@@ -1,0 +1,31 @@
+[package]
+name = "bpmn-lite-ffi-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP FFI execution owner for bpmn-lite — registers HTTP endpoint templates and dispatches calls from BPMN processes via Instr::ExecFfi"
+
+# Capability discipline (B7):
+#   IN-SCOPE  : HttpFfiOwner (implements FfiExecutionOwner), template registration,
+#               request construction (path params, query string, JSON body),
+#               response parsing, error mapping per B6 contract.
+#   OUT-OF-SCOPE: TLS (A16+), authentication (A16+), in-owner retry (B8+),
+#               response_replaces_domain_payload (B8+), hyper migration (TODO(refactor)).
+
+[dependencies]
+ffi-types = { path = "../ffi-types" }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+hex = "0.4"
+percent-encoding = "2"
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = "0.6"

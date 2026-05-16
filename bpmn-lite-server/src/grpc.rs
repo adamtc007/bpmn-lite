@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_types::{ErrorClass, Value};
+use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
@@ -205,6 +206,8 @@ pub struct BpmnLiteService {
     pub subscription_limiter: Arc<Semaphore>,
     /// In-process dmn-lite FFI execution owner (registers decisions, evaluates them).
     pub ffi_owner: Arc<DmnLiteOwner>,
+    /// In-process HTTP FFI execution owner (registers HTTP templates, makes HTTP calls).
+    pub http_ffi_owner: Arc<HttpFfiOwner>,
     /// FFI template catalogue (shared with FfiDispatcher via Arc).
     pub ffi_catalogue: Arc<FfiCatalogue>,
     /// Backing store for the FFI catalogue; used to publish new templates.
@@ -934,5 +937,62 @@ impl BpmnLite for BpmnLiteService {
 
         tracing::info!(template_id = %template_id_hex, %tenant_id, "registered dmn-lite decision as FFI template");
         Ok(Response::new(RegisterDmnDecisionResponse { template_id_hex }))
+    }
+
+    async fn register_http_template(
+        &self,
+        request: Request<RegisterHttpTemplateRequest>,
+    ) -> Result<Response<RegisterHttpTemplateResponse>, Status> {
+        self.metrics.request_started();
+        let req = request.into_inner();
+        let tenant_id = request_tenant_id(&self.limits, &req.tenant_id)?;
+        let publisher = if req.publisher.is_empty() { "server".to_string() } else { req.publisher.clone() };
+
+        let method: HttpMethod = match req.method.to_uppercase().as_str() {
+            "GET" => HttpMethod::Get,
+            "POST" => HttpMethod::Post,
+            other => return Err(Status::invalid_argument(format!("unsupported HTTP method '{}'; use GET or POST", other))),
+        };
+
+        let idempotency = match req.idempotency.to_lowercase().as_str() {
+            "idempotent" => HttpIdempotency::Idempotent,
+            "non_idempotent" | "nonidempotent" => HttpIdempotency::NonIdempotent,
+            "" => method.default_idempotency(),
+            other => return Err(Status::invalid_argument(format!("unknown idempotency '{}'; use idempotent or non_idempotent", other))),
+        };
+
+        let timeout_ms = if req.timeout_ms == 0 { 5000 } else { req.timeout_ms };
+        let success_codes: Vec<u16> = if req.success_status_codes.is_empty() {
+            vec![200]
+        } else {
+            req.success_status_codes.iter().map(|&c| c as u16).collect()
+        };
+
+        let input_schema = proto_fields_to_schema(&req.input_fields)?;
+        let output_schema = proto_fields_to_schema(&req.output_fields)?;
+
+        let template = self.http_ffi_owner
+            .register_template(
+                req.url,
+                method,
+                req.static_headers.into_iter().collect(),
+                timeout_ms,
+                req.path_params,
+                success_codes,
+                idempotency,
+                input_schema,
+                output_schema,
+                tenant_id.clone(),
+                publisher,
+            )
+            .map_err(|e| Status::invalid_argument(format!("invalid HTTP template: {:#}", e)))?;
+
+        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+
+        self.ffi_store.publish(&template).await.map_err(|e| Status::internal(format!("publish: {e}")))?;
+        self.ffi_catalogue.load_into_cache(&tenant_id).await.map_err(|e| Status::internal(format!("refresh cache: {e}")))?;
+
+        tracing::info!(template_id = %template_id_hex, %tenant_id, "registered HTTP template");
+        Ok(Response::new(RegisterHttpTemplateResponse { template_id_hex }))
     }
 }

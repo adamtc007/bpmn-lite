@@ -6,6 +6,7 @@ service BpmnLite {
     rpc Compile(CompileRequest) returns (CompileResponse);
     // FFI vocabulary registration
     rpc RegisterDmnDecision(RegisterDmnDecisionRequest) returns (RegisterDmnDecisionResponse);
+    rpc RegisterHttpTemplate(RegisterHttpTemplateRequest) returns (RegisterHttpTemplateResponse);
 
     // Process lifecycle
     rpc StartProcess(StartRequest) returns (StartResponse);
@@ -209,6 +210,24 @@ message FfiFieldSchemaProto {
     // "bool" | "i64" | "f64" | "string"
     string kind = 2;
     bool required = 3;
+}
+
+message RegisterHttpTemplateRequest {
+    string url = 1;
+    string method = 2;                          // "GET" | "POST"
+    map<string, string> static_headers = 3;
+    uint64 timeout_ms = 4;                      // 0 = default (5000)
+    repeated string path_params = 5;
+    repeated uint32 success_status_codes = 6;   // empty = [200]
+    repeated FfiFieldSchemaProto input_fields = 7;
+    repeated FfiFieldSchemaProto output_fields = 8;
+    string idempotency = 9;                     // "" | "idempotent" | "non_idempotent"
+    string tenant_id = 10;
+    string publisher = 11;
+}
+
+message RegisterHttpTemplateResponse {
+    string template_id_hex = 1;
 }
 
 message RegisterDmnDecisionRequest {

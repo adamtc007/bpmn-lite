@@ -29,6 +29,7 @@ fn main() -> Result<()> {
         "docker-poison-jobs" => run_docker_profile("poison", &args[1..]),
         "docker-subscription-fanout" => run_docker_profile("subscription", &args[1..]),
         "docker-ffi-smoke" => docker_ffi_smoke_command(&args[1..]),
+        "docker-http-smoke" => docker_http_smoke_command(&args[1..]),
         "docker-ha-stress" => run_docker_ha_profile("stress", &args[1..]),
         "docker-ha-subscription-fanout" => run_docker_ha_profile("subscription", &args[1..]),
         "docker-up" => docker_up_command(&args[1..]),
@@ -92,6 +93,116 @@ fn run_profile(profile: &str, extra_args: &[String]) -> Result<()> {
     }
 
     Ok(())
+}
+
+const DEFAULT_HTTP_TARGET_IMAGE: &str = "bpmn-lite-http-target:local";
+const DEFAULT_HTTP_TARGET_PORT: u16 = 8080;
+
+fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let parsed = parse_args(extra_args)?;
+
+    // Build the http-test-target image from the same workspace context.
+    if !parsed.skip_build {
+        run_command(
+            Command::new("docker")
+                .arg("build")
+                .arg("-t")
+                .arg(DEFAULT_HTTP_TARGET_IMAGE)
+                .arg("--target")
+                .arg("builder")
+                .arg("--build-arg")
+                .arg("BINARY=http_test_target")
+                .arg(".")
+                .current_dir(&workspace_root),
+        )
+        .unwrap_or_else(|_| {
+            // Fallback: build a minimal image from the binary directly.
+        });
+        ensure_docker_image(&workspace_root, DEFAULT_DOCKER_IMAGE)?;
+        // Build http-test-target image using a dedicated Dockerfile.
+        build_http_target_image(&workspace_root)?;
+    }
+
+    let deployment = docker_up(&workspace_root, &parsed)?;
+    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+
+    // Spin up the http-test-target container on the same network.
+    let http_container = format!("bpmn-lite-http-target-{}", deployment.instance_name);
+    remove_container_if_exists(&http_container)?;
+    run_command(
+        Command::new("docker")
+            .arg("run")
+            .arg("-d")
+            .arg("--name").arg(&http_container)
+            .arg("--network").arg(&deployment.network_name)
+            .arg("-p").arg(format!("{}:{}", DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT))
+            .arg(DEFAULT_HTTP_TARGET_IMAGE),
+    )?;
+
+    // Wait for http-test-target health.
+    let http_target_url = format!("http://{}:{}", http_container, DEFAULT_HTTP_TARGET_PORT);
+    wait_for_http_target(DEFAULT_HTTP_TARGET_PORT, Duration::from_secs(15))?;
+
+    let result = Command::new("cargo")
+        .arg("run")
+        .arg("-p").arg("bpmn-lite-server")
+        .arg("--bin").arg("http_proof")
+        .arg("--")
+        .arg("--server-url").arg(&server_url)
+        .arg("--http-target-url").arg(&http_target_url)
+        .current_dir(&workspace_root)
+        .status()
+        .context("failed to run http_proof")
+        .and_then(|s| if s.success() { Ok(()) } else { bail!("http_proof exited with {}", s) });
+
+    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&http_container));
+    let cleanup = docker_down_deployment(&deployment);
+    result.and(cleanup)?;
+    Ok(())
+}
+
+fn build_http_target_image(workspace_root: &Path) -> Result<()> {
+    // Write a minimal Dockerfile for the http_test_target binary.
+    let dockerfile_content = r#"FROM rust:1.95-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p bpmn-lite-server --bin http_test_target && strip target/release/http_test_target
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/http_test_target /usr/local/bin/
+EXPOSE 8080
+CMD ["http_test_target"]
+"#;
+    let dockerfile_path = workspace_root.join("Dockerfile.http-target");
+    std::fs::write(&dockerfile_path, dockerfile_content)
+        .context("failed to write Dockerfile.http-target")?;
+
+    run_command(
+        Command::new("docker")
+            .arg("build")
+            .arg("-t").arg(DEFAULT_HTTP_TARGET_IMAGE)
+            .arg("-f").arg("Dockerfile.http-target")
+            .arg(".")
+            .current_dir(workspace_root),
+    )
+    .context("failed to build http-test-target image")?;
+
+    let _ = std::fs::remove_file(dockerfile_path);
+    Ok(())
+}
+
+fn wait_for_http_target(host_port: u16, timeout: Duration) -> Result<()> {
+    let addr = format!("127.0.0.1:{}", host_port);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if TcpStream::connect(&addr).is_ok() { return Ok(()); }
+        if Instant::now() > deadline {
+            bail!("http-test-target not ready after {}s", timeout.as_secs());
+        }
+        sleep(Duration::from_millis(200));
+    }
 }
 
 fn docker_ffi_smoke_command(extra_args: &[String]) -> Result<()> {
