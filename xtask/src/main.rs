@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         "docker-subscription-fanout" => run_docker_profile("subscription", &args[1..]),
         "docker-ffi-smoke" => docker_ffi_smoke_command(&args[1..]),
         "docker-http-smoke" => docker_http_smoke_command(&args[1..]),
+        "docker-heterogeneous-smoke" => docker_heterogeneous_smoke_command(&args[1..]),
         "docker-ha-stress" => run_docker_ha_profile("stress", &args[1..]),
         "docker-ha-subscription-fanout" => run_docker_ha_profile("subscription", &args[1..]),
         "docker-up" => docker_up_command(&args[1..]),
@@ -155,6 +156,49 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
         .status()
         .context("failed to run http_proof")
         .and_then(|s| if s.success() { Ok(()) } else { bail!("http_proof exited with {}", s) });
+
+    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&http_container));
+    let cleanup = docker_down_deployment(&deployment);
+    result.and(cleanup)?;
+    Ok(())
+}
+
+fn docker_heterogeneous_smoke_command(extra_args: &[String]) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let parsed = parse_args(extra_args)?;
+
+    if !parsed.skip_build {
+        ensure_docker_image(&workspace_root, DEFAULT_DOCKER_IMAGE)?;
+        build_http_target_image(&workspace_root)?;
+    }
+
+    let deployment = docker_up(&workspace_root, &parsed)?;
+    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+
+    let http_container = format!("bpmn-lite-http-target-{}", deployment.instance_name);
+    remove_container_if_exists(&http_container)?;
+    run_command(
+        Command::new("docker")
+            .arg("run").arg("-d")
+            .arg("--name").arg(&http_container)
+            .arg("--network").arg(&deployment.network_name)
+            .arg("-p").arg(format!("{}:{}", DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT))
+            .arg(DEFAULT_HTTP_TARGET_IMAGE),
+    )?;
+
+    let http_target_url = format!("http://{}:{}", http_container, DEFAULT_HTTP_TARGET_PORT);
+    wait_for_http_target(DEFAULT_HTTP_TARGET_PORT, Duration::from_secs(15))?;
+
+    let result = Command::new("cargo")
+        .arg("run").arg("-p").arg("bpmn-lite-server")
+        .arg("--bin").arg("heterogeneous_proof")
+        .arg("--")
+        .arg("--server-url").arg(&server_url)
+        .arg("--http-target-url").arg(&http_target_url)
+        .current_dir(&workspace_root)
+        .status()
+        .context("failed to run heterogeneous_proof")
+        .and_then(|s| if s.success() { Ok(()) } else { bail!("heterogeneous_proof exited with {}", s) });
 
     let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&http_container));
     let cleanup = docker_down_deployment(&deployment);
