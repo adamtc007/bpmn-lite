@@ -1,0 +1,18 @@
+[package]
+name = "dmn-lite-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dmn-lite engine: stack VM and reference evaluator over compiled decision artifacts"
+
+[dependencies]
+dmn-lite-types = { path = "../dmn-lite-types" }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
+proptest = "1"

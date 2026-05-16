@@ -1,0 +1,12 @@
+[package]
+name = "dmn-lite-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dmn-lite s-expression DSL parser: source text to typed AST"
+
+[dependencies]
+dmn-lite-types = { path = "../dmn-lite-types" }

@@ -1,0 +1,22 @@
+; EBNF §5.2 — age-band classification (FIRST, numeric ranges)
+; Classify customer by age band for onboarding risk scoring.
+(define-decision age-band-classification
+  :decision-id "age_band.v1"
+  :hit-policy first
+  :inputs
+    ((age :type integer :domain AgeYears))
+  :outputs
+    ((band :type enum :domain AgeBand))
+  :rules
+    ((rule r-minor
+       :when ((age in [* .. 18)))   ; age < 18
+       :then ((band = MINOR)))
+     (rule r-young-adult
+       :when ((age in [18 .. 25])) ; 18 <= age <= 25
+       :then ((band = YOUNG_ADULT)))
+     (rule r-adult
+       :when ((age in [26 .. 64])) ; 26 <= age <= 64
+       :then ((band = ADULT)))
+     (rule r-senior
+       :when ((age in [65 .. *]))  ; age >= 65
+       :then ((band = SENIOR)))))

@@ -1,6 +1,18 @@
-# BPMN-lite
+# BPMN-lite platform
 
-Standalone BPMN runtime and gRPC service.
+Compilation-and-execution kernel for the V&S v1.1 vocabularies. A single Rust workspace (edition 2024, resolver "3", rust 1.95) ships two compiled vocabularies plus the vocabulary-neutral FFI catalogue that wires them together:
+
+- **bpmn-lite** — process vocabulary: BPMN 2.0 XML → verified bytecode → fiber-based stack VM, exposed as a gRPC service on port 50051.
+- **dmn-lite** — decision vocabulary: s-expression DSL → verified bytecode → stack VM, registered into the FFI catalogue via `dmn-lite-bridge` and invoked in-process from bpmn-lite via `Instr::ExecFfi`.
+
+The dmn-lite repo was consolidated into this workspace during B0 (2026-05-16); both vocabularies now build, test, and version together as 18 peer crates. See [`CLAUDE.md`](CLAUDE.md) for the unified crate map, architecture, A-phase status, and test counts.
+
+## Quick build
+
+```bash
+cargo build --workspace
+cargo test  --workspace --exclude bpmn-lite-store-postgres
+```
 
 ## Runtime Contract
 

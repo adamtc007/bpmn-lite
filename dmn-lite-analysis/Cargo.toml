@@ -1,0 +1,16 @@
+[package]
+name = "dmn-lite-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dmn-lite static analysis: overlap, gap, unreachable rules, hit-policy diagnostics"
+
+[dependencies]
+dmn-lite-types = { path = "../dmn-lite-types" }
+
+[dev-dependencies]
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }

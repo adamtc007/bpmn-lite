@@ -1,0 +1,403 @@
+# dmn-lite stub Sem OS catalogue — Phase 1.2 through Phase 1.4 input
+#
+# All IDs are proper UUIDv7 (RFC 9562) with a fixed synthetic timestamp of
+# 2026-01-01T00:00:00Z (ms = 0x019C0A5D0000) and deterministic rand fields
+# for reproducibility across builds and test runs.
+#
+# UUIDv7 structure used here:
+#   019c0a5d-0000-7000-8NNN-000000000VVV
+#   ^^^^^^^^^^^^                           fixed timestamp (2026-01-01)
+#                   ^^^^                   version 7
+#                        ^^^^              RFC 4122 variant (8) + namespace
+#                             ^^^^^^^^^^^^ sequential value
+#
+# Namespace allocation:
+#   8000 = snapshot / domain IDs
+#   8001 = Jurisdiction values
+#   8002 = CbuType values
+#   8003 = ProductCode values
+#   8004 = BookingPrincipal values
+#   8005 = SourceOfFunds values
+#   8006 = EligibilityOutcome values
+#   8007 = BookingReasonCode values
+#   8008 = AgeBand values         (§5.2)
+#   800b = ReviewOutcome values   (§5.3)
+#   800c = KycStatus values       (§5.3)
+#   800d = RiskLevel values
+#   800e = PepStatus values
+#   800f = ReviewAction values
+#   8010 = TierCode values
+#   8011 = FeeBand values
+#
+# Adding a domain or value here is a governance-grade change: every dependent
+# compiled artifact's hash changes (V&S §11.5 / dmn-lite-semantics.md §3.2.4).
+
+snapshot_id      = "019c0a5d-0000-7000-8000-000000000000"
+snapshot_version = "v0.1.0-stub"
+created_at       = "2026-01-01T00:00:00Z"
+
+# ─── Jurisdiction ──────────────────────────────────────────────────────────────
+[[domain]]
+name        = "Jurisdiction"
+domain_id   = "019c0a5d-0000-7000-8000-000000000001"
+description = "ISO-style jurisdiction code for booking, custody, and KYC."
+
+[[domain.value]]
+symbol   = "LU"
+value_id = "019c0a5d-0000-7000-8001-000000000001"
+
+[[domain.value]]
+symbol   = "IE"
+value_id = "019c0a5d-0000-7000-8001-000000000002"
+
+[[domain.value]]
+symbol   = "UK"
+value_id = "019c0a5d-0000-7000-8001-000000000003"
+
+[[domain.value]]
+symbol   = "US"
+value_id = "019c0a5d-0000-7000-8001-000000000004"
+
+[[domain.value]]
+symbol   = "KP"
+value_id = "019c0a5d-0000-7000-8001-000000000005"
+
+[[domain.value]]
+symbol   = "IR"
+value_id = "019c0a5d-0000-7000-8001-000000000006"
+
+[[domain.value]]
+symbol   = "SY"
+value_id = "019c0a5d-0000-7000-8001-000000000007"
+
+# ─── CbuType ───────────────────────────────────────────────────────────────────
+[[domain]]
+name        = "CbuType"
+domain_id   = "019c0a5d-0000-7000-8000-000000000002"
+description = "Client Booking Unit type. Represents the operating arrangement."
+
+[[domain.value]]
+symbol   = "SICAV"
+value_id = "019c0a5d-0000-7000-8002-000000000001"
+
+[[domain.value]]
+symbol   = "AIF"
+value_id = "019c0a5d-0000-7000-8002-000000000002"
+
+[[domain.value]]
+symbol   = "UCITS"
+value_id = "019c0a5d-0000-7000-8002-000000000003"
+
+[[domain.value]]
+symbol   = "PENSION_FUND"
+value_id = "019c0a5d-0000-7000-8002-000000000004"
+
+[[domain.value]]
+symbol   = "CORPORATE"
+value_id = "019c0a5d-0000-7000-8002-000000000005"
+
+# ─── ProductCode ───────────────────────────────────────────────────────────────
+[[domain]]
+name        = "ProductCode"
+domain_id   = "019c0a5d-0000-7000-8000-000000000003"
+description = "Custody banking product code."
+
+[[domain.value]]
+symbol   = "CUSTODY"
+value_id = "019c0a5d-0000-7000-8003-000000000001"
+
+[[domain.value]]
+symbol   = "FUND_ACCOUNTING"
+value_id = "019c0a5d-0000-7000-8003-000000000002"
+
+[[domain.value]]
+symbol   = "TRANSFER_AGENCY"
+value_id = "019c0a5d-0000-7000-8003-000000000003"
+
+[[domain.value]]
+symbol   = "DEPOSITARY"
+value_id = "019c0a5d-0000-7000-8003-000000000004"
+
+[[domain.value]]
+symbol   = "COLLATERAL_MANAGEMENT"
+value_id = "019c0a5d-0000-7000-8003-000000000005"
+
+# ─── BookingPrincipal ──────────────────────────────────────────────────────────
+[[domain]]
+name        = "BookingPrincipal"
+domain_id   = "019c0a5d-0000-7000-8000-000000000004"
+description = "Legal entity onto whose books the activity is recorded."
+
+[[domain.value]]
+symbol   = "BNY_LUX"
+value_id = "019c0a5d-0000-7000-8004-000000000001"
+
+[[domain.value]]
+symbol   = "BNY_IE"
+value_id = "019c0a5d-0000-7000-8004-000000000002"
+
+[[domain.value]]
+symbol   = "BNY_UK"
+value_id = "019c0a5d-0000-7000-8004-000000000003"
+
+[[domain.value]]
+symbol   = "BNY_US"
+value_id = "019c0a5d-0000-7000-8004-000000000004"
+
+# ─── SourceOfFunds ─────────────────────────────────────────────────────────────
+[[domain]]
+name        = "SourceOfFunds"
+domain_id   = "019c0a5d-0000-7000-8000-000000000005"
+description = "Declared source of funds for KYC / AML purposes."
+
+[[domain.value]]
+symbol   = "SALARY"
+value_id = "019c0a5d-0000-7000-8005-000000000001"
+
+[[domain.value]]
+symbol   = "INHERITANCE"
+value_id = "019c0a5d-0000-7000-8005-000000000002"
+
+[[domain.value]]
+symbol   = "BUSINESS_INCOME"
+value_id = "019c0a5d-0000-7000-8005-000000000003"
+
+[[domain.value]]
+symbol   = "INVESTMENT_RETURNS"
+value_id = "019c0a5d-0000-7000-8005-000000000004"
+
+[[domain.value]]
+symbol   = "ASSET_SALE"
+value_id = "019c0a5d-0000-7000-8005-000000000005"
+
+[[domain.value]]
+symbol   = "UNKNOWN"
+value_id = "019c0a5d-0000-7000-8005-000000000006"
+
+# ─── EligibilityOutcome ────────────────────────────────────────────────────────
+[[domain]]
+name        = "EligibilityOutcome"
+domain_id   = "019c0a5d-0000-7000-8000-000000000006"
+description = "Result of a booking-eligibility decision."
+
+[[domain.value]]
+symbol   = "ELIGIBLE"
+value_id = "019c0a5d-0000-7000-8006-000000000001"
+
+[[domain.value]]
+symbol   = "NOT_ELIGIBLE"
+value_id = "019c0a5d-0000-7000-8006-000000000002"
+
+[[domain.value]]
+symbol   = "NEEDS_REVIEW"
+value_id = "019c0a5d-0000-7000-8006-000000000003"
+
+# ─── BookingReasonCode ─────────────────────────────────────────────────────────
+[[domain]]
+name        = "BookingReasonCode"
+domain_id   = "019c0a5d-0000-7000-8000-000000000007"
+description = "Reason code attached to a booking-eligibility outcome."
+
+[[domain.value]]
+symbol   = "STANDARD_LUX_SICAV"
+value_id = "019c0a5d-0000-7000-8007-000000000001"
+
+[[domain.value]]
+symbol   = "STANDARD_IE_UCITS"
+value_id = "019c0a5d-0000-7000-8007-000000000002"
+
+[[domain.value]]
+symbol   = "SOF_MISSING"
+value_id = "019c0a5d-0000-7000-8007-000000000003"
+
+[[domain.value]]
+symbol   = "SANCTIONS_HIT"
+value_id = "019c0a5d-0000-7000-8007-000000000004"
+
+[[domain.value]]
+symbol   = "NO_MATCH"
+value_id = "019c0a5d-0000-7000-8007-000000000005"
+
+[[domain.value]]
+symbol   = "JURISDICTION_RESTRICTED"
+value_id = "019c0a5d-0000-7000-8007-000000000006"
+
+# ─── AgeBand  (EBNF §5.2) ─────────────────────────────────────────────────────
+[[domain]]
+name        = "AgeBand"
+domain_id   = "019c0a5d-0000-7000-8000-000000000008"
+description = "Age-band classification for onboarding risk scoring."
+
+[[domain.value]]
+symbol   = "MINOR"
+value_id = "019c0a5d-0000-7000-8008-000000000001"
+
+[[domain.value]]
+symbol   = "YOUNG_ADULT"
+value_id = "019c0a5d-0000-7000-8008-000000000002"
+
+[[domain.value]]
+symbol   = "ADULT"
+value_id = "019c0a5d-0000-7000-8008-000000000003"
+
+[[domain.value]]
+symbol   = "SENIOR"
+value_id = "019c0a5d-0000-7000-8008-000000000004"
+
+# ─── AgeYears  (EBNF §5.2 — integer domain, no values) ────────────────────────
+[[domain]]
+name        = "AgeYears"
+domain_id   = "019c0a5d-0000-7000-8000-000000000009"
+description = "Age in years (advisory integer domain; value-level not enforced in v0.1)."
+
+# ─── TruthValue  (EBNF §5.3 — bool domain, no values) ─────────────────────────
+[[domain]]
+name        = "TruthValue"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000a"
+description = "Boolean truth value (advisory bool domain; value-level not enforced in v0.1)."
+
+# ─── ReviewOutcome  (EBNF §5.3) ───────────────────────────────────────────────
+[[domain]]
+name        = "ReviewOutcome"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000b"
+description = "Outcome of a KYC document review."
+
+[[domain.value]]
+symbol   = "PASS"
+value_id = "019c0a5d-0000-7000-800b-000000000001"
+
+[[domain.value]]
+symbol   = "FAIL"
+value_id = "019c0a5d-0000-7000-800b-000000000002"
+
+# ─── KycStatus  (EBNF §5.3) ───────────────────────────────────────────────────
+[[domain]]
+name        = "KycStatus"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000c"
+description = "Current KYC status for an onboarding case."
+
+[[domain.value]]
+symbol   = "PENDING_DOCUMENTS"
+value_id = "019c0a5d-0000-7000-800c-000000000001"
+
+[[domain.value]]
+symbol   = "APPROVED"
+value_id = "019c0a5d-0000-7000-800c-000000000002"
+
+[[domain.value]]
+symbol   = "REJECTED"
+value_id = "019c0a5d-0000-7000-800c-000000000003"
+
+[[domain.value]]
+symbol   = "UNDER_REVIEW"
+value_id = "019c0a5d-0000-7000-800c-000000000004"
+
+# ─── RiskLevel ─────────────────────────────────────────────────────────────────
+[[domain]]
+name        = "RiskLevel"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000d"
+description = "AML / compliance risk classification level."
+
+[[domain.value]]
+symbol   = "LOW"
+value_id = "019c0a5d-0000-7000-800d-000000000001"
+
+[[domain.value]]
+symbol   = "STANDARD"
+value_id = "019c0a5d-0000-7000-800d-000000000002"
+
+[[domain.value]]
+symbol   = "ELEVATED"
+value_id = "019c0a5d-0000-7000-800d-000000000003"
+
+[[domain.value]]
+symbol   = "HIGH"
+value_id = "019c0a5d-0000-7000-800d-000000000004"
+
+# ─── PepStatus ─────────────────────────────────────────────────────────────────
+[[domain]]
+name        = "PepStatus"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000e"
+description = "Politically exposed person status."
+
+[[domain.value]]
+symbol   = "NONE"
+value_id = "019c0a5d-0000-7000-800e-000000000001"
+
+[[domain.value]]
+symbol   = "DOMESTIC"
+value_id = "019c0a5d-0000-7000-800e-000000000002"
+
+[[domain.value]]
+symbol   = "FOREIGN"
+value_id = "019c0a5d-0000-7000-800e-000000000003"
+
+[[domain.value]]
+symbol   = "FAMILY_OR_ASSOCIATE"
+value_id = "019c0a5d-0000-7000-800e-000000000004"
+
+# ─── ReviewAction ──────────────────────────────────────────────────────────────
+[[domain]]
+name        = "ReviewAction"
+domain_id   = "019c0a5d-0000-7000-8000-00000000000f"
+description = "Outcome of a review-trigger decision."
+
+[[domain.value]]
+symbol   = "APPROVE"
+value_id = "019c0a5d-0000-7000-800f-000000000001"
+
+[[domain.value]]
+symbol   = "NEEDS_REVIEW"
+value_id = "019c0a5d-0000-7000-800f-000000000002"
+
+[[domain.value]]
+symbol   = "ESCALATE"
+value_id = "019c0a5d-0000-7000-800f-000000000003"
+
+[[domain.value]]
+symbol   = "REJECT"
+value_id = "019c0a5d-0000-7000-800f-000000000004"
+
+# ─── TierCode ──────────────────────────────────────────────────────────────────
+[[domain]]
+name        = "TierCode"
+domain_id   = "019c0a5d-0000-7000-8000-000000000010"
+description = "Client tier assignment driven by AUM bands."
+
+[[domain.value]]
+symbol   = "BRONZE"
+value_id = "019c0a5d-0000-7000-8010-000000000001"
+
+[[domain.value]]
+symbol   = "SILVER"
+value_id = "019c0a5d-0000-7000-8010-000000000002"
+
+[[domain.value]]
+symbol   = "GOLD"
+value_id = "019c0a5d-0000-7000-8010-000000000003"
+
+[[domain.value]]
+symbol   = "PLATINUM"
+value_id = "019c0a5d-0000-7000-8010-000000000004"
+
+# ─── FeeBand ───────────────────────────────────────────────────────────────────
+[[domain]]
+name        = "FeeBand"
+domain_id   = "019c0a5d-0000-7000-8000-000000000011"
+description = "Fee schedule band associated with a tier."
+
+[[domain.value]]
+symbol   = "BAND_A"
+value_id = "019c0a5d-0000-7000-8011-000000000001"
+
+[[domain.value]]
+symbol   = "BAND_B"
+value_id = "019c0a5d-0000-7000-8011-000000000002"
+
+[[domain.value]]
+symbol   = "BAND_C"
+value_id = "019c0a5d-0000-7000-8011-000000000003"
+
+[[domain.value]]
+symbol   = "BAND_D"
+value_id = "019c0a5d-0000-7000-8011-000000000004"

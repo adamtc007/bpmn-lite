@@ -1,0 +1,32 @@
+[package]
+name = "dmn-lite-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FFI execution owner for dmn-lite — registers compiled decisions in the FFI catalogue and dispatches calls from bpmn-lite processes"
+
+# Capability discipline (A10):
+#   IN-SCOPE  : DmnLiteOwner (implements FfiExecutionOwner), decision
+#               registration (artifact_hash as owner_metadata), JSON input
+#               marshalling to TypedInputContext, FfiResult assembly from
+#               EvaluationOutput / EvalError.
+#   OUT-OF-SCOPE: Sem OS catalogue integration for enum domain resolution
+#               (A12+), persistence of invocation records (A16).
+
+[dependencies]
+dmn-lite-types = { path = "../dmn-lite-types" }
+dmn-lite-engine = { path = "../dmn-lite-engine" }
+# ffi-types is now a workspace-local peer crate.
+ffi-types = { path = "../ffi-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
+tokio = { workspace = true }

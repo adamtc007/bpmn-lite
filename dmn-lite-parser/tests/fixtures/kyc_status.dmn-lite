@@ -1,0 +1,25 @@
+; EBNF §5.3 — KYC status (FIRST, boolean inputs, is-null)
+; Determine KYC status based on document submission and review outcome.
+(define-decision kyc-status
+  :decision-id "kyc_status.v1"
+  :hit-policy first
+  :inputs
+    ((documents-submitted :type bool   :domain TruthValue)
+     (review-outcome      :type enum   :domain ReviewOutcome))
+  :outputs
+    ((kyc-status :type enum :domain KycStatus))
+  :rules
+    ((rule r-not-submitted
+       :when ((documents-submitted = false))
+       :then ((kyc-status = PENDING_DOCUMENTS)))
+     (rule r-passed
+       :when ((documents-submitted = true)
+              (review-outcome = PASS))
+       :then ((kyc-status = APPROVED)))
+     (rule r-failed
+       :when ((documents-submitted = true)
+              (review-outcome = FAIL))
+       :then ((kyc-status = REJECTED)))
+     (rule r-fallback
+       :when (*)
+       :then ((kyc-status = UNDER_REVIEW)))))

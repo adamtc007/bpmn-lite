@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4a29df378c73b0ca0e3150108f4d08cb2b0439b4bfd12f4bdf8aad2f2b2380a1 # shrinks to input = TypedInputContext { slots: [Some(Bool(false)), None], schema_hash: SchemaHash(11989221872599159802) }

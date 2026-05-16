@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a3229a5b158a35df4b39edc72df67c7a4c540a3ba5e4bc04bbdfea59741e6763 # shrinks to input = TypedInputContext { slots: [None, None, None, None, Some(Enum { domain_id: DomainId(019c0a5d-0000-7000-8000-000000000005), value_id: ValueId(019c0a5d-0000-7000-8005-000000000006) })], schema_hash: SchemaHash(12906420391490800394) }
+cc b23aed03d1f4b17b953f81c1bfad8fc8aca8da14878cdf78b6bc854249b2d1cf # shrinks to input = TypedInputContext { slots: [Some(Enum { domain_id: DomainId(019c0a5d-0000-7000-8000-000000000001), value_id: ValueId(019c0a5d-0000-7000-8001-000000000001) }), Some(Enum { domain_id: DomainId(019c0a5d-0000-7000-8000-000000000002), value_id: ValueId(019c0a5d-0000-7000-8002-000000000001) }), Some(Enum { domain_id: DomainId(019c0a5d-0000-7000-8000-000000000003), value_id: ValueId(019c0a5d-0000-7000-8003-000000000001) }), Some(Enum { domain_id: DomainId(019c0a5d-0000-7000-8000-000000000004), value_id: ValueId(019c0a5d-0000-7000-8004-000000000001) }), None], schema_hash: SchemaHash(12906420391490800394) }

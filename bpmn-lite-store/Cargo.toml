@@ -20,7 +20,7 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 sha2 = { workspace = true }
 serde_json = { workspace = true }
-ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+ob-poc-types = { workspace = true }
 
 [lints]
 workspace = true

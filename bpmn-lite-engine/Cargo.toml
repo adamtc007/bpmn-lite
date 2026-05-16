@@ -37,14 +37,14 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+ob-poc-types = { workspace = true }
 
 [dev-dependencies]
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
 ffi-catalogue = { path = "../ffi-catalogue" }
-dmn-lite-bridge = { path = "../../dmn-lite/crates/dmn-lite-bridge" }
-dmn-lite-compiler = { path = "../../dmn-lite/crates/dmn-lite-compiler" }
-dmn-lite-parser = { path = "../../dmn-lite/crates/dmn-lite-parser" }
+dmn-lite-bridge = { path = "../dmn-lite-bridge" }
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
 ffi-types = { path = "../ffi-types" }
 
 [lints]
