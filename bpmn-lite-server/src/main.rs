@@ -136,7 +136,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    tracing::info!("BPMN-Lite gRPC server listening on {}", addr);
+    tracing::info!(
+        bind_addr = %addr,
+        store_mode = %store_mode,
+        scheduler_owner = %scheduler_owner,
+        "BPMN-Lite gRPC server starting"
+    );
 
     let service = BpmnLiteService {
         engine: engine.clone(),
@@ -155,6 +160,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let max_message_bytes = parse_usize_env("BPMN_LITE_GRPC_MAX_MESSAGE_BYTES", 4 * 1024 * 1024);
 
+    tracing::info!("BPMN-Lite gRPC server listening on {}", addr);
+
+    let shutdown_signal = async {
+        let ctrl_c = tokio::signal::ctrl_c();
+
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+            tokio::select! {
+                _ = ctrl_c => {}
+                _ = sigterm.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctrl_c.await;
+        }
+
+        tracing::info!("shutdown signal received — draining in-flight requests");
+    };
+
     Server::builder()
         .timeout(std::time::Duration::from_secs(parse_u64_env(
             "BPMN_LITE_GRPC_TIMEOUT_SECS",
@@ -169,9 +197,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .max_decoding_message_size(max_message_bytes)
                 .max_encoding_message_size(max_message_bytes),
         )
-        .serve(addr)
+        .serve_with_shutdown(addr, shutdown_signal)
         .await?;
 
+    tracing::info!("BPMN-Lite gRPC server stopped");
     Ok(())
 }
 
