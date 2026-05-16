@@ -262,6 +262,11 @@ impl BpmnLiteEngine {
         })
     }
 
+    /// Load a previously compiled program by its bytecode_version hash.
+    pub async fn load_program(&self, bytecode_version: [u8; 32]) -> Result<Option<CompiledProgram>> {
+        self.store.load_program(bytecode_version).await
+    }
+
     /// Persist an already-compiled program through this engine's
     /// `ProcessStore` and surface the same `CompileResult` shape the
     /// retired `compile_from_dto` / `compile_from_yaml` produced.
@@ -2095,6 +2100,70 @@ impl BpmnLiteEngine {
 
     pub async fn health_check(&self) -> Result<()> {
         self.store.health_check().await
+    }
+
+    /// A17 — Scan running instances for interrupted FFI calls at startup.
+    ///
+    /// For each running instance, checks if the last FFI-related event is
+    /// `FfiInvocationPending` with no matching `FfiInvocationCompleted`. These
+    /// represent calls that were in-flight when the server crashed.
+    ///
+    /// - **Idempotent templates:** no action required — the tick loop will
+    ///   re-execute the ExecFfi instruction and re-invoke the owner.
+    /// - **NonIdempotent templates:** the engine logs a warning; creating an
+    ///   incident for these is the remaining A17 work (requires decoding the
+    ///   fiber state and calling `create_incident` which needs the full engine).
+    ///
+    /// Returns the count of interrupted calls detected.
+    pub async fn detect_interrupted_ffi_calls(&self, tenant_id: &str) -> Result<usize> {
+        use bpmn_lite_types::events::RuntimeEvent;
+        use std::collections::HashSet;
+
+        let running = self.store.list_running_instances(tenant_id).await?;
+        let mut interrupted = 0usize;
+
+        for instance_id in running {
+            let events = self.store.read_events(instance_id, 0).await?;
+
+            // Collect completed invocation IDs.
+            let completed_ids: HashSet<uuid::Uuid> = events
+                .iter()
+                .filter_map(|(_, ev)| match ev {
+                    RuntimeEvent::FfiInvocationCompleted { invocation_id, .. } => {
+                        Some(*invocation_id)
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            // Find pending invocations without a corresponding completed event.
+            for (_, ev) in &events {
+                if let RuntimeEvent::FfiInvocationPending {
+                    invocation_id,
+                    template_id_hex,
+                    caller_task_id,
+                    owner_type,
+                    ..
+                } = ev
+                {
+                    if !completed_ids.contains(invocation_id) {
+                        interrupted += 1;
+                        tracing::warn!(
+                            %instance_id,
+                            %invocation_id,
+                            template_id = %&template_id_hex[..16],
+                            %owner_type,
+                            %caller_task_id,
+                            "A17: interrupted FFI call detected at startup; \
+                             idempotent calls will be retried by tick loop; \
+                             non-idempotent calls require manual incident resolution"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(interrupted)
     }
 }
 

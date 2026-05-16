@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_types::{ErrorClass, Value};
+use bpmn_lite_analysis;
 use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
 use dmn_lite_bridge::DmnLiteOwner;
@@ -367,17 +368,57 @@ impl BpmnLite for BpmnLiteService {
             .await
             .map_err(|e| Status::invalid_argument(format!("Compilation failed: {:#}", e)))?;
 
+        // Run static analysis on the compiled program and surface findings as diagnostics.
+        let analysis_diagnostics = if !req.validate_only {
+            // Load the program we just compiled to run analysis.
+            // The engine stores it; reload via the engine's store.
+            let maybe_program = self
+                .engine
+                .load_program(result.bytecode_version)
+                .await
+                .ok()
+                .flatten();
+            if let Some(program) = maybe_program {
+                let report = bpmn_lite_analysis::analyse(&program);
+                if report.warning_count() > 0 {
+                    tracing::warn!(
+                        warnings = report.warning_count(),
+                        "static analysis found potential issues in compiled BPMN"
+                    );
+                }
+                report
+                    .findings
+                    .into_iter()
+                    .map(|f| Diagnostic {
+                        severity: match f.severity {
+                            bpmn_lite_analysis::Severity::Warning => "warning".to_string(),
+                            bpmn_lite_analysis::Severity::Info => "info".to_string(),
+                        },
+                        message: f.message,
+                        element_id: f.element_id.unwrap_or_default(),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        let mut diagnostics: Vec<Diagnostic> = result
+            .diagnostics
+            .into_iter()
+            .map(|msg| Diagnostic {
+                severity: "info".to_string(),
+                message: msg,
+                element_id: String::new(),
+            })
+            .collect();
+        diagnostics.extend(analysis_diagnostics);
+
         Ok(Response::new(CompileResponse {
             bytecode_version: result.bytecode_version.to_vec(),
-            diagnostics: result
-                .diagnostics
-                .into_iter()
-                .map(|msg| Diagnostic {
-                    severity: "info".to_string(),
-                    message: msg,
-                    element_id: String::new(),
-                })
-                .collect(),
+            diagnostics,
             flag_symbol_table: result.flag_symbol_table.into_iter().collect(),
         }))
     }

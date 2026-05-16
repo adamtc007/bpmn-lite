@@ -17,6 +17,7 @@ members = [
     "ffi-catalogue",
     "ffi-dispatcher",
     "ffi-types",
+    "bpmn-lite-analysis",
     "bpmn-lite-ffi-http",
     "bpmn-lite-ffi-grpc",
     "xtask",

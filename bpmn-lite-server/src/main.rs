@@ -76,9 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_owner(grpc_ffi_owner.clone())
         .expect("register GrpcFfiOwner");
     let ffi_dispatcher = Arc::new(ffi_dispatcher);
-    tracing::info!("FFI dispatcher initialised with dmn-lite + http execution owners");
+    tracing::info!("FFI dispatcher initialised with dmn-lite + http + grpc execution owners");
 
-    let engine = Arc::new(BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher));
+    let engine = Arc::new(BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone()));
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
         std::time::Duration::from_millis(parse_u64_env("BPMN_LITE_EVENT_FANOUT_FALLBACK_MS", 500)),
@@ -135,6 +135,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    // A17 — Detect interrupted FFI calls from a previous crash.
+    match engine.detect_interrupted_ffi_calls("default").await {
+        Ok(0) => tracing::info!("A17: no interrupted FFI calls detected"),
+        Ok(n) => tracing::warn!(count = n, "A17: {} interrupted FFI call(s) detected; see above for details", n),
+        Err(e) => tracing::warn!(error = %e, "A17: interrupted FFI call scan failed (non-fatal)"),
+    }
+
+    // Validate that every ExecFfi instruction in stored programs has a registered owner.
+    let coverage_gaps = ffi_dispatcher.validate_coverage().await;
+    if coverage_gaps.is_empty() {
+        tracing::info!("FFI coverage validated: all stored programs have registered owners");
+    } else {
+        for gap in &coverage_gaps {
+            let template_id_hex: String = gap.template_id.iter().map(|b| format!("{b:02x}")).collect();
+            let reason = format!("{:?}", gap.reason);
+            tracing::warn!(
+                template_id = %template_id_hex,
+                reason = %reason,
+                "FFI coverage gap: stored program references unregistered template"
+            );
+        }
+        tracing::warn!(gaps = coverage_gaps.len(), "FFI coverage gaps detected at startup");
+    }
 
     tracing::info!(
         bind_addr = %addr,

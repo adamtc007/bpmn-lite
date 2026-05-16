@@ -270,6 +270,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpmn-lite-analysis"
+version = "0.1.0"
+dependencies = [
+ "bpmn-lite-types",
+ "serde",
+]
+
+[[package]]
 name = "bpmn-lite-authoring"
 version = "0.1.0"
 dependencies = [
@@ -366,6 +374,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bpmn-lite-analysis",
  "bpmn-lite-engine",
  "bpmn-lite-ffi-grpc",
  "bpmn-lite-ffi-http",
