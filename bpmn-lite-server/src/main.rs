@@ -7,6 +7,9 @@ use bpmn_lite_server::grpc::proto::bpmn_lite_server::BpmnLiteServer;
 use bpmn_lite_server::grpc::{BpmnLiteService, RequestLimits, ServerMetrics};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::store_memory::MemoryStore;
+use dmn_lite_bridge::DmnLiteOwner;
+use ffi_catalogue::{FfiCatalogue, MemoryFfiTemplateStore};
+use ffi_dispatcher::FfiDispatcher;
 use tokio::sync::Semaphore;
 use tonic::transport::Server;
 use tracing_subscriber::EnvFilter;
@@ -54,7 +57,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let engine = Arc::new(BpmnLiteEngine::new(store.clone()));
+    // FFI infrastructure — dmn-lite decision vocabulary wired in-process.
+    let ffi_store = Arc::new(MemoryFfiTemplateStore::new());
+    let ffi_cat = Arc::new(FfiCatalogue::new(ffi_store.clone()));
+    let ffi_owner = Arc::new(DmnLiteOwner::new());
+    let mut ffi_dispatcher = FfiDispatcher::new(ffi_cat.clone());
+    ffi_dispatcher
+        .register_owner(ffi_owner.clone())
+        .expect("register DmnLiteOwner");
+    let ffi_dispatcher = Arc::new(ffi_dispatcher);
+    tracing::info!("FFI dispatcher initialised with dmn-lite execution owner");
+
+    let engine = Arc::new(BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher));
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
         std::time::Duration::from_millis(parse_u64_env("BPMN_LITE_EVENT_FANOUT_FALLBACK_MS", 500)),
@@ -123,6 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "BPMN_LITE_MAX_EVENT_SUBSCRIPTIONS",
             256,
         ))),
+        ffi_owner,
+        ffi_catalogue: ffi_cat,
+        ffi_store,
     };
     let max_message_bytes = parse_usize_env("BPMN_LITE_GRPC_MAX_MESSAGE_BYTES", 4 * 1024 * 1024);
 

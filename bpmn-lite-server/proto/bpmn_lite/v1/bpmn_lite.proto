@@ -4,6 +4,8 @@ package bpmn_lite.v1;
 service BpmnLite {
     // Model lifecycle
     rpc Compile(CompileRequest) returns (CompileResponse);
+    // FFI vocabulary registration
+    rpc RegisterDmnDecision(RegisterDmnDecisionRequest) returns (RegisterDmnDecisionResponse);
 
     // Process lifecycle
     rpc StartProcess(StartRequest) returns (StartResponse);
@@ -34,6 +36,8 @@ message CompileRequest {
 message CompileResponse {
     bytes bytecode_version = 1;
     repeated Diagnostic diagnostics = 2;
+    // Maps FlagKey (u32) → data-object name. Use "flag_<N>" as orch_flags keys.
+    map<uint32, string> flag_symbol_table = 3;
 }
 
 message Diagnostic {
@@ -196,6 +200,28 @@ message MetricsResponse {
     uint64 job_failures_total = 5;
     uint64 active_subscriptions = 6;
     uint64 subscription_rejections_total = 7;
+}
+
+// --- FFI vocabulary registration ---
+
+message FfiFieldSchemaProto {
+    string name = 1;
+    // "bool" | "i64" | "f64" | "string"
+    string kind = 2;
+    bool required = 3;
+}
+
+message RegisterDmnDecisionRequest {
+    string dmn_source = 1;
+    string catalogue_toml = 2;
+    repeated FfiFieldSchemaProto input_fields = 3;
+    repeated FfiFieldSchemaProto output_fields = 4;
+    string tenant_id = 5;
+    string publisher = 6;
+}
+
+message RegisterDmnDecisionResponse {
+    string template_id_hex = 1;
 }
 
 // --- Shared types ---

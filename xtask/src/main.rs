@@ -28,6 +28,7 @@ fn main() -> Result<()> {
         "docker-stress" => run_docker_profile("stress", &args[1..]),
         "docker-poison-jobs" => run_docker_profile("poison", &args[1..]),
         "docker-subscription-fanout" => run_docker_profile("subscription", &args[1..]),
+        "docker-ffi-smoke" => docker_ffi_smoke_command(&args[1..]),
         "docker-ha-stress" => run_docker_ha_profile("stress", &args[1..]),
         "docker-ha-subscription-fanout" => run_docker_ha_profile("subscription", &args[1..]),
         "docker-up" => docker_up_command(&args[1..]),
@@ -90,6 +91,40 @@ fn run_profile(profile: &str, extra_args: &[String]) -> Result<()> {
         bail!("load harness exited with {}", status);
     }
 
+    Ok(())
+}
+
+fn docker_ffi_smoke_command(extra_args: &[String]) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let parsed = parse_args(extra_args)?;
+    let deployment = docker_up(&workspace_root, &parsed)?;
+    let server_url = parsed
+        .server_url
+        .clone()
+        .unwrap_or_else(|| deployment.server_url.clone());
+
+    let result = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("bpmn-lite-server")
+        .arg("--bin")
+        .arg("ffi_proof")
+        .arg("--")
+        .arg("--server-url")
+        .arg(&server_url)
+        .current_dir(&workspace_root)
+        .status()
+        .context("failed to run ffi_proof against docker deployment")
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                bail!("ffi_proof exited with {}", status)
+            }
+        });
+
+    let cleanup = docker_down_deployment(&deployment);
+    result.and(cleanup)?;
     Ok(())
 }
 

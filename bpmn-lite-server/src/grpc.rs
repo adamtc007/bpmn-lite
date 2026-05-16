@@ -8,6 +8,11 @@ use uuid::Uuid;
 
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_types::{ErrorClass, Value};
+use dmn_lite_bridge::DmnLiteOwner;
+use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
+use dmn_lite_parser::parse;
+use ffi_catalogue::{FfiCatalogue, FfiTemplateStore};
+use ffi_types::{FieldSchema, Idempotency, SchemaKind};
 
 use crate::event_fanout::EventFanout;
 
@@ -198,6 +203,12 @@ pub struct BpmnLiteService {
     pub limits: RequestLimits,
     pub metrics: Arc<ServerMetrics>,
     pub subscription_limiter: Arc<Semaphore>,
+    /// In-process dmn-lite FFI execution owner (registers decisions, evaluates them).
+    pub ffi_owner: Arc<DmnLiteOwner>,
+    /// FFI template catalogue (shared with FfiDispatcher via Arc).
+    pub ffi_catalogue: Arc<FfiCatalogue>,
+    /// Backing store for the FFI catalogue; used to publish new templates.
+    pub ffi_store: Arc<dyn FfiTemplateStore>,
 }
 
 // --- Proto ↔ Core conversions ---
@@ -305,6 +316,32 @@ fn extract_instance_id_from_job_key(job_key: &str) -> Result<Uuid, Status> {
     parse_uuid(uuid_str)
 }
 
+#[allow(clippy::result_large_err)]
+fn proto_fields_to_schema(fields: &[FfiFieldSchemaProto]) -> Result<Vec<FieldSchema>, Status> {
+    fields
+        .iter()
+        .map(|f| {
+            let kind = match f.kind.as_str() {
+                "bool" => SchemaKind::Bool,
+                "i64" => SchemaKind::I64,
+                "f64" => SchemaKind::F64,
+                "string" => SchemaKind::String,
+                other => {
+                    return Err(Status::invalid_argument(format!(
+                        "unknown field kind '{}'; use bool, i64, f64, or string",
+                        other
+                    )))
+                }
+            };
+            Ok(FieldSchema {
+                name: f.name.clone(),
+                kind,
+                required: f.required,
+            })
+        })
+        .collect()
+}
+
 #[tonic::async_trait]
 impl BpmnLite for BpmnLiteService {
     async fn compile(
@@ -335,6 +372,7 @@ impl BpmnLite for BpmnLiteService {
                     element_id: String::new(),
                 })
                 .collect(),
+            flag_symbol_table: result.flag_symbol_table.into_iter().collect(),
         }))
     }
 
@@ -833,5 +871,68 @@ impl BpmnLite for BpmnLiteService {
     ) -> Result<Response<MetricsResponse>, Status> {
         self.metrics.request_started();
         Ok(Response::new(self.metrics.snapshot()))
+    }
+
+    async fn register_dmn_decision(
+        &self,
+        request: Request<RegisterDmnDecisionRequest>,
+    ) -> Result<Response<RegisterDmnDecisionResponse>, Status> {
+        self.metrics.request_started();
+        let req = request.into_inner();
+        let tenant_id = request_tenant_id(&self.limits, &req.tenant_id)?;
+        let publisher = if req.publisher.is_empty() {
+            "server".to_string()
+        } else {
+            req.publisher.clone()
+        };
+
+        // Parse catalogue (empty TOML = minimal catalogue with no domains).
+        let catalogue_toml = if req.catalogue_toml.is_empty() {
+            concat!(
+                "snapshot_id = \"00000000-0000-7000-8000-000000000000\"\n",
+                "snapshot_version = \"v1\"\n",
+                "created_at = \"2026-01-01T00:00:00Z\"\n",
+            ).to_string()
+        } else {
+            req.catalogue_toml.clone()
+        };
+        let catalogue = load_catalogue_from_str(&catalogue_toml)
+            .map_err(|e| Status::invalid_argument(format!("catalogue_toml invalid: {e}")))?;
+
+        // Parse and compile the DMN source.
+        let ast = parse(&req.dmn_source)
+            .map_err(|e| Status::invalid_argument(format!("dmn_source parse error: {e}")))?;
+        let decision = compile_and_verify(ast, &catalogue, &req.dmn_source)
+            .map_err(|e| Status::invalid_argument(format!("dmn_source compile error: {e}")))?;
+
+        // Convert proto field schemas.
+        let input_schema = proto_fields_to_schema(&req.input_fields)?;
+        let output_schema = proto_fields_to_schema(&req.output_fields)?;
+
+        // Register with the DmnLiteOwner and publish the template.
+        let template = self.ffi_owner.register_decision(
+            decision,
+            input_schema,
+            output_schema,
+            Idempotency::Idempotent,
+            tenant_id.clone(),
+            publisher,
+        );
+
+        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+
+        self.ffi_store
+            .publish(&template)
+            .await
+            .map_err(|e| Status::internal(format!("publish template: {e}")))?;
+
+        // Refresh cache so the dispatcher sees the new template immediately.
+        self.ffi_catalogue
+            .load_into_cache(&tenant_id)
+            .await
+            .map_err(|e| Status::internal(format!("refresh catalogue cache: {e}")))?;
+
+        tracing::info!(template_id = %template_id_hex, %tenant_id, "registered dmn-lite decision as FFI template");
+        Ok(Response::new(RegisterDmnDecisionResponse { template_id_hex }))
     }
 }

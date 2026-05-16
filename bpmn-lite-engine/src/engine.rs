@@ -54,6 +54,9 @@ pub struct CompileResult {
     pub bytecode_version: [u8; 32],
     pub task_types: Vec<String>,
     pub diagnostics: Vec<String>,
+    /// Maps FlagKey (u32) → symbolic data-object name.
+    /// Clients use this to address flags by name via `orch_flags` keys like `"flag_<N>"`.
+    pub flag_symbol_table: std::collections::BTreeMap<u32, String>,
 }
 
 /// Snapshot of a process instance for the Inspect RPC.
@@ -247,6 +250,7 @@ impl BpmnLiteEngine {
 
         let bytecode_version = program.bytecode_version;
         let task_types = program.task_manifest.clone();
+        let flag_symbol_table = program.flag_symbol_table.clone();
 
         self.store.store_program(bytecode_version, &program).await?;
 
@@ -254,6 +258,7 @@ impl BpmnLiteEngine {
             bytecode_version,
             task_types,
             diagnostics: vec![],
+            flag_symbol_table,
         })
     }
 
@@ -284,6 +289,7 @@ impl BpmnLiteEngine {
 
         let bytecode_version = program.bytecode_version;
         let task_types = program.task_manifest.clone();
+        let flag_symbol_table = program.flag_symbol_table.clone();
 
         self.store.store_program(bytecode_version, &program).await?;
 
@@ -291,6 +297,7 @@ impl BpmnLiteEngine {
             bytecode_version,
             task_types,
             diagnostics: vec![],
+            flag_symbol_table,
         })
     }
 

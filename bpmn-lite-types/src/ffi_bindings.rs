@@ -32,7 +32,7 @@ pub enum PrimitiveType {
 
 /// Type declaration for a process variable.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum DataObjectType {
     Primitive(PrimitiveType),
     /// A Sem OS-governed enumerated domain. Maps to `DomainPayload` storage.
@@ -48,7 +48,7 @@ pub enum DataObjectType {
 /// - `Bool`, `I64` → `Flag` (fits in `bpmn_lite_types::Value`)
 /// - `F64`, `String`, `SemOsDomain` → `DomainPayload`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "storage", rename_all = "snake_case")]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum DataObjectStorage {
     /// Stored in `ProcessInstance.flags` under this key.
     Flag(FlagKey),
@@ -89,7 +89,7 @@ pub struct DataObjectDecl {
 /// Produced from the C-minimal expression language (A2 §5):
 /// `bool` / integer / float / string / symbol literals.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Literal {
     Bool(bool),
     I64(i64),
@@ -102,7 +102,7 @@ pub enum Literal {
 /// Produced by lowering `Expression::VarRef` / `Expression::Literal` against
 /// the `data_objects` map.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "source", rename_all = "snake_case")]
+#[serde(tag = "source", content = "value", rename_all = "snake_case")]
 pub enum BindingSource {
     /// A compile-time constant.
     Literal(Literal),
@@ -115,7 +115,7 @@ pub enum BindingSource {
 
 /// A resolved binding target for one `<bpmn:output>` entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "target", rename_all = "snake_case")]
+#[serde(tag = "target", content = "value", rename_all = "snake_case")]
 pub enum BindingTarget {
     /// Write into `ProcessInstance.flags[key]`.
     /// Only valid for `SchemaKind::Bool` and `SchemaKind::I64` outputs
