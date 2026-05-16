@@ -127,6 +127,15 @@ impl FfiDispatcher {
             .map(|t| t.owner_type.clone())
             .unwrap_or_else(|| "unknown".to_string())
     }
+
+    /// Return the idempotency declaration for a cached template.
+    /// Returns `None` if the template is not in the catalogue cache.
+    pub async fn idempotency_for(&self, template_id: &[u8; 32]) -> Option<ffi_types::Idempotency> {
+        self.catalogue
+            .lookup_cached(template_id)
+            .await
+            .map(|t| t.idempotency.clone())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -2102,31 +2102,29 @@ impl BpmnLiteEngine {
         self.store.health_check().await
     }
 
-    /// A17 — Scan running instances for interrupted FFI calls at startup.
+    /// A17 — Scan running instances for interrupted FFI calls and recover.
     ///
-    /// For each running instance, checks if the last FFI-related event is
-    /// `FfiInvocationPending` with no matching `FfiInvocationCompleted`. These
-    /// represent calls that were in-flight when the server crashed.
+    /// - **Idempotent / IdempotentWithKey:** no action — tick loop re-invokes.
+    /// - **NonIdempotent:** creates an Incident on the stalled fiber and marks
+    ///   the instance Failed. Operator must resolve the incident manually.
     ///
-    /// - **Idempotent templates:** no action required — the tick loop will
-    ///   re-execute the ExecFfi instruction and re-invoke the owner.
-    /// - **NonIdempotent templates:** the engine logs a warning; creating an
-    ///   incident for these is the remaining A17 work (requires decoding the
-    ///   fiber state and calling `create_incident` which needs the full engine).
-    ///
-    /// Returns the count of interrupted calls detected.
+    /// Returns the number of interrupted calls processed.
     pub async fn detect_interrupted_ffi_calls(&self, tenant_id: &str) -> Result<usize> {
         use bpmn_lite_types::events::RuntimeEvent;
+        use ffi_types::Idempotency;
         use std::collections::HashSet;
 
+        let Some(dispatcher) = &self.ffi_dispatcher else {
+            return Ok(0);
+        };
+
         let running = self.store.list_running_instances(tenant_id).await?;
-        let mut interrupted = 0usize;
+        let mut count = 0usize;
 
         for instance_id in running {
             let events = self.store.read_events(instance_id, 0).await?;
 
-            // Collect completed invocation IDs.
-            let completed_ids: HashSet<uuid::Uuid> = events
+            let completed_ids: HashSet<Uuid> = events
                 .iter()
                 .filter_map(|(_, ev)| match ev {
                     RuntimeEvent::FfiInvocationCompleted { invocation_id, .. } => {
@@ -2136,34 +2134,110 @@ impl BpmnLiteEngine {
                 })
                 .collect();
 
-            // Find pending invocations without a corresponding completed event.
             for (_, ev) in &events {
-                if let RuntimeEvent::FfiInvocationPending {
+                let RuntimeEvent::FfiInvocationPending {
                     invocation_id,
                     template_id_hex,
                     caller_task_id,
+                    caller_pc,
                     owner_type,
-                    ..
-                } = ev
-                {
-                    if !completed_ids.contains(invocation_id) {
-                        interrupted += 1;
+                } = ev else { continue; };
+
+                if completed_ids.contains(invocation_id) {
+                    continue;
+                }
+                count += 1;
+
+                // Decode template_id from 64-char hex.
+                let template_id: Option<[u8; 32]> = (template_id_hex.len() == 64)
+                    .then(|| {
+                        (0..32)
+                            .map(|i| u8::from_str_radix(&template_id_hex[i * 2..i * 2 + 2], 16).ok())
+                            .collect::<Option<Vec<u8>>>()
+                    })
+                    .flatten()
+                    .and_then(|v| v.try_into().ok());
+
+                let idempotency = if let Some(tid) = &template_id {
+                    dispatcher.idempotency_for(tid).await
+                } else {
+                    None
+                };
+
+                match &idempotency {
+                    Some(Idempotency::NonIdempotent) => {
                         tracing::warn!(
-                            %instance_id,
-                            %invocation_id,
+                            %instance_id, %invocation_id,
                             template_id = %&template_id_hex[..16],
-                            %owner_type,
-                            %caller_task_id,
-                            "A17: interrupted FFI call detected at startup; \
-                             idempotent calls will be retried by tick loop; \
-                             non-idempotent calls require manual incident resolution"
+                            %owner_type, %caller_task_id,
+                            "A17: non-idempotent FFI call interrupted — creating incident"
+                        );
+
+                        let result: Result<()> = async {
+                            let mut instance = self.store.load_instance(instance_id).await?
+                                .ok_or_else(|| anyhow!("A17: instance {} not found", instance_id))?;
+
+                            if !matches!(instance.state, ProcessState::Running) {
+                                return Ok(());
+                            }
+
+                            // Fibers are stored separately from the instance.
+                            let mut fibers = self.store.load_fibers(instance_id).await?;
+                            let fiber_idx = fibers.iter().position(|f| f.pc == *caller_pc);
+                            let Some(idx) = fiber_idx else {
+                                tracing::warn!(%instance_id, "A17: fiber at pc={} not found; skipping", caller_pc);
+                                return Ok(());
+                            };
+
+                            let incident_id = Uuid::now_v7();
+                            let fiber = &fibers[idx];
+                            let incident = Incident {
+                                incident_id,
+                                process_instance_id: instance_id,
+                                fiber_id: fiber.fiber_id,
+                                service_task_id: caller_task_id.clone(),
+                                bytecode_addr: *caller_pc,
+                                error_class: ErrorClass::ContractViolation,
+                                message: format!(
+                                    "non-idempotent FFI call to {} interrupted at restart; manual resolution required",
+                                    &template_id_hex[..16]
+                                ),
+                                retry_count: 0,
+                                created_at: now_ms(),
+                                resolved_at: None,
+                                resolution: None,
+                            };
+                            self.store.save_incident(&incident).await?;
+                            self.store.append_event(instance_id, &RuntimeEvent::IncidentCreated {
+                                incident_id,
+                                service_task_id: caller_task_id.clone(),
+                                job_key: None,
+                            }).await?;
+
+                            fibers[idx].wait = WaitState::Incident { incident_id };
+                            self.store.save_fiber(instance_id, &fibers[idx]).await?;
+                            instance.state = ProcessState::Failed { incident_id };
+                            self.store.save_instance(&instance).await?;
+                            Ok(())
+                        }.await;
+
+                        if let Err(e) = result {
+                            tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
+                        }
+                    }
+                    _ => {
+                        tracing::info!(
+                            %instance_id, %invocation_id,
+                            template_id = %&template_id_hex[..16],
+                            %owner_type, %caller_task_id,
+                            "A17: idempotent FFI call interrupted — tick loop will re-invoke"
                         );
                     }
                 }
             }
         }
 
-        Ok(interrupted)
+        Ok(count)
     }
 }
 

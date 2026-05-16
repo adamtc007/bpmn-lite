@@ -77,6 +77,29 @@ impl PostgresProcessStore {
             .context("failed to run bpmn-lite migrations")?;
         Ok(())
     }
+
+    /// A16 — Set the tenant context for the current transaction.
+    ///
+    /// Call `SET LOCAL app.tenant_id = <tenant>` at the start of each
+    /// transaction so that Row-Level Security policies can filter rows.
+    /// `SET LOCAL` scopes the setting to the current transaction only;
+    /// it is reset automatically when the transaction commits or rolls back.
+    ///
+    /// Usage: call this immediately after beginning a transaction, before
+    /// any data query. Without this, RLS policies using
+    /// `current_setting('app.tenant_id', true)` will return NULL and
+    /// no rows will be visible.
+    pub async fn set_tenant_context(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tenant_id: &str,
+    ) -> Result<()> {
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(tenant_id)
+            .execute(tx.as_mut())
+            .await
+            .context("failed to set tenant context for RLS")?;
+        Ok(())
+    }
 }
 
 async fn notify_event_tx(
