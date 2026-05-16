@@ -1,2 +1,5 @@
 target/
 .git/
+docs/
+*.md
+**/*.md

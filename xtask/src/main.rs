@@ -597,18 +597,13 @@ fn ensure_docker_available() -> Result<()> {
 }
 
 fn ensure_docker_image(workspace_root: &Path, image: &str) -> Result<()> {
-    let repo_root = workspace_root
-        .parent()
-        .ok_or_else(|| anyhow!("failed to locate repo root from bpmn-lite workspace"))?;
     run_command(
         Command::new("docker")
             .arg("build")
             .arg("-t")
             .arg(image)
-            .arg("-f")
-            .arg("bpmn-lite/Dockerfile")
             .arg(".")
-            .current_dir(repo_root),
+            .current_dir(workspace_root),
     )
     .with_context(|| format!("failed to build docker image '{}'", image))
 }
