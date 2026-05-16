@@ -1,0 +1,27 @@
+syntax = "proto3";
+package ffi_bridge.v1;
+
+// Vocabulary-neutral FFI bridge service.
+//
+// Any external service that wants to be callable as an FFI vocabulary
+// implements this single-method service. Input and output payloads are
+// JSON-encoded (UTF-8) in the bytes fields — no schema is baked into the proto.
+//
+// Owner metadata (stored in FfiTemplate.owner_metadata) specifies the
+// endpoint; the vocab-specific field names live only in the FFI catalogue.
+service FfiBridge {
+    rpc Invoke(FfiBridgeRequest) returns (FfiBridgeResponse);
+}
+
+message FfiBridgeRequest {
+    // JSON object {"field": value, ...} matching the FFI template's input_schema.
+    bytes inputs_json = 1;
+    // Opaque invocation ID from the calling bpmn-lite engine (UUIDv7, for idempotency).
+    string invocation_id = 2;
+}
+
+message FfiBridgeResponse {
+    // JSON object {"field": value, ...} matching the FFI template's output_schema.
+    // Empty bytes (b"") signals NoMatch — the call succeeded but produced no output.
+    bytes outputs_json = 1;
+}

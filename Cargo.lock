@@ -329,6 +329,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpmn-lite-ffi-grpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ffi-types",
+ "hex",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "bpmn-lite-ffi-http"
 version = "0.1.0"
 dependencies = [
@@ -351,6 +367,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bpmn-lite-engine",
+ "bpmn-lite-ffi-grpc",
  "bpmn-lite-ffi-http",
  "bpmn-lite-store",
  "bpmn-lite-store-postgres",

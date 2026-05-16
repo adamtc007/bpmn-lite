@@ -1,0 +1,35 @@
+[package]
+name = "bpmn-lite-ffi-grpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "gRPC FFI execution owner for bpmn-lite — registers gRPC endpoint templates and dispatches calls via a vocabulary-neutral FfiBridge service"
+
+# Capability discipline:
+#   IN-SCOPE  : GrpcFfiOwner (FfiExecutionOwner), GrpcTemplateConfig,
+#               FfiBridge proto (client + server), gRPC status → FfiIncidentClass mapping.
+#   OUT-OF-SCOPE: auth/TLS (A16+), per-service proto compilation, streaming.
+
+[dependencies]
+ffi-types = { path = "../ffi-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+hex = "0.4"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true }
+tonic = { workspace = true }
+
+[lints]
+workspace = true

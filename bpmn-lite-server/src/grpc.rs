@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_types::{ErrorClass, Value};
+use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
@@ -206,8 +207,10 @@ pub struct BpmnLiteService {
     pub subscription_limiter: Arc<Semaphore>,
     /// In-process dmn-lite FFI execution owner (registers decisions, evaluates them).
     pub ffi_owner: Arc<DmnLiteOwner>,
-    /// In-process HTTP FFI execution owner (registers HTTP templates, makes HTTP calls).
+    /// In-process HTTP FFI execution owner.
     pub http_ffi_owner: Arc<HttpFfiOwner>,
+    /// In-process gRPC FFI execution owner.
+    pub grpc_ffi_owner: Arc<GrpcFfiOwner>,
     /// FFI template catalogue (shared with FfiDispatcher via Arc).
     pub ffi_catalogue: Arc<FfiCatalogue>,
     /// Backing store for the FFI catalogue; used to publish new templates.
@@ -994,5 +997,37 @@ impl BpmnLite for BpmnLiteService {
 
         tracing::info!(template_id = %template_id_hex, %tenant_id, "registered HTTP template");
         Ok(Response::new(RegisterHttpTemplateResponse { template_id_hex }))
+    }
+
+    async fn register_grpc_template(
+        &self,
+        request: Request<RegisterGrpcTemplateRequest>,
+    ) -> Result<Response<RegisterGrpcTemplateResponse>, Status> {
+        self.metrics.request_started();
+        let req = request.into_inner();
+        let tenant_id = request_tenant_id(&self.limits, &req.tenant_id)?;
+        let publisher = if req.publisher.is_empty() { "server".to_string() } else { req.publisher.clone() };
+        let timeout_ms = if req.timeout_ms == 0 { 5000 } else { req.timeout_ms };
+
+        let idempotency = match req.idempotency.to_lowercase().as_str() {
+            "idempotent" => Idempotency::Idempotent,
+            "non_idempotent" | "nonidempotent" | "" => Idempotency::NonIdempotent,
+            other => return Err(Status::invalid_argument(format!("unknown idempotency '{}'", other))),
+        };
+
+        let input_schema = proto_fields_to_schema(&req.input_fields)?;
+        let output_schema = proto_fields_to_schema(&req.output_fields)?;
+
+        let template = self.grpc_ffi_owner
+            .register_template(req.endpoint, timeout_ms, input_schema, output_schema, idempotency, tenant_id.clone(), publisher)
+            .map_err(|e| Status::invalid_argument(format!("invalid gRPC template: {:#}", e)))?;
+
+        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+
+        self.ffi_store.publish(&template).await.map_err(|e| Status::internal(format!("{e}")))?;
+        self.ffi_catalogue.load_into_cache(&tenant_id).await.map_err(|e| Status::internal(format!("{e}")))?;
+
+        tracing::info!(template_id = %template_id_hex, %tenant_id, "registered gRPC template");
+        Ok(Response::new(RegisterGrpcTemplateResponse { template_id_hex }))
     }
 }

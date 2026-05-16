@@ -7,6 +7,7 @@ use bpmn_lite_server::grpc::proto::bpmn_lite_server::BpmnLiteServer;
 use bpmn_lite_server::grpc::{BpmnLiteService, RequestLimits, ServerMetrics};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::store_memory::MemoryStore;
+use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::HttpFfiOwner;
 use dmn_lite_bridge::DmnLiteOwner;
 use ffi_catalogue::{FfiCatalogue, MemoryFfiTemplateStore};
@@ -63,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ffi_cat = Arc::new(FfiCatalogue::new(ffi_store.clone()));
     let ffi_owner = Arc::new(DmnLiteOwner::new());
     let http_ffi_owner = Arc::new(HttpFfiOwner::new());
+    let grpc_ffi_owner = Arc::new(GrpcFfiOwner::new());
     let mut ffi_dispatcher = FfiDispatcher::new(ffi_cat.clone());
     ffi_dispatcher
         .register_owner(ffi_owner.clone())
@@ -70,6 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ffi_dispatcher
         .register_owner(http_ffi_owner.clone())
         .expect("register HttpFfiOwner");
+    ffi_dispatcher
+        .register_owner(grpc_ffi_owner.clone())
+        .expect("register GrpcFfiOwner");
     let ffi_dispatcher = Arc::new(ffi_dispatcher);
     tracing::info!("FFI dispatcher initialised with dmn-lite + http execution owners");
 
@@ -144,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))),
         ffi_owner,
         http_ffi_owner,
+        grpc_ffi_owner,
         ffi_catalogue: ffi_cat,
         ffi_store,
     };

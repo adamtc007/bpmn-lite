@@ -31,6 +31,7 @@ fn main() -> Result<()> {
         "docker-ffi-smoke" => docker_ffi_smoke_command(&args[1..]),
         "docker-http-smoke" => docker_http_smoke_command(&args[1..]),
         "docker-heterogeneous-smoke" => docker_heterogeneous_smoke_command(&args[1..]),
+        "docker-grpc-smoke" => docker_grpc_smoke_command(&args[1..]),
         "docker-ha-stress" => run_docker_ha_profile("stress", &args[1..]),
         "docker-ha-subscription-fanout" => run_docker_ha_profile("subscription", &args[1..]),
         "docker-up" => docker_up_command(&args[1..]),
@@ -98,6 +99,8 @@ fn run_profile(profile: &str, extra_args: &[String]) -> Result<()> {
 
 const DEFAULT_HTTP_TARGET_IMAGE: &str = "bpmn-lite-http-target:local";
 const DEFAULT_HTTP_TARGET_PORT: u16 = 8080;
+const DEFAULT_GRPC_TARGET_IMAGE: &str = "bpmn-lite-grpc-target:local";
+const DEFAULT_GRPC_TARGET_PORT: u16 = 50099;
 
 fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
     let workspace_root = workspace_root()?;
@@ -161,6 +164,84 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
     let cleanup = docker_down_deployment(&deployment);
     result.and(cleanup)?;
     Ok(())
+}
+
+fn docker_grpc_smoke_command(extra_args: &[String]) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let parsed = parse_args(extra_args)?;
+
+    if !parsed.skip_build {
+        ensure_docker_image(&workspace_root, DEFAULT_DOCKER_IMAGE)?;
+        build_grpc_target_image(&workspace_root)?;
+    }
+
+    let deployment = docker_up(&workspace_root, &parsed)?;
+    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+
+    let grpc_container = format!("bpmn-lite-grpc-target-{}", deployment.instance_name);
+    remove_container_if_exists(&grpc_container)?;
+    run_command(
+        Command::new("docker")
+            .arg("run").arg("-d")
+            .arg("--name").arg(&grpc_container)
+            .arg("--network").arg(&deployment.network_name)
+            .arg("-p").arg(format!("{}:{}", DEFAULT_GRPC_TARGET_PORT, DEFAULT_GRPC_TARGET_PORT))
+            .arg(DEFAULT_GRPC_TARGET_IMAGE),
+    )?;
+
+    let grpc_target_url = format!("http://{}:{}", grpc_container, DEFAULT_GRPC_TARGET_PORT);
+    wait_for_tcp_port(DEFAULT_GRPC_TARGET_PORT, Duration::from_secs(15))?;
+
+    let result = Command::new("cargo")
+        .arg("run").arg("-p").arg("bpmn-lite-server")
+        .arg("--bin").arg("grpc_proof")
+        .arg("--")
+        .arg("--server-url").arg(&server_url)
+        .arg("--grpc-target-url").arg(&grpc_target_url)
+        .current_dir(&workspace_root)
+        .status()
+        .context("failed to run grpc_proof")
+        .and_then(|s| if s.success() { Ok(()) } else { bail!("grpc_proof exited with {}", s) });
+
+    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&grpc_container));
+    let cleanup = docker_down_deployment(&deployment);
+    result.and(cleanup)?;
+    Ok(())
+}
+
+fn build_grpc_target_image(workspace_root: &Path) -> Result<()> {
+    let dockerfile = r#"FROM rust:1.95-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p bpmn-lite-server --bin grpc_test_target && strip target/release/grpc_test_target
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/grpc_test_target /usr/local/bin/
+EXPOSE 50099
+CMD ["grpc_test_target"]
+"#;
+    let path = workspace_root.join("Dockerfile.grpc-target");
+    std::fs::write(&path, dockerfile).context("write Dockerfile.grpc-target")?;
+    run_command(
+        Command::new("docker")
+            .arg("build").arg("-t").arg(DEFAULT_GRPC_TARGET_IMAGE)
+            .arg("-f").arg("Dockerfile.grpc-target")
+            .arg(".")
+            .current_dir(workspace_root),
+    ).context("build grpc-target image")?;
+    let _ = std::fs::remove_file(path);
+    Ok(())
+}
+
+fn wait_for_tcp_port(port: u16, timeout: Duration) -> Result<()> {
+    let addr = format!("127.0.0.1:{}", port);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if TcpStream::connect(&addr).is_ok() { return Ok(()); }
+        if Instant::now() > deadline { bail!("port {} not ready after {}s", port, timeout.as_secs()); }
+        sleep(Duration::from_millis(200));
+    }
 }
 
 fn docker_heterogeneous_smoke_command(extra_args: &[String]) -> Result<()> {

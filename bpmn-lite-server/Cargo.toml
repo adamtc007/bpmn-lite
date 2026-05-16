@@ -24,6 +24,7 @@ dmn-lite-parser = { path = "../dmn-lite-parser" }
 dmn-lite-compiler = { path = "../dmn-lite-compiler" }
 dmn-lite-bridge = { path = "../dmn-lite-bridge" }
 bpmn-lite-ffi-http = { path = "../bpmn-lite-ffi-http" }
+bpmn-lite-ffi-grpc = { path = "../bpmn-lite-ffi-grpc" }
 tonic = { workspace = true }
 prost = { workspace = true }
 tokio = { workspace = true }

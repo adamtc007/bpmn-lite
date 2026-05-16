@@ -7,6 +7,7 @@ service BpmnLite {
     // FFI vocabulary registration
     rpc RegisterDmnDecision(RegisterDmnDecisionRequest) returns (RegisterDmnDecisionResponse);
     rpc RegisterHttpTemplate(RegisterHttpTemplateRequest) returns (RegisterHttpTemplateResponse);
+    rpc RegisterGrpcTemplate(RegisterGrpcTemplateRequest) returns (RegisterGrpcTemplateResponse);
 
     // Process lifecycle
     rpc StartProcess(StartRequest) returns (StartResponse);
@@ -227,6 +228,20 @@ message RegisterHttpTemplateRequest {
 }
 
 message RegisterHttpTemplateResponse {
+    string template_id_hex = 1;
+}
+
+message RegisterGrpcTemplateRequest {
+    string endpoint = 1;
+    uint64 timeout_ms = 2;                      // 0 = default (5000)
+    repeated FfiFieldSchemaProto input_fields = 3;
+    repeated FfiFieldSchemaProto output_fields = 4;
+    string idempotency = 5;                     // "" | "idempotent" | "non_idempotent"
+    string tenant_id = 6;
+    string publisher = 7;
+}
+
+message RegisterGrpcTemplateResponse {
     string template_id_hex = 1;
 }
 
