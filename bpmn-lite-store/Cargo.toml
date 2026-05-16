@@ -1,0 +1,26 @@
+[package]
+name = "bpmn-lite-store"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite persistence boundary — ProcessStore trait + MemoryStore impl. PostgreSQL impl lives in sibling bpmn-lite-store-postgres crate."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : `ProcessStore` async trait + `MemoryProcessStore`
+#               (in-process implementation used by tests and dev).
+#   OUT-OF-SCOPE: PostgreSQL impl (bpmn-lite-store-postgres),
+#                 schema migrations (also in -store-postgres),
+#                 the bytecode interpreter (bpmn-lite-vm), the
+#                 compiler (bpmn-lite-compiler).
+
+[dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
+serde_json = { workspace = true }
+ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+
+[lints]
+workspace = true

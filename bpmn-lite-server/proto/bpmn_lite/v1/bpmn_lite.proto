@@ -1,0 +1,209 @@
+syntax = "proto3";
+package bpmn_lite.v1;
+
+service BpmnLite {
+    // Model lifecycle
+    rpc Compile(CompileRequest) returns (CompileResponse);
+
+    // Process lifecycle
+    rpc StartProcess(StartRequest) returns (StartResponse);
+    rpc Signal(SignalRequest) returns (SignalResponse);
+    rpc Cancel(CancelRequest) returns (CancelResponse);
+    rpc Inspect(InspectRequest) returns (InspectResponse);
+
+    // Job worker protocol
+    rpc ActivateJobs(ActivateJobsRequest) returns (stream JobActivationMsg);
+    rpc CompleteJob(CompleteJobRequest) returns (CompleteJobResponse);
+    rpc FailJob(FailJobRequest) returns (FailJobResponse);
+
+    // Event stream
+    rpc SubscribeEvents(SubscribeRequest) returns (stream LifecycleEvent);
+
+    // Operations
+    rpc Health(HealthRequest) returns (HealthResponse);
+    rpc Metrics(MetricsRequest) returns (MetricsResponse);
+}
+
+// --- Compile ---
+
+message CompileRequest {
+    string bpmn_xml = 1;
+    bool validate_only = 2;
+}
+
+message CompileResponse {
+    bytes bytecode_version = 1;
+    repeated Diagnostic diagnostics = 2;
+}
+
+message Diagnostic {
+    string severity = 1;
+    string message = 2;
+    string element_id = 3;
+}
+
+// --- Start ---
+
+message StartRequest {
+    string process_key = 1;
+    bytes bytecode_version = 2;
+    string domain_payload = 3;
+    bytes domain_payload_hash = 4;
+    string session_stack_json = 5;
+    map<string, ProtoValue> orch_flags = 6;
+    string correlation_id = 7;
+    string entry_id = 8;
+    string runbook_id = 9;
+    string tenant_id = 10;
+}
+
+message StartResponse {
+    string process_instance_id = 1;
+}
+
+// --- Signal ---
+
+message SignalRequest {
+    string process_instance_id = 1;
+    string message_name = 2;
+    ProtoValue correlation_key = 3;
+    bytes payload = 4;
+    string msg_id = 5;
+    string tenant_id = 6;
+}
+
+message SignalResponse {}
+
+// --- Cancel ---
+
+message CancelRequest {
+    string process_instance_id = 1;
+    string reason = 2;
+    string tenant_id = 3;
+}
+
+message CancelResponse {}
+
+// --- Inspect ---
+
+message InspectRequest {
+    string process_instance_id = 1;
+    string tenant_id = 2;
+}
+
+message InspectResponse {
+    string state = 1;
+    repeated FiberInfo fibers = 2;
+    repeated WaitInfo waits = 3;
+    bytes bytecode_version = 4;
+    string domain_payload_hash = 5;
+    string tenant_id = 6;
+}
+
+message FiberInfo {
+    string fiber_id = 1;
+    uint32 pc = 2;
+    string wait_state = 3;
+}
+
+message WaitInfo {
+    string fiber_id = 1;
+    string wait_type = 2;
+    string detail = 3;
+}
+
+// --- Job Worker ---
+
+message ActivateJobsRequest {
+    repeated string task_types = 1;
+    int32 max_jobs = 2;
+    int64 timeout_ms = 3;
+    string worker_id = 4;
+    string tenant_id = 5;
+}
+
+message JobActivationMsg {
+    string job_key = 1;
+    string process_instance_id = 2;
+    string task_type = 3;
+    string service_task_id = 4;
+    string domain_payload = 5;
+    bytes domain_payload_hash = 6;
+    string session_stack_json = 7;
+    map<string, ProtoValue> orch_flags = 8;
+    int32 retries_remaining = 9;
+    string entry_id = 10;
+    string runbook_id = 11;
+    string worker_id = 12;
+    string claim_token = 13;
+    string tenant_id = 14;
+}
+
+message CompleteJobRequest {
+    string job_key = 1;
+    string domain_payload = 2;
+    bytes domain_payload_hash = 3;
+    map<string, ProtoValue> orch_flags = 4;
+    string worker_id = 5;
+    string claim_token = 6;
+    string tenant_id = 7;
+}
+
+message CompleteJobResponse {}
+
+message FailJobRequest {
+    string job_key = 1;
+    string error_class = 2;
+    string message = 3;
+    int64 retry_hint_ms = 4;
+    string worker_id = 5;
+    string claim_token = 6;
+    string tenant_id = 7;
+}
+
+message FailJobResponse {}
+
+// --- Events ---
+
+message SubscribeRequest {
+    string process_instance_id = 1;
+    string tenant_id = 2;
+}
+
+message LifecycleEvent {
+    uint64 sequence = 1;
+    string event_type = 2;
+    string process_instance_id = 3;
+    string payload_json = 4;
+}
+
+// --- Operations ---
+
+message HealthRequest {}
+
+message HealthResponse {
+    bool ready = 1;
+    string status = 2;
+}
+
+message MetricsRequest {}
+
+message MetricsResponse {
+    uint64 requests_total = 1;
+    uint64 request_rejections_total = 2;
+    uint64 job_activations_total = 3;
+    uint64 job_completions_total = 4;
+    uint64 job_failures_total = 5;
+    uint64 active_subscriptions = 6;
+    uint64 subscription_rejections_total = 7;
+}
+
+// --- Shared types ---
+
+message ProtoValue {
+    oneof kind {
+        bool bool_value = 1;
+        int64 i64_value = 2;
+        string str_value = 3;
+    }
+}

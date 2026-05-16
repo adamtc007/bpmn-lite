@@ -1,0 +1,27 @@
+[package]
+name = "bpmn-lite-compiler"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite compiler — BPMN-XML parse → IR → bytecode lowering + verification. Pure functions over bpmn-lite-types."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : BPMN 2.0 XML parser, IR representation, IR→bytecode
+#               lowering, IR + bytecode verification. Pure
+#               functions over `bpmn-lite-types`; no async, no DB.
+#   OUT-OF-SCOPE: YAML / DTO authoring path (bpmn-lite-authoring
+#                 owns that and depends on us), bytecode execution
+#                 (bpmn-lite-vm), persistence (bpmn-lite-store).
+
+[dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+ffi-types = { path = "../ffi-types" }
+anyhow = { workspace = true }
+petgraph = { workspace = true }
+quick-xml = "0.36"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

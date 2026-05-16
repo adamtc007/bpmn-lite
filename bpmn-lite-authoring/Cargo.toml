@@ -1,0 +1,52 @@
+[package]
+name = "bpmn-lite-authoring"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite authoring — YAML/DTO → IR pipeline, lint rules (L1–L5), publish pipeline, BPMN-XML round-trip, template registry. Today inert; needs gRPC/CLI exposure to become user-facing."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : YAML parse (`yaml`), DTO definitions (`dto`),
+#               structural validation (`validate`), contract-aware
+#               lint rules L1–L5 (`lints` + `contracts`), DTO→IR
+#               (`dto_to_ir`), IR→DTO round-trip (`ir_to_dto`),
+#               BPMN-XML export (`export_bpmn`), publish pipeline
+#               (`publish`), template registry trait + memory impl
+#               (`registry`). PostgreSQL template store goes
+#               behind a feature or splits to `-authoring-postgres`.
+#   OUT-OF-SCOPE: bytecode interpretation (bpmn-lite-vm), engine
+#                 orchestration (bpmn-lite-engine), the
+#                 process-state store (bpmn-lite-store).
+#
+# Audit note (bpmn-lite Phase 0 finding): this crate's pipeline
+# is architecturally complete (YAML → DTO → IR → bytecode →
+# optional BPMN-XML export + lint diagnostics) but currently has
+# zero external callers. The gRPC service exposes only
+# `Compile(bpmn_xml: string)` — there is no `PublishWorkflow` /
+# `CompileYaml` / `Validate` / `Lint` / `Template*` RPC, and no
+# xtask CLI surface. The Phase 2 migration relocates the code
+# without changing that wiring; making this crate user-facing is
+# a separate slice (add gRPC RPCs + wire `compile_and_publish` to
+# persist into TemplateStore).
+
+[features]
+default = []
+postgres = ["dep:sqlx", "dep:chrono"]
+
+[dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+sha2 = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+petgraph = { workspace = true }
+sqlx = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

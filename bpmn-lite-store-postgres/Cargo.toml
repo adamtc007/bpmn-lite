@@ -1,0 +1,40 @@
+[package]
+name = "bpmn-lite-store-postgres"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite PostgreSQL persistence — PostgresProcessStore + migrations. Implements the ProcessStore trait from bpmn-lite-store."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : `PostgresProcessStore` impl of `ProcessStore`,
+#               schema migrations (under `./migrations/`), the
+#               `LISTEN/NOTIFY` plumbing the gRPC server's event
+#               fanout depends on.
+#   OUT-OF-SCOPE: in-memory store (bpmn-lite-store), authoring's
+#                 template store (bpmn-lite-authoring keeps its
+#                 own template-postgres impl), runtime semantics
+#                 (bpmn-lite-vm, bpmn-lite-engine).
+
+[dependencies]
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+ffi-catalogue = { path = "../ffi-catalogue" }
+ffi-types = { path = "../ffi-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+chrono = { workspace = true }
+ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+bpmn-lite-engine = { path = "../bpmn-lite-engine" }
+bpmn-lite-vm = { path = "../bpmn-lite-vm" }
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+tokio = { workspace = true, features = ["test-util"] }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

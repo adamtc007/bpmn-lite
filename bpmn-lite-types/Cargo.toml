@@ -1,0 +1,24 @@
+[package]
+name = "bpmn-lite-types"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite domain model — value types, instruction set, ProcessInstance/Fiber/CompiledProgram, RuntimeEvent. Leaf crate; depends on no other bpmn-lite crate."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : pure value types, scalar id aliases (Addr, JoinId, ...),
+#               serialisable DTOs the runtime + persistence + wire pass
+#               around. No DB. No tokio. No anyhow side-effects.
+#   OUT-OF-SCOPE: bytecode interpreter (bpmn-lite-vm), compiler
+#                 (bpmn-lite-compiler), store traits / impls
+#                 (bpmn-lite-store, -store-postgres), authoring
+#                 (bpmn-lite-authoring), engine orchestration
+#                 (bpmn-lite-engine).
+
+[dependencies]
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+
+[lints]
+workspace = true

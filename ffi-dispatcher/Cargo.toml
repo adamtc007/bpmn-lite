@@ -1,0 +1,26 @@
+[package]
+name = "ffi-dispatcher"
+version = "0.1.0"
+edition = "2021"
+description = "FFI dispatcher — routes FfiCall to the registered FfiExecutionOwner based on the template's owner_type."
+
+# Capability discipline:
+#   IN-SCOPE  : FfiDispatcher (owner registry + per-call routing),
+#               startup validation (every template's owner_type has a
+#               registered owner that supports its template_id).
+#   OUT-OF-SCOPE: ExecFfi opcode handling (bpmn-lite-vm), invocation
+#                 record persistence (bpmn-lite-engine writes the record
+#                 atomically with the fiber-state update).
+
+[dependencies]
+ffi-types = { path = "../ffi-types" }
+ffi-catalogue = { path = "../ffi-catalogue" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "ffi-catalogue"
+version = "0.1.0"
+edition = "2021"
+description = "FFI template catalogue — FfiTemplateStore trait, MemoryFfiTemplateStore, FfiCatalogue (cache-front). Backend-agnostic; Postgres impl lives in bpmn-lite-store-postgres."
+
+# Capability discipline:
+#   IN-SCOPE  : FfiTemplateStore trait, MemoryFfiTemplateStore (in-process
+#               testing impl), FfiCatalogue (cache-front for hot-path
+#               template lookups). Implements FfiCatalogueSnapshot so the
+#               compiler verifier can consume it directly.
+#   OUT-OF-SCOPE: Postgres persistence (bpmn-lite-store-postgres),
+#                 dispatch routing (ffi-dispatcher).
+
+[dependencies]
+ffi-types = { path = "../ffi-types" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

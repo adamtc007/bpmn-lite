@@ -1,0 +1,25 @@
+[package]
+name = "ffi-types"
+version = "0.1.0"
+edition = "2021"
+description = "FFI protocol types for the bpmn-lite Foreign Function Interface (A2 contract). Vocabulary-neutral: no bpmn-lite or dmn-lite dependencies."
+
+# Capability discipline:
+#   IN-SCOPE  : FfiTemplate, FieldSchema, SchemaKind, Idempotency,
+#               FfiCall, FfiResult, FfiIncidentClass, FfiOutcomeKind,
+#               ForeignFunctionInvocationRecord, FfiExecutionOwner trait,
+#               FfiCatalogueSnapshot trait, GLOBAL_TENANT_ID, canonical
+#               template_id encoding + BLAKE3 hash.
+#   OUT-OF-SCOPE: catalogue persistence (ffi-catalogue), dispatch routing
+#                 (ffi-dispatcher), bpmn-lite engine wiring (bpmn-lite-*).
+
+[dependencies]
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+blake3 = "1"
+
+[lints]
+workspace = true

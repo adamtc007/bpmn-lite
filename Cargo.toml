@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "bpmn-lite-authoring",
+    "bpmn-lite-compiler",
+    "bpmn-lite-engine",
+    "bpmn-lite-server",
+    "bpmn-lite-store",
+    "bpmn-lite-store-postgres",
+    "bpmn-lite-types",
+    "bpmn-lite-vm",
+    "ffi-catalogue",
+    "ffi-dispatcher",
+    "ffi-types",
+    "xtask",
+]
+resolver = "2"
+
+# Pub-discipline ratchet (bpmn-lite cleanup Phase 0.1).
+# Every retained `pub` must be reachable from the crate's public root
+# (lib.rs / main.rs). Items that aren't get an unreachable_pub error
+# at build time. Each crate opts in via `[lints] workspace = true`.
+[workspace.lints.rust]
+unreachable_pub = "deny"
+
+[workspace.dependencies]
+uuid = { version = "1", features = ["v7", "serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+async-trait = "0.1"
+thiserror = "2"
+sha2 = "0.10"
+petgraph = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+anyhow = "1"
+tonic = "0.12"
+prost = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+chrono = { version = "0.4", features = ["serde"] }

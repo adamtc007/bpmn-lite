@@ -1,0 +1,51 @@
+[package]
+name = "bpmn-lite-engine"
+version = "0.1.0"
+edition = "2021"
+description = "BPMN-Lite engine facade — compile pipeline orchestration, process runtime API (start/signal/cancel/inspect), background scheduler. Wires compiler + VM + store together; does NOT depend on authoring."
+
+# Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
+#   IN-SCOPE  : `BpmnLiteEngine` struct, the public surface
+#               (`new`, `compile(bpmn_xml)`, `start`, `start_with_params`,
+#               `signal`, `cancel`, `inspect`, `complete_job`,
+#               `fail_job`, `activate_jobs`, `read_events`,
+#               `health_check`), and the scheduler loop
+#               (`tick_all`, `tick_claimed_batch`, `tick_instance`).
+#   OUT-OF-SCOPE: BPMN→bytecode compilation (bpmn-lite-compiler),
+#                 bytecode execution (bpmn-lite-vm), persistence
+#                 (bpmn-lite-store-*), authoring (bpmn-lite-authoring).
+#
+# Locked decision (Phase 0 plan §1, decision 1): the engine does
+# NOT depend on `bpmn-lite-authoring`. The Phase 2 engine slice
+# inverts the current `engine.rs:161-224` edge by relocating
+# `compile_from_dto` / `compile_from_yaml` / `compile_and_publish`
+# OUT of the engine and INTO bpmn-lite-authoring. The engine keeps
+# `compile(bpmn_xml)` (which only needs bpmn-lite-compiler) and a
+# `compile_program(&CompiledProgram)` entry point for callers that
+# already hold a compiled artefact.
+
+[dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+bpmn-lite-vm = { path = "../bpmn-lite-vm" }
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+ffi-types = { path = "../ffi-types" }
+ffi-dispatcher = { path = "../ffi-dispatcher" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ob-poc-types = { path = "../../rust/crates/ob-poc-types" }
+
+[dev-dependencies]
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+ffi-catalogue = { path = "../ffi-catalogue" }
+dmn-lite-bridge = { path = "../../dmn-lite/crates/dmn-lite-bridge" }
+dmn-lite-compiler = { path = "../../dmn-lite/crates/dmn-lite-compiler" }
+dmn-lite-parser = { path = "../../dmn-lite/crates/dmn-lite-parser" }
+ffi-types = { path = "../ffi-types" }
+
+[lints]
+workspace = true
