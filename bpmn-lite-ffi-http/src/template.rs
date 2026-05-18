@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// HTTP method supported for v0.1.
@@ -38,7 +38,9 @@ pub enum HttpIdempotency {
     Idempotent,
     NonIdempotent,
     /// Advisory: passes the selector field value as `Idempotency-Key` header.
-    IdempotentWithKey { selector: String },
+    IdempotentWithKey {
+        selector: String,
+    },
 }
 
 /// The parsed, validated form of `FfiTemplate.owner_metadata` for an HTTP template.
@@ -169,15 +171,16 @@ mod tests {
     use super::*;
 
     fn minimal_metadata(method: &str) -> Vec<u8> {
-        format!(r#"{{"url":"http://host/api","method":"{}"}}"#, method)
-            .into_bytes()
+        format!(r#"{{"url":"http://host/api","method":"{}"}}"#, method).into_bytes()
     }
 
     #[test]
     fn parse_get_defaults_idempotent() {
-        let cfg =
-            HttpTemplateConfig::from_owner_metadata(&minimal_metadata("GET"), HttpIdempotency::Idempotent)
-                .unwrap();
+        let cfg = HttpTemplateConfig::from_owner_metadata(
+            &minimal_metadata("GET"),
+            HttpIdempotency::Idempotent,
+        )
+        .unwrap();
         assert_eq!(cfg.method, HttpMethod::Get);
         assert_eq!(cfg.timeout, Duration::from_millis(5000));
         assert_eq!(cfg.success_status_codes, vec![200]);
@@ -196,16 +199,20 @@ mod tests {
     #[test]
     fn reject_path_param_not_in_url() {
         let meta = br#"{"url":"http://host/api","method":"GET","path_params":["missing"]}"#;
-        let err = HttpTemplateConfig::from_owner_metadata(meta, HttpIdempotency::Idempotent)
-            .unwrap_err();
-        assert!(err.to_string().contains("has no"), "expected 'has no' in: {}", err);
+        let err =
+            HttpTemplateConfig::from_owner_metadata(meta, HttpIdempotency::Idempotent).unwrap_err();
+        assert!(
+            err.to_string().contains("has no"),
+            "expected 'has no' in: {}",
+            err
+        );
     }
 
     #[test]
     fn reject_invalid_url() {
         let meta = br#"{"url":"not-a-url","method":"GET"}"#;
-        let err = HttpTemplateConfig::from_owner_metadata(meta, HttpIdempotency::Idempotent)
-            .unwrap_err();
+        let err =
+            HttpTemplateConfig::from_owner_metadata(meta, HttpIdempotency::Idempotent).unwrap_err();
         assert!(err.to_string().contains("valid URL"));
     }
 

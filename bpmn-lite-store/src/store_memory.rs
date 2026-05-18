@@ -899,6 +899,46 @@ impl ProcessStore for MemoryStore {
     async fn health_check(&self) -> Result<()> {
         Ok(())
     }
+
+    async fn ensure_tenant(&self, _tenant_id: &str) -> Result<()> {
+        Ok(()) // MemoryStore is single-process; tenant registration is a no-op.
+    }
+
+    async fn list_tenants(&self) -> Result<Vec<String>> {
+        let guard = self.inner.read().await;
+        let mut tenants: Vec<String> = guard
+            .instances
+            .values()
+            .map(|i| i.tenant_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        tenants.sort();
+        Ok(tenants)
+    }
+
+    async fn list_tenants_in_pool(&self, pool_id: &str) -> Result<Vec<String>> {
+        // MemoryStore has no pool concept; 'default' returns all known tenants,
+        // other pool IDs return empty (consistent with an empty dedicated pool).
+        if pool_id == "default" {
+            self.list_tenants().await
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    async fn quarantine_instance(
+        &self,
+        instance_id: Uuid,
+        _tenant_id: &str,
+        _detection_point: &str,
+    ) -> Result<()> {
+        let mut guard = self.inner.write().await;
+        if let Some(inst) = guard.instances.get_mut(&instance_id) {
+            inst.quarantine_state = Some("integrity_violation".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -908,7 +948,7 @@ mod tests {
 
     fn make_instance(id: Uuid) -> ProcessInstance {
         let payload = r#"{"case_id":"abc"}"#;
-        let hash = sha2_hash(payload);
+        let hash = test_hash(payload);
         ProcessInstance {
             instance_id: id,
             process_key: "test-process".to_string(),
@@ -925,14 +965,13 @@ mod tests {
             entry_id: Uuid::new_v4(),
             runbook_id: Uuid::new_v4(),
             created_at: 1000,
+            integrity_hash: None,
+            quarantine_state: None,
         }
     }
 
-    fn sha2_hash(data: &str) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(data.as_bytes());
-        hasher.finalize().into()
+    fn test_hash(data: &str) -> [u8; 32] {
+        blake3::hash(data.as_bytes()).into()
     }
 
     /// A2.T1: Save/load instance round-trip
@@ -1055,7 +1094,7 @@ mod tests {
         let completion = JobCompletion {
             job_key: "job-abc".to_string(),
             domain_payload: r#"{"done":true}"#.to_string(),
-            expected_instance_payload_hash: sha2_hash(r#"{"case_id":"abc"}"#),
+            expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
         };
 
@@ -1487,14 +1526,14 @@ mod tests {
         let iid = Uuid::now_v7();
 
         let payload_v1 = r#"{"version":1}"#;
-        let hash_v1 = sha2_hash(payload_v1);
+        let hash_v1 = test_hash(payload_v1);
         store
             .save_payload_version(iid, &hash_v1, payload_v1)
             .await
             .unwrap();
 
         let payload_v2 = r#"{"version":2}"#;
-        let hash_v2 = sha2_hash(payload_v2);
+        let hash_v2 = test_hash(payload_v2);
         store
             .save_payload_version(iid, &hash_v2, payload_v2)
             .await

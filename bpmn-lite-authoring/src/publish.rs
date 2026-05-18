@@ -8,7 +8,6 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{lowering, verifier};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_types::CompiledProgram;
-use sha2::{Digest, Sha256};
 use std::fmt::Write;
 
 /// Phase 2.7 inversion entrypoint: pure DTO → CompiledProgram.
@@ -123,7 +122,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// 4. `dto_to_ir()` → IRGraph
 /// 5. `verifier::verify()` → reject if errors
 /// 6. `lowering::lower()` → CompiledProgram
-/// 7. `bytecode_version = sha256(serialized program bytecode)`
+/// 7. `bytecode_version = blake3(serialized program bytecode)`
 /// 8. Extract `task_manifest` from CompiledProgram
 /// 9. Optional: `dto_to_bpmn_xml()` if `generate_bpmn=true`
 /// 10. Build WorkflowTemplate with `state=Published, published_at=now`
@@ -226,16 +225,14 @@ pub fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<Publi
     })
 }
 
-/// Compute a deterministic hex SHA-256 hash of the program bytecode.
+/// Compute a deterministic hex BLAKE3 hash of the program bytecode.
 /// Excludes debug_map and task_manifest from the hash for stability.
 fn compute_bytecode_hash(program: &bpmn_lite_types::CompiledProgram) -> String {
-    let mut hasher = Sha256::new();
-    // Hash each instruction's debug representation for determinism.
-    // This avoids needing bincode — we serialize the program Vec<Instr> via debug format.
+    let mut hasher = blake3::Hasher::new();
     for instr in &program.program {
         hasher.update(format!("{:?}", instr).as_bytes());
     }
-    hex_encode(&hasher.finalize())
+    hex_encode(hasher.finalize().as_bytes())
 }
 
 /// Helper: shorthand for compile_and_publish without the DTO.

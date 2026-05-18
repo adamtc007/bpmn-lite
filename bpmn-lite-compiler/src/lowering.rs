@@ -3,7 +3,6 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_types::*;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Lower a verified IR graph to bytecode.
@@ -549,10 +548,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 if let Some((bt_node_idx, spec)) = boundary_lookup.get(id) {
                     let race_id = race_id_counter;
                     race_id_counter += 1;
-                    let timer_resume = node_addr
-                        .get(bt_node_idx)
-                        .copied()
-                        .unwrap_or(exec_addr + 2);
+                    let timer_resume = node_addr.get(bt_node_idx).copied().unwrap_or(exec_addr + 2);
                     let duration_ms = match spec {
                         TimerSpec::Duration { ms } => *ms,
                         TimerSpec::Date { deadline_ms } => {
@@ -566,9 +562,16 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     };
                     let interrupting = matches!(
                         graph[*bt_node_idx],
-                        IRNode::BoundaryTimer { interrupting: true, .. }
+                        IRNode::BoundaryTimer {
+                            interrupting: true,
+                            ..
+                        }
                     );
-                    let cycle = if let TimerSpec::Cycle { interval_ms, max_fires } = spec {
+                    let cycle = if let TimerSpec::Cycle {
+                        interval_ms,
+                        max_fires,
+                    } = spec
+                    {
                         Some(bpmn_lite_types::CycleSpec {
                             interval_ms: *interval_ms,
                             max_fires: *max_fires,
@@ -645,11 +648,9 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         error_route_map.insert(host_addr, routes);
     }
 
-    // Compute bytecode_version as SHA-256 of serialized program
+    // Compute bytecode_version as BLAKE3 of serialized program (B14: unified with FFI template IDs)
     let serialized = serde_json::to_string(&instructions)?;
-    let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
-    let bytecode_version: [u8; 32] = hasher.finalize().into();
+    let bytecode_version: [u8; 32] = blake3::hash(serialized.as_bytes()).into();
 
     // Build write_set from flag_intern
     for (name, &key) in &flag_intern {
@@ -657,8 +658,10 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     }
 
     // Preserve the intern map so the FFI binding layer can resolve names to keys.
-    let flag_symbol_table: BTreeMap<FlagKey, String> =
-        flag_intern.into_iter().map(|(name, key)| (key, name)).collect();
+    let flag_symbol_table: BTreeMap<FlagKey, String> = flag_intern
+        .into_iter()
+        .map(|(name, key)| (key, name))
+        .collect();
 
     Ok(CompiledProgram {
         bytecode_version,
@@ -777,11 +780,9 @@ pub(crate) fn assign_storage(
 }
 
 /// Convert an IR-level literal to a compiled-artifact literal.
-pub(crate) fn lower_literal(
-    lit: &crate::ir::IrLiteral,
-) -> bpmn_lite_types::ffi_bindings::Literal {
-    use bpmn_lite_types::ffi_bindings::Literal;
+pub(crate) fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_bindings::Literal {
     use crate::ir::IrLiteral;
+    use bpmn_lite_types::ffi_bindings::Literal;
     match lit {
         IrLiteral::Bool(b) => Literal::Bool(*b),
         IrLiteral::I64(n) => Literal::I64(*n),
@@ -796,8 +797,8 @@ pub(crate) fn resolve_expression(
     expr: &crate::ir::Expression,
     data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
 ) -> Result<bpmn_lite_types::ffi_bindings::BindingSource> {
-    use bpmn_lite_types::ffi_bindings::{BindingSource, DataObjectStorage};
     use crate::ir::Expression;
+    use bpmn_lite_types::ffi_bindings::{BindingSource, DataObjectStorage};
     match expr {
         Expression::Literal(lit) => Ok(BindingSource::Literal(lower_literal(lit))),
         Expression::VarRef(path) => {
@@ -1196,7 +1197,9 @@ mod tests {
     fn test_flag_symbol_table_preserved() {
         // Build: Start → XOR (condition on "approved") → task_a / task_b → End
         let mut graph = IRGraph::new();
-        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
         let gw = graph.add_node(IRNode::GatewayXor {
             id: "gw1".to_string(),
             name: "Decision".to_string(),
@@ -1211,9 +1214,19 @@ mod tests {
             name: "Task B".to_string(),
             task_type: "do_b".to_string(),
         });
-        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+        let end = graph.add_node(IRNode::End {
+            id: "end".to_string(),
+            terminate: false,
+        });
 
-        graph.add_edge(start, gw, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(
+            start,
+            gw,
+            IREdge {
+                id: "f1".to_string(),
+                condition: None,
+            },
+        );
         graph.add_edge(
             gw,
             task_a,
@@ -1226,9 +1239,30 @@ mod tests {
                 }),
             },
         );
-        graph.add_edge(gw, task_b, IREdge { id: "f3".to_string(), condition: None });
-        graph.add_edge(task_a, end, IREdge { id: "f4".to_string(), condition: None });
-        graph.add_edge(task_b, end, IREdge { id: "f5".to_string(), condition: None });
+        graph.add_edge(
+            gw,
+            task_b,
+            IREdge {
+                id: "f3".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            task_a,
+            end,
+            IREdge {
+                id: "f4".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            task_b,
+            end,
+            IREdge {
+                id: "f5".to_string(),
+                condition: None,
+            },
+        );
 
         let program = lower(&graph).unwrap();
 

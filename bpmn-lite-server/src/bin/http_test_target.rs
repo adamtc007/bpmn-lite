@@ -16,10 +16,10 @@
 //! Usage: cargo run -p bpmn-lite-server --bin http_test_target -- --bind 0.0.0.0:8080
 
 use axum::{
-    Json, Router,
     extract::rejection::JsonRejection,
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -37,9 +37,7 @@ struct CreditCheckResponse {
     reason: String,
 }
 
-async fn credit_check(
-    body: Result<Json<CreditCheckRequest>, JsonRejection>,
-) -> impl IntoResponse {
+async fn credit_check(body: Result<Json<CreditCheckRequest>, JsonRejection>) -> impl IntoResponse {
     let Json(req) = match body {
         Ok(b) => b,
         Err(e) => {
@@ -52,9 +50,21 @@ async fn credit_check(
     };
 
     match req.client_id.as_str() {
-        "ERROR_404" => (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response(),
-        "ERROR_500" => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "internal"}))).into_response(),
-        "ERROR_409" => (axum::http::StatusCode::CONFLICT, Json(serde_json::json!({"error": "conflict"}))).into_response(),
+        "ERROR_404" => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found"})),
+        )
+            .into_response(),
+        "ERROR_500" => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "internal"})),
+        )
+            .into_response(),
+        "ERROR_409" => (
+            axum::http::StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "conflict"})),
+        )
+            .into_response(),
         "REJECT" => Json(CreditCheckResponse {
             score: 450,
             approved: false,

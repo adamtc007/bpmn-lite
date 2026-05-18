@@ -9,7 +9,7 @@ use std::time::Instant;
 use anyhow::Result;
 use async_trait::async_trait;
 use ffi_types::{
-    compute_template_id, FfiExecutionOwner, FfiTemplate, FieldSchema, Idempotency,
+    FfiExecutionOwner, FfiTemplate, FieldSchema, Idempotency, compute_template_id,
     wire::{FfiCall, FfiIncidentClass, FfiResult},
 };
 
@@ -62,9 +62,9 @@ impl HttpFfiOwner {
         let ffi_idempotency = match &idempotency {
             HttpIdempotency::Idempotent => Idempotency::Idempotent,
             HttpIdempotency::NonIdempotent => Idempotency::NonIdempotent,
-            HttpIdempotency::IdempotentWithKey { selector } => {
-                Idempotency::IdempotentWithKey { selector: selector.clone() }
-            }
+            HttpIdempotency::IdempotentWithKey { selector } => Idempotency::IdempotentWithKey {
+                selector: selector.clone(),
+            },
         };
 
         let mut template = FfiTemplate {
@@ -80,7 +80,12 @@ impl HttpFfiOwner {
         };
         template.template_id = compute_template_id(&template);
 
-        let effective_idempotency = if matches!(idempotency, HttpIdempotency::Idempotent | HttpIdempotency::NonIdempotent | HttpIdempotency::IdempotentWithKey { .. }) {
+        let effective_idempotency = if matches!(
+            idempotency,
+            HttpIdempotency::Idempotent
+                | HttpIdempotency::NonIdempotent
+                | HttpIdempotency::IdempotentWithKey { .. }
+        ) {
             idempotency
         } else {
             method.default_idempotency()
@@ -222,7 +227,11 @@ impl FfiExecutionOwner for HttpFfiOwner {
             Err(e) if e.is_timeout() => {
                 return Ok(FfiResult::Incident {
                     error_class: FfiIncidentClass::Transient,
-                    message: format!("request timed out after {}ms: {}", config.timeout.as_millis(), e),
+                    message: format!(
+                        "request timed out after {}ms: {}",
+                        config.timeout.as_millis(),
+                        e
+                    ),
                     retry_hint_ms: Some(1000),
                 });
             }
@@ -264,8 +273,12 @@ impl FfiExecutionOwner for HttpFfiOwner {
             let excerpt = body_excerpt(&body_bytes);
             let error_class = match status {
                 400 | 401 | 403 | 422 => FfiIncidentClass::ContractViolation,
-                404 => FfiIncidentClass::BusinessRejection { rejection_code: "HTTP_NOT_FOUND".to_string() },
-                409 => FfiIncidentClass::BusinessRejection { rejection_code: "HTTP_CONFLICT".to_string() },
+                404 => FfiIncidentClass::BusinessRejection {
+                    rejection_code: "HTTP_NOT_FOUND".to_string(),
+                },
+                409 => FfiIncidentClass::BusinessRejection {
+                    rejection_code: "HTTP_CONFLICT".to_string(),
+                },
                 s if s >= 400 && s < 500 => FfiIncidentClass::ContractViolation,
                 s if s >= 500 => FfiIncidentClass::Transient,
                 _ => FfiIncidentClass::ContractViolation,
@@ -285,7 +298,9 @@ impl FfiExecutionOwner for HttpFfiOwner {
         // Parse response body as JSON.
         let body_ref: &[u8] = body_bytes.as_ref();
         if body_ref.is_empty() || body_ref == b"null" || body_ref == b"{}" {
-            return Ok(FfiResult::NoMatch { trace_payload: Some(trace) });
+            return Ok(FfiResult::NoMatch {
+                trace_payload: Some(trace),
+            });
         }
 
         let body: serde_json::Value = match serde_json::from_slice(body_ref) {
@@ -300,7 +315,9 @@ impl FfiExecutionOwner for HttpFfiOwner {
         };
 
         if body.is_null() || matches!(&body, serde_json::Value::Object(m) if m.is_empty()) {
-            return Ok(FfiResult::NoMatch { trace_payload: Some(trace) });
+            return Ok(FfiResult::NoMatch {
+                trace_payload: Some(trace),
+            });
         }
 
         if !body.is_object() {

@@ -20,7 +20,7 @@ petgraph = { workspace = true }
 quick-xml = "0.36"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
+blake3 = { workspace = true }
 uuid = { workspace = true }
 
 [lints]

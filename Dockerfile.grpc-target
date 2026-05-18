@@ -1,0 +1,10 @@
+FROM rust:1.95-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p bpmn-lite-server --bin grpc_test_target && strip target/release/grpc_test_target
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/grpc_test_target /usr/local/bin/
+EXPOSE 50099
+CMD ["grpc_test_target"]

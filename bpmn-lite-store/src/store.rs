@@ -236,4 +236,32 @@ pub trait ProcessStore: Send + Sync {
 
     /// Lightweight readiness probe for the backing store.
     async fn health_check(&self) -> Result<()>;
+
+    // ── Tenant directory ──
+
+    /// Register a tenant on first use. Idempotent — safe to call on every
+    /// process start. The tenants table has no RLS so the scheduler can
+    /// enumerate all tenants without a tenant context set.
+    async fn ensure_tenant(&self, tenant_id: &str) -> Result<()>;
+
+    /// List all known tenant IDs. Used by the scheduler to enumerate tenants
+    /// for per-tenant tick batches.
+    async fn list_tenants(&self) -> Result<Vec<String>>;
+
+    /// List tenant IDs assigned to a specific pool. Returns an empty vec if the
+    /// pool doesn't exist or has no tenants. Used by bpmn-controller to query
+    /// pool membership.
+    async fn list_tenants_in_pool(&self, pool_id: &str) -> Result<Vec<String>>;
+
+    // ── A19 — Integrity hash / quarantine ──
+
+    /// Mark an instance as quarantined after an integrity hash mismatch.
+    /// Appends an InstanceQuarantined event and sets quarantine_state on the row.
+    /// The instance's original fields are preserved for forensic inspection.
+    async fn quarantine_instance(
+        &self,
+        instance_id: Uuid,
+        tenant_id: &str,
+        detection_point: &str,
+    ) -> Result<()>;
 }

@@ -6,13 +6,13 @@ use std::sync::RwLock;
 use anyhow::Result;
 use async_trait::async_trait;
 use ffi_types::{
-    compute_template_id, FfiExecutionOwner, FfiTemplate, FieldSchema, Idempotency,
+    FfiExecutionOwner, FfiTemplate, FieldSchema, Idempotency, compute_template_id,
     wire::{FfiCall, FfiIncidentClass, FfiResult},
 };
 use tonic::Code;
 
-use crate::proto::ffi_bridge_client::FfiBridgeClient;
 use crate::proto::FfiBridgeRequest;
+use crate::proto::ffi_bridge_client::FfiBridgeClient;
 use crate::template::GrpcTemplateConfig;
 
 pub struct GrpcFfiOwner {
@@ -21,7 +21,9 @@ pub struct GrpcFfiOwner {
 
 impl GrpcFfiOwner {
     pub fn new() -> Self {
-        Self { templates: RwLock::new(HashMap::new()) }
+        Self {
+            templates: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Register a gRPC template. Returns the `FfiTemplate` for publication.
@@ -61,15 +63,22 @@ impl GrpcFfiOwner {
 }
 
 impl Default for GrpcFfiOwner {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[async_trait]
 impl FfiExecutionOwner for GrpcFfiOwner {
-    fn owner_type(&self) -> &str { "grpc" }
+    fn owner_type(&self) -> &str {
+        "grpc"
+    }
 
     fn supports_template(&self, template_id: &[u8; 32]) -> bool {
-        self.templates.read().expect("lock").contains_key(template_id)
+        self.templates
+            .read()
+            .expect("lock")
+            .contains_key(template_id)
     }
 
     async fn invoke(&self, call: FfiCall) -> Result<FfiResult> {
@@ -79,21 +88,28 @@ impl FfiExecutionOwner for GrpcFfiOwner {
         };
         let config = match config {
             Some(c) => c,
-            None => return Ok(FfiResult::Incident {
-                error_class: FfiIncidentClass::ContractViolation,
-                message: format!("grpc template {:?} not registered", hex::encode(call.template_id)),
-                retry_hint_ms: None,
-            }),
+            None => {
+                return Ok(FfiResult::Incident {
+                    error_class: FfiIncidentClass::ContractViolation,
+                    message: format!(
+                        "grpc template {:?} not registered",
+                        hex::encode(call.template_id)
+                    ),
+                    retry_hint_ms: None,
+                });
+            }
         };
 
         // Connect and invoke with per-call timeout.
         let mut client = match FfiBridgeClient::connect(config.endpoint.clone()).await {
             Ok(c) => c,
-            Err(e) => return Ok(FfiResult::Incident {
-                error_class: FfiIncidentClass::Transient,
-                message: format!("gRPC connect failed to {}: {}", config.endpoint, e),
-                retry_hint_ms: Some(500),
-            }),
+            Err(e) => {
+                return Ok(FfiResult::Incident {
+                    error_class: FfiIncidentClass::Transient,
+                    message: format!("gRPC connect failed to {}: {}", config.endpoint, e),
+                    retry_hint_ms: Some(500),
+                });
+            }
         };
 
         let request = tonic::Request::new(FfiBridgeRequest {
@@ -112,22 +128,31 @@ impl FfiExecutionOwner for GrpcFfiOwner {
         // Empty outputs_json signals NoMatch.
         if response.outputs_json.is_empty() {
             let trace = trace_json(&config.endpoint, "no_match");
-            return Ok(FfiResult::NoMatch { trace_payload: Some(trace) });
+            return Ok(FfiResult::NoMatch {
+                trace_payload: Some(trace),
+            });
         }
 
         // Validate output is a JSON object.
         match serde_json::from_slice::<serde_json::Value>(&response.outputs_json) {
             Ok(v) if v.is_object() => {}
-            Ok(v) => return Ok(FfiResult::Incident {
-                error_class: FfiIncidentClass::ContractViolation,
-                message: format!("gRPC outputs_json must be a JSON object, got {}", json_type(&v)),
-                retry_hint_ms: None,
-            }),
-            Err(e) => return Ok(FfiResult::Incident {
-                error_class: FfiIncidentClass::ContractViolation,
-                message: format!("gRPC outputs_json is not valid JSON: {}", e),
-                retry_hint_ms: None,
-            }),
+            Ok(v) => {
+                return Ok(FfiResult::Incident {
+                    error_class: FfiIncidentClass::ContractViolation,
+                    message: format!(
+                        "gRPC outputs_json must be a JSON object, got {}",
+                        json_type(&v)
+                    ),
+                    retry_hint_ms: None,
+                });
+            }
+            Err(e) => {
+                return Ok(FfiResult::Incident {
+                    error_class: FfiIncidentClass::ContractViolation,
+                    message: format!("gRPC outputs_json is not valid JSON: {}", e),
+                    retry_hint_ms: None,
+                });
+            }
         }
 
         let trace = trace_json(&config.endpoint, "success");
@@ -142,29 +167,29 @@ impl FfiExecutionOwner for GrpcFfiOwner {
 fn grpc_status_to_incident(status: tonic::Status) -> FfiResult {
     let (error_class, retry_hint_ms) = match status.code() {
         Code::NotFound => (
-            FfiIncidentClass::BusinessRejection { rejection_code: "GRPC_NOT_FOUND".to_string() },
+            FfiIncidentClass::BusinessRejection {
+                rejection_code: "GRPC_NOT_FOUND".to_string(),
+            },
             None,
         ),
         Code::AlreadyExists | Code::Aborted => (
-            FfiIncidentClass::BusinessRejection { rejection_code: "GRPC_CONFLICT".to_string() },
+            FfiIncidentClass::BusinessRejection {
+                rejection_code: "GRPC_CONFLICT".to_string(),
+            },
             None,
         ),
-        Code::InvalidArgument | Code::FailedPrecondition | Code::OutOfRange => (
-            FfiIncidentClass::ContractViolation,
-            None,
-        ),
-        Code::PermissionDenied | Code::Unauthenticated => (
-            FfiIncidentClass::ContractViolation,
-            None,
-        ),
-        Code::Unavailable | Code::DeadlineExceeded | Code::ResourceExhausted => (
-            FfiIncidentClass::Transient,
-            Some(1000u64),
-        ),
-        Code::Internal | Code::Unknown | Code::Unimplemented => (
-            FfiIncidentClass::Transient,
-            Some(500u64),
-        ),
+        Code::InvalidArgument | Code::FailedPrecondition | Code::OutOfRange => {
+            (FfiIncidentClass::ContractViolation, None)
+        }
+        Code::PermissionDenied | Code::Unauthenticated => {
+            (FfiIncidentClass::ContractViolation, None)
+        }
+        Code::Unavailable | Code::DeadlineExceeded | Code::ResourceExhausted => {
+            (FfiIncidentClass::Transient, Some(1000u64))
+        }
+        Code::Internal | Code::Unknown | Code::Unimplemented => {
+            (FfiIncidentClass::Transient, Some(500u64))
+        }
         _ => (FfiIncidentClass::ContractViolation, None),
     };
     FfiResult::Incident {

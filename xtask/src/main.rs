@@ -129,7 +129,10 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
     }
 
     let deployment = docker_up(&workspace_root, &parsed)?;
-    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+    let server_url = parsed
+        .server_url
+        .clone()
+        .unwrap_or_else(|| deployment.server_url.clone());
 
     // Spin up the http-test-target container on the same network.
     let http_container = format!("bpmn-lite-http-target-{}", deployment.instance_name);
@@ -138,9 +141,15 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
         Command::new("docker")
             .arg("run")
             .arg("-d")
-            .arg("--name").arg(&http_container)
-            .arg("--network").arg(&deployment.network_name)
-            .arg("-p").arg(format!("{}:{}", DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT))
+            .arg("--name")
+            .arg(&http_container)
+            .arg("--network")
+            .arg(&deployment.network_name)
+            .arg("-p")
+            .arg(format!(
+                "{}:{}",
+                DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT
+            ))
             .arg(DEFAULT_HTTP_TARGET_IMAGE),
     )?;
 
@@ -150,17 +159,32 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
 
     let result = Command::new("cargo")
         .arg("run")
-        .arg("-p").arg("bpmn-lite-server")
-        .arg("--bin").arg("http_proof")
+        .arg("-p")
+        .arg("bpmn-lite-server")
+        .arg("--bin")
+        .arg("http_proof")
         .arg("--")
-        .arg("--server-url").arg(&server_url)
-        .arg("--http-target-url").arg(&http_target_url)
+        .arg("--server-url")
+        .arg(&server_url)
+        .arg("--http-target-url")
+        .arg(&http_target_url)
         .current_dir(&workspace_root)
         .status()
         .context("failed to run http_proof")
-        .and_then(|s| if s.success() { Ok(()) } else { bail!("http_proof exited with {}", s) });
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                bail!("http_proof exited with {}", s)
+            }
+        });
 
-    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&http_container));
+    let _ = run_command(
+        Command::new("docker")
+            .arg("rm")
+            .arg("-f")
+            .arg(&http_container),
+    );
     let cleanup = docker_down_deployment(&deployment);
     result.and(cleanup)?;
     Ok(())
@@ -176,16 +200,26 @@ fn docker_grpc_smoke_command(extra_args: &[String]) -> Result<()> {
     }
 
     let deployment = docker_up(&workspace_root, &parsed)?;
-    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+    let server_url = parsed
+        .server_url
+        .clone()
+        .unwrap_or_else(|| deployment.server_url.clone());
 
     let grpc_container = format!("bpmn-lite-grpc-target-{}", deployment.instance_name);
     remove_container_if_exists(&grpc_container)?;
     run_command(
         Command::new("docker")
-            .arg("run").arg("-d")
-            .arg("--name").arg(&grpc_container)
-            .arg("--network").arg(&deployment.network_name)
-            .arg("-p").arg(format!("{}:{}", DEFAULT_GRPC_TARGET_PORT, DEFAULT_GRPC_TARGET_PORT))
+            .arg("run")
+            .arg("-d")
+            .arg("--name")
+            .arg(&grpc_container)
+            .arg("--network")
+            .arg(&deployment.network_name)
+            .arg("-p")
+            .arg(format!(
+                "{}:{}",
+                DEFAULT_GRPC_TARGET_PORT, DEFAULT_GRPC_TARGET_PORT
+            ))
             .arg(DEFAULT_GRPC_TARGET_IMAGE),
     )?;
 
@@ -193,17 +227,33 @@ fn docker_grpc_smoke_command(extra_args: &[String]) -> Result<()> {
     wait_for_tcp_port(DEFAULT_GRPC_TARGET_PORT, Duration::from_secs(15))?;
 
     let result = Command::new("cargo")
-        .arg("run").arg("-p").arg("bpmn-lite-server")
-        .arg("--bin").arg("grpc_proof")
+        .arg("run")
+        .arg("-p")
+        .arg("bpmn-lite-server")
+        .arg("--bin")
+        .arg("grpc_proof")
         .arg("--")
-        .arg("--server-url").arg(&server_url)
-        .arg("--grpc-target-url").arg(&grpc_target_url)
+        .arg("--server-url")
+        .arg(&server_url)
+        .arg("--grpc-target-url")
+        .arg(&grpc_target_url)
         .current_dir(&workspace_root)
         .status()
         .context("failed to run grpc_proof")
-        .and_then(|s| if s.success() { Ok(()) } else { bail!("grpc_proof exited with {}", s) });
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                bail!("grpc_proof exited with {}", s)
+            }
+        });
 
-    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&grpc_container));
+    let _ = run_command(
+        Command::new("docker")
+            .arg("rm")
+            .arg("-f")
+            .arg(&grpc_container),
+    );
     let cleanup = docker_down_deployment(&deployment);
     result.and(cleanup)?;
     Ok(())
@@ -225,11 +275,15 @@ CMD ["grpc_test_target"]
     std::fs::write(&path, dockerfile).context("write Dockerfile.grpc-target")?;
     run_command(
         Command::new("docker")
-            .arg("build").arg("-t").arg(DEFAULT_GRPC_TARGET_IMAGE)
-            .arg("-f").arg("Dockerfile.grpc-target")
+            .arg("build")
+            .arg("-t")
+            .arg(DEFAULT_GRPC_TARGET_IMAGE)
+            .arg("-f")
+            .arg("Dockerfile.grpc-target")
             .arg(".")
             .current_dir(workspace_root),
-    ).context("build grpc-target image")?;
+    )
+    .context("build grpc-target image")?;
     let _ = std::fs::remove_file(path);
     Ok(())
 }
@@ -238,8 +292,12 @@ fn wait_for_tcp_port(port: u16, timeout: Duration) -> Result<()> {
     let addr = format!("127.0.0.1:{}", port);
     let deadline = Instant::now() + timeout;
     loop {
-        if TcpStream::connect(&addr).is_ok() { return Ok(()); }
-        if Instant::now() > deadline { bail!("port {} not ready after {}s", port, timeout.as_secs()); }
+        if TcpStream::connect(&addr).is_ok() {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            bail!("port {} not ready after {}s", port, timeout.as_secs());
+        }
         sleep(Duration::from_millis(200));
     }
 }
@@ -251,37 +309,93 @@ fn docker_heterogeneous_smoke_command(extra_args: &[String]) -> Result<()> {
     if !parsed.skip_build {
         ensure_docker_image(&workspace_root, DEFAULT_DOCKER_IMAGE)?;
         build_http_target_image(&workspace_root)?;
+        build_grpc_target_image(&workspace_root)?;
     }
 
     let deployment = docker_up(&workspace_root, &parsed)?;
-    let server_url = parsed.server_url.clone().unwrap_or_else(|| deployment.server_url.clone());
+    let server_url = parsed
+        .server_url
+        .clone()
+        .unwrap_or_else(|| deployment.server_url.clone());
 
+    // HTTP target
     let http_container = format!("bpmn-lite-http-target-{}", deployment.instance_name);
     remove_container_if_exists(&http_container)?;
     run_command(
         Command::new("docker")
-            .arg("run").arg("-d")
-            .arg("--name").arg(&http_container)
-            .arg("--network").arg(&deployment.network_name)
-            .arg("-p").arg(format!("{}:{}", DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT))
+            .arg("run")
+            .arg("-d")
+            .arg("--name")
+            .arg(&http_container)
+            .arg("--network")
+            .arg(&deployment.network_name)
+            .arg("-p")
+            .arg(format!(
+                "{}:{}",
+                DEFAULT_HTTP_TARGET_PORT, DEFAULT_HTTP_TARGET_PORT
+            ))
             .arg(DEFAULT_HTTP_TARGET_IMAGE),
     )?;
-
     let http_target_url = format!("http://{}:{}", http_container, DEFAULT_HTTP_TARGET_PORT);
     wait_for_http_target(DEFAULT_HTTP_TARGET_PORT, Duration::from_secs(15))?;
 
+    // gRPC target (B12: third vocabulary in the heterogeneous proof)
+    let grpc_container = format!("bpmn-lite-grpc-target-{}", deployment.instance_name);
+    remove_container_if_exists(&grpc_container)?;
+    run_command(
+        Command::new("docker")
+            .arg("run")
+            .arg("-d")
+            .arg("--name")
+            .arg(&grpc_container)
+            .arg("--network")
+            .arg(&deployment.network_name)
+            .arg("-p")
+            .arg(format!(
+                "{}:{}",
+                DEFAULT_GRPC_TARGET_PORT, DEFAULT_GRPC_TARGET_PORT
+            ))
+            .arg(DEFAULT_GRPC_TARGET_IMAGE),
+    )?;
+    let grpc_target_url = format!("http://{}:{}", grpc_container, DEFAULT_GRPC_TARGET_PORT);
+    wait_for_tcp_port(DEFAULT_GRPC_TARGET_PORT, Duration::from_secs(15))?;
+
     let result = Command::new("cargo")
-        .arg("run").arg("-p").arg("bpmn-lite-server")
-        .arg("--bin").arg("heterogeneous_proof")
+        .arg("run")
+        .arg("-p")
+        .arg("bpmn-lite-server")
+        .arg("--bin")
+        .arg("heterogeneous_proof")
         .arg("--")
-        .arg("--server-url").arg(&server_url)
-        .arg("--http-target-url").arg(&http_target_url)
+        .arg("--server-url")
+        .arg(&server_url)
+        .arg("--http-target-url")
+        .arg(&http_target_url)
+        .arg("--grpc-target-url")
+        .arg(&grpc_target_url)
         .current_dir(&workspace_root)
         .status()
         .context("failed to run heterogeneous_proof")
-        .and_then(|s| if s.success() { Ok(()) } else { bail!("heterogeneous_proof exited with {}", s) });
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                bail!("heterogeneous_proof exited with {}", s)
+            }
+        });
 
-    let _ = run_command(Command::new("docker").arg("rm").arg("-f").arg(&http_container));
+    let _ = run_command(
+        Command::new("docker")
+            .arg("rm")
+            .arg("-f")
+            .arg(&http_container),
+    );
+    let _ = run_command(
+        Command::new("docker")
+            .arg("rm")
+            .arg("-f")
+            .arg(&grpc_container),
+    );
     let cleanup = docker_down_deployment(&deployment);
     result.and(cleanup)?;
     Ok(())
@@ -307,8 +421,10 @@ CMD ["http_test_target"]
     run_command(
         Command::new("docker")
             .arg("build")
-            .arg("-t").arg(DEFAULT_HTTP_TARGET_IMAGE)
-            .arg("-f").arg("Dockerfile.http-target")
+            .arg("-t")
+            .arg(DEFAULT_HTTP_TARGET_IMAGE)
+            .arg("-f")
+            .arg("Dockerfile.http-target")
             .arg(".")
             .current_dir(workspace_root),
     )
@@ -322,7 +438,9 @@ fn wait_for_http_target(host_port: u16, timeout: Duration) -> Result<()> {
     let addr = format!("127.0.0.1:{}", host_port);
     let deadline = Instant::now() + timeout;
     loop {
-        if TcpStream::connect(&addr).is_ok() { return Ok(()); }
+        if TcpStream::connect(&addr).is_ok() {
+            return Ok(());
+        }
         if Instant::now() > deadline {
             bail!("http-test-target not ready after {}s", timeout.as_secs());
         }
@@ -785,8 +903,23 @@ fn docker_up(workspace_root: &Path, parsed: &ParsedArgs) -> Result<DockerDeploym
             Duration::from_secs(30),
         )?;
 
-        let container_database_url = format!(
+        // A18 — Split admin / runtime connection URLs.
+        //
+        // DATABASE_ADMIN_URL: superuser connection used for migrations
+        //   (includes migration 026 which creates bpmn_lite_app).
+        // DATABASE_URL: runtime connection as the bpmn_lite_app role,
+        //   which is NOT a superuser and does not BYPASSRLS. RLS
+        //   policies enabled in migration 025 apply to this connection.
+        //
+        // The trust auth mode lets bpmn_lite_app connect without a
+        // password from within the network (dev convenience). Production
+        // deployments must use proper authentication.
+        let container_admin_url = format!(
             "postgresql://postgres@{}/{}",
+            deployment.db_container_name, db_name
+        );
+        let container_database_url = format!(
+            "postgresql://bpmn_lite_app@{}/{}",
             deployment.db_container_name, db_name
         );
 
@@ -800,6 +933,8 @@ fn docker_up(workspace_root: &Path, parsed: &ParsedArgs) -> Result<DockerDeploym
                 .arg(&deployment.network_name)
                 .arg("-p")
                 .arg(format!("{server_port}:50051"))
+                .arg("-e")
+                .arg(format!("DATABASE_ADMIN_URL={container_admin_url}"))
                 .arg("-e")
                 .arg(format!("DATABASE_URL={container_database_url}"))
                 .arg("-e")

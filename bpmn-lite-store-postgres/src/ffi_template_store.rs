@@ -36,10 +36,9 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         let input_schema_json = serde_json::to_value(&template.input_schema)?;
         let output_schema_json = serde_json::to_value(&template.output_schema)?;
         let idempotency_json = serde_json::to_value(&template.idempotency)?;
-        let published_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-            template.published_at,
-        )
-        .unwrap_or_else(chrono::Utc::now);
+        let published_at =
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(template.published_at)
+                .unwrap_or_else(chrono::Utc::now);
         let row_uuid = Uuid::now_v7();
 
         let inserted = sqlx::query(
@@ -86,10 +85,7 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         }
     }
 
-    async fn lookup(
-        &self,
-        template_id: &[u8; 32],
-    ) -> anyhow::Result<Option<FfiTemplate>> {
+    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>> {
         let row = sqlx::query(
             r#"
             SELECT template_id, owner_type, owner_metadata,
@@ -109,10 +105,7 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         }
     }
 
-    async fn list_by_tenant(
-        &self,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<FfiTemplate>> {
+    async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>> {
         let rows = sqlx::query(
             r#"
             SELECT template_id, owner_type, owner_metadata,

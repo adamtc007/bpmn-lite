@@ -21,7 +21,7 @@ bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
-sha2 = { workspace = true }
+blake3 = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }

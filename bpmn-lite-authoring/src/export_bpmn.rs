@@ -1,6 +1,5 @@
 use super::dto::*;
 use anyhow::Result;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -16,7 +15,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 ///
 /// ## bpmn_id policy
 /// - If `ServiceTask.bpmn_id` is `Some(id)`, use it.
-/// - Otherwise: `sanitize_ncname(node_id) + "_" + sha256(node_id)[..4].hex()`.
+/// - Otherwise: `sanitize_ncname(node_id) + "_" + blake3(node_id)[..4].hex()`.
 /// - Never embed sensitive data; deterministic across re-runs.
 ///
 /// ## XOR default
@@ -432,12 +431,10 @@ fn sanitize_ncname(s: &str) -> String {
     result
 }
 
-/// First 4 bytes (8 hex chars) of SHA-256 hash — deterministic.
+/// First 4 bytes (8 hex chars) of BLAKE3 hash — deterministic.
 fn short_hash(s: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    let result = hasher.finalize();
-    hex_encode(&result[..4])
+    let result = blake3::hash(s.as_bytes());
+    hex_encode(&result.as_bytes()[..4])
 }
 
 fn xml_escape(s: &str) -> String {

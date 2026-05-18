@@ -6,11 +6,11 @@ use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use bpmn_lite_engine::BpmnLiteEngine;
-use bpmn_lite_types::{ErrorClass, Value};
 use bpmn_lite_analysis;
+use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
+use bpmn_lite_types::{ErrorClass, Value};
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
@@ -939,7 +939,8 @@ impl BpmnLite for BpmnLiteService {
                 "snapshot_id = \"00000000-0000-7000-8000-000000000000\"\n",
                 "snapshot_version = \"v1\"\n",
                 "created_at = \"2026-01-01T00:00:00Z\"\n",
-            ).to_string()
+            )
+            .to_string()
         } else {
             req.catalogue_toml.clone()
         };
@@ -966,7 +967,11 @@ impl BpmnLite for BpmnLiteService {
             publisher,
         );
 
-        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+        let template_id_hex: String = template
+            .template_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
         self.ffi_store
             .publish(&template)
@@ -980,7 +985,9 @@ impl BpmnLite for BpmnLiteService {
             .map_err(|e| Status::internal(format!("refresh catalogue cache: {e}")))?;
 
         tracing::info!(template_id = %template_id_hex, %tenant_id, "registered dmn-lite decision as FFI template");
-        Ok(Response::new(RegisterDmnDecisionResponse { template_id_hex }))
+        Ok(Response::new(RegisterDmnDecisionResponse {
+            template_id_hex,
+        }))
     }
 
     async fn register_http_template(
@@ -990,22 +997,40 @@ impl BpmnLite for BpmnLiteService {
         self.metrics.request_started();
         let req = request.into_inner();
         let tenant_id = request_tenant_id(&self.limits, &req.tenant_id)?;
-        let publisher = if req.publisher.is_empty() { "server".to_string() } else { req.publisher.clone() };
+        let publisher = if req.publisher.is_empty() {
+            "server".to_string()
+        } else {
+            req.publisher.clone()
+        };
 
         let method: HttpMethod = match req.method.to_uppercase().as_str() {
             "GET" => HttpMethod::Get,
             "POST" => HttpMethod::Post,
-            other => return Err(Status::invalid_argument(format!("unsupported HTTP method '{}'; use GET or POST", other))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unsupported HTTP method '{}'; use GET or POST",
+                    other
+                )))
+            }
         };
 
         let idempotency = match req.idempotency.to_lowercase().as_str() {
             "idempotent" => HttpIdempotency::Idempotent,
             "non_idempotent" | "nonidempotent" => HttpIdempotency::NonIdempotent,
             "" => method.default_idempotency(),
-            other => return Err(Status::invalid_argument(format!("unknown idempotency '{}'; use idempotent or non_idempotent", other))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown idempotency '{}'; use idempotent or non_idempotent",
+                    other
+                )))
+            }
         };
 
-        let timeout_ms = if req.timeout_ms == 0 { 5000 } else { req.timeout_ms };
+        let timeout_ms = if req.timeout_ms == 0 {
+            5000
+        } else {
+            req.timeout_ms
+        };
         let success_codes: Vec<u16> = if req.success_status_codes.is_empty() {
             vec![200]
         } else {
@@ -1015,7 +1040,8 @@ impl BpmnLite for BpmnLiteService {
         let input_schema = proto_fields_to_schema(&req.input_fields)?;
         let output_schema = proto_fields_to_schema(&req.output_fields)?;
 
-        let template = self.http_ffi_owner
+        let template = self
+            .http_ffi_owner
             .register_template(
                 req.url,
                 method,
@@ -1031,13 +1057,25 @@ impl BpmnLite for BpmnLiteService {
             )
             .map_err(|e| Status::invalid_argument(format!("invalid HTTP template: {:#}", e)))?;
 
-        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+        let template_id_hex: String = template
+            .template_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
-        self.ffi_store.publish(&template).await.map_err(|e| Status::internal(format!("publish: {e}")))?;
-        self.ffi_catalogue.load_into_cache(&tenant_id).await.map_err(|e| Status::internal(format!("refresh cache: {e}")))?;
+        self.ffi_store
+            .publish(&template)
+            .await
+            .map_err(|e| Status::internal(format!("publish: {e}")))?;
+        self.ffi_catalogue
+            .load_into_cache(&tenant_id)
+            .await
+            .map_err(|e| Status::internal(format!("refresh cache: {e}")))?;
 
         tracing::info!(template_id = %template_id_hex, %tenant_id, "registered HTTP template");
-        Ok(Response::new(RegisterHttpTemplateResponse { template_id_hex }))
+        Ok(Response::new(RegisterHttpTemplateResponse {
+            template_id_hex,
+        }))
     }
 
     async fn register_grpc_template(
@@ -1047,28 +1085,62 @@ impl BpmnLite for BpmnLiteService {
         self.metrics.request_started();
         let req = request.into_inner();
         let tenant_id = request_tenant_id(&self.limits, &req.tenant_id)?;
-        let publisher = if req.publisher.is_empty() { "server".to_string() } else { req.publisher.clone() };
-        let timeout_ms = if req.timeout_ms == 0 { 5000 } else { req.timeout_ms };
+        let publisher = if req.publisher.is_empty() {
+            "server".to_string()
+        } else {
+            req.publisher.clone()
+        };
+        let timeout_ms = if req.timeout_ms == 0 {
+            5000
+        } else {
+            req.timeout_ms
+        };
 
         let idempotency = match req.idempotency.to_lowercase().as_str() {
             "idempotent" => Idempotency::Idempotent,
             "non_idempotent" | "nonidempotent" | "" => Idempotency::NonIdempotent,
-            other => return Err(Status::invalid_argument(format!("unknown idempotency '{}'", other))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown idempotency '{}'",
+                    other
+                )))
+            }
         };
 
         let input_schema = proto_fields_to_schema(&req.input_fields)?;
         let output_schema = proto_fields_to_schema(&req.output_fields)?;
 
-        let template = self.grpc_ffi_owner
-            .register_template(req.endpoint, timeout_ms, input_schema, output_schema, idempotency, tenant_id.clone(), publisher)
+        let template = self
+            .grpc_ffi_owner
+            .register_template(
+                req.endpoint,
+                timeout_ms,
+                input_schema,
+                output_schema,
+                idempotency,
+                tenant_id.clone(),
+                publisher,
+            )
             .map_err(|e| Status::invalid_argument(format!("invalid gRPC template: {:#}", e)))?;
 
-        let template_id_hex: String = template.template_id.iter().map(|b| format!("{b:02x}")).collect();
+        let template_id_hex: String = template
+            .template_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
-        self.ffi_store.publish(&template).await.map_err(|e| Status::internal(format!("{e}")))?;
-        self.ffi_catalogue.load_into_cache(&tenant_id).await.map_err(|e| Status::internal(format!("{e}")))?;
+        self.ffi_store
+            .publish(&template)
+            .await
+            .map_err(|e| Status::internal(format!("{e}")))?;
+        self.ffi_catalogue
+            .load_into_cache(&tenant_id)
+            .await
+            .map_err(|e| Status::internal(format!("{e}")))?;
 
         tracing::info!(template_id = %template_id_hex, %tenant_id, "registered gRPC template");
-        Ok(Response::new(RegisterGrpcTemplateResponse { template_id_hex }))
+        Ok(Response::new(RegisterGrpcTemplateResponse {
+            template_id_hex,
+        }))
     }
 }

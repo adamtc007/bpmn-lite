@@ -23,10 +23,7 @@ pub trait FfiTemplateStore: Send + Sync {
     /// (no-op success).
     async fn publish(&self, template: &FfiTemplate) -> anyhow::Result<()>;
 
-    async fn lookup(
-        &self,
-        template_id: &[u8; 32],
-    ) -> anyhow::Result<Option<FfiTemplate>>;
+    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>>;
 
     /// List all templates for the given tenant. Includes the GLOBAL tenant
     /// implicitly only if the caller passes [`ffi_types::GLOBAL_TENANT_ID`].
@@ -91,10 +88,7 @@ impl FfiTemplateStore for MemoryFfiTemplateStore {
         Ok(())
     }
 
-    async fn lookup(
-        &self,
-        template_id: &[u8; 32],
-    ) -> anyhow::Result<Option<FfiTemplate>> {
+    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>> {
         let guard = self
             .inner
             .read()
@@ -102,10 +96,7 @@ impl FfiTemplateStore for MemoryFfiTemplateStore {
         Ok(guard.get(template_id).cloned())
     }
 
-    async fn list_by_tenant(
-        &self,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<FfiTemplate>> {
+    async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>> {
         let guard = self
             .inner
             .read()
@@ -146,8 +137,7 @@ fn hex(bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
     use ffi_types::{
-        compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind,
-        GLOBAL_TENANT_ID,
+        compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind, GLOBAL_TENANT_ID,
     };
 
     fn make_template(owner_type: &str, tenant_id: &str, marker: u8) -> FfiTemplate {

@@ -283,6 +283,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "bpmn-lite-compiler",
  "bpmn-lite-store",
  "bpmn-lite-types",
@@ -291,7 +292,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "sha2",
  "sqlx",
  "tokio",
  "uuid",
@@ -302,13 +302,13 @@ name = "bpmn-lite-compiler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "bpmn-lite-types",
  "ffi-types",
  "petgraph 0.6.5",
  "quick-xml",
  "serde",
  "serde_json",
- "sha2",
  "uuid",
 ]
 
@@ -399,6 +399,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "tonic-health",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -410,10 +411,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "bpmn-lite-types",
  "ob-poc-types",
  "serde_json",
- "sha2",
  "tokio",
  "uuid",
 ]
@@ -424,6 +425,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "bpmn-lite-authoring",
  "bpmn-lite-engine",
  "bpmn-lite-store",
@@ -435,7 +437,6 @@ dependencies = [
  "ob-poc-types",
  "serde",
  "serde_json",
- "sha2",
  "sqlx",
  "tokio",
  "tracing",
@@ -446,9 +447,12 @@ dependencies = [
 name = "bpmn-lite-types"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "blake3",
  "ob-poc-types",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
 ]
 
@@ -458,12 +462,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "bpmn-lite-compiler",
  "bpmn-lite-store",
  "bpmn-lite-types",
  "ob-poc-types",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
  "uuid",
@@ -3043,6 +3047,19 @@ dependencies = [
  "prost-types",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "tonic-health"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eaf34ddb812120f5c601162d5429933c9b527d901ab0e7f930d3147e33a09b2"
+dependencies = [
+ "async-stream",
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]

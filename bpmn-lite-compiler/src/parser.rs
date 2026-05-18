@@ -391,20 +391,26 @@ fn handle_open_tag(
         }
         "input" if *in_ffi_task_definition && *in_extension_elements => {
             // <bpmn:input target="<field>" expression="<expr>"/>
-            let target_field = get_attr(e, "target")
-                .context("<bpmn:input> missing target= attribute")?;
-            let expr_str = get_attr(e, "expression")
-                .context("<bpmn:input> missing expression= attribute")?;
+            let target_field =
+                get_attr(e, "target").context("<bpmn:input> missing target= attribute")?;
+            let expr_str =
+                get_attr(e, "expression").context("<bpmn:input> missing expression= attribute")?;
             let expression = parse_expression(&expr_str)?;
-            ffi_inputs.push(FfiInputBinding { target_field, expression });
+            ffi_inputs.push(FfiInputBinding {
+                target_field,
+                expression,
+            });
         }
         "output" if *in_ffi_task_definition && *in_extension_elements => {
             // <bpmn:output source="<field>" target="<variable>"/>
-            let source_field = get_attr(e, "source")
-                .context("<bpmn:output> missing source= attribute")?;
-            let target_variable = get_attr(e, "target")
-                .context("<bpmn:output> missing target= attribute")?;
-            ffi_outputs.push(FfiOutputBinding { source_field, target_variable });
+            let source_field =
+                get_attr(e, "source").context("<bpmn:output> missing source= attribute")?;
+            let target_variable =
+                get_attr(e, "target").context("<bpmn:output> missing target= attribute")?;
+            ffi_outputs.push(FfiOutputBinding {
+                source_field,
+                target_variable,
+            });
         }
         "dataType" if *in_extension_elements => {
             // <bpmn:dataType primitive="..." role="..."/> or
@@ -997,10 +1003,7 @@ fn decode_template_id(hex: &str) -> Result<[u8; 32]> {
 fn parse_expression(s: &str) -> Result<Expression> {
     let s = s.trim();
     if let Some(inner) = s.strip_prefix("${").and_then(|t| t.strip_suffix('}')) {
-        let path: Vec<String> = inner
-            .split('.')
-            .map(|seg| seg.trim().to_string())
-            .collect();
+        let path: Vec<String> = inner.split('.').map(|seg| seg.trim().to_string()).collect();
         if path.is_empty() || path.iter().any(|p| p.is_empty()) {
             anyhow::bail!("invalid variable reference '{}': empty path segment", s);
         }
@@ -1029,9 +1032,7 @@ fn parse_expression(s: &str) -> Result<Expression> {
 }
 
 /// Parse a `<bpmn:dataType .../>` element into a type + role declaration.
-fn parse_data_object_type(
-    e: &BytesStart,
-) -> Result<(DataObjectType, DataObjectRole)> {
+fn parse_data_object_type(e: &BytesStart) -> Result<(DataObjectType, DataObjectRole)> {
     let role = match get_attr_opt(e, "role").as_deref() {
         Some("input") => DataObjectRole::Input,
         Some("output") => DataObjectRole::Output,
@@ -1043,22 +1044,38 @@ fn parse_data_object_type(
             "integer" | "int" | "i64" => PrimitiveType::I64,
             "float" | "f64" | "decimal" | "number" => PrimitiveType::F64,
             "string" | "str" | "text" => PrimitiveType::String,
-            other => anyhow::bail!("<bpmn:dataType> unknown primitive='{}': expected bool/integer/float/string", other),
+            other => anyhow::bail!(
+                "<bpmn:dataType> unknown primitive='{}': expected bool/integer/float/string",
+                other
+            ),
         };
         return Ok((DataObjectType::Primitive(prim), role));
     }
     if let Some(domain_str) = get_attr_opt(e, "domain") {
-        let domain_id: Uuid = domain_str
-            .parse()
-            .map_err(|_| anyhow!("<bpmn:dataType> invalid UUID in domain='{}': must be a UUIDv7 hex string", domain_str))?;
+        let domain_id: Uuid = domain_str.parse().map_err(|_| {
+            anyhow!(
+                "<bpmn:dataType> invalid UUID in domain='{}': must be a UUIDv7 hex string",
+                domain_str
+            )
+        })?;
         let version_hash_str = get_attr_opt(e, "version-hash").unwrap_or_default();
         let version_hash = if version_hash_str.is_empty() {
             [0u8; 32]
         } else {
-            decode_template_id(&version_hash_str)
-                .with_context(|| format!("<bpmn:dataType> invalid version-hash: '{}'", version_hash_str))?
+            decode_template_id(&version_hash_str).with_context(|| {
+                format!(
+                    "<bpmn:dataType> invalid version-hash: '{}'",
+                    version_hash_str
+                )
+            })?
         };
-        return Ok((DataObjectType::SemOsDomain { domain_id, version_hash }, role));
+        return Ok((
+            DataObjectType::SemOsDomain {
+                domain_id,
+                version_hash,
+            },
+            role,
+        ));
     }
     anyhow::bail!("<bpmn:dataType> requires either primitive= or domain= attribute")
 }

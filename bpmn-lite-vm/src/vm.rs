@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::*;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -1012,9 +1011,7 @@ pub fn apply_completion(instance: &mut ProcessInstance, completion: &JobCompleti
 }
 
 pub fn compute_hash(data: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(data.as_bytes());
-    hasher.finalize().into()
+    blake3::hash(data.as_bytes()).into()
 }
 
 fn now_ms() -> Timestamp {
@@ -1067,6 +1064,8 @@ mod tests {
             entry_id: Uuid::new_v4(),
             runbook_id: Uuid::new_v4(),
             created_at: 0,
+            integrity_hash: None,
+            quarantine_state: None,
         }
     }
 

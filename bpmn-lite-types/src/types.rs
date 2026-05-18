@@ -313,7 +313,7 @@ pub struct ProcessInstance {
     pub bytecode_version: [u8; 32],
     /// Opaque canonical JSON — never parsed by the VM.
     pub domain_payload: Arc<str>,
-    /// SHA-256 of domain_payload.
+    /// BLAKE3 of domain_payload.
     pub domain_payload_hash: [u8; 32],
     /// Canonical session stack copied by value from ob-poc when BPMN starts.
     pub session_stack: SessionStackState,
@@ -331,6 +331,15 @@ pub struct ProcessInstance {
     /// Originating ob-poc runbook containing the parked entry.
     pub runbook_id: Uuid,
     pub created_at: Timestamp,
+    /// A19 — BLAKE3 hash of immutable fields set at creation.
+    /// None for instances created before A19 migration; those are
+    /// treated as "not yet hashed" and skipped at verification until
+    /// their next save_instance call populates the field.
+    pub integrity_hash: Option<[u8; 32]>,
+    /// A19 — Quarantine marker. None for normal instances; set to
+    /// 'integrity_violation' when a pickup boundary detects hash mismatch.
+    /// Quarantined instances are skipped by the scheduler and all handlers.
+    pub quarantine_state: Option<String>,
 }
 
 // ─── Job activation/completion (the wire types) ───────────────
@@ -423,7 +432,7 @@ pub struct PayloadUpdate {
 /// The output of the compiler pipeline.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledProgram {
-    /// SHA-256 of the serialized program — version key.
+    /// BLAKE3 of the serialized program — version key.
     pub bytecode_version: [u8; 32],
     pub program: Vec<Instr>,
     /// Bytecode address → BPMN element id (for diagnostics).

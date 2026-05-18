@@ -1,12 +1,18 @@
 //! B-gRPC test target — a minimal tonic FfiBridge server simulating a credit-check gRPC service.
 //!
 //! Implements the vocabulary-neutral FfiBridge protocol from bpmn-lite-ffi-grpc.
-//! Input: JSON object with "client_id" and "amount" fields.
-//! Output: JSON object with "score", "approved", "reason" fields.
 //!
-//! client_id = "REJECT" → score=450, approved=false
-//! client_id = "ERROR_GRPC" → returns NOT_FOUND status
-//! Others → score=720, approved=true
+//! Path 1 — credit-check (client_id + amount):
+//!   Input: { "client_id": string, "amount": i64 }
+//!   Output: { "score": i64, "approved": bool, "reason": string }
+//!   client_id = "REJECT" → score=450, approved=false
+//!   client_id = "ERROR_GRPC" → returns NOT_FOUND status
+//!   Others → score=720 (or 680 if amount > 100k), approved=true
+//!
+//! Path 2 — risk-approval (score + eligible) — B12 three-vocabulary proof:
+//!   Input: { "score": i64, "eligible": bool }
+//!   Output: { "approved": bool }
+//!   approved = score >= 700 && eligible
 //!
 //! Usage: cargo run -p bpmn-lite-server --bin grpc_test_target -- --bind 0.0.0.0:50099
 
@@ -28,6 +34,20 @@ impl FfiBridge for CreditCheckService {
         let input: serde_json::Value = serde_json::from_slice(&req.inputs_json)
             .map_err(|e| Status::invalid_argument(format!("inputs_json: {}", e)))?;
 
+        // Path 2: risk-approval — score + eligible → approved (B12 three-vocab proof).
+        if let Some(score) = input.get("score").and_then(|v| v.as_i64()) {
+            let eligible = input
+                .get("eligible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let approved = score >= 700 && eligible;
+            let output = serde_json::json!({ "approved": approved });
+            return Ok(Response::new(FfiBridgeResponse {
+                outputs_json: serde_json::to_vec(&output).unwrap().into(),
+            }));
+        }
+
+        // Path 1: credit-check — client_id + amount → score + approved.
         let client_id = input
             .get("client_id")
             .and_then(|v| v.as_str())

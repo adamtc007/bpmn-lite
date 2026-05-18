@@ -3,15 +3,14 @@
 use crate::resolver::ValueResolver;
 use async_trait::async_trait;
 use dmn_lite_engine::evaluate;
+use dmn_lite_types::EvalError;
 use dmn_lite_types::compiled::VerifiedDecision;
 use dmn_lite_types::ir::{FieldSchema, ResolvedType, TypedValue};
 use dmn_lite_types::values::TypedInputContextBuilder;
-use dmn_lite_types::EvalError;
-use ffi_types::{
-    compute_template_id, FfiExecutionOwner, FfiTemplate,
-    FieldSchema as FfiFieldSchema, Idempotency,
-};
 use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
+use ffi_types::{
+    FfiExecutionOwner, FfiTemplate, FieldSchema as FfiFieldSchema, Idempotency, compute_template_id,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -98,10 +97,7 @@ impl FfiExecutionOwner for DmnLiteOwner {
 
     async fn invoke(&self, call: FfiCall) -> anyhow::Result<FfiResult> {
         let decision = {
-            let guard = self
-                .decisions
-                .read()
-                .expect("DmnLiteOwner lock poisoned");
+            let guard = self.decisions.read().expect("DmnLiteOwner lock poisoned");
             match guard.get(&call.template_id) {
                 Some(d) => Arc::clone(d),
                 None => {
@@ -117,9 +113,8 @@ impl FfiExecutionOwner for DmnLiteOwner {
             }
         };
 
-        let input_json: serde_json::Value =
-            serde_json::from_slice(&call.input_payload)
-                .map_err(|e| anyhow::anyhow!("invalid input_payload JSON: {}", e))?;
+        let input_json: serde_json::Value = serde_json::from_slice(&call.input_payload)
+            .map_err(|e| anyhow::anyhow!("invalid input_payload JSON: {}", e))?;
 
         let compiled = decision.as_compiled();
         let input_ctx = match build_input_context(
@@ -145,9 +140,8 @@ impl FfiExecutionOwner for DmnLiteOwner {
                     let tv = output.output.get(field.field_id);
                     obj.insert(field.name.clone(), typed_value_to_json(tv));
                 }
-                let output_payload =
-                    serde_json::to_vec(&serde_json::Value::Object(obj))
-                        .expect("output serialisation cannot fail");
+                let output_payload = serde_json::to_vec(&serde_json::Value::Object(obj))
+                    .expect("output serialisation cannot fail");
                 // EvaluationTrace doesn't derive Serialize; serialise as debug string.
                 let trace_payload =
                     serde_json::to_vec(&format!("{:?}", output.trace)).unwrap_or_default();
@@ -157,7 +151,9 @@ impl FfiExecutionOwner for DmnLiteOwner {
                     new_domain_payload: None,
                 })
             }
-            Err(EvalError::NoMatch) => Ok(FfiResult::NoMatch { trace_payload: None }),
+            Err(EvalError::NoMatch) => Ok(FfiResult::NoMatch {
+                trace_payload: None,
+            }),
             Err(e) => Ok(FfiResult::Incident {
                 error_class: FfiIncidentClass::ContractViolation,
                 message: format!("dmn-lite evaluation error: {}", e),
@@ -207,7 +203,9 @@ fn json_to_typed_value(
         },
         ResolvedType::Decimal => match v {
             serde_json::Value::Number(n) => {
-                let f = n.as_f64().ok_or_else(|| anyhow::anyhow!("cannot convert to f64"))?;
+                let f = n
+                    .as_f64()
+                    .ok_or_else(|| anyhow::anyhow!("cannot convert to f64"))?;
                 Ok(TypedValue::Decimal(f))
             }
             other => anyhow::bail!("expected number, got {}", type_name_json(other)),
@@ -269,7 +267,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str, Catalogue};
+    use dmn_lite_compiler::{Catalogue, compile_and_verify, load_catalogue_from_str};
     use dmn_lite_parser::parse;
     use ffi_types::{FieldSchema as FfiField, Idempotency, SchemaKind};
 
@@ -297,7 +295,11 @@ description = "integers"
     }
 
     fn bool_schema(name: &str) -> FfiField {
-        FfiField { name: name.to_string(), kind: SchemaKind::Bool, required: true }
+        FfiField {
+            name: name.to_string(),
+            kind: SchemaKind::Bool,
+            required: true,
+        }
     }
 
     #[tokio::test]
@@ -307,7 +309,11 @@ description = "integers"
         let template = owner.register_decision(
             make_bool_decision(&c),
             vec![bool_schema("active")],
-            vec![FfiField { name: "result".to_string(), kind: SchemaKind::Bool, required: false }],
+            vec![FfiField {
+                name: "result".to_string(),
+                kind: SchemaKind::Bool,
+                required: false,
+            }],
             Idempotency::Idempotent,
             "tenant-a".to_string(),
             "test".to_string(),
@@ -315,14 +321,17 @@ description = "integers"
         assert_eq!(template.owner_type, "dmn-lite");
         assert!(owner.supports_template(&template.template_id));
 
-        let result = owner.invoke(FfiCall {
-            invocation_id: uuid::Uuid::now_v7(),
-            template_id: template.template_id,
-            tenant_id: "tenant-a".to_string(),
-            process_instance_id: uuid::Uuid::now_v7(),
-            caller_task_id: "T1".to_string(),
-            input_payload: b"{\"active\":true}".to_vec(),
-        }).await.unwrap();
+        let result = owner
+            .invoke(FfiCall {
+                invocation_id: uuid::Uuid::now_v7(),
+                template_id: template.template_id,
+                tenant_id: "tenant-a".to_string(),
+                process_instance_id: uuid::Uuid::now_v7(),
+                caller_task_id: "T1".to_string(),
+                input_payload: b"{\"active\":true}".to_vec(),
+            })
+            .await
+            .unwrap();
 
         match result {
             FfiResult::Success { output_payload, .. } => {
@@ -340,19 +349,26 @@ description = "integers"
         let template = owner.register_decision(
             make_bool_decision(&c),
             vec![bool_schema("active")],
-            vec![FfiField { name: "result".to_string(), kind: SchemaKind::Bool, required: false }],
+            vec![FfiField {
+                name: "result".to_string(),
+                kind: SchemaKind::Bool,
+                required: false,
+            }],
             Idempotency::Idempotent,
             "tenant-a".to_string(),
             "test".to_string(),
         );
-        let result = owner.invoke(FfiCall {
-            invocation_id: uuid::Uuid::now_v7(),
-            template_id: template.template_id,
-            tenant_id: "tenant-a".to_string(),
-            process_instance_id: uuid::Uuid::now_v7(),
-            caller_task_id: "T1".to_string(),
-            input_payload: b"{\"active\":false}".to_vec(),
-        }).await.unwrap();
+        let result = owner
+            .invoke(FfiCall {
+                invocation_id: uuid::Uuid::now_v7(),
+                template_id: template.template_id,
+                tenant_id: "tenant-a".to_string(),
+                process_instance_id: uuid::Uuid::now_v7(),
+                caller_task_id: "T1".to_string(),
+                input_payload: b"{\"active\":false}".to_vec(),
+            })
+            .await
+            .unwrap();
 
         match result {
             FfiResult::Success { output_payload, .. } => {
@@ -377,38 +393,59 @@ description = "integers"
         let template = owner.register_decision(
             decision,
             vec![bool_schema("active")],
-            vec![FfiField { name: "result".to_string(), kind: SchemaKind::Bool, required: false }],
+            vec![FfiField {
+                name: "result".to_string(),
+                kind: SchemaKind::Bool,
+                required: false,
+            }],
             Idempotency::Idempotent,
             "tenant-a".to_string(),
             "test".to_string(),
         );
-        let result = owner.invoke(FfiCall {
-            invocation_id: uuid::Uuid::now_v7(),
-            template_id: template.template_id,
-            tenant_id: "tenant-a".to_string(),
-            process_instance_id: uuid::Uuid::now_v7(),
-            caller_task_id: "T1".to_string(),
-            input_payload: b"{\"active\":false}".to_vec(),
-        }).await.unwrap();
+        let result = owner
+            .invoke(FfiCall {
+                invocation_id: uuid::Uuid::now_v7(),
+                template_id: template.template_id,
+                tenant_id: "tenant-a".to_string(),
+                process_instance_id: uuid::Uuid::now_v7(),
+                caller_task_id: "T1".to_string(),
+                input_payload: b"{\"active\":false}".to_vec(),
+            })
+            .await
+            .unwrap();
 
-        assert!(matches!(result, FfiResult::NoMatch { .. }), "got {:?}", result);
+        assert!(
+            matches!(result, FfiResult::NoMatch { .. }),
+            "got {:?}",
+            result
+        );
     }
 
     #[tokio::test]
     async fn unknown_template_returns_incident() {
         let owner = DmnLiteOwner::new();
-        let result = owner.invoke(FfiCall {
-            invocation_id: uuid::Uuid::now_v7(),
-            template_id: [7u8; 32],
-            tenant_id: "t".to_string(),
-            process_instance_id: uuid::Uuid::now_v7(),
-            caller_task_id: "T1".to_string(),
-            input_payload: b"{}".to_vec(),
-        }).await.unwrap();
+        let result = owner
+            .invoke(FfiCall {
+                invocation_id: uuid::Uuid::now_v7(),
+                template_id: [7u8; 32],
+                tenant_id: "t".to_string(),
+                process_instance_id: uuid::Uuid::now_v7(),
+                caller_task_id: "T1".to_string(),
+                input_payload: b"{}".to_vec(),
+            })
+            .await
+            .unwrap();
 
         assert!(
-            matches!(result, FfiResult::Incident { error_class: FfiIncidentClass::ContractViolation, .. }),
-            "got {:?}", result
+            matches!(
+                result,
+                FfiResult::Incident {
+                    error_class: FfiIncidentClass::ContractViolation,
+                    ..
+                }
+            ),
+            "got {:?}",
+            result
         );
     }
 
@@ -418,12 +455,20 @@ description = "integers"
         let owner = DmnLiteOwner::new();
         let schema = vec![bool_schema("active")];
         let t1 = owner.register_decision(
-            make_bool_decision(&c), schema.clone(), vec![],
-            Idempotency::Idempotent, "t".to_string(), "t".to_string(),
+            make_bool_decision(&c),
+            schema.clone(),
+            vec![],
+            Idempotency::Idempotent,
+            "t".to_string(),
+            "t".to_string(),
         );
         let t2 = owner.register_decision(
-            make_bool_decision(&c), schema, vec![],
-            Idempotency::Idempotent, "t".to_string(), "t".to_string(),
+            make_bool_decision(&c),
+            schema,
+            vec![],
+            Idempotency::Idempotent,
+            "t".to_string(),
+            "t".to_string(),
         );
         assert_eq!(t1.template_id, t2.template_id);
     }
@@ -440,14 +485,17 @@ description = "integers"
             "t".to_string(),
             "t".to_string(),
         );
-        let result = owner.invoke(FfiCall {
-            invocation_id: uuid::Uuid::now_v7(),
-            template_id: template.template_id,
-            tenant_id: "t".to_string(),
-            process_instance_id: uuid::Uuid::now_v7(),
-            caller_task_id: "T1".to_string(),
-            input_payload: b"not-json{{".to_vec(),
-        }).await.unwrap_err();
+        let result = owner
+            .invoke(FfiCall {
+                invocation_id: uuid::Uuid::now_v7(),
+                template_id: template.template_id,
+                tenant_id: "t".to_string(),
+                process_instance_id: uuid::Uuid::now_v7(),
+                caller_task_id: "T1".to_string(),
+                input_payload: b"not-json{{".to_vec(),
+            })
+            .await
+            .unwrap_err();
 
         assert!(result.to_string().contains("JSON"));
     }

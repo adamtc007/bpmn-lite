@@ -1,10 +1,11 @@
 # CLAUDE.md — bpmn-lite
 
-> **Last reviewed:** 2026-05-16
+> **Last reviewed:** 2026-05-17
 > **Repo:** github.com/adamtc007/bpmn-lite
-> **Status:** A3–A11 complete; B0 consolidation complete — dmn-lite absorbed as in-workspace peer
+> **Status:** A1–A19 complete; B0–B9 + B11–B12 complete; 597 tests passing
 > **Related:** github.com/adamtc007/ob-poc (BNY onboarding platform — consumes via gRPC)
-> **V&S:** `ob-poc/todo/dmn-lite/bpmn-dmn-lite-vs-v1_1.md`
+> **V&S:** `ob-poc/todo/dmn-lite/bpmn-dmn-lite-vs-v1_2.md`
+> **Arch commitments:** `ob-poc/todo/dmn-lite/architecture-commitments-v0_6.md`
 
 bpmn-lite is the **compilation-and-execution kernel** described in V&S v1.1. It currently ships two compiled vocabularies in a single workspace:
 
@@ -197,15 +198,22 @@ EvaluationOutput { output, trace }
 | A10 | — | `dmn-lite-bridge` crate (now in-workspace) | ✅ |
 | A11 | — | First end-to-end test: BPMN → ExecFfi → dmn-lite → result | ✅ |
 | B0 | — | dmn-lite consolidated into bpmn-lite workspace | ✅ |
-| A12 | Δ7 | Publish compiled BPMN process as FFI template | ⬜ |
-| A13 | — | HTTP FFI execution owner | ⬜ |
-| A14 | — | gRPC FFI execution owner | ⬜ |
-| A15 | — | bpmn-lite static analysis (dead branches, FFI signature coverage) | ⬜ |
-| A16 | — | Multi-tenant Postgres (RLS enforcement) | ⬜ |
-| A17 | — | Hot restart of in-flight FFI calls | ⬜ |
-| A18 | — | Sub-process invocation (bpmn-lite calls bpmn-lite as sub-process) | ⬜ |
+| B1 | — | Dockerfile (cargo-chef, bpmn-lite/ context, docker-smoke) | ✅ |
+| B5 | — | `docker-ffi-smoke`: dmn-lite FFI deployed proof | ✅ |
+| B6 | — | HTTP FFI contract design (`b6-http-ffi-contract.md`) | ✅ |
+| B7-B8 | — | `bpmn-lite-ffi-http` crate + `docker-http-smoke` deployed proof | ✅ |
+| B9 | — | `docker-heterogeneous-smoke`: HTTP + dmn-lite in one process (tag `v0.1.0-heterogeneous-ffi`) | ✅ |
+| A16 | Δ4 | Tenancy enforcement: RLS (025), `bpmn_lite_app` role (026), `tenants` directory (027), `set_tenant_context` at atomic paths, admin/runtime URL split, `verify_not_superuser` WARN | ✅ |
+| A17 | Δ2 | Hot restart: `detect_interrupted_ffi_calls`; Idempotent auto-recover; NonIdempotent → Incident + Failed | ✅ |
+| A18 | Δ3 | Tenancy remediation: A16-Audit findings resolved; `rows_affected` validation on 5 write methods; per-tenant scheduler via `tenants` table | ✅ |
+| A19 | Δ4 | DB-enforced immutability: `integrity_hash` (BLAKE3) at creation; BEFORE UPDATE trigger (029) guards 7 immutable fields; `quarantine_state` + `InstanceQuarantined` event | ✅ |
+| L0 | Δ3 | Pool schema: `tenant_pools` table (030), `pool_id` column on `tenants` (031), default pool seed + FK (032); `list_tenants_in_pool` on ProcessStore + both impls | ✅ |
+| B2 | — | `docker-compose.yml` at repo root; admin/runtime URL split in Docker context | ✅ |
+| B3 | — | Standard gRPC health endpoint (`tonic-health`, `grpc.health.v1.Health`) | ✅ |
+| B11 | — | `verify_not_superuser` WARN → hard error; `BPMN_LITE_ALLOW_SUPERUSER=1` dev override | ✅ |
+| B12 | — | Three-vocabulary heterogeneous proof: HTTP + dmn-lite + gRPC in one BPMN process; `docker-heterogeneous-smoke` updated | ✅ |
 
-Design documents: `ob-poc/todo/bpmn-lite/` (a0–a2 notes, B-plan) and `ob-poc/todo/dmn-lite/` (v&s v1.1, arch commitments v0.3).
+Design documents: `ob-poc/todo/bpmn-lite/` and `ob-poc/todo/dmn-lite/` — see architecture-commitments-v0_6.md and bpmn-dmn-lite-vs-v1_2.md.
 
 ---
 
@@ -302,4 +310,6 @@ ob-poc-types = { git = "https://github.com/adamtc007/ob-poc.git", rev = "397470c
 | dmn-lite-engine | 48 |
 | dmn-lite-analysis | 57 |
 | dmn-lite-bridge | 6 |
-| **Total (workspace, excl. postgres)** | **574 passing, 5 ignored** |
+| bpmn-lite-ffi-http | 5 |
+| bpmn-lite-types (integrity) | 10 |
+| **Total (workspace, excl. postgres)** | **597 passing, 5 ignored** |

@@ -1,0 +1,54 @@
+# bpmn-lite — local development deployment
+#
+# Brings up a full stack: Postgres + bpmn-lite gRPC server (port 50051).
+#
+# Usage:
+#   docker build -t bpmn-lite:dev .   # build the image first
+#   docker-compose up                  # start both services
+#   docker-compose down -v             # stop and remove volumes
+#
+# Two connection URLs (A18 admin/runtime split):
+#   DATABASE_ADMIN_URL — superuser; used by bpmn-lite at startup for migrations
+#     (including migration 026 which creates bpmn_lite_app + migration 025 RLS)
+#   DATABASE_URL — bpmn_lite_app role (non-superuser); used for all runtime queries
+#     RLS policies apply; verify_not_superuser check emits INFO on startup
+#
+# POSTGRES_HOST_AUTH_METHOD=trust is dev-only convenience.
+# Production deployments must use proper pg_hba authentication.
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: bpmn_lite
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bpmn_lite"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  bpmn-lite:
+    image: bpmn-lite:dev
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+    environment:
+      # Superuser URL — migrations only (creates bpmn_lite_app, enables RLS).
+      DATABASE_ADMIN_URL: postgresql://postgres@postgres/bpmn_lite
+      # Runtime URL — bpmn_lite_app role, no BYPASSRLS.
+      DATABASE_URL: postgresql://bpmn_lite_app@postgres/bpmn_lite
+      BPMN_LITE_SCHEDULER_OWNER: bpmn-lite-compose
+      RUST_LOG: info
+    restart: on-failure:3
+
+volumes:
+  pgdata:

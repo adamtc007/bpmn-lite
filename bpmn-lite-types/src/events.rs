@@ -214,7 +214,6 @@ pub enum RuntimeEvent {
     },
 
     // ── FFI audit events (A8) ─────────────────────────────────────────────────
-
     /// Written BEFORE dispatching an in-process FFI call.
     /// Paired with FfiInvocationCompleted; together they form an
     /// audit record matching `ffi_invocation_record` table rows.
@@ -234,5 +233,17 @@ pub enum RuntimeEvent {
         outcome_kind: String,
         /// For incidents: structured error description.
         error_message: Option<String>,
+    },
+
+    /// A19 — Written when a pickup boundary detects an integrity hash mismatch.
+    /// The instance is quarantined after this event is appended.
+    InstanceQuarantined {
+        instance_id: Uuid,
+        tenant_id: String,
+        /// "scheduler_claim" | "grpc_handler" | "a17_recovery"
+        detection_point: String,
+        /// "integrity_hash_mismatch"
+        failure_reason: String,
+        detected_at: Timestamp,
     },
 }

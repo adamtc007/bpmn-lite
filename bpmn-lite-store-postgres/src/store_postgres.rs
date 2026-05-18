@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::integrity::compute_instance_integrity_hash;
 use bpmn_lite_types::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -69,6 +70,41 @@ impl PostgresProcessStore {
         Self { pool }
     }
 
+    /// A18 — Execute `f` inside a transaction with `app.tenant_id` set via
+    /// SET LOCAL. Every gRPC handler that mutates tenant-scoped data must
+    /// use this wrapper so that RLS policies (migration 025) see the correct
+    /// tenant on every query within the transaction.
+    ///
+    /// SET LOCAL scopes the setting to the transaction only — it is reset
+    /// automatically on commit or rollback, so connection-pool reuse is safe.
+    pub async fn with_tenant<F, T>(&self, tenant_id: &str, f: F) -> Result<T>
+    where
+        F: for<'c> FnOnce(
+                &'c mut sqlx::Transaction<'_, sqlx::Postgres>,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<T>> + Send + 'c>,
+            > + Send,
+        T: Send,
+    {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("with_tenant: begin transaction")?;
+        Self::set_tenant_context(&mut tx, tenant_id).await?;
+        let result = f(&mut tx).await?;
+        tx.commit()
+            .await
+            .context("with_tenant: commit transaction")?;
+        Ok(result)
+    }
+
+    /// Expose the inner pool for callers that need ad-hoc executor access
+    /// outside of `with_tenant` (e.g. read-only queries, health checks).
+    pub fn pool(&self) -> &sqlx::PgPool {
+        &self.pool
+    }
+
     /// Run embedded migrations.
     pub async fn migrate(&self) -> Result<()> {
         sqlx::migrate!("./migrations")
@@ -125,18 +161,19 @@ impl ProcessStore for PostgresProcessStore {
         let state = serde_json::to_value(&instance.state)?;
         let session_stack = serde_json::to_value(&instance.session_stack)?;
         let created_at = epoch_ms_to_datetime(instance.created_at);
+        // A19 — compute integrity hash over immutable fields at creation.
+        // integrity_hash is excluded from the ON CONFLICT DO UPDATE clause so
+        // it is written once and never overwritten by subsequent updates.
+        let integrity_hash = compute_instance_integrity_hash(instance);
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO process_instances (
                 instance_id, tenant_id, process_key, bytecode_version, domain_payload,
                 domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                correlation_id, entry_id, runbook_id, created_at, integrity_hash
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             ON CONFLICT (instance_id) DO UPDATE SET
-                tenant_id = EXCLUDED.tenant_id,
-                process_key = EXCLUDED.process_key,
-                bytecode_version = EXCLUDED.bytecode_version,
                 domain_payload = EXCLUDED.domain_payload,
                 domain_payload_hash = EXCLUDED.domain_payload_hash,
                 session_stack = EXCLUDED.session_stack,
@@ -144,9 +181,11 @@ impl ProcessStore for PostgresProcessStore {
                 counters = EXCLUDED.counters,
                 join_expected = EXCLUDED.join_expected,
                 state = EXCLUDED.state,
-                correlation_id = EXCLUDED.correlation_id,
-                entry_id = EXCLUDED.entry_id,
-                runbook_id = EXCLUDED.runbook_id
+                correlation_id = EXCLUDED.correlation_id
+            -- Immutable fields (tenant_id, process_key, bytecode_version, entry_id,
+            -- runbook_id, created_at, integrity_hash) are omitted: migration 029
+            -- trigger rejects any UPDATE that changes them. quarantine_state is
+            -- owned exclusively by quarantine_instance().
             "#,
         )
         .bind(instance.instance_id)
@@ -164,8 +203,21 @@ impl ProcessStore for PostgresProcessStore {
         .bind(instance.entry_id)
         .bind(instance.runbook_id)
         .bind(created_at)
+        .bind(&integrity_hash[..])
         .execute(&self.pool)
         .await?;
+
+        // A18 — rows_affected validation. INSERT ... ON CONFLICT DO UPDATE
+        // must touch exactly one row. Zero means RLS rejection, missing
+        // parent FK, or other silent failure.
+        if result.rows_affected() == 0 {
+            return Err(anyhow!(
+                "save_instance affected 0 rows for instance {} (tenant={}); \
+                 possible RLS rejection or constraint violation",
+                instance.instance_id,
+                instance.tenant_id
+            ));
+        }
 
         Ok(())
     }
@@ -176,7 +228,9 @@ impl ProcessStore for PostgresProcessStore {
             SELECT instance_id, tenant_id, process_key, bytecode_version, domain_payload,
                    domain_payload_hash, session_stack, flags, counters, join_expected, state,
                    correlation_id, entry_id, runbook_id,
-                   (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms
+                   (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+                   integrity_hash,
+                   quarantine_state
             FROM process_instances
             WHERE instance_id = $1
             "#,
@@ -197,6 +251,8 @@ impl ProcessStore for PostgresProcessStore {
                 let join_expected_json: serde_json::Value = row.get("join_expected");
                 let state_json: serde_json::Value = row.get("state");
                 let created_at_ms: i64 = row.get("created_at_ms");
+                let integrity_hash_raw: Option<Vec<u8>> = row.get("integrity_hash");
+                let integrity_hash = integrity_hash_raw.map(bytes_to_hash).transpose()?;
 
                 Ok(Some(ProcessInstance {
                     instance_id: row.get("instance_id"),
@@ -214,6 +270,8 @@ impl ProcessStore for PostgresProcessStore {
                     entry_id: row.get("entry_id"),
                     runbook_id: row.get("runbook_id"),
                     created_at: created_at_ms,
+                    integrity_hash,
+                    quarantine_state: row.get("quarantine_state"),
                 }))
             }
         }
@@ -279,7 +337,7 @@ impl ProcessStore for PostgresProcessStore {
         let regs = serde_json::to_value(&fiber.regs)?;
         let wait_state = serde_json::to_value(&fiber.wait)?;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -300,6 +358,18 @@ impl ProcessStore for PostgresProcessStore {
         .bind(fiber.loop_epoch as i32)
         .execute(&self.pool)
         .await?;
+
+        // A18 — rows_affected validation. INSERT ... ON CONFLICT DO UPDATE
+        // must touch exactly one row. Zero means RLS rejection on the
+        // parent instance, or the parent instance was deleted concurrently.
+        if result.rows_affected() == 0 {
+            return Err(anyhow!(
+                "save_fiber affected 0 rows for instance {} fiber {}; \
+                 parent instance may be missing or RLS rejected",
+                instance_id,
+                fiber.fiber_id
+            ));
+        }
 
         Ok(())
     }
@@ -488,7 +558,7 @@ impl ProcessStore for PostgresProcessStore {
         let orch_flags = serde_json::to_value(&activation.orch_flags)?;
         let session_stack = serde_json::to_value(&activation.session_stack)?;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO job_queue (
                 job_key, tenant_id, process_instance_id, task_type, service_task_id,
@@ -511,6 +581,40 @@ impl ProcessStore for PostgresProcessStore {
         .bind(activation.runbook_id)
         .execute(&self.pool)
         .await?;
+
+        // A18 — rows_affected validation. INSERT with `ON CONFLICT DO NOTHING`
+        // legitimately produces 0 rows on duplicate job_key (idempotent
+        // re-enqueue). But it also produces 0 rows if the parent instance
+        // subquery resolves to NULL (parent missing or RLS rejection) —
+        // in that case the row insert would have a NULL tenant_id, which
+        // the NOT NULL constraint rejects. So 0 here is ambiguous: either
+        // benign duplicate, or unsignalled failure. We check the parent
+        // existence explicitly to disambiguate.
+        if result.rows_affected() == 0 {
+            // Distinguish duplicate vs missing parent. If the job_key
+            // already exists, we accept it (idempotent). Otherwise, the
+            // parent instance is missing or RLS rejected.
+            let existing: Option<(String,)> =
+                sqlx::query_as("SELECT job_key FROM job_queue WHERE job_key = $1")
+                    .bind(&activation.job_key)
+                    .fetch_optional(&self.pool)
+                    .await?;
+
+            if existing.is_none() {
+                return Err(anyhow!(
+                    "enqueue_job affected 0 rows for job {} (instance {}); \
+                     parent instance missing, RLS rejected, or NOT NULL \
+                     constraint violation on tenant_id",
+                    activation.job_key,
+                    activation.process_instance_id
+                ));
+            }
+            // Duplicate job_key — benign idempotent re-enqueue, fall through.
+            tracing::debug!(
+                job_key = %activation.job_key,
+                "enqueue_job: duplicate job_key, idempotent no-op"
+            );
+        }
 
         Ok(())
     }
@@ -611,10 +715,26 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn ack_job(&self, job_key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
+        let result = sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
             .bind(job_key)
             .execute(&self.pool)
             .await?;
+
+        // A18 — rows_affected validation. A 0-row DELETE on ack_job is
+        // legitimate: a concurrent worker may have already acked, the
+        // claim may have expired and been reclaimed elsewhere, or the
+        // job may have been cancelled. Treat as a soft signal (debug
+        // log) rather than an error to preserve current orchestrator
+        // behavior. A18-Session-2 may revisit this to return a typed
+        // AckOutcome { Acked, AlreadyAcked } once the caller side is
+        // ready to discriminate.
+        if result.rows_affected() == 0 {
+            tracing::debug!(
+                job_key = %job_key,
+                "ack_job: 0 rows deleted (already acked, expired, or cancelled)"
+            );
+        }
+
         Ok(())
     }
 
@@ -1307,7 +1427,7 @@ impl ProcessStore for PostgresProcessStore {
         let created_at = epoch_ms_to_datetime(incident.created_at);
         let resolved_at = incident.resolved_at.map(epoch_ms_to_datetime);
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO incidents (
                 incident_id, process_instance_id, fiber_id, service_task_id,
@@ -1329,6 +1449,19 @@ impl ProcessStore for PostgresProcessStore {
         .bind(&incident.resolution)
         .execute(&self.pool)
         .await?;
+
+        // A18 — rows_affected validation. A straight INSERT with no
+        // ON CONFLICT clause must produce exactly 1 row. Zero means
+        // RLS rejected (when migration 025's policy applies) or the
+        // parent process_instance was deleted concurrently.
+        if result.rows_affected() == 0 {
+            return Err(anyhow!(
+                "save_incident affected 0 rows for incident {} (instance {}); \
+                 parent missing, RLS rejected, or constraint violation",
+                incident.incident_id,
+                incident.process_instance_id
+            ));
+        }
 
         Ok(())
     }
@@ -1384,7 +1517,13 @@ impl ProcessStore for PostgresProcessStore {
         root_fiber: &Fiber,
         event: &RuntimeEvent,
     ) -> Result<u64> {
+        // Register the tenant on first use. Idempotent — ON CONFLICT DO NOTHING.
+        // Runs outside the main transaction so the tenants row is visible to
+        // the scheduler even if the main transaction rolls back.
+        self.ensure_tenant(&instance.tenant_id).await?;
+
         let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &instance.tenant_id).await?;
 
         // 1. INSERT process_instances
         let flags = serde_json::to_value(&instance.flags)?;
@@ -1480,6 +1619,7 @@ impl ProcessStore for PostgresProcessStore {
         events: &[RuntimeEvent],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &instance.tenant_id).await?;
 
         // 1. UPSERT process_instances
         let flags = serde_json::to_value(&instance.flags)?;
@@ -1497,9 +1637,6 @@ impl ProcessStore for PostgresProcessStore {
                 correlation_id, entry_id, runbook_id, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (instance_id) DO UPDATE SET
-                tenant_id = EXCLUDED.tenant_id,
-                process_key = EXCLUDED.process_key,
-                bytecode_version = EXCLUDED.bytecode_version,
                 domain_payload = EXCLUDED.domain_payload,
                 domain_payload_hash = EXCLUDED.domain_payload_hash,
                 session_stack = EXCLUDED.session_stack,
@@ -1507,9 +1644,8 @@ impl ProcessStore for PostgresProcessStore {
                 counters = EXCLUDED.counters,
                 join_expected = EXCLUDED.join_expected,
                 state = EXCLUDED.state,
-                correlation_id = EXCLUDED.correlation_id,
-                entry_id = EXCLUDED.entry_id,
-                runbook_id = EXCLUDED.runbook_id
+                correlation_id = EXCLUDED.correlation_id
+            -- Immutable fields omitted: migration 029 trigger enforces them.
             "#,
         )
         .bind(instance.instance_id)
@@ -1708,6 +1844,7 @@ impl ProcessStore for PostgresProcessStore {
                 FROM process_instances
                 WHERE tenant_id = $1
                   AND state = '"Running"'::jsonb
+                  AND quarantine_state IS NULL
                   AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $2)
                 ORDER BY updated_at
                 LIMIT $3
@@ -1790,6 +1927,100 @@ impl ProcessStore for PostgresProcessStore {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
     }
+
+    async fn ensure_tenant(&self, tenant_id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenants (tenant_id, pool_id) VALUES ($1, 'default') ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_tenants(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
+            .fetch_all(&self.pool)
+            .await?;
+        use sqlx::Row;
+        Ok(rows
+            .iter()
+            .map(|r| r.get::<String, _>("tenant_id"))
+            .collect())
+    }
+
+    async fn list_tenants_in_pool(&self, pool_id: &str) -> Result<Vec<String>> {
+        let rows =
+            sqlx::query("SELECT tenant_id FROM tenants WHERE pool_id = $1 ORDER BY first_seen_at")
+                .bind(pool_id)
+                .fetch_all(&self.pool)
+                .await?;
+        use sqlx::Row;
+        Ok(rows
+            .iter()
+            .map(|r| r.get::<String, _>("tenant_id"))
+            .collect())
+    }
+
+    async fn quarantine_instance(
+        &self,
+        instance_id: Uuid,
+        tenant_id: &str,
+        detection_point: &str,
+    ) -> Result<()> {
+        // 1. Mark the row as quarantined. Use a separate pool connection
+        //    so the quarantine persists even if the caller's transaction rolls back.
+        sqlx::query(
+            "UPDATE process_instances \
+             SET quarantine_state = 'integrity_violation' \
+             WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .execute(&self.pool)
+        .await
+        .context("quarantine_instance: failed to set quarantine_state")?;
+
+        // 2. Append InstanceQuarantined event to the audit log.
+        let now = chrono::Utc::now();
+        let now_ms = now.timestamp_millis();
+        let event = RuntimeEvent::InstanceQuarantined {
+            instance_id,
+            tenant_id: tenant_id.to_string(),
+            detection_point: detection_point.to_string(),
+            failure_reason: "integrity_hash_mismatch".to_string(),
+            detected_at: now_ms,
+        };
+        let event_json = serde_json::to_value(&event)?;
+
+        sqlx::query(
+            r#"
+            WITH seq AS (
+                INSERT INTO event_sequences (instance_id, next_seq)
+                VALUES ($1, 1)
+                ON CONFLICT (instance_id) DO UPDATE
+                    SET next_seq = event_sequences.next_seq + 1
+                RETURNING next_seq
+            )
+            INSERT INTO event_log (instance_id, seq, event)
+            SELECT $1, seq.next_seq, $2
+            FROM seq
+            "#,
+        )
+        .bind(instance_id)
+        .bind(&event_json)
+        .execute(&self.pool)
+        .await
+        .context("quarantine_instance: failed to append InstanceQuarantined event")?;
+
+        tracing::warn!(
+            instance_id = %instance_id,
+            tenant_id = %tenant_id,
+            detection_point = %detection_point,
+            "A19: instance quarantined due to integrity hash mismatch"
+        );
+
+        Ok(())
+    }
 }
 
 // The whole crate is postgres-only — no need for the inner cfg-gate
@@ -1865,16 +2096,13 @@ mod tests {
         (pool, store)
     }
 
-    fn sha2_hash(data: &str) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(data.as_bytes());
-        hasher.finalize().into()
+    fn test_hash(data: &str) -> [u8; 32] {
+        blake3::hash(data.as_bytes()).into()
     }
 
     fn make_instance(id: Uuid) -> ProcessInstance {
         let payload = r#"{"case_id":"abc"}"#;
-        let hash = sha2_hash(payload);
+        let hash = test_hash(payload);
         ProcessInstance {
             instance_id: id,
             tenant_id: "default".to_string(),
@@ -1891,6 +2119,8 @@ mod tests {
             entry_id: Uuid::nil(),
             runbook_id: Uuid::nil(),
             created_at: 1700000000000,
+            integrity_hash: None,
+            quarantine_state: None,
         }
     }
 
@@ -2033,7 +2263,7 @@ mod tests {
         let completion = JobCompletion {
             job_key: "job-abc".to_string(),
             domain_payload: r#"{"done":true}"#.to_string(),
-            expected_instance_payload_hash: sha2_hash(r#"{"case_id":"abc"}"#),
+            expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
         };
 
@@ -2146,14 +2376,14 @@ mod tests {
         store.save_instance(&make_instance(iid)).await.unwrap();
 
         let payload_v1 = r#"{"version":1}"#;
-        let hash_v1 = sha2_hash(payload_v1);
+        let hash_v1 = test_hash(payload_v1);
         store
             .save_payload_version(iid, &hash_v1, payload_v1)
             .await
             .unwrap();
 
         let payload_v2 = r#"{"version":2}"#;
-        let hash_v2 = sha2_hash(payload_v2);
+        let hash_v2 = test_hash(payload_v2);
         store
             .save_payload_version(iid, &hash_v2, payload_v2)
             .await
@@ -2188,7 +2418,7 @@ mod tests {
         let (_pool, store) = setup().await;
 
         let program = CompiledProgram {
-            bytecode_version: sha2_hash("test-program"),
+            bytecode_version: test_hash("test-program"),
             program: vec![Instr::End],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -2309,7 +2539,7 @@ mod tests {
 
         // Update payload
         let new_payload = r#"{"updated":true}"#;
-        let new_hash = sha2_hash(new_payload);
+        let new_hash = test_hash(new_payload);
         store
             .update_instance_payload(id, new_payload, &new_hash)
             .await
@@ -2578,5 +2808,376 @@ mod tests {
             .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].job_key, "cancel-b-0");
+    }
+
+    // ── A18-Session-1: rows_affected validation tests ──
+    //
+    // These tests deliberately provoke 0-row write outcomes and assert
+    // that the named write methods either error (save_instance, save_fiber,
+    // enqueue_job, save_incident) or fall through cleanly (ack_job's
+    // soft-signal case).
+
+    /// T-A18-1: enqueue_job against a non-existent parent instance errors.
+    /// The job_queue tenant_id is derived via subquery on process_instances;
+    /// a missing parent yields NULL tenant_id which violates NOT NULL.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a18_enqueue_job_missing_parent_errors() {
+        let (_pool, store) = setup().await;
+        let fake_parent = Uuid::now_v7();
+
+        let activation = JobActivation {
+            job_key: "a18-orphan-job".to_string(),
+            tenant_id: "default".to_string(),
+            process_instance_id: fake_parent,
+            task_type: "a18_test".to_string(),
+            service_task_id: "a18-task".to_string(),
+            domain_payload: "{}".to_string(),
+            domain_payload_hash: [0u8; 32],
+            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            orch_flags: BTreeMap::new(),
+            retries_remaining: 3,
+            entry_id: Uuid::nil(),
+            runbook_id: Uuid::nil(),
+            worker_id: String::new(),
+            claim_token: String::new(),
+            claim_expires_at: None,
+            attempt_count: 0,
+            failure_count: 0,
+            not_before: None,
+        };
+
+        let err = store.enqueue_job(&activation).await.unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("a18-orphan-job") || msg.contains("tenant_id") || msg.contains("violates"),
+            "expected enqueue_job error to surface the failure cause, got: {msg}"
+        );
+    }
+
+    /// T-A18-2: enqueue_job duplicate job_key (idempotent) does NOT error.
+    /// `ON CONFLICT DO NOTHING` is benign when the row already exists.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a18_enqueue_job_duplicate_is_idempotent() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        store.save_instance(&make_instance(iid)).await.unwrap();
+
+        let activation = JobActivation {
+            job_key: "a18-dup-job".to_string(),
+            tenant_id: "default".to_string(),
+            process_instance_id: iid,
+            task_type: "a18_test".to_string(),
+            service_task_id: "a18-task".to_string(),
+            domain_payload: "{}".to_string(),
+            domain_payload_hash: [0u8; 32],
+            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            orch_flags: BTreeMap::new(),
+            retries_remaining: 3,
+            entry_id: Uuid::nil(),
+            runbook_id: Uuid::nil(),
+            worker_id: String::new(),
+            claim_token: String::new(),
+            claim_expires_at: None,
+            attempt_count: 0,
+            failure_count: 0,
+            not_before: None,
+        };
+
+        // First insert succeeds; second is a benign duplicate.
+        store.enqueue_job(&activation).await.unwrap();
+        store
+            .enqueue_job(&activation)
+            .await
+            .expect("duplicate enqueue_job must be idempotent, not an error");
+    }
+
+    /// T-A18-3: save_incident with a missing parent instance errors.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a18_save_incident_missing_parent_errors() {
+        let (_pool, store) = setup().await;
+        let fake_parent = Uuid::now_v7();
+
+        let incident = Incident {
+            incident_id: Uuid::now_v7(),
+            process_instance_id: fake_parent,
+            fiber_id: Uuid::now_v7(),
+            service_task_id: "a18-task".to_string(),
+            bytecode_addr: 0,
+            error_class: ErrorClass::Transient,
+            message: "test".to_string(),
+            retry_count: 0,
+            created_at: 1700000000000,
+            resolved_at: None,
+            resolution: None,
+        };
+
+        let err = store.save_incident(&incident).await.unwrap_err();
+        let msg = format!("{:#}", err);
+        // Either our validation error fires, or the FK constraint surfaces.
+        assert!(
+            msg.contains(&incident.incident_id.to_string())
+                || msg.contains("foreign key")
+                || msg.contains("violates"),
+            "expected save_incident error to mention incident or FK, got: {msg}"
+        );
+    }
+
+    /// T-A18-4: ack_job for an already-acked job returns Ok (soft signal).
+    #[tokio::test]
+    #[ignore]
+    async fn test_a18_ack_job_already_acked_is_ok() {
+        let (_pool, store) = setup().await;
+        // No setup needed — job_key simply doesn't exist.
+        store
+            .ack_job("a18-nonexistent-job-key")
+            .await
+            .expect("ack_job of nonexistent key must be Ok (soft signal)");
+    }
+
+    /// T-A18-5: save_instance + save_fiber happy path still works.
+    /// Regression guard so rows_affected validation doesn't break the
+    /// normal path.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a18_happy_path_writes_succeed() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let fid = Uuid::now_v7();
+
+        store
+            .save_instance(&make_instance(iid))
+            .await
+            .expect("save_instance happy path must succeed");
+
+        let fiber = Fiber::new(fid, 0);
+        store
+            .save_fiber(iid, &fiber)
+            .await
+            .expect("save_fiber happy path must succeed");
+    }
+
+    // ── A19-Session-1: integrity hash tests ──
+    //
+    // These tests require a real Postgres database and are gated by #[ignore].
+    // They verify: hash stored at creation; load returns it; tampering surfaces;
+    // quarantined instances are skipped by claim_running_instances.
+
+    /// T-A19-PG-1: save_instance stores an integrity hash; load_instance returns it.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a19_hash_stored_on_save_and_loaded() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+
+        store.save_instance(&make_instance(iid)).await.unwrap();
+
+        let loaded = store.load_instance(iid).await.unwrap().unwrap();
+        assert!(
+            loaded.integrity_hash.is_some(),
+            "integrity_hash must be set after save_instance"
+        );
+
+        // Verify the hash is correct (matches recomputation).
+        use bpmn_lite_types::integrity::verify_instance_integrity;
+        assert!(
+            verify_instance_integrity(&loaded).is_ok(),
+            "loaded instance must pass integrity verification"
+        );
+    }
+
+    /// T-A19-PG-2: hash is NOT updated when save_instance is called again (ON CONFLICT branch).
+    #[tokio::test]
+    #[ignore]
+    async fn test_a19_hash_not_overwritten_on_update() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+
+        store.save_instance(&make_instance(iid)).await.unwrap();
+        let original_hash = store
+            .load_instance(iid)
+            .await
+            .unwrap()
+            .unwrap()
+            .integrity_hash;
+
+        // Re-save (simulates tick updating state/flags).
+        let inst = store.load_instance(iid).await.unwrap().unwrap();
+        store.save_instance(&inst).await.unwrap();
+
+        let after_hash = store
+            .load_instance(iid)
+            .await
+            .unwrap()
+            .unwrap()
+            .integrity_hash;
+
+        assert_eq!(original_hash, after_hash, "hash must not change on update");
+    }
+
+    /// T-A19-PG-3: deliberate DB-level tamper of tenant_id is detected via verify_instance_integrity.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a19_tamper_tenant_id_detected() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+
+        store.save_instance(&make_instance(iid)).await.unwrap();
+
+        // Simulate DB-level tamper (bypass application layer).
+        sqlx::query(
+            "UPDATE process_instances SET tenant_id = 'evil-tenant' WHERE instance_id = $1",
+        )
+        .bind(iid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let loaded = store.load_instance(iid).await.unwrap().unwrap();
+        use bpmn_lite_types::integrity::verify_instance_integrity;
+        let result = verify_instance_integrity(&loaded);
+        assert!(
+            result.is_err(),
+            "tampered instance must fail integrity verification"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("integrity hash mismatch"), "got: {msg}");
+    }
+
+    /// T-A19-PG-4: quarantine_instance marks the row and logs an event.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a19_quarantine_marks_row_and_logs_event() {
+        use sqlx::Row;
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+
+        store.save_instance(&make_instance(iid)).await.unwrap();
+        store
+            .quarantine_instance(iid, "default", "grpc_handler")
+            .await
+            .expect("quarantine_instance must succeed");
+
+        // Check quarantine_state column.
+        let row =
+            sqlx::query("SELECT quarantine_state FROM process_instances WHERE instance_id = $1")
+                .bind(iid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let state: Option<String> = row.get("quarantine_state");
+        assert_eq!(
+            state.as_deref(),
+            Some("integrity_violation"),
+            "quarantine_state must be 'integrity_violation'"
+        );
+
+        // Check InstanceQuarantined event was appended.
+        let events = store.read_events(iid, 0).await.unwrap();
+        let has_quarantine_event = events.iter().any(|(_, ev)| {
+            matches!(
+                ev,
+                bpmn_lite_types::events::RuntimeEvent::InstanceQuarantined { .. }
+            )
+        });
+        assert!(
+            has_quarantine_event,
+            "InstanceQuarantined event must be logged"
+        );
+    }
+
+    /// T-A19-PG-5: quarantined instance is skipped by claim_running_instances.
+    #[tokio::test]
+    #[ignore]
+    async fn test_a19_quarantined_instance_skipped_by_scheduler() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+
+        store.save_instance(&make_instance(iid)).await.unwrap();
+
+        // Quarantine the instance.
+        store
+            .quarantine_instance(iid, "default", "scheduler_claim")
+            .await
+            .unwrap();
+
+        // Claim batch — quarantined instance should not be returned.
+        let claimed = store
+            .claim_running_instances("default", "test-scheduler", 10, 5_000)
+            .await
+            .unwrap();
+        assert!(
+            !claimed.contains(&iid),
+            "quarantined instance must not appear in scheduler claim"
+        );
+    }
+
+    // ── L0 — Pool schema tests ──────────────────────────────────────────────
+
+    /// T-L0-PG-1: default pool row is present after migrations.
+    #[tokio::test]
+    #[ignore]
+    async fn test_l0_default_pool_exists() {
+        let (pool, _store) = setup().await;
+        let row: (String,) =
+            sqlx::query_as("SELECT pool_id FROM tenant_pools WHERE pool_id = 'default'")
+                .fetch_one(&pool)
+                .await
+                .expect("default pool row must exist after migration 032");
+        assert_eq!(row.0, "default");
+    }
+
+    /// T-L0-PG-2: ensure_tenant assigns pool_id = 'default'.
+    #[tokio::test]
+    #[ignore]
+    async fn test_l0_ensure_tenant_sets_pool_id() {
+        let (pool, store) = setup().await;
+        store.ensure_tenant("l0_test_tenant").await.unwrap();
+        let row: (String,) =
+            sqlx::query_as("SELECT pool_id FROM tenants WHERE tenant_id = 'l0_test_tenant'")
+                .fetch_one(&pool)
+                .await
+                .expect("tenant row must exist");
+        assert_eq!(row.0, "default");
+    }
+
+    /// T-L0-PG-3: list_tenants_in_pool returns only tenants in that pool.
+    #[tokio::test]
+    #[ignore]
+    async fn test_l0_list_tenants_in_pool() {
+        let (_pool, store) = setup().await;
+        store.ensure_tenant("l0_pool_tenant_a").await.unwrap();
+        store.ensure_tenant("l0_pool_tenant_b").await.unwrap();
+
+        let in_default = store.list_tenants_in_pool("default").await.unwrap();
+        assert!(
+            in_default.contains(&"l0_pool_tenant_a".to_string()),
+            "l0_pool_tenant_a must be in default pool"
+        );
+        assert!(
+            in_default.contains(&"l0_pool_tenant_b".to_string()),
+            "l0_pool_tenant_b must be in default pool"
+        );
+
+        let in_nonexistent = store.list_tenants_in_pool("does_not_exist").await.unwrap();
+        assert!(
+            in_nonexistent.is_empty(),
+            "unknown pool must return empty vec"
+        );
+    }
+
+    /// T-L0-PG-4: FK constraint prevents assigning a tenant to a nonexistent pool.
+    #[tokio::test]
+    #[ignore]
+    async fn test_l0_fk_rejects_unknown_pool() {
+        let (pool, _store) = setup().await;
+        let result = sqlx::query(
+            "INSERT INTO tenants (tenant_id, pool_id) VALUES ('fk_test_tenant', 'nonexistent_pool')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(result.is_err(), "FK constraint must reject unknown pool_id");
     }
 }

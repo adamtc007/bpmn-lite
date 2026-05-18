@@ -38,7 +38,6 @@ use ffi_types::{FieldSchema, Idempotency, SchemaKind};
 
 use std::sync::Arc;
 
-
 const INT_CAT: &str = r#"
 snapshot_id = "019c0a5d-0000-7000-8000-000000000099"
 snapshot_version = "test"
@@ -57,8 +56,7 @@ description = "integers"
 ///
 /// Bool output → FlagWrite (fits in bpmn_lite_types::Value::Bool).
 /// Integer input → FlagRef (pre-initialised by test before running).
-async fn setup_ffi(
-) -> (String, Arc<DmnLiteOwner>, Arc<FfiCatalogue>) {
+async fn setup_ffi() -> (String, Arc<DmnLiteOwner>, Arc<FfiCatalogue>) {
     let catalogue = load_catalogue_from_str(INT_CAT).expect("catalogue load");
     let src = r#"(define-decision check :hit-policy first
         :inputs  ((score    :type integer :domain N))
@@ -71,8 +69,16 @@ async fn setup_ffi(
     let owner = Arc::new(DmnLiteOwner::new());
     let template = owner.register_decision(
         decision,
-        vec![FieldSchema { name: "score".to_string(), kind: SchemaKind::I64, required: true }],
-        vec![FieldSchema { name: "eligible".to_string(), kind: SchemaKind::Bool, required: false }],
+        vec![FieldSchema {
+            name: "score".to_string(),
+            kind: SchemaKind::I64,
+            required: true,
+        }],
+        vec![FieldSchema {
+            name: "eligible".to_string(),
+            kind: SchemaKind::Bool,
+            required: false,
+        }],
         Idempotency::Idempotent,
         "tenant-a".to_string(),
         "test".to_string(),
@@ -87,9 +93,15 @@ async fn setup_ffi(
 
     // Publish to FFI catalogue.
     let ffi_store = Arc::new(MemoryFfiTemplateStore::new());
-    ffi_store.publish(&template).await.expect("publish template");
+    ffi_store
+        .publish(&template)
+        .await
+        .expect("publish template");
     let ffi_cat = Arc::new(FfiCatalogue::new(ffi_store));
-    ffi_cat.load_into_cache("tenant-a").await.expect("load cache");
+    ffi_cat
+        .load_into_cache("tenant-a")
+        .await
+        .expect("load cache");
 
     (template_id_hex, owner, ffi_cat)
 }
@@ -144,8 +156,7 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
 
     // Set up engine.
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone())
-        .with_ffi_dispatcher(dispatcher);
+    let engine = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(dispatcher);
 
     // Compile the BPMN process.
     let bpmn_xml = build_bpmn_xml(&template_id_hex);
@@ -228,8 +239,7 @@ async fn a11_no_match_score_produces_tier_zero() {
     dispatcher.register_owner(owner).expect("register owner");
 
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone())
-        .with_ffi_dispatcher(Arc::new(dispatcher));
+    let engine = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(Arc::new(dispatcher));
 
     let bpmn_xml = build_bpmn_xml(&template_id_hex);
     let compile_result = engine.compile(&bpmn_xml).await.expect("compile");
@@ -292,11 +302,7 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
     let compile_result = engine.compile(&bpmn_xml).await.expect("compile");
     let bytecode_version = compile_result.bytecode_version;
 
-    let program = store
-        .load_program(bytecode_version)
-        .await
-        .unwrap()
-        .unwrap();
+    let program = store.load_program(bytecode_version).await.unwrap().unwrap();
     let score_key = *program
         .flag_symbol_table
         .iter()
@@ -307,7 +313,13 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
     let payload = "{}";
     let hash = compute_hash(payload);
     let instance_id = engine
-        .start("eligibility", bytecode_version, payload, hash, "a11-incident")
+        .start(
+            "eligibility",
+            bytecode_version,
+            payload,
+            hash,
+            "a11-incident",
+        )
         .await
         .expect("start");
 

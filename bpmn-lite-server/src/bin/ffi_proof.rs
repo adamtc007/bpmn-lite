@@ -25,9 +25,8 @@ use tonic::transport::Channel;
 
 use bpmn_lite_server::grpc::proto::bpmn_lite_client::BpmnLiteClient;
 use bpmn_lite_server::grpc::proto::{
-    ActivateJobsRequest, CompileRequest, CompleteJobRequest, FfiFieldSchemaProto,
+    proto_value, ActivateJobsRequest, CompileRequest, CompleteJobRequest, FfiFieldSchemaProto,
     HealthRequest, InspectRequest, ProtoValue, RegisterDmnDecisionRequest, StartRequest,
-    proto_value,
 };
 use bpmn_lite_vm::compute_hash;
 
@@ -118,7 +117,11 @@ async fn wait_ready(server_url: &str, timeout: Duration) -> Result<()> {
     }
 }
 
-async fn poll_completed(client: &mut BpmnLiteClient<Channel>, instance_id: &str, timeout: Duration) -> Result<()> {
+async fn poll_completed(
+    client: &mut BpmnLiteClient<Channel>,
+    instance_id: &str,
+    timeout: Duration,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         let resp = client
@@ -132,11 +135,19 @@ async fn poll_completed(client: &mut BpmnLiteClient<Channel>, instance_id: &str,
         match resp.state.as_str() {
             "COMPLETED" => return Ok(()),
             "RUNNING" => {}
-            other => bail!("unexpected process state '{}' for instance {}", other, instance_id),
+            other => bail!(
+                "unexpected process state '{}' for instance {}",
+                other,
+                instance_id
+            ),
         }
 
         if Instant::now() > deadline {
-            bail!("instance {} did not reach COMPLETED within {}s", instance_id, timeout.as_secs());
+            bail!(
+                "instance {} did not reach COMPLETED within {}s",
+                instance_id,
+                timeout.as_secs()
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -189,7 +200,10 @@ async fn run_case(
             }
         }
         if Instant::now() > deadline {
-            bail!("seed_score job for instance {} not available within 10s", instance_id);
+            bail!(
+                "seed_score job for instance {} not available within 10s",
+                instance_id
+            );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
@@ -199,7 +213,9 @@ async fn run_case(
     let mut orch_flags = HashMap::new();
     orch_flags.insert(
         flag_key,
-        ProtoValue { kind: Some(proto_value::Kind::I64Value(score)) },
+        ProtoValue {
+            kind: Some(proto_value::Kind::I64Value(score)),
+        },
     );
 
     client
@@ -215,7 +231,8 @@ async fn run_case(
         .await?;
 
     // Wait for process to reach COMPLETED (ExecFfi + gateway resolves in-process).
-    poll_completed(client, &instance_id, Duration::from_secs(15)).await
+    poll_completed(client, &instance_id, Duration::from_secs(15))
+        .await
         .with_context(|| format!("score={}", score))?;
 
     println!("  ✓ score={score} → COMPLETED (instance {instance_id})");
@@ -233,7 +250,8 @@ async fn main() -> Result<()> {
 
     println!("B5 FFI proof — server: {}", server_url);
 
-    wait_ready(&server_url, Duration::from_secs(15)).await
+    wait_ready(&server_url, Duration::from_secs(15))
+        .await
         .context("server not ready")?;
 
     let mut client = connect(&server_url).await?;
@@ -284,16 +302,32 @@ async fn main() -> Result<()> {
         .iter()
         .find(|(_, name)| *name == "do_score")
         .map(|(k, _)| *k)
-        .ok_or_else(|| anyhow!("do_score not found in flag_symbol_table; BPMN parse may have failed"))?;
+        .ok_or_else(|| {
+            anyhow!("do_score not found in flag_symbol_table; BPMN parse may have failed")
+        })?;
 
     println!("  do_score flag_key: {}", do_score_key);
 
     // 3. Run two cases through the deployed stack.
     println!("  running case: score=100 (eligible branch)...");
-    run_case(&mut client, bytecode_version.clone(), do_score_key, 100, "b5-proof-eligible").await?;
+    run_case(
+        &mut client,
+        bytecode_version.clone(),
+        do_score_key,
+        100,
+        "b5-proof-eligible",
+    )
+    .await?;
 
     println!("  running case: score=99 (denied branch)...");
-    run_case(&mut client, bytecode_version, do_score_key, 99, "b5-proof-denied").await?;
+    run_case(
+        &mut client,
+        bytecode_version,
+        do_score_key,
+        99,
+        "b5-proof-denied",
+    )
+    .await?;
 
     println!("B5 FFI proof PASSED — both branches complete via deployed dmn-lite FFI");
     Ok(())

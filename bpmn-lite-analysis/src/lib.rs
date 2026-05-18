@@ -75,7 +75,9 @@ pub struct AnalysisReport {
 
 impl AnalysisReport {
     pub fn warnings(&self) -> impl Iterator<Item = &Finding> {
-        self.findings.iter().filter(|f| f.severity == Severity::Warning)
+        self.findings
+            .iter()
+            .filter(|f| f.severity == Severity::Warning)
     }
 
     pub fn warning_count(&self) -> usize {
@@ -117,12 +119,19 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                             let always_taken = *v;
                             findings.push(Finding {
                                 severity: Severity::Warning,
-                                kind: FindingKind::ConstantCondition { branch_addr, always_taken },
+                                kind: FindingKind::ConstantCondition {
+                                    branch_addr,
+                                    always_taken,
+                                },
                                 element_id,
                                 message: format!(
                                     "Branch at addr {} is {} (literal bool condition '{}')",
                                     branch_addr,
-                                    if always_taken { "always taken" } else { "never taken" },
+                                    if always_taken {
+                                        "always taken"
+                                    } else {
+                                        "never taken"
+                                    },
                                     v
                                 ),
                             });
@@ -131,12 +140,19 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                             let always_taken = !v;
                             findings.push(Finding {
                                 severity: Severity::Warning,
-                                kind: FindingKind::ConstantCondition { branch_addr, always_taken },
+                                kind: FindingKind::ConstantCondition {
+                                    branch_addr,
+                                    always_taken,
+                                },
                                 element_id,
                                 message: format!(
                                     "Branch at addr {} is {} (literal bool condition '!{}')",
                                     branch_addr,
-                                    if always_taken { "always taken" } else { "never taken" },
+                                    if always_taken {
+                                        "always taken"
+                                    } else {
+                                        "never taken"
+                                    },
                                     v
                                 ),
                             });
@@ -177,7 +193,11 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
 
     // Informational: list FFI template pins.
     for (addr, decl) in &program.ffi_task_decls {
-        let template_id_hex: String = decl.template_id.iter().map(|b| format!("{b:02x}")).collect();
+        let template_id_hex: String = decl
+            .template_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let element_id = program.debug_map.get(addr).cloned();
         findings.push(Finding {
             severity: Severity::Info,
@@ -186,7 +206,11 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                 ffi_task_addr: *addr as u32,
             },
             element_id,
-            message: format!("ExecFfi at addr {} pins template {}", addr, &template_id_hex[..16]),
+            message: format!(
+                "ExecFfi at addr {} pins template {}",
+                addr,
+                &template_id_hex[..16]
+            ),
         });
     }
 
@@ -197,10 +221,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
 pub fn summarise(report: &AnalysisReport) -> String {
     let warnings = report.warning_count();
     let infos = report.findings.len() - warnings;
-    format!(
-        "{} warning(s), {} info(s)",
-        warnings, infos
-    )
+    format!("{} warning(s), {} info(s)", warnings, infos)
 }
 
 #[cfg(test)]
@@ -230,39 +251,36 @@ mod tests {
 
     #[test]
     fn detects_constant_false_condition() {
-        let prog = empty_program(vec![
-            Instr::PushBool(false),
-            Instr::BrIf { target: 10 },
-        ]);
+        let prog = empty_program(vec![Instr::PushBool(false), Instr::BrIf { target: 10 }]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 1);
         assert!(matches!(
             report.findings[0].kind,
-            FindingKind::ConstantCondition { always_taken: false, .. }
+            FindingKind::ConstantCondition {
+                always_taken: false,
+                ..
+            }
         ));
     }
 
     #[test]
     fn detects_constant_true_condition_inverted() {
-        let prog = empty_program(vec![
-            Instr::PushBool(true),
-            Instr::BrIfNot { target: 10 },
-        ]);
+        let prog = empty_program(vec![Instr::PushBool(true), Instr::BrIfNot { target: 10 }]);
         let report = analyse(&prog);
         // PushBool(true) + BrIfNot → never taken
         assert_eq!(report.warning_count(), 1);
         assert!(matches!(
             report.findings[0].kind,
-            FindingKind::ConstantCondition { always_taken: false, .. }
+            FindingKind::ConstantCondition {
+                always_taken: false,
+                ..
+            }
         ));
     }
 
     #[test]
     fn detects_unwritten_flag_condition() {
-        let prog = empty_program(vec![
-            Instr::LoadFlag { key: 7 },
-            Instr::BrIf { target: 10 },
-        ]);
+        let prog = empty_program(vec![Instr::LoadFlag { key: 7 }, Instr::BrIf { target: 10 }]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 1);
         assert!(matches!(

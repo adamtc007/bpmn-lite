@@ -46,8 +46,7 @@ impl FfiCatalogue {
     pub async fn load_into_cache(&self, tenant_id: &str) -> anyhow::Result<usize> {
         let mut tenant_templates = self.store.list_by_tenant(tenant_id).await?;
         if tenant_id != GLOBAL_TENANT_ID {
-            let mut global_templates =
-                self.store.list_by_tenant(GLOBAL_TENANT_ID).await?;
+            let mut global_templates = self.store.list_by_tenant(GLOBAL_TENANT_ID).await?;
             tenant_templates.append(&mut global_templates);
         }
 
@@ -76,10 +75,7 @@ impl FfiCatalogue {
 
     /// Cache-only lookup. Returns `None` if not loaded (callers may either
     /// trigger a `load_into_cache` or use `lookup_or_fetch`).
-    pub async fn lookup_cached(
-        &self,
-        template_id: &[u8; 32],
-    ) -> Option<Arc<FfiTemplate>> {
+    pub async fn lookup_cached(&self, template_id: &[u8; 32]) -> Option<Arc<FfiTemplate>> {
         let guard = self.cache.read().await;
         guard.get(template_id).cloned()
     }
@@ -106,8 +102,7 @@ impl FfiCatalogue {
                 .write()
                 .map_err(|e| anyhow::anyhow!("snapshot lock poisoned: {e}"))?;
             // Copy-on-write: clone the current snapshot map, insert, replace.
-            let mut new_map: HashMap<[u8; 32], FfiTemplate> =
-                snap_guard.as_ref().clone();
+            let mut new_map: HashMap<[u8; 32], FfiTemplate> = snap_guard.as_ref().clone();
             new_map.insert(template.template_id, template);
             *snap_guard = Arc::new(new_map);
 
@@ -135,10 +130,7 @@ impl FfiCatalogue {
     /// Borrow the catalogue as a snapshot for the compiler verifier.
     /// Returns an owned `CatalogueSnapshot` that wraps an Arc<HashMap>.
     pub fn snapshot(&self) -> CatalogueSnapshot {
-        let guard = self
-            .snapshot_view
-            .read()
-            .expect("snapshot lock poisoned");
+        let guard = self.snapshot_view.read().expect("snapshot lock poisoned");
         CatalogueSnapshot {
             map: Arc::clone(&*guard),
         }
@@ -162,9 +154,7 @@ impl FfiCatalogueSnapshot for CatalogueSnapshot {
 mod tests {
     use super::*;
     use crate::store::MemoryFfiTemplateStore;
-    use ffi_types::{
-        compute_template_id, FieldSchema, Idempotency, SchemaKind,
-    };
+    use ffi_types::{compute_template_id, FieldSchema, Idempotency, SchemaKind};
 
     fn make_template(owner_type: &str, tenant_id: &str, marker: u8) -> FfiTemplate {
         let mut t = FfiTemplate {
@@ -236,11 +226,7 @@ mod tests {
         // Cache is empty.
         assert!(cat.lookup_cached(&t.template_id).await.is_none());
 
-        let got = cat
-            .lookup_or_fetch(&t.template_id)
-            .await
-            .unwrap()
-            .unwrap();
+        let got = cat.lookup_or_fetch(&t.template_id).await.unwrap().unwrap();
         assert_eq!(got.template_id, t.template_id);
 
         // After fetch, the cache has it.

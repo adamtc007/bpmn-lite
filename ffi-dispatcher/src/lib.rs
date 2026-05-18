@@ -36,10 +36,7 @@ impl FfiDispatcher {
 
     /// Register an owner. Fails if the same `owner_type` is already
     /// registered (no overrides — registration is one-shot per startup).
-    pub fn register_owner(
-        &mut self,
-        owner: Arc<dyn FfiExecutionOwner>,
-    ) -> anyhow::Result<()> {
+    pub fn register_owner(&mut self, owner: Arc<dyn FfiExecutionOwner>) -> anyhow::Result<()> {
         let ot = owner.owner_type().to_string();
         if self.owners.contains_key(&ot) {
             anyhow::bail!("FFI owner already registered: {}", ot);
@@ -165,9 +162,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use ffi_catalogue::{FfiTemplateStore, MemoryFfiTemplateStore};
-    use ffi_types::{
-        compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind,
-    };
+    use ffi_types::{compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind};
     use uuid::Uuid;
 
     fn make_template(owner_type: &str) -> FfiTemplate {

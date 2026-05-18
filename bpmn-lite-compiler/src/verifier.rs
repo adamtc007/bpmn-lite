@@ -1,6 +1,8 @@
 use crate::ir::*;
 use anyhow::{anyhow, Result};
-use bpmn_lite_types::ffi_bindings::{BindingSource, BindingTarget, DataObjectStorage, DataObjectType, PrimitiveType};
+use bpmn_lite_types::ffi_bindings::{
+    BindingSource, BindingTarget, DataObjectStorage, DataObjectType, PrimitiveType,
+};
 use bpmn_lite_types::{Addr, CompiledProgram, FlagKey, Instr};
 use ffi_types::{FfiCatalogueSnapshot, SchemaKind};
 use petgraph::visit::Dfs;
@@ -525,7 +527,13 @@ pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
 
     // Check all FfiServiceTask bindings resolve.
     for idx in graph.node_indices() {
-        if let IRNode::FfiServiceTask { id, inputs, outputs, .. } = &graph[idx] {
+        if let IRNode::FfiServiceTask {
+            id,
+            inputs,
+            outputs,
+            ..
+        } = &graph[idx]
+        {
             for binding in inputs {
                 if let crate::ir::Expression::VarRef(path) = &binding.expression {
                     let first = path.first().map(|s| s.as_str()).unwrap_or("");
@@ -534,7 +542,9 @@ pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
                             message: format!(
                                 "unresolved input var ref '{}' in task '{}': \
                                  no data object with id '{}'",
-                                path.join("."), id, first
+                                path.join("."),
+                                id,
+                                first
                             ),
                             element_id: Some(id.clone()),
                         });
@@ -593,21 +603,22 @@ pub fn verify_ffi_schemas(
 
     for (addr, task_decl) in &program.ffi_task_decls {
         // 1. Template lookup.
-        let template = match catalogue.lookup(&task_decl.template_id) {
-            Some(t) => t,
-            None => {
-                errors.push(VerifyError {
-                    message: format!(
+        let template =
+            match catalogue.lookup(&task_decl.template_id) {
+                Some(t) => t,
+                None => {
+                    errors.push(VerifyError {
+                        message: format!(
                         "FFI template not found in catalogue: {:02x}{:02x}...{:02x}{:02x} (pc={})",
                         task_decl.template_id[0], task_decl.template_id[1],
                         task_decl.template_id[30], task_decl.template_id[31],
                         addr
                     ),
-                    element_id: None,
-                });
-                continue; // skip further checks — no template to validate against
-            }
-        };
+                        element_id: None,
+                    });
+                    continue; // skip further checks — no template to validate against
+                }
+            };
 
         // Index template schemas by field name for O(1) lookup.
         let input_by_name: HashMap<&str, &ffi_types::FieldSchema> = template
@@ -622,8 +633,7 @@ pub fn verify_ffi_schemas(
             .collect();
 
         // Track which fields were bound (for required-field check).
-        let mut bound_inputs: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
+        let mut bound_inputs: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         // 2. Per-input binding checks.
         for binding in &task_decl.inputs {
@@ -657,7 +667,10 @@ pub fn verify_ffi_schemas(
                 field_name,
                 &flag_type,
             ) {
-                errors.push(VerifyError { message: err_msg, element_id: None });
+                errors.push(VerifyError {
+                    message: err_msg,
+                    element_id: None,
+                });
             }
         }
 
@@ -846,8 +859,8 @@ mod tests {
 
     use bpmn_lite_types::ffi_bindings::{
         BindingSource, BindingTarget, CompiledFfiInputBinding, CompiledFfiOutputBinding,
-        DataObjectDecl, DataObjectRole, DataObjectStorage, DataObjectType, FfiTaskDecl,
-        Literal, PrimitiveType,
+        DataObjectDecl, DataObjectRole, DataObjectStorage, DataObjectType, FfiTaskDecl, Literal,
+        PrimitiveType,
     };
     use ffi_types::{compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind};
     use std::collections::BTreeMap;
@@ -881,7 +894,11 @@ mod tests {
     }
 
     fn field(name: &str, kind: SchemaKind, required: bool) -> FieldSchema {
-        FieldSchema { name: name.to_string(), kind, required }
+        FieldSchema {
+            name: name.to_string(),
+            kind,
+            required,
+        }
     }
 
     fn empty_program() -> CompiledProgram {
@@ -907,11 +924,14 @@ mod tests {
     fn a6_template_not_in_catalogue_emits_error() {
         let cat = MockCatalogue(Default::default());
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: [42u8; 32],
-            inputs: vec![],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: [42u8; 32],
+                inputs: vec![],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
         assert!(!errs.is_empty());
         assert!(errs[0].message.contains("not found"));
@@ -926,21 +946,30 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![CompiledFfiInputBinding {
-                target_field: "unknown_field".to_string(),
-                source: BindingSource::Literal(Literal::Bool(true)),
-            }],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![CompiledFfiInputBinding {
+                    target_field: "unknown_field".to_string(),
+                    source: BindingSource::Literal(Literal::Bool(true)),
+                }],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.iter().any(|e| e.message.contains("unknown") && e.message.contains("unknown_field")));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("unknown") && e.message.contains("unknown_field")));
     }
 
     #[test]
     fn a6_required_input_not_bound_emits_error() {
-        let t = make_template("dmn-lite", vec![field("required_x", SchemaKind::Bool, true)], vec![]);
+        let t = make_template(
+            "dmn-lite",
+            vec![field("required_x", SchemaKind::Bool, true)],
+            vec![],
+        );
         let tid = t.template_id;
         let mut cat_map = std::collections::HashMap::new();
         cat_map.insert(tid, t);
@@ -948,31 +977,47 @@ mod tests {
 
         let mut prog = empty_program();
         // No input bindings at all.
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.iter().any(|e| e.message.contains("required") && e.message.contains("required_x")));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("required") && e.message.contains("required_x")));
     }
 
     #[test]
     fn a6_optional_input_not_bound_is_ok() {
-        let t = make_template("dmn-lite", vec![field("optional_x", SchemaKind::Bool, false)], vec![]);
+        let t = make_template(
+            "dmn-lite",
+            vec![field("optional_x", SchemaKind::Bool, false)],
+            vec![],
+        );
         let tid = t.template_id;
         let mut cat_map = std::collections::HashMap::new();
         cat_map.insert(tid, t);
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.is_empty(), "optional unbound field should not error: {:?}", errs);
+        assert!(
+            errs.is_empty(),
+            "optional unbound field should not error: {:?}",
+            errs
+        );
     }
 
     #[test]
@@ -992,16 +1037,29 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![
-                CompiledFfiInputBinding { target_field: "b".to_string(), source: BindingSource::Literal(Literal::Bool(true)) },
-                CompiledFfiInputBinding { target_field: "n".to_string(), source: BindingSource::Literal(Literal::I64(42)) },
-            ],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![
+                    CompiledFfiInputBinding {
+                        target_field: "b".to_string(),
+                        source: BindingSource::Literal(Literal::Bool(true)),
+                    },
+                    CompiledFfiInputBinding {
+                        target_field: "n".to_string(),
+                        source: BindingSource::Literal(Literal::I64(42)),
+                    },
+                ],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.is_empty(), "compatible bindings should pass: {:?}", errs);
+        assert!(
+            errs.is_empty(),
+            "compatible bindings should pass: {:?}",
+            errs
+        );
     }
 
     #[test]
@@ -1013,25 +1071,35 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![CompiledFfiInputBinding {
-                target_field: "b".to_string(),
-                source: BindingSource::Literal(Literal::I64(1)), // wrong type
-            }],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![CompiledFfiInputBinding {
+                    target_field: "b".to_string(),
+                    source: BindingSource::Literal(Literal::I64(1)), // wrong type
+                }],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.iter().any(|e| e.message.contains("incompatible") && e.message.contains("'b'")));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("incompatible") && e.message.contains("'b'")));
     }
 
     #[test]
     fn a6_domain_payload_ref_is_always_compatible() {
         let t = make_template(
             "dmn-lite",
-            vec![
-                field("domain_field", SchemaKind::SemOsDomain { domain_id: uuid::Uuid::nil(), version_hash: [0u8; 32] }, true),
-            ],
+            vec![field(
+                "domain_field",
+                SchemaKind::SemOsDomain {
+                    domain_id: uuid::Uuid::nil(),
+                    version_hash: [0u8; 32],
+                },
+                true,
+            )],
             vec![],
         );
         let tid = t.template_id;
@@ -1040,37 +1108,56 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![CompiledFfiInputBinding {
-                target_field: "domain_field".to_string(),
-                source: BindingSource::DomainPayloadRef(vec!["customer".to_string(), "jurisdiction".to_string()]),
-            }],
-            outputs: vec![],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![CompiledFfiInputBinding {
+                    target_field: "domain_field".to_string(),
+                    source: BindingSource::DomainPayloadRef(vec![
+                        "customer".to_string(),
+                        "jurisdiction".to_string(),
+                    ]),
+                }],
+                outputs: vec![],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.is_empty(), "DomainPayloadRef should be compatible: {:?}", errs);
+        assert!(
+            errs.is_empty(),
+            "DomainPayloadRef should be compatible: {:?}",
+            errs
+        );
     }
 
     #[test]
     fn a6_unknown_output_field_emits_error() {
-        let t = make_template("dmn-lite", vec![], vec![field("result", SchemaKind::Bool, false)]);
+        let t = make_template(
+            "dmn-lite",
+            vec![],
+            vec![field("result", SchemaKind::Bool, false)],
+        );
         let tid = t.template_id;
         let mut cat_map = std::collections::HashMap::new();
         cat_map.insert(tid, t);
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![CompiledFfiOutputBinding {
-                source_field: "no_such_field".to_string(),
-                target: BindingTarget::FlagWrite(0),
-            }],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![CompiledFfiOutputBinding {
+                    source_field: "no_such_field".to_string(),
+                    target: BindingTarget::FlagWrite(0),
+                }],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.iter().any(|e| e.message.contains("unknown") && e.message.contains("no_such_field")));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("unknown") && e.message.contains("no_such_field")));
     }
 
     #[test]
@@ -1086,16 +1173,21 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![CompiledFfiOutputBinding {
-                source_field: "decimal_out".to_string(),
-                target: BindingTarget::FlagWrite(0), // F64 can't go into a flag
-            }],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![CompiledFfiOutputBinding {
+                    source_field: "decimal_out".to_string(),
+                    target: BindingTarget::FlagWrite(0), // F64 can't go into a flag
+                }],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.iter().any(|e| e.message.contains("cannot target a process flag")));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("cannot target a process flag")));
     }
 
     #[test]
@@ -1111,14 +1203,17 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![CompiledFfiOutputBinding {
-                source_field: "eligible".to_string(),
-                target: BindingTarget::FlagWrite(0),
-            }],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![CompiledFfiOutputBinding {
+                    source_field: "eligible".to_string(),
+                    target: BindingTarget::FlagWrite(0),
+                }],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
         assert!(errs.is_empty(), "Bool FlagWrite should pass: {:?}", errs);
     }
@@ -1130,7 +1225,14 @@ mod tests {
             vec![],
             vec![
                 field("decimal_out", SchemaKind::F64, false),
-                field("domain_out", SchemaKind::SemOsDomain { domain_id: uuid::Uuid::nil(), version_hash: [0u8; 32] }, false),
+                field(
+                    "domain_out",
+                    SchemaKind::SemOsDomain {
+                        domain_id: uuid::Uuid::nil(),
+                        version_hash: [0u8; 32],
+                    },
+                    false,
+                ),
             ],
         );
         let tid = t.template_id;
@@ -1139,22 +1241,35 @@ mod tests {
         let cat = MockCatalogue(cat_map);
 
         let mut prog = empty_program();
-        prog.ffi_task_decls.insert(0, FfiTaskDecl {
-            template_id: tid,
-            inputs: vec![],
-            outputs: vec![
-                CompiledFfiOutputBinding {
-                    source_field: "decimal_out".to_string(),
-                    target: BindingTarget::DomainPayloadWrite(vec!["result".to_string(), "decimal".to_string()]),
-                },
-                CompiledFfiOutputBinding {
-                    source_field: "domain_out".to_string(),
-                    target: BindingTarget::DomainPayloadWrite(vec!["customer".to_string(), "type".to_string()]),
-                },
-            ],
-        });
+        prog.ffi_task_decls.insert(
+            0,
+            FfiTaskDecl {
+                template_id: tid,
+                inputs: vec![],
+                outputs: vec![
+                    CompiledFfiOutputBinding {
+                        source_field: "decimal_out".to_string(),
+                        target: BindingTarget::DomainPayloadWrite(vec![
+                            "result".to_string(),
+                            "decimal".to_string(),
+                        ]),
+                    },
+                    CompiledFfiOutputBinding {
+                        source_field: "domain_out".to_string(),
+                        target: BindingTarget::DomainPayloadWrite(vec![
+                            "customer".to_string(),
+                            "type".to_string(),
+                        ]),
+                    },
+                ],
+            },
+        );
         let errs = verify_ffi_schemas(&prog, &cat);
-        assert!(errs.is_empty(), "DomainPayloadWrite should always pass: {:?}", errs);
+        assert!(
+            errs.is_empty(),
+            "DomainPayloadWrite should always pass: {:?}",
+            errs
+        );
     }
 
     #[test]
