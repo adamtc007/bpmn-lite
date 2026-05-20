@@ -16,9 +16,11 @@ description = "BPMN-Lite persistence boundary — ProcessStore trait + MemorySto
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 blake3 = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 ob-poc-types = { workspace = true }
 

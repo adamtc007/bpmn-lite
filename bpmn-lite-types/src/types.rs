@@ -289,6 +289,8 @@ pub enum ProcessState {
     Cancelled { reason: String, at: Timestamp },
     Terminated { at: Timestamp },
     Failed { incident_id: Uuid },
+    WaitingOnSubmission { callout_id: uuid::Uuid, node_id: String },
+    WaitingOnInvocation { execution_id: uuid::Uuid, node_id: String },
 }
 
 impl ProcessState {
@@ -340,6 +342,16 @@ pub struct ProcessInstance {
     /// 'integrity_violation' when a pickup boundary detects hash mismatch.
     /// Quarantined instances are skipped by the scheduler and all handlers.
     pub quarantine_state: Option<String>,
+    /// T3 — plan-based execution: hash of the stored WorkflowExecutionPlan.
+    /// None for bytecode-path instances.
+    #[serde(default)]
+    pub plan_hash: Option<[u8; 32]>,
+    /// T3 — current node id in the WorkflowExecutionPlan.
+    #[serde(default)]
+    pub current_node_id: Option<String>,
+    /// T3 — placeholder values produced by executed callout nodes.
+    #[serde(default)]
+    pub placeholder_values: Option<serde_json::Value>,
 }
 
 // ─── Job activation/completion (the wire types) ───────────────

@@ -94,6 +94,12 @@ pub trait ProcessStore: Send + Sync {
     async fn store_program(&self, version: [u8; 32], program: &CompiledProgram) -> Result<()>;
     async fn load_program(&self, version: [u8; 32]) -> Result<Option<CompiledProgram>>;
 
+    /// T3 — Store a serialised WorkflowExecutionPlan keyed by BLAKE3 hash.
+    /// Idempotent: ON CONFLICT DO NOTHING in Postgres; no-op if already present in MemoryStore.
+    async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()>;
+    /// T3 — Load a WorkflowExecutionPlan by BLAKE3 hash. Returns None if not found.
+    async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>>;
+
     // ── Dead-letter queue ──
 
     async fn dead_letter_put(

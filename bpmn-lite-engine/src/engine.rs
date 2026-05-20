@@ -360,6 +360,9 @@ impl BpmnLiteEngine {
             // integrity_hash and quarantine_state are set/managed by the store.
             integrity_hash: None,
             quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
         };
         let fiber_id = Uuid::now_v7();
         let root_fiber = Fiber::new(fiber_id, 0);

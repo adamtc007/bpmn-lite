@@ -15,6 +15,7 @@ description = "BPMN-Lite compiler — BPMN-XML parse → IR → bytecode lowerin
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 ffi-types = { path = "../ffi-types" }
+dsl-manifest = { path = "../dsl-manifest" }
 anyhow = { workspace = true }
 petgraph = { workspace = true }
 quick-xml = "0.36"

@@ -22,6 +22,7 @@ struct Inner {
     /// Jobs that have been dequeued but not yet acked.
     inflight_jobs: HashMap<String, (JobActivation, Instant)>,
     programs: HashMap<[u8; 32], CompiledProgram>,
+    plans: HashMap<[u8; 32], String>,
     dead_letter: HashMap<(u32, String), (Vec<u8>, u64)>,
     events: HashMap<Uuid, Vec<(u64, RuntimeEvent)>>,
     event_seq: HashMap<Uuid, u64>,
@@ -50,6 +51,7 @@ impl MemoryStore {
                 job_queue: VecDeque::new(),
                 inflight_jobs: HashMap::new(),
                 programs: HashMap::new(),
+                plans: HashMap::new(),
                 dead_letter: HashMap::new(),
                 events: HashMap::new(),
                 event_seq: HashMap::new(),
@@ -407,6 +409,17 @@ impl ProcessStore for MemoryStore {
     async fn load_program(&self, version: [u8; 32]) -> Result<Option<CompiledProgram>> {
         let r = self.inner.read().await;
         Ok(r.programs.get(&version).cloned())
+    }
+
+    async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()> {
+        let mut w = self.inner.write().await;
+        w.plans.entry(plan_hash).or_insert_with(|| plan_json.to_owned());
+        Ok(())
+    }
+
+    async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
+        let r = self.inner.read().await;
+        Ok(r.plans.get(&plan_hash).cloned())
     }
 
     // ── Dead-letter queue ──
@@ -967,6 +980,9 @@ mod tests {
             created_at: 1000,
             integrity_hash: None,
             quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
         }
     }
 

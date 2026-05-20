@@ -1,3 +1,6 @@
+#[cfg(feature = "postgres")]
+mod bus_runtime;
+
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -34,6 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_mode = std::env::var("BPMN_LITE_STORE").unwrap_or_else(|_| "postgres".to_string());
     let allow_memory = store_mode.eq_ignore_ascii_case("memory");
 
+    // T2B.9 — also retain the runtime pool for the federated DSL bus
+    // runtime so the bus reuses the same connection bookkeeping the
+    // BPMN store uses. `None` means the bus is disabled (memory store
+    // selected, or no postgres feature).
+    #[cfg(feature = "postgres")]
+    let mut bus_pool: Option<sqlx::PgPool> = None;
     let store: Arc<dyn ProcessStore> = match database_url {
         #[cfg(feature = "postgres")]
         Some(url) => {
@@ -65,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // A18-Session-1: warn (not yet error) if connected as superuser.
             verify_not_superuser(&pool).await?;
 
+            bus_pool = Some(pool.clone());
             let pg = bpmn_lite_store_postgres::PostgresProcessStore::new(pool);
             if database_admin_url.is_none() {
                 // No admin URL — run migrations through the runtime pool
@@ -126,6 +136,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_fanout.start_postgres_listener(url).await?;
         tracing::info!("Postgres LISTEN/NOTIFY event fanout enabled");
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // T2B.9 — Federated DSL bus runtime
+    //
+    // Co-located with the 50051 BPMN gRPC server: the bus binds on its
+    // own port (default 50063) and shares the runtime pool. Disabled
+    // when BPMN_LITE_BUS_LISTEN is unset, so the existing deployment
+    // story keeps working unchanged.
+    //
+    // Splitting the bus into a separate bin (`bpmn-lite-bus-server`)
+    // is tech debt logged for after T3 — the ProcessAdvancer needs
+    // an inter-process channel to the BPMN executor, and T3 owns
+    // that contract.
+    // ────────────────────────────────────────────────────────────────
+    #[cfg(feature = "postgres")]
+    let bus_runtime = match (bus_pool.take(), std::env::var("BPMN_LITE_BUS_LISTEN")) {
+        (Some(pool), Ok(listen)) => {
+            let bind_addr: std::net::SocketAddr = listen
+                .parse()
+                .map_err(|e| config_error(&format!("invalid BPMN_LITE_BUS_LISTEN: {e}")))?;
+            let mut peers = Vec::new();
+            if let Ok(uri) = std::env::var("OB_POC_BUS_ENDPOINT") {
+                peers.push(("ob-poc".to_owned(), uri));
+            }
+            if let Ok(uri) = std::env::var("DMN_LITE_BUS_ENDPOINT") {
+                peers.push(("dmn-lite".to_owned(), uri));
+            }
+            tracing::info!(
+                bind_addr = %bind_addr,
+                peer_count = peers.len(),
+                "starting bpmn-lite federated bus runtime"
+            );
+            Some(
+                bus_runtime::start(bus_runtime::BusRuntimeConfig {
+                    pool,
+                    bind_addr,
+                    peers,
+                })
+                .await?,
+            )
+        }
+        _ => {
+            tracing::info!(
+                "federated bus runtime disabled (set BPMN_LITE_BUS_LISTEN to enable)"
+            );
+            None
+        }
+    };
 
     let scheduler_owner = std::env::var("BPMN_LITE_SCHEDULER_OWNER")
         .unwrap_or_else(|_| format!("bpmn-lite-{}", Uuid::now_v7()));
@@ -295,6 +353,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     tracing::info!("BPMN-Lite gRPC server stopped");
+
+    #[cfg(feature = "postgres")]
+    if let Some(runtime) = bus_runtime {
+        if let Err(e) = runtime.shutdown().await {
+            tracing::warn!(error = %e, "federated bus runtime shutdown reported error");
+        } else {
+            tracing::info!("federated bus runtime stopped cleanly");
+        }
+    }
+
     Ok(())
 }
 

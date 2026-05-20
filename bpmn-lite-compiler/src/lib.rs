@@ -10,6 +10,7 @@
 //! consumers reach the surface through the prelude re-exports
 //! below.
 
+pub mod dsl;
 pub mod ir;
 pub mod lowering;
 pub mod parser;

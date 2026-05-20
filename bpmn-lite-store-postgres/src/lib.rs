@@ -14,7 +14,11 @@
 //! `bpmn-lite-core/migrations/` before the move.
 
 pub mod ffi_template_store;
+pub mod pending_store;
+pub mod process_instance_store;
 pub mod store_postgres;
 
 pub use ffi_template_store::PostgresFfiTemplateStore;
+pub use pending_store::PostgresPendingInvocationStore;
+pub use process_instance_store::PostgresBpmnProcessInstanceStore;
 pub use store_postgres::*;

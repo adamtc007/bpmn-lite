@@ -859,8 +859,7 @@ mod tests {
 
     use bpmn_lite_types::ffi_bindings::{
         BindingSource, BindingTarget, CompiledFfiInputBinding, CompiledFfiOutputBinding,
-        DataObjectDecl, DataObjectRole, DataObjectStorage, DataObjectType, FfiTaskDecl, Literal,
-        PrimitiveType,
+        FfiTaskDecl, Literal,
     };
     use ffi_types::{compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind};
     use std::collections::BTreeMap;

@@ -20,6 +20,15 @@ members = [
     "bpmn-lite-analysis",
     "bpmn-lite-ffi-http",
     "bpmn-lite-ffi-grpc",
+    "bpmn-lite-bus-handler",
+    "dmn-lite-bus-handler",
+    "dmn-lite-manifest-export",
+    "dmn-lite-server",
+    "dsl-bus-client",
+    "dsl-bus-protocol",
+    "dsl-bus-server",
+    "dsl-bus-storage",
+    "dsl-manifest",
     "xtask",
 ]
 resolver = "3"

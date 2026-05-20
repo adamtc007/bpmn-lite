@@ -811,6 +811,9 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         created_at: 1,
         integrity_hash: None,
         quarantine_state: None,
+        plan_hash: None,
+        current_node_id: None,
+        placeholder_values: None,
     };
     store.save_instance(&instance).await.unwrap();
 
@@ -2238,6 +2241,9 @@ async fn t_loop_3_counter_starts_at_zero() {
         created_at: 0,
         integrity_hash: None,
         quarantine_state: None,
+        plan_hash: None,
+        current_node_id: None,
+        placeholder_values: None,
     };
     store.save_instance(&instance).await.unwrap();
 

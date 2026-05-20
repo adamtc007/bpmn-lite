@@ -107,6 +107,9 @@ mod tests {
             created_at: 1_700_000_000_000,
             integrity_hash: None,
             quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
         }
     }
 

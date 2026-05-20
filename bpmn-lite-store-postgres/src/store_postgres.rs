@@ -171,8 +171,10 @@ impl ProcessStore for PostgresProcessStore {
             INSERT INTO process_instances (
                 instance_id, tenant_id, process_key, bytecode_version, domain_payload,
                 domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at, integrity_hash
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                correlation_id, entry_id, runbook_id, created_at, integrity_hash,
+                plan_hash, current_node_id, placeholder_values
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                      $17, $18, $19)
             ON CONFLICT (instance_id) DO UPDATE SET
                 domain_payload = EXCLUDED.domain_payload,
                 domain_payload_hash = EXCLUDED.domain_payload_hash,
@@ -181,7 +183,10 @@ impl ProcessStore for PostgresProcessStore {
                 counters = EXCLUDED.counters,
                 join_expected = EXCLUDED.join_expected,
                 state = EXCLUDED.state,
-                correlation_id = EXCLUDED.correlation_id
+                correlation_id = EXCLUDED.correlation_id,
+                plan_hash = EXCLUDED.plan_hash,
+                current_node_id = EXCLUDED.current_node_id,
+                placeholder_values = EXCLUDED.placeholder_values
             -- Immutable fields (tenant_id, process_key, bytecode_version, entry_id,
             -- runbook_id, created_at, integrity_hash) are omitted: migration 029
             -- trigger rejects any UPDATE that changes them. quarantine_state is
@@ -204,6 +209,9 @@ impl ProcessStore for PostgresProcessStore {
         .bind(instance.runbook_id)
         .bind(created_at)
         .bind(&integrity_hash[..])
+        .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
+        .bind(instance.current_node_id.as_deref())
+        .bind(instance.placeholder_values.as_ref())
         .execute(&self.pool)
         .await?;
 
@@ -230,7 +238,10 @@ impl ProcessStore for PostgresProcessStore {
                    correlation_id, entry_id, runbook_id,
                    (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
                    integrity_hash,
-                   quarantine_state
+                   quarantine_state,
+                   plan_hash,
+                   current_node_id,
+                   placeholder_values
             FROM process_instances
             WHERE instance_id = $1
             "#,
@@ -253,6 +264,8 @@ impl ProcessStore for PostgresProcessStore {
                 let created_at_ms: i64 = row.get("created_at_ms");
                 let integrity_hash_raw: Option<Vec<u8>> = row.get("integrity_hash");
                 let integrity_hash = integrity_hash_raw.map(bytes_to_hash).transpose()?;
+                let plan_hash_raw: Option<Vec<u8>> = row.get("plan_hash");
+                let plan_hash = plan_hash_raw.map(bytes_to_hash).transpose()?;
 
                 Ok(Some(ProcessInstance {
                     instance_id: row.get("instance_id"),
@@ -272,6 +285,9 @@ impl ProcessStore for PostgresProcessStore {
                     created_at: created_at_ms,
                     integrity_hash,
                     quarantine_state: row.get("quarantine_state"),
+                    plan_hash,
+                    current_node_id: row.get("current_node_id"),
+                    placeholder_values: row.get("placeholder_values"),
                 }))
             }
         }
@@ -892,6 +908,35 @@ impl ProcessStore for PostgresProcessStore {
                 Ok(Some(serde_json::from_value(json)?))
             }
         }
+    }
+
+    async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()> {
+        let plan_json_value: serde_json::Value = serde_json::from_str(plan_json)
+            .context("store_plan: invalid JSON")?;
+        sqlx::query(
+            r#"
+            INSERT INTO workflow_plans (plan_hash, plan_body)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(&plan_hash[..])
+        .bind(&plan_json_value)
+        .execute(&self.pool)
+        .await
+        .context("store_plan: insert failed")?;
+        Ok(())
+    }
+
+    async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
+        let row: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT plan_body FROM workflow_plans WHERE plan_hash = $1",
+        )
+        .bind(&plan_hash[..])
+        .fetch_optional(&self.pool)
+        .await
+        .context("load_plan: query failed")?;
+        Ok(row.map(|v| v.to_string()))
     }
 
     // ── Dead-letter queue ──
@@ -1538,8 +1583,10 @@ impl ProcessStore for PostgresProcessStore {
             INSERT INTO process_instances (
                 instance_id, tenant_id, process_key, bytecode_version, domain_payload,
                 domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                correlation_id, entry_id, runbook_id, created_at,
+                plan_hash, current_node_id, placeholder_values
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                      $16, $17, $18)
             "#,
         )
         .bind(instance.instance_id)
@@ -1557,6 +1604,9 @@ impl ProcessStore for PostgresProcessStore {
         .bind(instance.entry_id)
         .bind(instance.runbook_id)
         .bind(created_at)
+        .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
+        .bind(instance.current_node_id.as_deref())
+        .bind(instance.placeholder_values.as_ref())
         .execute(&mut *tx)
         .await?;
 
@@ -2121,6 +2171,9 @@ mod tests {
             created_at: 1700000000000,
             integrity_hash: None,
             quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
         }
     }
 

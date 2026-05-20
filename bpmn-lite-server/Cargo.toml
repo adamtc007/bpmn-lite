@@ -26,6 +26,17 @@ dmn-lite-bridge = { path = "../dmn-lite-bridge" }
 bpmn-lite-ffi-http = { path = "../bpmn-lite-ffi-http" }
 bpmn-lite-ffi-grpc = { path = "../bpmn-lite-ffi-grpc" }
 bpmn-lite-analysis = { path = "../bpmn-lite-analysis" }
+# Federated DSL bus (v0.6 §T2B.9). Wired alongside the existing 50051
+# gRPC service so a single process hosts both the BPMN service and the
+# bus result-receiver. Splitting into a separate bin is tech debt logged
+# for after T3 (the executor RIP-AND-REPLACE).
+dsl-bus-client = { path = "../dsl-bus-client" }
+dsl-bus-server = { path = "../dsl-bus-server" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+bpmn-lite-bus-handler = { path = "../bpmn-lite-bus-handler" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 prost = { workspace = true }
