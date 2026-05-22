@@ -1,0 +1,18 @@
+# Local-dev [patch] override for the dsl library repo.
+# Copy this file to .cargo/config.toml (which is git-ignored) when you need
+# to edit dsl source and have bpmn-lite pick up changes without a tag bump.
+#
+# Usage:
+#   cp .cargo/config.toml.example .cargo/config.toml
+#   # edit ~/dev/dsl
+#   # changes are picked up automatically by cargo
+#
+# PRODUCTION (once the dsl repo is pushed to GitHub with tags):
+# Remove this file. bpmn-lite crate Cargo.toml files will use git-tag deps.
+# Final migration step: change path deps to:
+#   dsl_types = { git = "https://github.com/adamtc007/dsl", tag = "v0.1.0" }
+#   dsl-core  = { git = "https://github.com/adamtc007/dsl", tag = "v0.1.0" }
+# Then this file becomes:
+#   [patch."https://github.com/adamtc007/dsl"]
+#   dsl_types = { path = "../dev/dsl/crates/dsl_types" }
+#   dsl-core  = { path = "../dev/dsl/crates/dsl-core"  }
