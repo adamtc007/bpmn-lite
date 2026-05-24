@@ -8,7 +8,7 @@ use bpmn_lite_types::*;
 use bpmn_lite_vm::{apply_completion, compute_hash, json_path, TickOutcome, Vm};
 use ffi_dispatcher::FfiDispatcher;
 use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
-use ob_poc_types::session_stack::SessionStackState;
+use bpmn_lite_types::session_stack::SessionStackState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 #[allow(unused_imports)]

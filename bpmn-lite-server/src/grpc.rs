@@ -453,7 +453,7 @@ impl BpmnLite for BpmnLiteService {
             ));
         }
         let session_stack = if req.session_stack_json.is_empty() {
-            ob_poc_types::session_stack::SessionStackState::default()
+            bpmn_lite_types::session_stack::SessionStackState::default()
         } else {
             serde_json::from_str(&req.session_stack_json)
                 .map_err(|e| Status::invalid_argument(format!("invalid session_stack_json: {e}")))?

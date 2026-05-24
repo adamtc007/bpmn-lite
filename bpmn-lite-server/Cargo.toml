@@ -51,7 +51,6 @@ sqlx = { workspace = true, optional = true }
 hex = "0.4"
 axum = { workspace = true }
 serde = { workspace = true }
-ob-poc-types = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

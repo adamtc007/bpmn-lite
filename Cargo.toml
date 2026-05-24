@@ -70,7 +70,6 @@ smallvec = { version = "1", features = ["serde"] }
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 axum = "0.7"
-# ob-poc-types: git dep pinned to the ob-poc commit that this platform was
-# last built and tested against. Bump deliberately when ob-poc-types interface changes.
-# Pin: 397470cb (ob-poc codex/acp-workflow-validity-harness, 2026-05-16)
-ob-poc-types = { git = "https://github.com/adamtc007/ob-poc.git", rev = "397470cb" }
+# ob-poc-types git dep REMOVED (Phase 4 extraction — 2026-05-22).
+# The three session_stack types bpmn-lite used are now defined locally
+# in bpmn-lite-types::session_stack (serde-compatible with the originals).

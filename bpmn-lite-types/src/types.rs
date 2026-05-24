@@ -1,4 +1,4 @@
-use ob_poc_types::session_stack::SessionStackState;
+use crate::session_stack::SessionStackState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;

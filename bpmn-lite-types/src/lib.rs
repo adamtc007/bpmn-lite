@@ -17,6 +17,7 @@
 pub mod events;
 pub mod ffi_bindings;
 pub mod integrity;
+pub mod session_stack;
 pub mod types;
 
 // Crate-prelude re-exports — every external consumer can `use

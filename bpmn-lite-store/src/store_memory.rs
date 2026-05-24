@@ -969,7 +969,7 @@ mod tests {
             tenant_id: "default".to_string(),
             domain_payload: payload.to_string().into(),
             domain_payload_hash: hash,
-            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
             flags: BTreeMap::from([(0, Value::Bool(true)), (1, Value::I64(42))]),
             counters: BTreeMap::new(),
             join_expected: BTreeMap::new(),
@@ -1020,13 +1020,13 @@ mod tests {
         let mutated_scope_id = Uuid::new_v4();
 
         let mut inst = make_instance(id);
-        inst.session_stack = ob_poc_types::session_stack::SessionStackState {
+        inst.session_stack = bpmn_lite_types::session_stack::SessionStackState {
             session_id: original_session_id,
-            scope: Some(ob_poc_types::session_stack::SessionScopeState {
+            scope: Some(bpmn_lite_types::session_stack::SessionScopeState {
                 client_group_id: original_scope_id,
                 client_group_name: Some("Original".to_string()),
             }),
-            active_workspace: Some(ob_poc_types::session_stack::SessionWorkspaceKind::Cbu),
+            active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu),
             workspace_stack: Vec::new(),
             trace_sequence: 7,
         };
@@ -1034,12 +1034,12 @@ mod tests {
         store.save_instance(&inst).await.unwrap();
 
         inst.session_stack.session_id = mutated_session_id;
-        inst.session_stack.scope = Some(ob_poc_types::session_stack::SessionScopeState {
+        inst.session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
             client_group_id: mutated_scope_id,
             client_group_name: Some("Mutated".to_string()),
         });
         inst.session_stack.active_workspace =
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
         inst.session_stack.trace_sequence = 99;
 
         let loaded = store.load_instance(id).await.unwrap().unwrap();
@@ -1054,7 +1054,7 @@ mod tests {
         );
         assert_eq!(
             loaded.session_stack.active_workspace,
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Cbu)
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu)
         );
         assert_eq!(loaded.session_stack.trace_sequence, 7);
     }
@@ -1144,7 +1144,7 @@ mod tests {
                     service_task_id: format!("task-{i}"),
                     domain_payload: "{}".to_string(),
                     domain_payload_hash: [0u8; 32],
-                    session_stack: ob_poc_types::session_stack::SessionStackState {
+                    session_stack: bpmn_lite_types::session_stack::SessionStackState {
                         session_id,
                         ..Default::default()
                     },
@@ -1229,7 +1229,7 @@ mod tests {
                 service_task_id: "task-lease".to_string(),
                 domain_payload: "{}".to_string(),
                 domain_payload_hash: [0u8; 32],
-                session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+                session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
                 orch_flags: BTreeMap::new(),
                 retries_remaining: 3,
                 entry_id: Uuid::new_v4(),
@@ -1469,9 +1469,9 @@ mod tests {
             service_task_id: "task-copy-test".to_string(),
             domain_payload: "{}".to_string(),
             domain_payload_hash: [0u8; 32],
-            session_stack: ob_poc_types::session_stack::SessionStackState {
+            session_stack: bpmn_lite_types::session_stack::SessionStackState {
                 session_id: original_session_id,
-                active_workspace: Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc),
+                active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
                 trace_sequence: 11,
                 ..Default::default()
             },
@@ -1491,7 +1491,7 @@ mod tests {
 
         activation.session_stack.session_id = mutated_session_id;
         activation.session_stack.active_workspace =
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
         activation.session_stack.trace_sequence = 42;
 
         let batch = store
@@ -1508,7 +1508,7 @@ mod tests {
         assert_eq!(batch[0].session_stack.session_id, original_session_id);
         assert_eq!(
             batch[0].session_stack.active_workspace,
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc)
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
         );
         assert_eq!(batch[0].session_stack.trace_sequence, 11);
     }

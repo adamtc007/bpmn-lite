@@ -37,7 +37,6 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-ob-poc-types = { workspace = true }
 
 [dev-dependencies]
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }

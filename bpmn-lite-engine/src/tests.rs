@@ -3,7 +3,7 @@ use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::{compute_hash, TickOutcome, Vm};
-use ob_poc_types::session_stack::SessionStackState;
+use bpmn_lite_types::session_stack::SessionStackState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -116,11 +116,11 @@ async fn test_start_with_session_stack_copies_value() {
 
     let mut session_stack = SessionStackState {
         session_id: Uuid::new_v4(),
-        scope: Some(ob_poc_types::session_stack::SessionScopeState {
+        scope: Some(bpmn_lite_types::session_stack::SessionScopeState {
             client_group_id: original_scope_id,
             client_group_name: Some("Original".to_string()),
         }),
-        active_workspace: Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc),
+        active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
         workspace_stack: Vec::new(),
         trace_sequence: 5,
     };
@@ -139,11 +139,11 @@ async fn test_start_with_session_stack_copies_value() {
         .await
         .unwrap();
 
-    session_stack.scope = Some(ob_poc_types::session_stack::SessionScopeState {
+    session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
         client_group_id: mutated_scope_id,
         client_group_name: Some("Mutated".to_string()),
     });
-    session_stack.active_workspace = Some(ob_poc_types::session_stack::SessionWorkspaceKind::Deal);
+    session_stack.active_workspace = Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
     session_stack.trace_sequence = 77;
 
     let loaded = store.load_instance(instance_id).await.unwrap().unwrap();
@@ -157,7 +157,7 @@ async fn test_start_with_session_stack_copies_value() {
     );
     assert_eq!(
         loaded.session_stack.active_workspace,
-        Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc)
+        Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
     );
     assert_eq!(loaded.session_stack.trace_sequence, 5);
 }

@@ -2160,7 +2160,7 @@ mod tests {
             bytecode_version: [0u8; 32],
             domain_payload: payload.to_string().into(),
             domain_payload_hash: hash,
-            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
             flags: BTreeMap::from([(0, Value::Bool(true)), (1, Value::I64(42))]),
             counters: BTreeMap::from([(0, 5), (1, 10)]),
             join_expected: BTreeMap::from([(0, 3)]),
@@ -2215,25 +2215,25 @@ mod tests {
         let mutated_scope_id = Uuid::new_v4();
 
         let mut inst = make_instance(id);
-        inst.session_stack = ob_poc_types::session_stack::SessionStackState {
+        inst.session_stack = bpmn_lite_types::session_stack::SessionStackState {
             session_id: Uuid::now_v7(),
-            scope: Some(ob_poc_types::session_stack::SessionScopeState {
+            scope: Some(bpmn_lite_types::session_stack::SessionScopeState {
                 client_group_id: original_scope_id,
                 client_group_name: Some("Original".to_string()),
             }),
-            active_workspace: Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc),
+            active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
             workspace_stack: Vec::new(),
             trace_sequence: 17,
         };
 
         store.save_instance(&inst).await.unwrap();
 
-        inst.session_stack.scope = Some(ob_poc_types::session_stack::SessionScopeState {
+        inst.session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
             client_group_id: mutated_scope_id,
             client_group_name: Some("Mutated".to_string()),
         });
         inst.session_stack.active_workspace =
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
         inst.session_stack.trace_sequence = 99;
 
         let loaded = store.load_instance(id).await.unwrap().unwrap();
@@ -2247,7 +2247,7 @@ mod tests {
         );
         assert_eq!(
             loaded.session_stack.active_workspace,
-            Some(ob_poc_types::session_stack::SessionWorkspaceKind::Kyc)
+            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
         );
         assert_eq!(loaded.session_stack.trace_sequence, 17);
     }
@@ -2350,7 +2350,7 @@ mod tests {
                     service_task_id: format!("task-{i}"),
                     domain_payload: "{}".to_string(),
                     domain_payload_hash: [0u8; 32],
-                    session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+                    session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
                     orch_flags: BTreeMap::new(),
                     retries_remaining: 3,
                     entry_id: Uuid::nil(),
@@ -2652,7 +2652,7 @@ mod tests {
                     service_task_id: format!("task-{i}"),
                     domain_payload: "{}".to_string(),
                     domain_payload_hash: [0u8; 32],
-                    session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+                    session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
                     orch_flags: BTreeMap::new(),
                     retries_remaining: 3,
                     entry_id: Uuid::nil(),
@@ -2811,7 +2811,7 @@ mod tests {
                     service_task_id: format!("task-a-{i}"),
                     domain_payload: "{}".to_string(),
                     domain_payload_hash: [0u8; 32],
-                    session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+                    session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
                     orch_flags: BTreeMap::new(),
                     retries_remaining: 3,
                     entry_id: Uuid::nil(),
@@ -2835,7 +2835,7 @@ mod tests {
                 service_task_id: "task-b-0".to_string(),
                 domain_payload: "{}".to_string(),
                 domain_payload_hash: [0u8; 32],
-                session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+                session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
                 orch_flags: BTreeMap::new(),
                 retries_remaining: 3,
                 entry_id: Uuid::nil(),
@@ -2887,7 +2887,7 @@ mod tests {
             service_task_id: "a18-task".to_string(),
             domain_payload: "{}".to_string(),
             domain_payload_hash: [0u8; 32],
-            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
             orch_flags: BTreeMap::new(),
             retries_remaining: 3,
             entry_id: Uuid::nil(),
@@ -2925,7 +2925,7 @@ mod tests {
             service_task_id: "a18-task".to_string(),
             domain_payload: "{}".to_string(),
             domain_payload_hash: [0u8; 32],
-            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
             orch_flags: BTreeMap::new(),
             retries_remaining: 3,
             entry_id: Uuid::nil(),

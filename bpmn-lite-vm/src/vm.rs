@@ -1055,7 +1055,7 @@ mod tests {
             tenant_id: "default".to_string(),
             domain_payload: payload.to_string().into(),
             domain_payload_hash: compute_hash(payload),
-            session_stack: ob_poc_types::session_stack::SessionStackState::default(),
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
             flags: BTreeMap::new(),
             counters: BTreeMap::new(),
             join_expected: BTreeMap::new(),

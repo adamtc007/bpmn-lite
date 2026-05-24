@@ -18,7 +18,6 @@ description = "BPMN-Lite domain model — value types, instruction set, ProcessI
 uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ob-poc-types = { workspace = true }
 blake3 = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
