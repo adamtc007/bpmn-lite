@@ -43,7 +43,7 @@ impl FfiBridge for CreditCheckService {
             let approved = score >= 700 && eligible;
             let output = serde_json::json!({ "approved": approved });
             return Ok(Response::new(FfiBridgeResponse {
-                outputs_json: serde_json::to_vec(&output).unwrap().into(),
+                outputs_json: serde_json::to_vec(&output).unwrap(),
             }));
         }
 
@@ -58,7 +58,7 @@ impl FfiBridge for CreditCheckService {
             "REJECT" => {
                 let output = serde_json::json!({ "score": 450_i64, "approved": false, "reason": "SCORE_TOO_LOW" });
                 return Ok(Response::new(FfiBridgeResponse {
-                    outputs_json: serde_json::to_vec(&output).unwrap().into(),
+                    outputs_json: serde_json::to_vec(&output).unwrap(),
                 }));
             }
             _ => {}
@@ -68,7 +68,7 @@ impl FfiBridge for CreditCheckService {
         let score = if amount > 100_000 { 680_i64 } else { 720_i64 };
         let output = serde_json::json!({ "score": score, "approved": true, "reason": "SCORE_OK" });
         Ok(Response::new(FfiBridgeResponse {
-            outputs_json: serde_json::to_vec(&output).unwrap().into(),
+            outputs_json: serde_json::to_vec(&output).unwrap(),
         }))
     }
 }

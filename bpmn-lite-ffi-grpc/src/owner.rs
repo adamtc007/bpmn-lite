@@ -27,6 +27,7 @@ impl GrpcFfiOwner {
     }
 
     /// Register a gRPC template. Returns the `FfiTemplate` for publication.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_template(
         &self,
         endpoint: String,

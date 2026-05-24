@@ -164,26 +164,25 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
 
             // Pattern: LoadFlag {key} followed by BrIf or BrIfNot, where key is never written.
             Instr::LoadFlag { key } => {
-                if !written_flags.contains(key) {
-                    if let Some(branch) = next {
-                        if matches!(branch, Instr::BrIf { .. } | Instr::BrIfNot { .. }) {
-                            let flag_name = program.flag_symbol_table.get(key).cloned();
-                            let name_str = flag_name.as_deref().unwrap_or("<unnamed>");
-                            findings.push(Finding {
-                                severity: Severity::Warning,
-                                kind: FindingKind::UnwrittenFlagCondition {
-                                    branch_addr,
-                                    flag_key: *key,
-                                    flag_name: flag_name.clone(),
-                                },
-                                element_id,
-                                message: format!(
-                                    "Flag '{}' (key={}) used as branch condition at addr {} but never written in this process; branch always evaluates against initial value (false/0)",
-                                    name_str, key, branch_addr
-                                ),
-                            });
-                        }
-                    }
+                if !written_flags.contains(key)
+                    && let Some(branch) = next
+                    && matches!(branch, Instr::BrIf { .. } | Instr::BrIfNot { .. })
+                {
+                    let flag_name = program.flag_symbol_table.get(key).cloned();
+                    let name_str = flag_name.as_deref().unwrap_or("<unnamed>");
+                    findings.push(Finding {
+                        severity: Severity::Warning,
+                        kind: FindingKind::UnwrittenFlagCondition {
+                            branch_addr,
+                            flag_key: *key,
+                            flag_name: flag_name.clone(),
+                        },
+                        element_id,
+                        message: format!(
+                            "Flag '{}' (key={}) used as branch condition at addr {} but never written in this process; branch always evaluates against initial value (false/0)",
+                            name_str, key, branch_addr
+                        ),
+                    });
                 }
             }
 
@@ -203,7 +202,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
             severity: Severity::Info,
             kind: FindingKind::FfiTemplatePinned {
                 template_id_hex: template_id_hex.clone(),
-                ffi_task_addr: *addr as u32,
+                ffi_task_addr: *addr,
             },
             element_id,
             message: format!(

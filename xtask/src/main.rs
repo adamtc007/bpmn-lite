@@ -120,9 +120,7 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
                 .arg(".")
                 .current_dir(&workspace_root),
         )
-        .unwrap_or_else(|_| {
-            // Fallback: build a minimal image from the binary directly.
-        });
+        .unwrap_or(());
         ensure_docker_image(&workspace_root, DEFAULT_DOCKER_IMAGE)?;
         // Build http-test-target image using a dedicated Dockerfile.
         build_http_target_image(&workspace_root)?;

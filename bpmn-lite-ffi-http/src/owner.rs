@@ -36,6 +36,7 @@ impl HttpFfiOwner {
     }
 
     /// Register an HTTP template. Returns the `FfiTemplate` for publication.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_template(
         &self,
         url: String,
@@ -198,13 +199,13 @@ impl FfiExecutionOwner for HttpFfiOwner {
         }
 
         // Idempotency-Key header for IdempotentWithKey.
-        if let HttpIdempotency::IdempotentWithKey { selector } = &config.idempotency {
-            if let Some(key_value) = input_obj.get(selector.as_str()) {
-                request = request.header(
-                    "Idempotency-Key",
-                    key_value.to_string().trim_matches('"').to_string(),
-                );
-            }
+        if let HttpIdempotency::IdempotentWithKey { selector } = &config.idempotency
+            && let Some(key_value) = input_obj.get(selector.as_str())
+        {
+            request = request.header(
+                "Idempotency-Key",
+                key_value.to_string().trim_matches('"').to_string(),
+            );
         }
 
         // Remaining fields: query string (GET) or JSON body (POST).
@@ -279,7 +280,7 @@ impl FfiExecutionOwner for HttpFfiOwner {
                 409 => FfiIncidentClass::BusinessRejection {
                     rejection_code: "HTTP_CONFLICT".to_string(),
                 },
-                s if s >= 400 && s < 500 => FfiIncidentClass::ContractViolation,
+                s if (400..500).contains(&s) => FfiIncidentClass::ContractViolation,
                 s if s >= 500 => FfiIncidentClass::Transient,
                 _ => FfiIncidentClass::ContractViolation,
             };

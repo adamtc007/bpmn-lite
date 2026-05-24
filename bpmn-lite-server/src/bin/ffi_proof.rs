@@ -100,15 +100,12 @@ async fn connect(server_url: &str) -> Result<BpmnLiteClient<Channel>> {
 async fn wait_ready(server_url: &str, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match connect(server_url).await {
-            Ok(mut client) => {
-                if let Ok(r) = client.health(HealthRequest {}).await {
-                    if r.into_inner().ready {
-                        return Ok(());
-                    }
+        if let Ok(mut client) = connect(server_url).await {
+            if let Ok(r) = client.health(HealthRequest {}).await {
+                if r.into_inner().ready {
+                    return Ok(());
                 }
             }
-            Err(_) => {}
         }
         if Instant::now() > deadline {
             bail!("server not ready after {}s", timeout.as_secs());
