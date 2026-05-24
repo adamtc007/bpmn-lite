@@ -1,0 +1,15 @@
+name: Layering guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guard:
+    name: bpmn-lite has no ob_poc_types dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Layering guard
+        run: bash scripts/check-layering.sh
