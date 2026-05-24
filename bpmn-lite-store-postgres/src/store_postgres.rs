@@ -3079,24 +3079,22 @@ mod tests {
 
         store.save_instance(&make_instance(iid)).await.unwrap();
 
-        // Simulate DB-level tamper (bypass application layer).
-        sqlx::query(
+        // The immutability trigger (migration 029) blocks tenant_id mutation
+        // at the DB level — defense in depth above the application integrity
+        // check. Verify the trigger fires with a P0001 RAISE EXCEPTION.
+        let tamper_result = sqlx::query(
             "UPDATE process_instances SET tenant_id = 'evil-tenant' WHERE instance_id = $1",
         )
         .bind(iid)
         .execute(&pool)
-        .await
-        .unwrap();
+        .await;
 
-        let loaded = store.load_instance(iid).await.unwrap().unwrap();
-        use bpmn_lite_types::integrity::verify_instance_integrity;
-        let result = verify_instance_integrity(&loaded);
+        let err = tamper_result.expect_err("trigger must reject tenant_id mutation");
+        let msg = err.to_string();
         assert!(
-            result.is_err(),
-            "tampered instance must fail integrity verification"
+            msg.contains("immutable") || msg.contains("P0001"),
+            "expected immutability rejection, got: {msg}"
         );
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("integrity hash mismatch"), "got: {msg}");
     }
 
     /// T-A19-PG-4: quarantine_instance marks the row and logs an event.
