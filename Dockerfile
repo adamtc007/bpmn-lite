@@ -23,7 +23,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 # then compile the real binary.
 FROM chef AS builder
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /build/recipe.json recipe.json
@@ -34,16 +34,15 @@ RUN cargo chef cook --release --features postgres -p bpmn-lite-server --recipe-p
 
 COPY . .
 RUN cargo build --release --features postgres -p bpmn-lite-server \
-    && strip target/release/bpmn-lite-server
+    && mkdir -p /build/out \
+    && cp target/release/bpmn-lite-server /build/out/bpmn-lite-server \
+    && strip /build/out/bpmn-lite-server
 
 # ── Stage 4: runtime ─────────────────────────────────────────────────────────
-# Minimal Debian image — matches the glibc ABI of the builder stage.
-FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Distroless cc keeps glibc/runtime libs without a shell or package manager.
+FROM gcr.io/distroless/cc-debian12:nonroot
 
-COPY --from=builder /build/target/release/bpmn-lite-server /usr/local/bin/
+COPY --from=builder /build/out/bpmn-lite-server /usr/local/bin/
 
 EXPOSE 50051
 

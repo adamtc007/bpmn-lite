@@ -29,6 +29,16 @@ bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-vm = { path = "../bpmn-lite-vm" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
+# T4 — demo model uses ManifestPlaceholderRegistry from dsl-manifest
+dsl-manifest = { path = "../dsl-manifest" }
+# T3 — plan walker bus dispatch
+dsl-bus-client = { path = "../dsl-bus-client" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+prost = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
 ffi-types = { path = "../ffi-types" }
 ffi-dispatcher = { path = "../ffi-dispatcher" }
 async-trait = { workspace = true }
@@ -40,6 +50,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+sqlx = { workspace = true }
 ffi-catalogue = { path = "../ffi-catalogue" }
 dmn-lite-bridge = { path = "../dmn-lite-bridge" }
 dmn-lite-compiler = { path = "../dmn-lite-compiler" }

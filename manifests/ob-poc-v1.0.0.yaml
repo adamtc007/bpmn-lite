@@ -1,0 +1,116 @@
+manifest_version: "1.0"
+domain: "ob-poc"
+catalogue_version: "v1.0.0"
+generated_at: "2026-05-20T12:44:52Z"
+min_consumer_manifest_version: "1.0"
+breaking_changes_since: []
+
+verbs:
+  - id: "cbu.create"
+    signature:
+      inputs:
+        - name: "name"
+          type: "string"
+          required: true
+        - name: "jurisdiction"
+          type: "string"
+          required: false
+        - name: "fund-entity-id"
+          type: "uuid"
+          required: false
+        - name: "client-type"
+          type: "string"
+          required: false
+        - name: "nature-purpose"
+          type: "string"
+          required: false
+        - name: "description"
+          type: "string"
+          required: false
+        - name: "commercial-client-entity-id"
+          type: "uuid"
+          required: false
+        - name: "manco-entity-id"
+          type: "uuid"
+          required: false
+      output:
+        produces: "CBU"
+    effect_class: "read_modify_write"
+    authority_required: "cbu.write"
+    resource_dependencies:
+      - kind: "NaturalKey"
+        from_input: "jurisdiction"
+        entity_type: "Jurisdiction"
+      - kind: "EntityUuid"
+        from_input: "fund-entity-id"
+        entity_type: "Entity"
+      - kind: "EntityUuid"
+        from_input: "commercial-client-entity-id"
+        entity_type: "Entity"
+      - kind: "EntityUuid"
+        from_input: "manco-entity-id"
+        entity_type: "Entity"
+    description: "Create a new Client Business Unit (idempotent by fund-entity-id if provided)"
+  - id: "cbu.add-product"
+    signature:
+      inputs:
+        - name: "cbu-id"
+          type: "uuid"
+          required: true
+        - name: "product"
+          type: "string"
+          required: true
+        - name: "config"
+          type: "json"
+          required: false
+        - name: "options"
+          type: "json"
+          required: false
+    effect_class: "read_modify_write"
+    authority_required: "cbu.write"
+    resource_dependencies:
+      - kind: "NaturalKey"
+        from_input: "cbu-id"
+        entity_type: "CBU"
+      - kind: "NaturalKey"
+        from_input: "product"
+        entity_type: "Product"
+    description: "Add a product to a CBU and derive service intents for its service-resource lifecycle"
+  - id: "instrument-matrix.attach"
+    signature:
+      inputs:
+        - name: "cbu-id"
+          type: "uuid"
+          required: true
+        - name: "template"
+          type: "string"
+          required: false
+    effect_class: "idempotent_ensure"
+    authority_required: "instrument-matrix.write"
+    resource_dependencies:
+      - kind: "NaturalKey"
+        from_input: "cbu-id"
+        entity_type: "CBU"
+    description: "Attach (bootstrap) an instrument matrix to a CBU, creating a draft trading profile if one does not exist. Idempotent."
+
+decisions: []
+
+types:
+  - name: "CBU"
+    kind: "entity"
+    uuid_type: "UUIDv7"
+  - name: "Entity"
+    kind: "entity"
+    uuid_type: "UUIDv7"
+  - name: "Jurisdiction"
+    kind: "entity"
+    uuid_type: "UUIDv7"
+  - name: "Product"
+    kind: "entity"
+    uuid_type: "UUIDv7"
+  - name: "json"
+    kind: "primitive"
+  - name: "string"
+    kind: "primitive"
+  - name: "uuid"
+    kind: "primitive"

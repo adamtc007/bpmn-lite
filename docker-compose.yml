@@ -1,54 +1,143 @@
-# bpmn-lite — local development deployment
+# bpmn-lite federated DSL platform — three-domain deployment (T7)
 #
-# Brings up a full stack: Postgres + bpmn-lite gRPC server (port 50051).
+# Brings up the full §10 demo stack:
+#   bpmn-lite-app  — BPMN workflow engine + bus result receiver (50051 gRPC + 50063 bus)
+#   ob-poc-app     — ob-poc verb engine + bus invocation receiver  (3000 HTTP + 50061 bus)
+#   dmn-lite-app   — dmn-lite decision evaluator + bus invocation receiver (50062 bus)
+#   *-postgres     — dedicated Postgres 16 per domain
 #
 # Usage:
-#   docker build -t bpmn-lite:dev .   # build the image first
-#   docker-compose up                  # start both services
-#   docker-compose down -v             # stop and remove volumes
+#   # Build all images (first time or after code changes):
+#   docker compose build
 #
-# Two connection URLs (A18 admin/runtime split):
-#   DATABASE_ADMIN_URL — superuser; used by bpmn-lite at startup for migrations
-#     (including migration 026 which creates bpmn_lite_app + migration 025 RLS)
-#   DATABASE_URL — bpmn_lite_app role (non-superuser); used for all runtime queries
-#     RLS policies apply; verify_not_superuser check emits INFO on startup
+#   # Bring up the full stack:
+#   docker compose up
 #
-# POSTGRES_HOST_AUTH_METHOD=trust is dev-only convenience.
-# Production deployments must use proper pg_hba authentication.
+#   # Reset demo state (clears process instances, outbox, inbox):
+#   ./scripts/reset-demo.sh
+#
+#   # Tear down completely:
+#   docker compose down -v
+#
+# Single-domain development (bpmn-lite only):
+#   docker compose up bpmn-lite-postgres bpmn-lite-app
+#
+# Env file: copy .env.example to .env and fill in ANTHROPIC_API_KEY
+# for ob-poc LLM/Sage features. The bus demo works without it.
+
+x-pg-healthcheck: &pg-healthcheck
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 3s
+    timeout: 5s
+    retries: 15
 
 services:
-  postgres:
+
+  # ── bpmn-lite ─────────────────────────────────────────────────────
+  bpmn-lite-postgres:
     image: postgres:16-bookworm
     environment:
       POSTGRES_DB: bpmn_lite
       POSTGRES_HOST_AUTH_METHOD: trust
-    ports:
-      - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d bpmn_lite"]
-      interval: 2s
-      timeout: 5s
-      retries: 15
+      - bpmn-lite-pgdata:/var/lib/postgresql/data
+    <<: *pg-healthcheck
 
-  bpmn-lite:
-    image: bpmn-lite:dev
+  bpmn-lite-app:
+    image: bpmn-lite-app:local
     build:
       context: .
+      dockerfile: Dockerfile
     depends_on:
-      postgres:
+      bpmn-lite-postgres:
         condition: service_healthy
     ports:
-      - "50051:50051"
+      - "50051:50051"   # BPMN gRPC (bytecode path — existing)
+      - "50063:50063"   # Federated bus — result receiver (plan-walker path)
+      - "8080:8080"     # REST demo API (T6 — UI smoke + §10 walkthrough)
     environment:
-      # Superuser URL — migrations only (creates bpmn_lite_app, enables RLS).
-      DATABASE_ADMIN_URL: postgresql://postgres@postgres/bpmn_lite
-      # Runtime URL — bpmn_lite_app role, no BYPASSRLS.
-      DATABASE_URL: postgresql://bpmn_lite_app@postgres/bpmn_lite
+      # A18 admin/runtime split.
+      DATABASE_ADMIN_URL: postgresql://postgres@bpmn-lite-postgres/bpmn_lite
+      DATABASE_URL: postgresql://bpmn_lite_app@bpmn-lite-postgres/bpmn_lite
+      BPMN_LITE_ALLOW_SUPERUSER: "1"       # dev — bpmn_lite_app role set up by migration 026
       BPMN_LITE_SCHEDULER_OWNER: bpmn-lite-compose
+      # T3 — federated bus (plan-walker results arrive here)
+      BPMN_LITE_BUS_LISTEN: "0.0.0.0:50063"
+      OB_POC_BUS_ENDPOINT: "http://ob-poc-app:50061"
+      DMN_LITE_BUS_ENDPOINT: "http://dmn-lite-app:50062"
+      RUST_LOG: info
+    restart: on-failure:3
+
+  # ── ob-poc ────────────────────────────────────────────────────────
+  ob-poc-postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: data_designer
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - ob-poc-pgdata:/var/lib/postgresql/data
+    <<: *pg-healthcheck
+
+  ob-poc-app:
+    image: ob-poc-app:local
+    build:
+      context: ..
+      dockerfile: Dockerfile.ob-poc
+    depends_on:
+      ob-poc-postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"     # HTTP axum (React frontend + REST API)
+      - "50061:50061"   # Federated bus — invocation receiver
+    environment:
+      DATABASE_URL: postgresql://postgres@ob-poc-postgres/data_designer
+      OB_POC_BUS_LISTEN: "0.0.0.0:50061"
+      BPMN_LITE_BUS_ENDPOINT: "http://bpmn-lite-app:50063"
+      OB_POC_CATALOGUE_VERSION: "v1.0.0"
+      # LLM / Sage (optional — bus demo works without it).
+      AGENT_BACKEND: ${AGENT_BACKEND:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      OBPOC_STRICT_SINGLE_PIPELINE: "false"
+      RUST_LOG: info
+    restart: on-failure:3
+
+  # ── dmn-lite ──────────────────────────────────────────────────────
+  dmn-lite-postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: dmn_lite
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - dmn-lite-pgdata:/var/lib/postgresql/data
+    <<: *pg-healthcheck
+
+  dmn-lite-app:
+    image: dmn-lite-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dmn-lite
+    depends_on:
+      dmn-lite-postgres:
+        condition: service_healthy
+    ports:
+      - "50062:50062"   # Federated bus — invocation receiver
+    environment:
+      DMN_LITE_DATABASE_URL: postgresql://postgres@dmn-lite-postgres/dmn_lite
+      DMN_LITE_BUS_LISTEN: "0.0.0.0:50062"
+      BPMN_LITE_BUS_ENDPOINT: "http://bpmn-lite-app:50063"
+      DMN_LITE_CATALOGUE_VERSION: "v1.0.0"
+      DMN_LITE_DECISIONS_DIR: "/app/decisions"
+      DMN_LITE_CATALOGUE_TOML: "/app/sem-os-stub.toml"
       RUST_LOG: info
     restart: on-failure:3
 
 volumes:
-  pgdata:
+  bpmn-lite-pgdata:
+  ob-poc-pgdata:
+  dmn-lite-pgdata:
+
+networks:
+  default:
+    name: bpmn-lite-federation

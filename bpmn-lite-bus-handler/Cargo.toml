@@ -1,0 +1,32 @@
+[package]
+name = "bpmn-lite-bus-handler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "bpmn-lite receiver-side bus handler. Implements dsl-bus-server's ResultDispatcher trait, routing InvocationResult deliveries into a caller-supplied ProcessAdvancer port (T2B.9 / T3 wires the real bpmn-lite runtime)."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : ResultDispatcher impl for bpmn-lite, ProcessAdvancer
+#               port trait, RejectInvocationDispatcher for the
+#               InvocationService slot (bpmn-lite is a workflow
+#               domain — it sends invocations but doesn't normally
+#               receive them).
+#   OUT-OF-SCOPE: actual process advancement (lives in bpmn-lite-runtime
+#                 — T3 RIP-AND-REPLACE), pending-call lookup
+#                 (bpmn-lite-store-postgres after T2B.8 migrations
+#                 land), durability (dsl-bus-storage handles inbox).
+
+[dependencies]
+dsl-bus-server = { path = "../dsl-bus-server" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "dsl-manifest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Catalogue manifest types — published API contract for federated DSL domains. Loader + validator + lookup. Consumed by domain compilers importing foreign catalogues."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : Manifest YAML schema types (Manifest, VerbEntry, DecisionEntry,
+#               TypeEntry), YAML loader, structural validator, lookup API.
+#   OUT-OF-SCOPE: manifest generation (per-domain export binaries in T2B),
+#                 bus protocol (dsl-bus-protocol), runtime delivery
+#                 (dsl-bus-client/-server).
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

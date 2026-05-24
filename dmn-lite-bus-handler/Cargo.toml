@@ -1,0 +1,28 @@
+[package]
+name = "dmn-lite-bus-handler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "dmn-lite receiver-side bus handler. Implements dsl-bus-server's InvocationDispatcher trait, routing decision invocations into a caller-supplied DecisionEvaluator port (T2B.9 wires the real dmn-lite engine)."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : InvocationDispatcher impl for dmn-lite, no-op
+#               ResultDispatcher, DecisionEvaluator port trait,
+#               error mapping to BusServerError.
+#   OUT-OF-SCOPE: actual decision evaluation (dmn-lite-engine), FFI
+#                 bridge (dmn-lite-bridge), durability (dsl-bus-storage).
+
+[dependencies]
+dsl-bus-server = { path = "../dsl-bus-server" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
+[lints]
+workspace = true

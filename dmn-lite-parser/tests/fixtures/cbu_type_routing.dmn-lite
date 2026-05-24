@@ -1,0 +1,24 @@
+; cbu_type_routing — routes a CBU to its product type based on client-type.
+; Input:  cbu-client-type (enum CbuClientType)
+; Output: cbu-type        (enum CbuType — "fund" | "corporate" | "trust")
+;
+; Used by the Phase 5.5 demo BPMN workflow: the exclusive-gateway checks
+; @cbu-type to pick which cbu.add-product branch to take.
+
+(define-decision cbu_type_routing
+  :hit-policy first
+  :inputs  ((cbu-client-type :type enum :domain CbuClientType))
+  :outputs ((cbu-type        :type enum :domain CbuType))
+  :rules
+    ((rule fund
+       :when ((cbu-client-type = FUND_MANDATE))
+       :then ((cbu-type = fund)))
+     (rule corporate
+       :when ((cbu-client-type = CORPORATE))
+       :then ((cbu-type = corporate)))
+     (rule trust
+       :when ((cbu-client-type = TRUST))
+       :then ((cbu-type = trust)))
+     (rule fallback
+       :when (*)
+       :then ((cbu-type = corporate)))))

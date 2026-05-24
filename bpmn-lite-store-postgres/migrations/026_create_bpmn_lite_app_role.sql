@@ -43,8 +43,16 @@ BEGIN
 END
 $$;
 
--- Database-level connect privilege (idempotent).
-GRANT CONNECT ON DATABASE current_database() TO bpmn_lite_app;
+-- Database-level connect privilege (idempotent). GRANT requires a
+-- database identifier, so use dynamic SQL for the current database.
+DO $$
+BEGIN
+    EXECUTE format(
+        'GRANT CONNECT ON DATABASE %I TO bpmn_lite_app',
+        current_database()
+    );
+END
+$$;
 
 -- Schema usage + table CRUD on the public schema.
 GRANT USAGE ON SCHEMA public TO bpmn_lite_app;

@@ -22,9 +22,16 @@
 //!
 //! …and the runtime API plus scheduler.
 
+pub mod demo;
 pub mod engine;
+pub mod plan_walker;
 
 pub use engine::*;
+
+#[cfg(test)]
+mod plan_walker_tests;
+#[cfg(test)]
+mod demo_integration_tests;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,13 @@
+# dmn-lite catalogue publication allowlist (v0.6 §7.5).
+#
+# Each entry here becomes a decision in the published manifest
+# (`bpmn-lite/manifests/dmn-lite-v1.0.0.yaml`) that federated DSL peers
+# import at their compile time. Decisions NOT listed here stay private
+# to dmn-lite and cannot be referenced as `dmn-lite:<id>` from a workflow.
+#
+# Owned by the dmn-lite vocabulary maintainers.
+
+public_verbs: []
+
+public_decisions:
+  - cbu_type_routing

@@ -1,0 +1,36 @@
+[package]
+name = "dmn-lite-manifest-export"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Catalogue manifest exporter for dmn-lite — reads .dmn-lite decision sources + manifest-allowlist.yaml, emits the v0.6 §7 manifest consumed by bpmn-lite at compile time."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : parse `.dmn-lite` sources via the existing
+#               `dmn-lite-parser`, intersect with the published
+#               allowlist, convert to v0.6 §7 DecisionEntry surface,
+#               emit YAML.
+#   OUT-OF-SCOPE: runtime decision evaluation (dmn-lite-engine), bridge
+#                 to the FFI catalogue (dmn-lite-bridge), bus transport
+#                 (dsl-bus-*).
+
+[[bin]]
+name = "dmn-lite-manifest-export"
+path = "src/main.rs"
+
+[dependencies]
+dsl-manifest = { path = "../dsl-manifest" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
+dmn-lite-types = { path = "../dmn-lite-types" }
+serde = { workspace = true }
+serde_yaml = "0.9"
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,47 @@
+[package]
+name = "dsl-bus-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Federated DSL bus — receiver-side server. Tonic services that implement v0.6 §6 invocation + result handlers, gate via inbox idempotency, hand verbs/results off to consumer-supplied dispatchers."
+
+# Capability discipline (v0.6 §5.9 / T2B.2):
+#   IN-SCOPE  : tonic server impls of InvocationService + ResultService,
+#               idempotent inbox short-circuit, atomic inbox+outbox tx
+#               on accept, structural request validation, dispatcher
+#               trait surface.
+#   OUT-OF-SCOPE: actual verb dispatch (lives in domain bus-handler
+#                 crates), outbox sender (dsl-bus-client), manifest
+#                 schema (dsl-manifest).
+
+[dependencies]
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+# A2 §2: server is a writer (it enqueues result-outbox rows after
+# accepting an invocation) so it must call `OutboxNotifier::notify`
+# after `tx.commit()`. The notifier type lives in dsl-bus-client.
+dsl-bus-client = { path = "../dsl-bus-client" }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = "0.13"
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+# Server tests need a real `OutboxNotifier`; the only public way to
+# get one is via `BusClient::outbox_notifier()`, so we depend on the
+# client crate at test scope as well.
+# (Already a regular dep above; this comment documents why tests
+# also exercise the same crate.)
+
+[lints]
+workspace = true

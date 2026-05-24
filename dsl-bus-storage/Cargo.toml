@@ -1,0 +1,29 @@
+[package]
+name = "dsl-bus-storage"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Federated DSL bus durability — outbox and inbox tables + CRUD per v0.6 §8. Per-domain schema; receiver inbox guarantees exactly-once at the semantic layer."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : `outbox` + `inbox` SQL migrations and the typed CRUD
+#               operations the sender loop (§8.5) and receiver handler
+#               (§8.6) drive. Both tables are per-domain.
+#   OUT-OF-SCOPE: bus wire protocol (dsl-bus-protocol), wire transport
+#                 (dsl-bus-server/-client), bpmn-lite's caller-side
+#                 `bpmn_pending_invocation` table (§8.3, owned by
+#                 bpmn-lite-store-postgres).
+
+[dependencies]
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

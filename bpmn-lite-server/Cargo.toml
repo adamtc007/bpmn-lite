@@ -11,6 +11,7 @@ postgres = ["dep:bpmn-lite-store-postgres", "dep:sqlx"]
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-engine = { path = "../bpmn-lite-engine" }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
 bpmn-lite-vm = { path = "../bpmn-lite-vm" }
@@ -49,6 +50,7 @@ serde_json = { workspace = true }
 tokio-stream = "0.1"
 sqlx = { workspace = true, optional = true }
 hex = "0.4"
+blake3 = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 

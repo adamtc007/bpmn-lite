@@ -1,0 +1,29 @@
+[package]
+name = "dsl-bus-protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Federated DSL bus protocol — protobuf v3 schema + tonic-generated server/client stubs for InvocationService and ResultService."
+
+# Capability discipline (v0.6 §5.9):
+#   IN-SCOPE  : `dsl_bus.proto` schema (§6) and the tonic-generated
+#               types + service traits. No handcrafted DTOs.
+#   OUT-OF-SCOPE: outbox/inbox storage (dsl-bus-storage), wire
+#                 transport configuration (dsl-bus-server/-client),
+#                 manifest types (dsl-manifest).
+
+[dependencies]
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = "0.13"
+
+[dev-dependencies]
+uuid = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[lints]
+workspace = true

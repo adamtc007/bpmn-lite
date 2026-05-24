@@ -1,0 +1,35 @@
+manifest_version: "1.0"
+domain: "dmn-lite"
+catalogue_version: "v1.0.0"
+generated_at: "2026-05-20T12:50:36Z"
+min_consumer_manifest_version: "1.0"
+breaking_changes_since: []
+
+verbs: []
+
+decisions:
+  - id: "cbu_type_routing"
+    inputs:
+      - name: "cbu-client-type"
+        type: "CbuClientType"
+        required: true
+    output:
+      type: "CbuType"
+      enum_values:
+        - "fund"
+        - "corporate"
+        - "trust"
+
+types:
+  - name: "CbuClientType"
+    kind: "enum"
+    values:
+      - "FUND_MANDATE"
+      - "CORPORATE"
+      - "TRUST"
+  - name: "CbuType"
+    kind: "enum"
+    values:
+      - "fund"
+      - "corporate"
+      - "trust"

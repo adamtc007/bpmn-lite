@@ -1,0 +1,51 @@
+[package]
+name = "dmn-lite-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "dmn-lite federated DSL bus server — boots a per-decision catalogue, accepts dmn-lite verb invocations over the bus (v0.6 §6), and evaluates them through the stack-VM engine."
+
+# Capability discipline (T2B.9):
+#   IN-SCOPE  : bin crate that loads `.dmn-lite` sources at startup,
+#               compiles + verifies each, wires the dsl-bus-server +
+#               dsl-bus-client + outbox sender, and implements the
+#               dmn-lite-bus-handler::DecisionEvaluator port against
+#               the catalogue.
+#   OUT-OF-SCOPE: catalogue authoring (lives in dmn-lite-decisions/),
+#                 compiler internals (dmn-lite-compiler), engine
+#                 evaluation (dmn-lite-engine), bus durability
+#                 (dsl-bus-storage), in-process FFI (dmn-lite-bridge).
+
+[[bin]]
+name = "dmn-lite-server"
+path = "src/main.rs"
+
+[dependencies]
+# Bus transport
+dsl-bus-client = { path = "../dsl-bus-client" }
+dsl-bus-server = { path = "../dsl-bus-server" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+# Decision vocabulary
+dmn-lite-bus-handler = { path = "../dmn-lite-bus-handler" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-engine = { path = "../dmn-lite-engine" }
+dmn-lite-types = { path = "../dmn-lite-types" }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_yaml = "0.9"
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

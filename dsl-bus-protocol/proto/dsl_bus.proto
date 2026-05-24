@@ -1,0 +1,312 @@
+// Federated DSL bus protocol — v0.6 §6.
+//
+// Two services connect every federated DSL domain (bpmn-lite, ob-poc,
+// dmn-lite, future form-io, …) over gRPC:
+//
+//   InvocationService.Submit       caller → receiver, "do this verb"
+//   ResultService.DeliverResult    receiver → caller, "here's the outcome"
+//
+// Each domain runs both services and an outbox/inbox queue (v0.6 §8) on
+// its own database, so the bus itself is stateless and durability lives
+// in the participating domains.
+syntax = "proto3";
+package dsl.bus.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ── Common types (§6.1) ──────────────────────────────────────────────
+
+// UUIDv7, 16 raw bytes on the wire. Always-network-order.
+message Uuid {
+  bytes value = 1;
+}
+
+// Caller-provided authority context. Receivers verify
+// `service_identity` against an allowlist and (optionally) the
+// `signed_token` against a JWT verifier.
+message AuthorityContext {
+  string service_identity = 1;
+  string user_identity = 2;
+  repeated string roles = 3;
+  bytes signed_token = 4;
+}
+
+// Typed value across the bus. `type_name` is informational (manifest
+// type name); the `oneof` carries the actual payload. `null_value`
+// preserves "absent" for nullable bindings.
+message TypedValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    Uuid uuid_value = 5;
+    bytes blob_value = 6;
+    bool null_value = 7;
+  }
+  string type_name = 10;
+}
+
+// Named typed value used for verb inputs and outcome bindings.
+message ResolvedBinding {
+  string name = 1;
+  TypedValue value = 2;
+}
+
+// Why a verb invocation ended the way it did. Aligned with v0.5 §9.1
+// ExecutionOutcome taxonomy.
+enum ExecutionOutcomeKind {
+  OUTCOME_UNSPECIFIED = 0;
+  COMMITTED = 1;
+  IDEMPOTENT_REPLAY_RETURNED = 2;
+  OPTIMISTIC_CONFLICT = 3;
+  LOCK_TIMEOUT = 4;
+  VERB_FAILED = 5;
+  AUTHORITY_DENIED = 6;
+  CANCELLED = 7;
+  TIMED_OUT = 8;
+  PANIC_RECOVERED = 9;
+  REJECTED_BY_ADMISSION = 10;
+  VERSION_MISMATCH = 11;
+}
+
+// Result envelope carrying the outcome kind, a free-form detail string,
+// and any verb-produced bindings (typically an output entity uuid).
+message ExecutionOutcome {
+  ExecutionOutcomeKind kind = 1;
+  string detail = 2;
+  repeated ResolvedBinding bindings = 3;
+}
+
+// ── InvocationService (§6.2) ─────────────────────────────────────────
+
+service InvocationService {
+  rpc Submit(InvocationRequest) returns (SubmissionAck);
+  // A3 §2.1 — Validate is the "would this verb succeed if invoked now?"
+  // RPC. Same request shape as Submit, distinct semantics: no side
+  // effects, no execution. v0.6 ships as a NOT_IMPLEMENTED stub; full
+  // implementation lands in engine V&S v0.4.
+  rpc Validate(InvocationRequest) returns (ValidationResult);
+}
+
+// A3 §2.1 — Result of a Validate call. `outcome` carries the high-level
+// answer (WOULD_SUCCEED / WOULD_FAIL / NOT_IMPLEMENTED); `issues` carry
+// structured detail when WOULD_FAIL. `validation_id` is a transient
+// trace identifier (UUIDv7) — not persisted in v0.6.
+message ValidationResult {
+  ValidationOutcome outcome = 1;
+  repeated ValidationIssue issues = 2;
+  Uuid validation_id = 3;
+}
+
+enum ValidationOutcome {
+  VALIDATION_UNSPECIFIED = 0;
+  WOULD_SUCCEED = 1;
+  WOULD_FAIL = 2;
+  NOT_IMPLEMENTED = 3;
+}
+
+message ValidationIssue {
+  string field_name = 1;
+  string issue_kind = 2;
+  string detail = 3;
+  oneof specific {
+    UnknownReferenceDetail unknown_reference = 10;
+    FsmPreconditionDetail fsm_precondition = 11;
+    AuthorityDetail authority = 12;
+  }
+}
+
+message UnknownReferenceDetail {
+  string expected_type = 1;
+  bytes provided_uuid = 2;
+  string provided_natural_key = 3;
+}
+
+message FsmPreconditionDetail {
+  string entity_uuid = 1;
+  string current_state = 2;
+  repeated string allowed_states = 3;
+}
+
+message AuthorityDetail {
+  string required_scope = 1;
+  repeated string provided_scopes = 2;
+}
+
+message InvocationRequest {
+  Uuid idempotency_key = 1;
+  // Verb id with the domain prefix stripped (e.g. "cbu.create").
+  // The receiver assumes this is one of its own catalogued verbs;
+  // the bus client strips the leading "<domain>:" before sending.
+  string verb_id = 2;
+  repeated ResolvedBinding inputs = 3;
+  AuthorityContext authority = 4;
+  // Domain id of the sender (e.g. "bpmn-lite"). Receiver records this
+  // in its inbox so a result can be routed back.
+  string source_domain = 5;
+  string catalogue_version = 6;
+  Uuid snapshot_pin = 7;
+  // gRPC endpoint the receiver should DeliverResult to.
+  string result_callback_endpoint = 8;
+  google.protobuf.Timestamp timeout_at = 9;
+}
+
+message SubmissionAck {
+  Uuid execution_id = 1;
+  SubmissionStatus status = 2;
+  string detail = 3;
+}
+
+enum SubmissionStatus {
+  SUBMISSION_UNSPECIFIED = 0;
+  ACCEPTED = 1;
+  DUPLICATE = 2;
+  REJECTED_VERB_UNKNOWN = 3;
+  REJECTED_VERSION_INCOMPATIBLE = 4;
+  REJECTED_AUTHORITY = 5;
+  REJECTED_MALFORMED = 6;
+}
+
+// ── ResultService (§6.3) ─────────────────────────────────────────────
+
+service ResultService {
+  rpc DeliverResult(InvocationResult) returns (ResultAck);
+}
+
+message InvocationResult {
+  Uuid execution_id = 1;
+  Uuid idempotency_key = 2;
+  ExecutionOutcome outcome = 3;
+  string source_domain = 4;
+  google.protobuf.Timestamp executed_at = 5;
+  Uuid plan_id = 6;
+  string audit_reference = 7;
+}
+
+message ResultAck {
+  ReceiptStatus status = 1;
+  string detail = 2;
+}
+
+enum ReceiptStatus {
+  RECEIPT_UNSPECIFIED = 0;
+  RECEIVED = 1;
+  DUPLICATE_IGNORED = 2;
+  REJECTED_UNKNOWN_EXECUTION = 3;
+}
+
+// ── EntityService (§6.5 / A3 §2.2) ───────────────────────────────────
+//
+// Cross-domain entity resolution: natural-key → UUID, existence check,
+// FSM state query, audit-pointer lookup. Per A3 §1 Principle 1 this is
+// *capability-based*: only domains that hold entity state register the
+// service. Stateless domains (dmn-lite) do NOT register it — gRPC
+// returns UNIMPLEMENTED natively, distinct from a registered service
+// returning NOT_IMPLEMENTED.
+//
+// v0.6 ships as a NOT_IMPLEMENTED stub even where registered; real
+// resolution lands in engine V&S v0.4.
+service EntityService {
+  rpc Resolve(EntityResolutionRequest) returns (EntityResolutionResult);
+}
+
+message EntityResolutionRequest {
+  AuthorityContext authority = 1;
+  repeated EntityQuery queries = 2;
+  string catalogue_version = 3;
+}
+
+message EntityQuery {
+  string entity_type = 1;
+  oneof lookup_by {
+    bytes uuid = 2;
+    string natural_key = 3;
+  }
+  bool include_state = 4;
+  bool include_audit_pointer = 5;
+}
+
+message EntityResolutionResult {
+  repeated EntityResolution resolutions = 1;
+  Uuid resolution_id = 2;
+}
+
+message EntityResolution {
+  ResolutionOutcome outcome = 1;
+  bytes resolved_uuid = 2;
+  string entity_type = 3;
+  string current_state = 4;
+  string audit_reference = 5;
+  string detail = 6;
+}
+
+enum ResolutionOutcome {
+  RESOLUTION_UNSPECIFIED = 0;
+  RESOLVED = 1;
+  NOT_FOUND = 2;
+  AMBIGUOUS = 3;
+  RESOLUTION_AUTHORITY_DENIED = 4;
+  RESOLUTION_NOT_IMPLEMENTED = 5;
+}
+
+// ── SemOsService (§6.6 / A3 §2.3) ────────────────────────────────────
+//
+// Per-domain SemOS DAG pack retrieval — semantic graphs, constellation
+// maps, derivation chains, FSM applicability matrices. Capability-based:
+// only domains that publish semantic grounding for their verbs register
+// the service.
+//
+// v0.6 ships as a NOT_IMPLEMENTED stub.
+service SemOsService {
+  rpc FetchDagPacks(DagPackRequest) returns (DagPackResponse);
+}
+
+message DagPackRequest {
+  AuthorityContext authority = 1;
+  repeated string dag_pack_ids = 2;
+  repeated string verb_ids = 3;
+  bool include_constellation_maps = 4;
+  bool include_derivation_chains = 5;
+  bool include_fsm_applicability = 6;
+  string catalogue_version = 7;
+}
+
+message DagPackResponse {
+  repeated DagPack packs = 1;
+  Uuid response_id = 2;
+}
+
+message DagPack {
+  string pack_id = 1;
+  string domain = 2;
+  string version = 3;
+  bytes semantic_graph = 4;
+  repeated ConstellationMapRef constellation_maps = 5;
+  repeated DerivationChainRef derivation_chains = 6;
+  FsmApplicabilityMatrix fsm_applicability = 7;
+  string detail = 8;
+  DagPackOutcome outcome = 9;
+}
+
+message ConstellationMapRef {
+  string map_id = 1;
+  bytes map_payload = 2;
+}
+
+message DerivationChainRef {
+  string chain_id = 1;
+  bytes chain_payload = 2;
+}
+
+message FsmApplicabilityMatrix {
+  bytes matrix_payload = 1;
+}
+
+enum DagPackOutcome {
+  DAG_PACK_UNSPECIFIED = 0;
+  AVAILABLE = 1;
+  DAG_PACK_NOT_FOUND = 2;
+  DAG_PACK_AUTHORITY_DENIED = 3;
+  DAG_PACK_NOT_IMPLEMENTED = 4;
+}

@@ -96,6 +96,36 @@ value_id = "019c0a5d-0000-7000-8002-000000000004"
 symbol   = "CORPORATE"
 value_id = "019c0a5d-0000-7000-8002-000000000005"
 
+[[domain.value]]
+symbol   = "fund"
+value_id = "019c0a5d-0000-7000-8002-000000000006"
+
+[[domain.value]]
+symbol   = "corporate"
+value_id = "019c0a5d-0000-7000-8002-000000000007"
+
+[[domain.value]]
+symbol   = "trust"
+value_id = "019c0a5d-0000-7000-8002-000000000008"
+
+# ─── CbuClientType ─────────────────────────────────────────────────────────────
+[[domain]]
+name        = "CbuClientType"
+domain_id   = "019c0a5d-0000-7000-8000-000000000012"
+description = "Client type used by the Phase 5.5 CBU routing decision."
+
+[[domain.value]]
+symbol   = "FUND_MANDATE"
+value_id = "019c0a5d-0000-7000-8012-000000000001"
+
+[[domain.value]]
+symbol   = "CORPORATE"
+value_id = "019c0a5d-0000-7000-8012-000000000002"
+
+[[domain.value]]
+symbol   = "TRUST"
+value_id = "019c0a5d-0000-7000-8012-000000000003"
+
 # ─── ProductCode ───────────────────────────────────────────────────────────────
 [[domain]]
 name        = "ProductCode"

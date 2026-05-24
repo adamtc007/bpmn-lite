@@ -1,0 +1,38 @@
+[package]
+name = "dsl-bus-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Adam Cearns <adamtc007@gmail.com>"]
+license = "MIT"
+description = "Federated DSL bus — sender-side client. Writes outbox rows, runs the sender task that dispatches them via tonic-generated InvocationService/ResultService stubs, manages exponential backoff."
+
+# Capability discipline (v0.6 §5.9 / T2B.1):
+#   IN-SCOPE  : `BusClient` builder, `submit_invocation`,
+#               `send_result`, the outbox sender loop, exponential
+#               backoff. Network transport is tonic-via-dsl-bus-protocol.
+#   OUT-OF-SCOPE: receiving (dsl-bus-server), inbox handling
+#                 (dsl-bus-storage::insert_inbox in receivers),
+#                 manifest validation (dsl-manifest), domain-specific
+#                 verb dispatch (per-domain bus handlers in T2B.5–7).
+
+[dependencies]
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = "0.13"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic-health = { workspace = true }
+
+[lints]
+workspace = true

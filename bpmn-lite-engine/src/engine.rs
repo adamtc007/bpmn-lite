@@ -34,6 +34,12 @@ pub struct BpmnLiteEngine {
     transition_lease_ms: u64,
     /// Optional in-process FFI dispatcher. None = ExecFfi produces an incident.
     ffi_dispatcher: Option<Arc<FfiDispatcher>>,
+    /// T3 — bus client for plan-based process execution. When set, Running
+    /// instances with plan_hash are dispatched to PlanWalker instead of the
+    /// bytecode fiber VM.
+    bus_client: Option<Arc<dsl_bus_client::BusClient>>,
+    /// T3 — pending invocation store for plan-based callouts.
+    pending_store: Option<Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>>,
 }
 
 /// Parameters for starting a new process instance.
@@ -135,6 +141,8 @@ impl BpmnLiteEngine {
             transition_owner: format!("engine-{}", Uuid::now_v7()),
             transition_lease_ms: DEFAULT_TRANSITION_LEASE_MS,
             ffi_dispatcher: None,
+            bus_client: None,
+            pending_store: None,
         }
     }
 
@@ -145,6 +153,20 @@ impl BpmnLiteEngine {
         self
     }
 
+    /// T3 — attach a bus client + pending store for plan-based process
+    /// execution. When set, Running instances with `plan_hash` populated
+    /// are dispatched to `PlanWalker::advance` instead of the bytecode
+    /// fiber loop.
+    pub fn with_bus_client(
+        mut self,
+        client: Arc<dsl_bus_client::BusClient>,
+        pending_store: Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>,
+    ) -> Self {
+        self.bus_client = Some(client);
+        self.pending_store = Some(pending_store);
+        self
+    }
+
     pub fn for_tenant(&self, tenant_id: impl Into<String>) -> Self {
         Self {
             store: self.store.clone(),
@@ -152,6 +174,8 @@ impl BpmnLiteEngine {
             transition_owner: format!("engine-{}", Uuid::now_v7()),
             transition_lease_ms: self.transition_lease_ms,
             ffi_dispatcher: self.ffi_dispatcher.clone(),
+            bus_client: self.bus_client.clone(),
+            pending_store: self.pending_store.clone(),
         }
     }
 
@@ -432,6 +456,29 @@ impl BpmnLiteEngine {
     }
 
     async fn tick_instance_inner(&self, instance_id: Uuid) -> Result<()> {
+        // T3 — plan-based instances bypass the fiber VM entirely.
+        // The discriminator is plan_hash: Some = plan path, None = bytecode path.
+        // WaitingOnSubmission / WaitingOnInvocation instances are skipped by the
+        // ProcessState::Running guard inside PlanWalker::advance.
+        if let (Some(bus_client), Some(pending_store)) =
+            (&self.bus_client, &self.pending_store)
+        {
+            // Peek at the instance state before full load.
+            if let Some(inst) = self.store.load_instance(instance_id).await? {
+                if inst.plan_hash.is_some() {
+                    if matches!(inst.state, ProcessState::Running) {
+                        let walker = crate::plan_walker::PlanWalker::new(
+                            self.store.clone(),
+                            pending_store.clone(),
+                            bus_client.clone(),
+                        );
+                        let _ = walker.advance(instance_id).await?;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         let mut instance = self
             .store
             .load_instance(instance_id)

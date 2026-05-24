@@ -1,5 +1,6 @@
 #[cfg(feature = "postgres")]
 mod bus_runtime;
+mod rest;
 
 use std::sync::Arc;
 use uuid::Uuid;
@@ -125,8 +126,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ffi_dispatcher = Arc::new(ffi_dispatcher);
     tracing::info!("FFI dispatcher initialised with dmn-lite + http + grpc execution owners");
 
-    let engine =
-        Arc::new(BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone()));
+    // T3.3 — Build the bus client early (before the engine) so we can
+    // wire it into the engine via .with_bus_client(). The bus server
+    // starts later (after the engine + event_fanout are ready).
+    #[cfg(feature = "postgres")]
+    let early_bus_client: Option<(Arc<dsl_bus_client::BusClient>, Arc<bpmn_lite_store_postgres::PostgresPendingInvocationStore>)> = match &bus_pool {
+        Some(pool) if std::env::var("BPMN_LITE_BUS_LISTEN").is_ok() => {
+            let mut builder = dsl_bus_client::BusClient::builder()
+                .pool(pool.clone())
+                .local_domain("bpmn-lite");
+            if let Ok(uri) = std::env::var("OB_POC_BUS_ENDPOINT") {
+                builder = builder.add_peer("ob-poc", uri);
+            }
+            if let Ok(uri) = std::env::var("DMN_LITE_BUS_ENDPOINT") {
+                builder = builder.add_peer("dmn-lite", uri);
+            }
+            let client = builder.build().await?;
+            let pending = Arc::new(bpmn_lite_store_postgres::PostgresPendingInvocationStore::new(pool.clone()));
+            Some((Arc::new(client), pending))
+        }
+        _ => None,
+    };
+
+    #[allow(unused_mut)]
+    let mut engine_builder = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
+    #[cfg(feature = "postgres")]
+    if let Some((ref bc, ref ps)) = early_bus_client {
+        engine_builder = engine_builder.with_bus_client(bc.clone(), ps.clone());
+        tracing::info!("T3: plan walker wired into engine tick loop");
+    }
+    let engine = Arc::new(engine_builder);
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
         std::time::Duration::from_millis(parse_u64_env("BPMN_LITE_EVENT_FANOUT_FALLBACK_MS", 500)),
@@ -151,28 +180,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // that contract.
     // ────────────────────────────────────────────────────────────────
     #[cfg(feature = "postgres")]
-    let bus_runtime = match (bus_pool.take(), std::env::var("BPMN_LITE_BUS_LISTEN")) {
-        (Some(pool), Ok(listen)) => {
+    let bus_runtime = match (bus_pool.take(), early_bus_client, std::env::var("BPMN_LITE_BUS_LISTEN")) {
+        (Some(pool), Some((bc, _ps)), Ok(listen)) => {
             let bind_addr: std::net::SocketAddr = listen
                 .parse()
                 .map_err(|e| config_error(&format!("invalid BPMN_LITE_BUS_LISTEN: {e}")))?;
-            let mut peers = Vec::new();
-            if let Ok(uri) = std::env::var("OB_POC_BUS_ENDPOINT") {
-                peers.push(("ob-poc".to_owned(), uri));
-            }
-            if let Ok(uri) = std::env::var("DMN_LITE_BUS_ENDPOINT") {
-                peers.push(("dmn-lite".to_owned(), uri));
-            }
-            tracing::info!(
-                bind_addr = %bind_addr,
-                peer_count = peers.len(),
-                "starting bpmn-lite federated bus runtime"
-            );
+            tracing::info!(bind_addr = %bind_addr, "starting bpmn-lite federated bus runtime");
             Some(
                 bus_runtime::start(bus_runtime::BusRuntimeConfig {
                     pool,
                     bind_addr,
-                    peers,
+                    client: bc,
+                    store: store.clone(),
                 })
                 .await?,
             )
@@ -275,6 +294,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             gaps = coverage_gaps.len(),
             "FFI coverage gaps detected at startup"
         );
+    }
+
+    // T6 — REST demo server (axum, port 8080 by default).
+    // Runs in-process alongside the gRPC server. MemoryStore-backed;
+    // stateless across restarts — only for the §10 demo walkthrough.
+    let rest_bind = std::env::var("BPMN_LITE_REST_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    if let Ok(rest_addr) = rest_bind.parse::<std::net::SocketAddr>() {
+        let demo_state = rest::DemoState::new();
+        let rest_app = rest::demo_router(demo_state);
+        tokio::spawn(async move {
+            tracing::info!(bind_addr = %rest_addr, "BPMN-Lite REST demo server starting");
+            let listener = tokio::net::TcpListener::bind(rest_addr).await
+                .expect("REST demo server bind failed");
+            if let Err(e) = axum::serve(listener, rest_app).await {
+                tracing::error!(error = %e, "REST demo server error");
+            }
+        });
+    } else {
+        tracing::warn!(bind = %rest_bind, "BPMN_LITE_REST_BIND is invalid — REST demo server disabled");
     }
 
     tracing::info!(
