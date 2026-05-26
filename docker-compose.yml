@@ -58,9 +58,14 @@ services:
       - "8080:8080"     # REST demo API (T6 — UI smoke + §10 walkthrough)
     environment:
       # A18 admin/runtime split.
+      # TODO(A18-store-rls): DATABASE_URL reverted to superuser until the ProcessStore
+      # trait threads tenant_id through load_instance/load_fibers/save_fiber so RLS can
+      # be honoured on bare-pool reads. bpmn_lite_app + RLS breaks claim/load/save paths
+      # because app.tenant_id is not set on pool connections. Revert to bpmn_lite_app
+      # once A18-store-rls fix is complete.
       DATABASE_ADMIN_URL: postgresql://postgres@bpmn-lite-postgres/bpmn_lite
-      DATABASE_URL: postgresql://bpmn_lite_app@bpmn-lite-postgres/bpmn_lite
-      BPMN_LITE_ALLOW_SUPERUSER: "1"       # dev — bpmn_lite_app role set up by migration 026
+      DATABASE_URL: postgresql://postgres@bpmn-lite-postgres/bpmn_lite
+      BPMN_LITE_ALLOW_SUPERUSER: "1"       # dev — superuser until A18-store-rls lands
       BPMN_LITE_SCHEDULER_OWNER: bpmn-lite-compose
       # T3 — federated bus (plan-walker results arrive here)
       BPMN_LITE_BUS_LISTEN: "0.0.0.0:50063"
