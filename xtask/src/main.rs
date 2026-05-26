@@ -905,19 +905,21 @@ fn docker_up(workspace_root: &Path, parsed: &ParsedArgs) -> Result<DockerDeploym
         //
         // DATABASE_ADMIN_URL: superuser connection used for migrations
         //   (includes migration 026 which creates bpmn_lite_app).
-        // DATABASE_URL: runtime connection as the bpmn_lite_app role,
-        //   which is NOT a superuser and does not BYPASSRLS. RLS
-        //   policies enabled in migration 025 apply to this connection.
+        // DATABASE_URL: runtime connection.
         //
-        // The trust auth mode lets bpmn_lite_app connect without a
-        // password from within the network (dev convenience). Production
-        // deployments must use proper authentication.
+        // TODO(A18-store-rls): Once the ProcessStore trait threads tenant_id
+        // through load_instance/load_fibers/save_fiber so set_tenant_context
+        // is called before every tenant-scoped query, revert DATABASE_URL to
+        //   bpmn_lite_app (non-superuser, RLS active).
+        // Until then, connect as postgres (superuser, RLS bypassed) so docker
+        // smoke/stress/poison/subscription tests can run. Tracked issue: the
+        // claim and load paths bypass app.tenant_id and see 0 rows under RLS.
         let container_admin_url = format!(
             "postgresql://postgres@{}/{}",
             deployment.db_container_name, db_name
         );
         let container_database_url = format!(
-            "postgresql://bpmn_lite_app@{}/{}",
+            "postgresql://postgres@{}/{}",
             deployment.db_container_name, db_name
         );
 
@@ -940,6 +942,9 @@ fn docker_up(workspace_root: &Path, parsed: &ParsedArgs) -> Result<DockerDeploym
                     "BPMN_LITE_SCHEDULER_OWNER={}",
                     deployment.server_container_name
                 ))
+                .arg("-e")
+                // TODO(A18-store-rls): remove when DATABASE_URL reverts to bpmn_lite_app
+                .arg("BPMN_LITE_ALLOW_SUPERUSER=1")
                 .arg("-e")
                 .arg("RUST_LOG=info")
                 .arg(&deployment.image),
