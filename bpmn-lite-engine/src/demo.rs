@@ -40,14 +40,16 @@ pub const DEMO_SOURCE: &str = r#"(workflow custody-cbu-onboarding
 
 /// ob-poc manifest. CARGO_MANIFEST_DIR = bpmn-lite-engine/; manifests/ is
 /// one level up at the workspace root (bpmn-lite/manifests/).
-const OB_POC_MANIFEST_YAML: &str = include_str!(
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/ob-poc-v1.0.0.yaml")
-);
+const OB_POC_MANIFEST_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifests/ob-poc-v1.0.0.yaml"
+));
 
 /// dmn-lite manifest at the same workspace root.
-const DMN_LITE_MANIFEST_YAML: &str = include_str!(
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/dmn-lite-v1.0.0.yaml")
-);
+const DMN_LITE_MANIFEST_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifests/dmn-lite-v1.0.0.yaml"
+));
 
 /// Compile the §10 demo workflow against the real ob-poc + dmn-lite manifests.
 ///
@@ -71,7 +73,10 @@ pub fn build_demo_plan() -> Result<WorkflowExecutionPlan, CompileError> {
 ///
 /// `client_type` should be one of `"FUND_MANDATE"`, `"CORPORATE"`, `"TRUST"`.
 /// These match the input values expected by the `cbu_type_routing` DMN decision.
-pub fn demo_initial_vars(client_name: &str, client_type: &str) -> HashMap<String, serde_json::Value> {
+pub fn demo_initial_vars(
+    client_name: &str,
+    client_type: &str,
+) -> HashMap<String, serde_json::Value> {
     let mut vars = HashMap::new();
     vars.insert(
         "@input-name".to_owned(),
@@ -131,10 +136,22 @@ mod tests {
     #[test]
     fn demo_plan_infers_cbu_and_cbu_type_placeholders() {
         let plan = build_demo_plan().expect("compile");
-        assert!(plan.placeholder_schema.slots.contains_key("@cbu"), "@cbu missing");
-        assert!(plan.placeholder_schema.slots.contains_key("@cbu-type"), "@cbu-type missing");
-        assert_eq!(plan.placeholder_schema.slots["@cbu"].produced_by, "create-cbu");
-        assert_eq!(plan.placeholder_schema.slots["@cbu-type"].produced_by, "type-decision");
+        assert!(
+            plan.placeholder_schema.slots.contains_key("@cbu"),
+            "@cbu missing"
+        );
+        assert!(
+            plan.placeholder_schema.slots.contains_key("@cbu-type"),
+            "@cbu-type missing"
+        );
+        assert_eq!(
+            plan.placeholder_schema.slots["@cbu"].produced_by,
+            "create-cbu"
+        );
+        assert_eq!(
+            plan.placeholder_schema.slots["@cbu-type"].produced_by,
+            "type-decision"
+        );
     }
 
     #[test]
@@ -177,7 +194,13 @@ mod tests {
         let vars = demo_initial_vars("Allianz AM", "FUND_MANDATE");
         assert!(vars.contains_key("@input-name"));
         assert!(vars.contains_key("@input-client-type"));
-        assert_eq!(vars["@input-name"], serde_json::Value::String("Allianz AM".into()));
-        assert_eq!(vars["@input-client-type"], serde_json::Value::String("FUND_MANDATE".into()));
+        assert_eq!(
+            vars["@input-name"],
+            serde_json::Value::String("Allianz AM".into())
+        );
+        assert_eq!(
+            vars["@input-client-type"],
+            serde_json::Value::String("FUND_MANDATE".into())
+        );
     }
 }

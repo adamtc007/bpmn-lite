@@ -457,8 +457,8 @@ fn handle_open_tag(
             }
         }
         // Unsupported elements inside process
-        "scriptTask" | "businessRuleTask" | "receiveTask" | "manualTask"
-        | "subProcess" | "callActivity" | "eventBasedGateway" | "complexGateway"
+        "scriptTask" | "businessRuleTask" | "receiveTask" | "manualTask" | "subProcess"
+        | "callActivity" | "eventBasedGateway" | "complexGateway"
             if *in_process =>
         {
             let id = get_attr_opt(e, "id").unwrap_or_else(|| local.clone());

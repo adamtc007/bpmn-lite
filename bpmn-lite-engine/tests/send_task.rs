@@ -66,7 +66,13 @@ async fn send_task_publishes_message_and_advances() {
     let payload = r#"{"trigger":"calibration"}"#;
     let hash = compute_hash(payload);
     let iid = engine
-        .start("send_proc", program.bytecode_version, payload, hash, "cal-1")
+        .start(
+            "send_proc",
+            program.bytecode_version,
+            payload,
+            hash,
+            "cal-1",
+        )
         .await
         .expect("start");
     engine.tick_instance(iid).await.expect("tick_instance");

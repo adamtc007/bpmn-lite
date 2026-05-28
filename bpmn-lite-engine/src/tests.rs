@@ -1,9 +1,9 @@
 use super::*;
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::store_memory::MemoryStore;
+use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::{compute_hash, TickOutcome, Vm};
-use bpmn_lite_types::session_stack::SessionStackState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -143,7 +143,8 @@ async fn test_start_with_session_stack_copies_value() {
         client_group_id: mutated_scope_id,
         client_group_name: Some("Mutated".to_string()),
     });
-    session_stack.active_workspace = Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
+    session_stack.active_workspace =
+        Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
     session_stack.trace_sequence = 77;
 
     let loaded = store.load_instance(instance_id).await.unwrap().unwrap();

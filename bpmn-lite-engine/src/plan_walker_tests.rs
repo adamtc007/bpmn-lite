@@ -233,18 +233,27 @@ async fn dod_41_ob_poc_full_round_trip() {
     let execution_id = Uuid::now_v7();
     let cbu_id = Uuid::now_v7();
 
-    let instance_id =
-        inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
+    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
 
     // Insert matching pending row so the test pattern mirrors the real flow.
     let idem = Uuid::now_v7();
-    let row = PendingInvocation::new(callout_id, instance_id, "create-cbu", "ob-poc", "cbu.create", idem);
+    let row = PendingInvocation::new(
+        callout_id,
+        instance_id,
+        "create-cbu",
+        "ob-poc",
+        "cbu.create",
+        idem,
+    );
     let _ = execution_id; // used in the assert below
     assert_eq!(pending.insert(row).await.unwrap(), InsertOutcome::Inserted);
 
     // Simulate: SubmissionAck arrives — pending row gains execution_id.
     let execution_id2 = Uuid::now_v7();
-    pending.record_ack(callout_id, execution_id2, Utc::now()).await.unwrap();
+    pending
+        .record_ack(callout_id, execution_id2, Utc::now())
+        .await
+        .unwrap();
 
     // Simulate: result delivered — advancer sets Running, advances to "end",
     // binds @cbu placeholder.
@@ -255,7 +264,8 @@ async fn dod_41_ob_poc_full_round_trip() {
         "end",
         Some("@cbu"),
         Some(serde_json::Value::String(cbu_id.to_string())),
-    ).await;
+    )
+    .await;
 
     // Tick: walker advances through EndEvent → Completed.
     let walker = make_walker(store.clone(), pending.clone()).await;
@@ -293,8 +303,7 @@ async fn dod_42_dmn_lite_full_round_trip() {
     let plan = dmn_lite_round_trip_plan();
     let callout_id = Uuid::now_v7();
 
-    let instance_id =
-        inject_waiting_instance(&store, &plan, "t1", "route", callout_id).await;
+    let instance_id = inject_waiting_instance(&store, &plan, "t1", "route", callout_id).await;
 
     // Simulate result: cbu-type = "fund" → gateway routes to end-fund.
     simulate_result_delivery(
@@ -304,7 +313,8 @@ async fn dod_42_dmn_lite_full_round_trip() {
         "gateway",
         Some("@cbu-type"),
         Some(serde_json::Value::String("fund".to_owned())),
-    ).await;
+    )
+    .await;
 
     let walker = make_walker(store.clone(), pending).await;
     let outcome = walker.advance(instance_id).await.unwrap();
@@ -331,8 +341,7 @@ async fn dod_44_crash_mid_outbox_recovery() {
     let plan = ob_poc_round_trip_plan();
     let callout_id = Uuid::now_v7();
 
-    let instance_id =
-        inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
+    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
 
     // "Restart": build a fresh walker over the same store (simulating
     // in-memory restart — the process state persisted, outbox pending).
@@ -345,14 +354,7 @@ async fn dod_44_crash_mid_outbox_recovery() {
     );
 
     // Now result arrives (outbox sender eventually dispatched, receiver replied).
-    simulate_result_delivery(
-        &store,
-        instance_id,
-        "create-cbu",
-        "end",
-        None,
-        None,
-    ).await;
+    simulate_result_delivery(&store, instance_id, "create-cbu", "end", None, None).await;
 
     // Advance → Completed.
     let outcome = walker_v2.advance(instance_id).await.unwrap();
@@ -372,8 +374,7 @@ async fn dod_45_crash_mid_ack_reconciliation() {
     let callout_id = Uuid::now_v7();
     let execution_id = Uuid::now_v7();
 
-    let instance_id =
-        inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
+    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
 
     // Simulate: SubmissionAck arrived → instance transitions to WaitingOnInvocation.
     {
@@ -395,14 +396,7 @@ async fn dod_45_crash_mid_ack_reconciliation() {
     );
 
     // Deliver result → Running → tick advances.
-    simulate_result_delivery(
-        &store,
-        instance_id,
-        "create-cbu",
-        "end",
-        None,
-        None,
-    ).await;
+    simulate_result_delivery(&store, instance_id, "create-cbu", "end", None, None).await;
 
     let outcome = walker_v2.advance(instance_id).await.unwrap();
     assert!(matches!(outcome, AdvanceOutcome::Completed { .. }));

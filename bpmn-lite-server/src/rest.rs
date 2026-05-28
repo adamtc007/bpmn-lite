@@ -35,8 +35,8 @@ use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_engine::demo::{build_demo_plan, demo_initial_vars};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::store_memory::MemoryStore;
-use bpmn_lite_types::types::{ProcessInstance, ProcessState};
 use bpmn_lite_types::session_stack::SessionStackState;
+use bpmn_lite_types::types::{ProcessInstance, ProcessState};
 
 // ── Demo state ─────────────────────────────────────────────────────────
 
@@ -57,7 +57,12 @@ impl DemoState {
     }
 
     fn cbu_type(&self, id: Uuid) -> String {
-        self.cbu_types.lock().unwrap().get(&id).cloned().unwrap_or_default()
+        self.cbu_types
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn set_cbu_type(&self, id: Uuid, t: String) {
@@ -107,7 +112,10 @@ pub(crate) struct StartBody {
 pub(crate) fn demo_router(state: Arc<DemoState>) -> Router {
     Router::new()
         .route("/bpmn/health", get(health))
-        .route("/bpmn/instances", get(list_instances).delete(reset_instances))
+        .route(
+            "/bpmn/instances",
+            get(list_instances).delete(reset_instances),
+        )
         .route("/bpmn/instances/start", post(start_instance))
         .route("/bpmn/instances/:id", get(get_instance))
         .route("/bpmn/instances/:id/next-step", post(next_step))
@@ -123,7 +131,11 @@ async fn health() -> impl IntoResponse {
 }
 
 async fn list_instances(State(demo): State<Arc<DemoState>>) -> impl IntoResponse {
-    let ids = demo.store.list_running_instances("demo").await.unwrap_or_default();
+    let ids = demo
+        .store
+        .list_running_instances("demo")
+        .await
+        .unwrap_or_default();
     let mut result: Vec<WorkflowInstanceSummary> = Vec::new();
     for id in ids {
         if let Ok(Some(inst)) = demo.store.load_instance(id).await {
@@ -146,7 +158,10 @@ async fn get_instance(
     let inst = match demo.store.load_instance(id).await {
         Ok(Some(i)) => i,
         _ => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"})))
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not found"})),
+            )
                 .into_response()
         }
     };
@@ -193,14 +208,14 @@ async fn start_instance(
     }
 }
 
-async fn next_step(
-    State(demo): State<Arc<DemoState>>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+async fn next_step(State(demo): State<Arc<DemoState>>, Path(id): Path<Uuid>) -> impl IntoResponse {
     let inst = match demo.store.load_instance(id).await {
         Ok(Some(i)) => i,
         _ => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"})))
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not found"})),
+            )
                 .into_response()
         }
     };
@@ -243,10 +258,12 @@ async fn next_step(
 
     let updated = demo.store.load_instance(id).await.ok().flatten();
     let (current, status) = updated
-        .map(|i| (
-            i.current_node_id.clone().unwrap_or_default(),
-            format_state(&i.state),
-        ))
+        .map(|i| {
+            (
+                i.current_node_id.clone().unwrap_or_default(),
+                format_state(&i.state),
+            )
+        })
         .unwrap_or_default();
 
     Json(serde_json::json!({
@@ -350,7 +367,9 @@ async fn create_instance(
 /// BusinessRuleTask so the user can click "Next Step" there.
 async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uuid) {
     loop {
-        let Ok(Some(mut inst)) = store.load_instance(id).await else { break };
+        let Ok(Some(mut inst)) = store.load_instance(id).await else {
+            break;
+        };
         if !matches!(inst.state, ProcessState::Running) {
             break;
         }

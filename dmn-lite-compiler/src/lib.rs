@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![deny(unreachable_pub)]
 
 pub mod catalogue_loader;
 mod emit;

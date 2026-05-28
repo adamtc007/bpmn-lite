@@ -17,7 +17,7 @@ use dmn_lite_types::{
 use crate::emit::serialize_typed_value;
 
 /// Compute the BLAKE3 artifact hash for a compiled decision.
-pub fn compute_artifact_hash(
+pub(crate) fn compute_artifact_hash(
     source_text: &str,
     typed: &TypedDecision,
     instructions: &[Instr],

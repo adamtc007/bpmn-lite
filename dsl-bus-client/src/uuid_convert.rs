@@ -14,7 +14,9 @@ pub(crate) fn from_proto(p: &ProtoUuid) -> Result<uuid::Uuid, BusClientError> {
     Ok(uuid::Uuid::from_bytes(bytes))
 }
 
-pub(crate) fn from_proto_opt(opt: &Option<ProtoUuid>) -> Result<Option<uuid::Uuid>, BusClientError> {
+pub(crate) fn from_proto_opt(
+    opt: &Option<ProtoUuid>,
+) -> Result<Option<uuid::Uuid>, BusClientError> {
     match opt {
         Some(p) => from_proto(p).map(Some),
         None => Ok(None),

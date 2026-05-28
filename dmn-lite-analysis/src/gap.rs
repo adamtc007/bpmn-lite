@@ -25,7 +25,7 @@ use crate::AnalysisConfig;
 use crate::region::{FieldRegion, RuleRegion, catalogue_values};
 
 /// Run the gap analysis pipeline.
-pub fn analyse(
+pub(crate) fn analyse(
     decision: &TypedDecision,
     regions: &[RuleRegion],
     catalogue: &Catalogue,

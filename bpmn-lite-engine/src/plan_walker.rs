@@ -15,6 +15,7 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, GatewayExecNode, WorkflowExecutionPlan};
 use bpmn_lite_store::pending::{PendingInvocation, PendingInvocationStore};
 use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::types::{ProcessInstance, ProcessState};
 use dsl_bus_client::BusClient;
 use dsl_bus_protocol::v1::{
@@ -22,7 +23,6 @@ use dsl_bus_protocol::v1::{
     TypedValue as ProtoTypedValue, Uuid as ProtoUuid,
 };
 use dsl_bus_storage::{insert_outbox, BusEndpoint, OutboxEntry};
-use bpmn_lite_types::session_stack::SessionStackState;
 use prost::Message;
 use uuid::Uuid;
 
@@ -107,8 +107,9 @@ impl PlanWalker {
                             self.store.save_instance(&instance).await?;
                         }
                         Err(reason) => {
-                            instance.state =
-                                ProcessState::Failed { incident_id: Uuid::now_v7() };
+                            instance.state = ProcessState::Failed {
+                                incident_id: Uuid::now_v7(),
+                            };
                             self.store.save_instance(&instance).await?;
                             tracing::error!(
                                 instance_id = %instance_id,
@@ -179,7 +180,9 @@ impl PlanWalker {
         };
         const MAX_RETRIES: u64 = 3;
         if retry_count >= MAX_RETRIES {
-            instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
+            instance.state = ProcessState::Failed {
+                incident_id: Uuid::now_v7(),
+            };
             self.store.save_instance(instance).await?;
             return Ok(AdvanceOutcome::NotRunnable);
         }
@@ -187,8 +190,7 @@ impl PlanWalker {
         let callout_id = Uuid::now_v7();
         let idempotency_key = Uuid::now_v7();
 
-        let placeholder_vals =
-            deserialize_placeholder_values(instance.placeholder_values.as_ref());
+        let placeholder_vals = deserialize_placeholder_values(instance.placeholder_values.as_ref());
         let inputs = build_inputs(&static_args, &placeholder_vals);
 
         let req = InvocationRequest {
@@ -326,10 +328,7 @@ fn evaluate_gateway<'a>(
             }
         }
     }
-    Err(anyhow!(
-        "no gateway flow matched for gateway '{}'",
-        gw.id
-    ))
+    Err(anyhow!("no gateway flow matched for gateway '{}'", gw.id))
 }
 
 fn deserialize_placeholder_values(
@@ -419,10 +418,8 @@ mod tests {
         store: Arc<MemoryStore>,
         pending: Arc<MemoryPendingInvocationStore>,
     ) -> PlanWalker {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://localhost/plan_walker_test_fake",
-        )
-        .unwrap();
+        let pool =
+            sqlx::PgPool::connect_lazy("postgresql://localhost/plan_walker_test_fake").unwrap();
         let client = Arc::new(
             dsl_bus_client::BusClient::builder()
                 .pool(pool)

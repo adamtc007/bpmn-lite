@@ -11,7 +11,7 @@ use dmn_lite_types::{
 };
 
 /// Run the SA-001 check.  Returns one finding or `None`.
-pub fn check(decision: &TypedDecision) -> Option<AnalysisFinding> {
+pub(crate) fn check(decision: &TypedDecision) -> Option<AnalysisFinding> {
     if decision.hit_policy != HitPolicy::Unique {
         return None;
     }

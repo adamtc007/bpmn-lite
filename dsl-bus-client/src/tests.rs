@@ -6,28 +6,26 @@
 //! and bind ephemeral TCP sockets.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use dsl_bus_protocol::v1::invocation_service_server::{
-    InvocationService, InvocationServiceServer,
-};
+use dsl_bus_protocol::v1::invocation_service_server::{InvocationService, InvocationServiceServer};
 use dsl_bus_protocol::v1::result_service_server::{ResultService, ResultServiceServer};
 use dsl_bus_protocol::v1::{
-    InvocationRequest, InvocationResult, ReceiptStatus, ResultAck, SubmissionAck,
-    SubmissionStatus, Uuid as ProtoUuid,
+    InvocationRequest, InvocationResult, ReceiptStatus, ResultAck, SubmissionAck, SubmissionStatus,
+    Uuid as ProtoUuid,
 };
 use dsl_bus_storage::InsertOutcome;
 use prost::Message as _;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use uuid::Uuid;
 
-use crate::sender::exp_backoff_secs;
 use crate::BusClient;
+use crate::sender::exp_backoff_secs;
 
 const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/dsl_bus_test";
 
@@ -66,7 +64,9 @@ impl InvocationService for MockService {
             return Err(Status::internal("mock-failure"));
         }
 
-        self.state.invocations_received.fetch_add(1, Ordering::SeqCst);
+        self.state
+            .invocations_received
+            .fetch_add(1, Ordering::SeqCst);
         let exec_bytes = Uuid::now_v7().as_bytes().to_vec();
         Ok(Response::new(SubmissionAck {
             execution_id: Some(ProtoUuid { value: exec_bytes }),
@@ -200,7 +200,11 @@ async fn fetch_outbox_status(pool: &PgPool, id: Uuid) -> (String, i32, Option<St
     .fetch_one(pool)
     .await
     .unwrap();
-    (row.get("status"), row.get("attempt_count"), row.get("last_error"))
+    (
+        row.get("status"),
+        row.get("attempt_count"),
+        row.get("last_error"),
+    )
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -438,7 +442,7 @@ fn backoff_grows_exponentially_and_caps() {
 // timer (replaced with a short fallback inside the crate for test
 // speed via [`BusClient::start_sender_internal`]).
 
-use dsl_bus_storage::{insert_outbox, BusEndpoint, OutboxEntry};
+use dsl_bus_storage::{BusEndpoint, OutboxEntry, insert_outbox};
 
 #[tokio::test]
 #[ignore]
@@ -590,10 +594,7 @@ async fn burst_coalescing() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert_eq!(
-        server.state.invocations_received.load(Ordering::SeqCst),
-        20
-    );
+    assert_eq!(server.state.invocations_received.load(Ordering::SeqCst), 20);
 
     handle.shutdown().await.unwrap();
     server.stop().await;
@@ -654,4 +655,3 @@ async fn sender_isolation_from_writer_failure() {
     handle.shutdown().await.unwrap();
     server.stop().await;
 }
-

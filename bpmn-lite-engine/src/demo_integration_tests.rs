@@ -81,7 +81,11 @@ async fn t4_start_process_creates_correct_initial_state() {
     let walker = make_walker(store.clone(), pending).await;
 
     let id = walker
-        .start_process(&plan, "demo", demo_initial_vars("Allianz AM", "FUND_MANDATE"))
+        .start_process(
+            &plan,
+            "demo",
+            demo_initial_vars("Allianz AM", "FUND_MANDATE"),
+        )
         .await
         .unwrap();
 
@@ -119,7 +123,11 @@ async fn run_full_path_demo(client_type_input: &str, cbu_type_output: &str) {
 
     let cbu_id = Uuid::now_v7();
     let id = walker
-        .start_process(&plan, "demo", demo_initial_vars("Test Client", client_type_input))
+        .start_process(
+            &plan,
+            "demo",
+            demo_initial_vars("Test Client", client_type_input),
+        )
         .await
         .unwrap();
 
@@ -127,12 +135,21 @@ async fn run_full_path_demo(client_type_input: &str, cbu_type_output: &str) {
     //   create-cbu result → @cbu = cbu_id, advance to type-decision
     //   type-decision result → @cbu-type = cbu_type_output, advance to type-gateway
     inject_running(
-        &store, id, "type-gateway",
+        &store,
+        id,
+        "type-gateway",
         HashMap::from([
-            ("@cbu".to_owned(), serde_json::Value::String(cbu_id.to_string())),
-            ("@cbu-type".to_owned(), serde_json::Value::String(cbu_type_output.to_owned())),
+            (
+                "@cbu".to_owned(),
+                serde_json::Value::String(cbu_id.to_string()),
+            ),
+            (
+                "@cbu-type".to_owned(),
+                serde_json::Value::String(cbu_type_output.to_owned()),
+            ),
         ]),
-    ).await;
+    )
+    .await;
 
     // `advance()` processes the ExclusiveGateway — evaluates @cbu-type,
     // moves current_node_id to the matching add-* task, then tries to

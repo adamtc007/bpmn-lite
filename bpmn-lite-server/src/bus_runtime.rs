@@ -93,7 +93,11 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
         "bpmn-lite bus server listening (result receiver)"
     );
 
-    Ok(BusRuntime { server, sender, client })
+    Ok(BusRuntime {
+        server,
+        sender,
+        client,
+    })
 }
 
 // ── StoreBackedAdvancer ──────────────────────────────────────────────
@@ -155,11 +159,7 @@ impl ProcessAdvancer for StoreBackedAdvancer {
                 if let Ok(Some(plan_json)) = self.store.load_plan(plan_hash).await {
                     if let Ok(plan) = serde_json::from_str::<WorkflowExecutionPlan>(&plan_json) {
                         if let Some(node) = plan.nodes.get(&row.node_id) {
-                            advance_node_and_bind(
-                                &mut instance,
-                                node,
-                                &input,
-                            );
+                            advance_node_and_bind(&mut instance, node, &input);
                         }
                     }
                 }
@@ -171,7 +171,9 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             ));
         } else {
             // Terminal failure.
-            instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
+            instance.state = ProcessState::Failed {
+                incident_id: Uuid::now_v7(),
+            };
         }
 
         self.store
@@ -202,9 +204,7 @@ fn advance_node_and_bind(
 ) {
     let (produces, next) = match node {
         ExecutionNode::ServiceTask(t) => (t.produces_placeholder.as_deref(), t.next.as_str()),
-        ExecutionNode::BusinessRuleTask(t) => {
-            (t.produces_placeholder.as_deref(), t.next.as_str())
-        }
+        ExecutionNode::BusinessRuleTask(t) => (t.produces_placeholder.as_deref(), t.next.as_str()),
         _ => return,
     };
 
@@ -220,8 +220,7 @@ fn advance_node_and_bind(
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         placeholders.insert(placeholder_name.to_owned(), value);
-        instance.placeholder_values =
-            serde_json::to_value(&placeholders).ok();
+        instance.placeholder_values = serde_json::to_value(&placeholders).ok();
     }
 }
 
@@ -240,16 +239,12 @@ fn extract_binding_value(input: &ProcessAdvanceInput) -> serde_json::Value {
     if let Some(b) = binding {
         if let Some(tv) = b.value.as_ref() {
             let val: Option<serde_json::Value> = match tv.value.as_ref() {
-                Some(ProtoValueKind::StringValue(s)) => {
-                    Some(serde_json::Value::String(s.clone()))
-                }
+                Some(ProtoValueKind::StringValue(s)) => Some(serde_json::Value::String(s.clone())),
                 Some(ProtoValueKind::UuidValue(u)) => {
                     if u.value.len() == 16 {
                         let mut arr = [0u8; 16];
                         arr.copy_from_slice(&u.value);
-                        Some(serde_json::Value::String(
-                            Uuid::from_bytes(arr).to_string(),
-                        ))
+                        Some(serde_json::Value::String(Uuid::from_bytes(arr).to_string()))
                     } else {
                         None
                     }

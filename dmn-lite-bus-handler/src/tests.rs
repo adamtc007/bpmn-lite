@@ -15,11 +15,10 @@ impl DecisionEvaluator for MockEvaluator {
         catalogue: &str,
         inputs: Vec<ResolvedBinding>,
     ) -> Result<DecisionOutcome, DecisionEvaluatorError> {
-        self.calls.lock().unwrap().push((
-            decision.to_owned(),
-            catalogue.to_owned(),
-            inputs.len(),
-        ));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((decision.to_owned(), catalogue.to_owned(), inputs.len()));
         Ok(DecisionOutcome {
             execution_id: Uuid::now_v7(),
             kind: ExecutionOutcomeKind::Committed,

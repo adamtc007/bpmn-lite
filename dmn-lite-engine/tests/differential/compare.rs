@@ -21,7 +21,7 @@ use dmn_lite_types::{EvalError, RuleId, ir::TypedValue};
 /// Description of a divergence between reference and VM results.
 #[derive(Debug)]
 #[allow(dead_code)] // fields are used by Debug formatting in failure messages
-pub struct DivergenceReport {
+pub(crate) struct DivergenceReport {
     pub kind: DivergenceKind,
     pub reference: String,
     pub vm: String,
@@ -30,7 +30,7 @@ pub struct DivergenceReport {
 /// Classification of the divergence.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub enum DivergenceKind {
+pub(crate) enum DivergenceKind {
     OutcomeDiffers,
     OutputDiffers,
     MatchedRuleSetDiffers,
@@ -45,7 +45,7 @@ pub enum DivergenceKind {
 /// Returns `Ok(())` on agreement, `Err(DivergenceReport)` with the first
 /// violation found.  Callers convert the report to a proptest `TestCaseError`
 /// for failure reporting with shrunken inputs.
-pub fn compare_results(
+pub(crate) fn compare_results(
     reference: &Result<EvaluationOutput, EvalError>,
     vm: &Result<EvaluationOutput, EvalError>,
 ) -> Result<(), DivergenceReport> {

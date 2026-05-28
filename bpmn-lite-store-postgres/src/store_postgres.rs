@@ -911,8 +911,8 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()> {
-        let plan_json_value: serde_json::Value = serde_json::from_str(plan_json)
-            .context("store_plan: invalid JSON")?;
+        let plan_json_value: serde_json::Value =
+            serde_json::from_str(plan_json).context("store_plan: invalid JSON")?;
         sqlx::query(
             r#"
             INSERT INTO workflow_plans (plan_hash, plan_body)
@@ -929,13 +929,12 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
-        let row: Option<serde_json::Value> = sqlx::query_scalar(
-            "SELECT plan_body FROM workflow_plans WHERE plan_hash = $1",
-        )
-        .bind(&plan_hash[..])
-        .fetch_optional(&self.pool)
-        .await
-        .context("load_plan: query failed")?;
+        let row: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT plan_body FROM workflow_plans WHERE plan_hash = $1")
+                .bind(&plan_hash[..])
+                .fetch_optional(&self.pool)
+                .await
+                .context("load_plan: query failed")?;
         Ok(row.map(|v| v.to_string()))
     }
 

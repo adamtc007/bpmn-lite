@@ -16,7 +16,7 @@ use dsl_bus_protocol::v1::{
     ExecutionOutcome, ExecutionOutcomeKind, InvocationRequest, InvocationResult, ReceiptStatus,
     ResolvedBinding, SubmissionStatus, Uuid as ProtoUuid,
 };
-use dsl_bus_storage::{lookup_inbox, BusEndpoint};
+use dsl_bus_storage::{BusEndpoint, lookup_inbox};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -83,9 +83,7 @@ async fn connect_invocation_client(
         .expect("connect to bus server")
 }
 
-async fn connect_result_client(
-    addr: SocketAddr,
-) -> ResultServiceClient<tonic::transport::Channel> {
+async fn connect_result_client(addr: SocketAddr) -> ResultServiceClient<tonic::transport::Channel> {
     let url = format!("http://{addr}");
     for _ in 0..20 {
         if let Ok(client) = ResultServiceClient::connect(url.clone()).await {
@@ -294,7 +292,11 @@ async fn duplicate_invocation_returns_cached_execution_id_without_redispatch() {
     assert_eq!(first.status, SubmissionStatus::Accepted as i32);
     assert_eq!(second.status, SubmissionStatus::Duplicate as i32);
     assert_eq!(first.execution_id, second.execution_id);
-    assert_eq!(inv_calls.load(Ordering::SeqCst), 1, "dispatcher must not run twice");
+    assert_eq!(
+        inv_calls.load(Ordering::SeqCst),
+        1,
+        "dispatcher must not run twice"
+    );
 
     handle.shutdown().await.unwrap();
 }
@@ -470,9 +472,17 @@ async fn duplicate_deliver_result_returns_duplicate_ignored() {
     };
 
     let _ = client.deliver_result(make_req()).await.unwrap();
-    let dup = client.deliver_result(make_req()).await.unwrap().into_inner();
+    let dup = client
+        .deliver_result(make_req())
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(dup.status, ReceiptStatus::DuplicateIgnored as i32);
-    assert_eq!(res_calls.load(Ordering::SeqCst), 1, "dispatcher must not re-run");
+    assert_eq!(
+        res_calls.load(Ordering::SeqCst),
+        1,
+        "dispatcher must not re-run"
+    );
 
     handle.shutdown().await.unwrap();
 }
@@ -497,9 +507,7 @@ use dsl_bus_protocol::v1::{
     ValidationOutcome,
 };
 
-async fn connect_entity_client(
-    addr: SocketAddr,
-) -> EntityServiceClient<tonic::transport::Channel> {
+async fn connect_entity_client(addr: SocketAddr) -> EntityServiceClient<tonic::transport::Channel> {
     let url = format!("http://{addr}");
     for _ in 0..20 {
         if let Ok(client) = EntityServiceClient::connect(url.clone()).await {
@@ -512,9 +520,7 @@ async fn connect_entity_client(
         .expect("connect to bus server")
 }
 
-async fn connect_sem_os_client(
-    addr: SocketAddr,
-) -> SemOsServiceClient<tonic::transport::Channel> {
+async fn connect_sem_os_client(addr: SocketAddr) -> SemOsServiceClient<tonic::transport::Channel> {
     let url = format!("http://{addr}");
     for _ in 0..20 {
         if let Ok(client) = SemOsServiceClient::connect(url.clone()).await {
@@ -567,8 +573,10 @@ async fn validate_stub_returns_not_implemented() {
     assert_eq!(response.outcome, ValidationOutcome::NotImplemented as i32);
     assert_eq!(response.issues.len(), 1);
     assert_eq!(response.issues[0].issue_kind, "not_implemented");
-    assert!(response.validation_id.is_some(),
-        "validation_id is a transient trace UUID even for stubs");
+    assert!(
+        response.validation_id.is_some(),
+        "validation_id is a transient trace UUID even for stubs"
+    );
 
     handle.shutdown().await.unwrap();
 }
@@ -588,11 +596,9 @@ async fn entity_resolve_stub_returns_not_implemented() {
             authority: None,
             queries: vec![EntityQuery {
                 entity_type: "CBU".into(),
-                lookup_by: Some(
-                    dsl_bus_protocol::v1::entity_query::LookupBy::NaturalKey(
-                        "Allianz".into(),
-                    ),
-                ),
+                lookup_by: Some(dsl_bus_protocol::v1::entity_query::LookupBy::NaturalKey(
+                    "Allianz".into(),
+                )),
                 include_state: true,
                 include_audit_pointer: false,
             }],

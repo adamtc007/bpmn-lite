@@ -59,7 +59,9 @@ fn output_enum_values_are_extracted_from_rule_assignments() {
     let yaml = export_to_yaml(tmp.path(), &allow, &cfg).unwrap();
     let manifest = dsl_manifest::Manifest::load_from_yaml(&yaml).unwrap();
 
-    let d = manifest.lookup_decision("cbu_type_routing").expect("present");
+    let d = manifest
+        .lookup_decision("cbu_type_routing")
+        .expect("present");
     assert_eq!(d.output.type_name, "CbuType");
     // Rule outputs: fund, corporate, trust, corporate (fallback).
     // Distinct, first-seen order.
@@ -117,7 +119,8 @@ fn verbs_in_allowlist_are_rejected_for_dmn_lite() {
     let cfg = ExporterConfig::new("dmn-lite", "v1.0.0");
     let err = export_to_yaml(tmp.path(), &allow, &cfg).unwrap_err();
     assert!(
-        err.to_string().contains("dmn-lite owns decisions, not verbs"),
+        err.to_string()
+            .contains("dmn-lite owns decisions, not verbs"),
         "got: {err}"
     );
 }
@@ -132,8 +135,5 @@ fn empty_allowlist_is_rejected() {
     };
     let cfg = ExporterConfig::new("dmn-lite", "v1.0.0");
     let err = export_to_yaml(tmp.path(), &allow, &cfg).unwrap_err();
-    assert!(
-        err.to_string().contains("nothing to export"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("nothing to export"), "got: {err}");
 }

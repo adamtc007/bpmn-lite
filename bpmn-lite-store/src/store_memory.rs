@@ -413,7 +413,9 @@ impl ProcessStore for MemoryStore {
 
     async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()> {
         let mut w = self.inner.write().await;
-        w.plans.entry(plan_hash).or_insert_with(|| plan_json.to_owned());
+        w.plans
+            .entry(plan_hash)
+            .or_insert_with(|| plan_json.to_owned());
         Ok(())
     }
 

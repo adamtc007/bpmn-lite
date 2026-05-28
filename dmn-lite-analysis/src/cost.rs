@@ -14,7 +14,7 @@ use dmn_lite_types::{
 };
 
 /// Compute the cost bound for a verified decision's typed IR.
-pub fn compute(decision: &TypedDecision) -> CostBound {
+pub(crate) fn compute(decision: &TypedDecision) -> CostBound {
     let mut total: usize = 0;
     for rule in &decision.rules {
         match &rule.when {

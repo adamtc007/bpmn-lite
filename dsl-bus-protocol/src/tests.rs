@@ -9,9 +9,9 @@ use prost::Message;
 use uuid::Uuid as ExtUuid;
 
 use crate::v1::{
-    typed_value, AuthorityContext, ExecutionOutcome, ExecutionOutcomeKind, InvocationRequest,
-    InvocationResult, ReceiptStatus, ResolvedBinding, ResultAck, SubmissionAck, SubmissionStatus,
-    TypedValue, Uuid,
+    AuthorityContext, ExecutionOutcome, ExecutionOutcomeKind, InvocationRequest, InvocationResult,
+    ReceiptStatus, ResolvedBinding, ResultAck, SubmissionAck, SubmissionStatus, TypedValue, Uuid,
+    typed_value,
 };
 
 fn uuid_v7_bytes(seed: u8) -> Uuid {

@@ -83,8 +83,8 @@ pub fn verify_instance_integrity(instance: &ProcessInstance) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ProcessState;
     use crate::session_stack::SessionStackState;
+    use crate::types::ProcessState;
     use std::collections::BTreeMap;
     use uuid::Uuid;
 

@@ -11,7 +11,7 @@ use dmn_lite_parser::parse;
 use dmn_lite_types::compiled::VerifiedDecision;
 
 /// A compiled and verified fixture ready for differential evaluation.
-pub struct Fixture {
+pub(crate) struct Fixture {
     pub verified: VerifiedDecision,
     pub catalogue: Catalogue,
     /// Original source text (forwarded to both evaluators for trace descriptions).
@@ -45,14 +45,14 @@ fn make_fixture(source: &'static str) -> Fixture {
     }
 }
 
-pub fn booking() -> &'static Fixture {
+pub(crate) fn booking() -> &'static Fixture {
     BOOKING.get_or_init(|| make_fixture(BOOKING_SRC))
 }
 
-pub fn age_band() -> &'static Fixture {
+pub(crate) fn age_band() -> &'static Fixture {
     AGE_BAND.get_or_init(|| make_fixture(AGE_BAND_SRC))
 }
 
-pub fn kyc() -> &'static Fixture {
+pub(crate) fn kyc() -> &'static Fixture {
     KYC.get_or_init(|| make_fixture(KYC_SRC))
 }

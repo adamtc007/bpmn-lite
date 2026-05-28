@@ -49,7 +49,10 @@ async fn dispatch_records_input_via_concrete_arc() {
     let advancer = Arc::new(RecordingAdvancer::default());
     let handler = BpmnLiteBusHandler::from_arc(advancer.clone());
     let exec_id = Uuid::now_v7();
-    handler.dispatch(ctx(exec_id), outcome_with_bindings()).await.unwrap();
+    handler
+        .dispatch(ctx(exec_id), outcome_with_bindings())
+        .await
+        .unwrap();
     let calls = advancer.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].execution_id, exec_id);

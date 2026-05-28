@@ -15,8 +15,8 @@ use dsl_bus_client::{BusClient, SenderHandle};
 use dsl_bus_server::{BusServer, ServerHandle};
 use sqlx::PgPool;
 
-use crate::evaluator::CatalogueDecisionEvaluator;
 use crate::catalogue::DecisionCatalogue;
+use crate::evaluator::CatalogueDecisionEvaluator;
 
 /// Owned bus runtime — keep alive for the lifetime of the process; drop
 /// (or call [`shutdown`](Self::shutdown)) to stop both the server and
@@ -83,8 +83,8 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> Result<BusRuntime> {
     // registered stub returning `NOT_IMPLEMENTED` per A3 §6
     // discipline #4. (`InvocationService.Validate` is on the same
     // service as Submit and ships as a stub automatically.)
-    let handler = DmnLiteBusHandler::new(evaluator)
-        .with_catalogue_version(config.catalogue_version.clone());
+    let handler =
+        DmnLiteBusHandler::new(evaluator).with_catalogue_version(config.catalogue_version.clone());
     let server = BusServer::builder()
         .pool(config.pool.clone())
         .local_domain("dmn-lite")

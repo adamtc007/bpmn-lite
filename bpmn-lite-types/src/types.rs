@@ -296,12 +296,27 @@ impl Fiber {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ProcessState {
     Running,
-    Completed { at: Timestamp },
-    Cancelled { reason: String, at: Timestamp },
-    Terminated { at: Timestamp },
-    Failed { incident_id: Uuid },
-    WaitingOnSubmission { callout_id: uuid::Uuid, node_id: String },
-    WaitingOnInvocation { execution_id: uuid::Uuid, node_id: String },
+    Completed {
+        at: Timestamp,
+    },
+    Cancelled {
+        reason: String,
+        at: Timestamp,
+    },
+    Terminated {
+        at: Timestamp,
+    },
+    Failed {
+        incident_id: Uuid,
+    },
+    WaitingOnSubmission {
+        callout_id: uuid::Uuid,
+        node_id: String,
+    },
+    WaitingOnInvocation {
+        execution_id: uuid::Uuid,
+        node_id: String,
+    },
 }
 
 impl ProcessState {

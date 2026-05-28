@@ -19,7 +19,7 @@ use dmn_lite_types::{
 use crate::region::{RuleRegion, is_subset_of};
 
 /// Run the unreachable-rule analysis (FIRST policy only).
-pub fn analyse(decision: &TypedDecision, regions: &[RuleRegion]) -> Vec<AnalysisFinding> {
+pub(crate) fn analyse(decision: &TypedDecision, regions: &[RuleRegion]) -> Vec<AnalysisFinding> {
     if decision.hit_policy != HitPolicy::First {
         return Vec::new();
     }

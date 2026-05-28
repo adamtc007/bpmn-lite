@@ -58,9 +58,7 @@ mod outbox;
 mod types;
 
 pub use inbox::{insert_inbox, lookup_inbox, mark_inbox_processed};
-pub use outbox::{
-    insert_outbox, mark_outbox_retry, mark_outbox_submitted, select_pending_outbox,
-};
+pub use outbox::{insert_outbox, mark_outbox_retry, mark_outbox_submitted, select_pending_outbox};
 pub use types::{
     BusEndpoint, BusStorageError, InboxEntry, InboxStatus, InsertOutcome, OutboxEntry,
     OutboxStatus, Result,
@@ -105,11 +103,7 @@ async fn ensure_bus_schema(pool: &sqlx::PgPool) -> std::result::Result<(), sqlx:
             .fetch_one(pool)
             .await?;
 
-            if exists {
-                Ok(())
-            } else {
-                Err(err)
-            }
+            if exists { Ok(()) } else { Err(err) }
         }
     }
 }

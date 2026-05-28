@@ -31,7 +31,7 @@ use dmn_lite_types::{
 ///
 /// Strategies are built once per property invocation (not per case) and reused
 /// across all generated inputs, keeping proptest's shrinking intact.
-pub fn input_strategy(
+pub(crate) fn input_strategy(
     decision: &TypedDecision,
     catalogue: &Catalogue,
 ) -> impl Strategy<Value = TypedInputContext> {
@@ -155,7 +155,7 @@ fn string_strategy() -> BoxedStrategy<TypedValue> {
 /// and `v+1` so boundary-adjacent values are exercised.
 ///
 /// Returns a deduplicated, sorted list of boundary values.
-pub fn collect_integer_boundaries(decision: &TypedDecision) -> Vec<i64> {
+pub(crate) fn collect_integer_boundaries(decision: &TypedDecision) -> Vec<i64> {
     let mut out: Vec<i64> = vec![0, 1, -1];
     for rule in &decision.rules {
         match &rule.when {

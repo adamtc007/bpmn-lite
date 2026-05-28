@@ -94,7 +94,9 @@ pub struct StubPlaceholderRegistry {
 }
 
 impl StubPlaceholderRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn register_verb(&mut self, fqn: impl Into<String>, decl: BindingDecl) {
         self.verbs.insert(fqn.into(), decl);
@@ -107,25 +109,37 @@ impl StubPlaceholderRegistry {
     /// Seed with the Phase 5.5 demo model bindings.
     pub fn with_demo_bindings(mut self) -> Self {
         // cbu.create → produces @cbu
-        self.register_verb("cbu.create", BindingDecl {
-            produces: Some("@cbu".into()),
-            consumes: vec![],
-        });
+        self.register_verb(
+            "cbu.create",
+            BindingDecl {
+                produces: Some("@cbu".into()),
+                consumes: vec![],
+            },
+        );
         // cbu.add-product → consumes @cbu, no new placeholder
-        self.register_verb("cbu.add-product", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into()],
-        });
+        self.register_verb(
+            "cbu.add-product",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into()],
+            },
+        );
         // instrument-matrix.attach → consumes @cbu, no new placeholder
-        self.register_verb("instrument-matrix.attach", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into()],
-        });
+        self.register_verb(
+            "instrument-matrix.attach",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into()],
+            },
+        );
         // cbu_type_routing DMN: consumes @cbu, produces @cbu-type
-        self.register_decision("cbu_type_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-        });
+        self.register_decision(
+            "cbu_type_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+            },
+        );
         self
     }
 }
@@ -169,16 +183,24 @@ struct Linter<'a> {
 
 impl<'a> Linter<'a> {
     fn new(registry: &'a dyn PlaceholderRegistry) -> Self {
-        Self { registry, errors: Vec::new() }
+        Self {
+            registry,
+            errors: Vec::new(),
+        }
     }
 
     fn err(&mut self, node_id: &str, msg: impl Into<String>) {
-        self.errors.push(LintError { node_id: node_id.into(), message: msg.into() });
+        self.errors.push(LintError {
+            node_id: node_id.into(),
+            message: msg.into(),
+        });
     }
 
     fn run(mut self, source: &WorkflowSource) -> Result<WorkflowExecutionPlan, Vec<LintError>> {
         // ── Pass 1: collect all node ids ──────────────────────────────────────
-        let node_ids: HashMap<String, ()> = source.nodes.iter()
+        let node_ids: HashMap<String, ()> = source
+            .nodes
+            .iter()
             .map(|n| (n.id().to_owned(), ()))
             .collect();
 
@@ -210,7 +232,10 @@ impl<'a> Linter<'a> {
                         self.err(id, "multiple start events");
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
-                    ExecutionNode::StartEvent(StartExecNode { id: n.id.clone(), next: n.next.clone() })
+                    ExecutionNode::StartEvent(StartExecNode {
+                        id: n.id.clone(),
+                        next: n.next.clone(),
+                    })
                 }
 
                 NodeAst::ServiceTask(n) => {
@@ -275,7 +300,10 @@ impl<'a> Linter<'a> {
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
 
-                    let decl = self.registry.decision_bindings(&n.decision).unwrap_or_default();
+                    let decl = self
+                        .registry
+                        .decision_bindings(&n.decision)
+                        .unwrap_or_default();
                     if let Some(ref produced) = decl.produces {
                         placeholder_producers.insert(produced.clone(), n.id.clone());
                     }
@@ -309,15 +337,19 @@ impl<'a> Linter<'a> {
                     })
                 }
 
-                NodeAst::EndEvent(n) => {
-                    ExecutionNode::EndEvent(EndExecNode { id: n.id.clone(), status: n.status.clone() })
-                }
+                NodeAst::EndEvent(n) => ExecutionNode::EndEvent(EndExecNode {
+                    id: n.id.clone(),
+                    status: n.status.clone(),
+                }),
             };
             exec_nodes.insert(id.to_owned(), exec_node);
         }
 
         if start_node.is_empty() {
-            self.errors.push(LintError { node_id: "<workflow>".into(), message: "no start-event found".into() });
+            self.errors.push(LintError {
+                node_id: "<workflow>".into(),
+                message: "no start-event found".into(),
+            });
         }
 
         // ── Pass 4: validate gateway predicates reference known placeholders ───
@@ -326,7 +358,12 @@ impl<'a> Linter<'a> {
                 for flow in &gw.flows {
                     let ConditionAst::Eq { placeholder, .. } = &flow.condition;
                     if !placeholder_producers.contains_key(placeholder) {
-                        self.err(&gw.id, format!("gateway condition references unknown placeholder '{placeholder}'"));
+                        self.err(
+                            &gw.id,
+                            format!(
+                                "gateway condition references unknown placeholder '{placeholder}'"
+                            ),
+                        );
                     }
                 }
             }
@@ -344,24 +381,36 @@ impl<'a> Linter<'a> {
                 NodeAst::ServiceTask(_) => {
                     let exec = exec_nodes.get(id).unwrap();
                     if let ExecutionNode::ServiceTask(t) = exec {
-                        (t.produces_placeholder.as_deref(), t.consumes_placeholders.as_slice())
-                    } else { (None, &[][..]) }
+                        (
+                            t.produces_placeholder.as_deref(),
+                            t.consumes_placeholders.as_slice(),
+                        )
+                    } else {
+                        (None, &[][..])
+                    }
                 }
                 NodeAst::BusinessRuleTask(_) => {
                     let exec = exec_nodes.get(id).unwrap();
                     if let ExecutionNode::BusinessRuleTask(t) = exec {
-                        (t.produces_placeholder.as_deref(), t.consumes_placeholders.as_slice())
-                    } else { (None, &[][..]) }
+                        (
+                            t.produces_placeholder.as_deref(),
+                            t.consumes_placeholders.as_slice(),
+                        )
+                    } else {
+                        (None, &[][..])
+                    }
                 }
                 _ => (None, &[][..]),
             };
 
             if let Some(p) = produces {
-                slots.entry(p.to_owned()).or_insert_with(|| PlaceholderSlot {
-                    name: p.to_owned(),
-                    produced_by: id.to_owned(),
-                    consumed_by: Vec::new(),
-                });
+                slots
+                    .entry(p.to_owned())
+                    .or_insert_with(|| PlaceholderSlot {
+                        name: p.to_owned(),
+                        produced_by: id.to_owned(),
+                        consumed_by: Vec::new(),
+                    });
             }
             for c in consumes {
                 slots.entry(c.clone()).and_modify(|s| {
@@ -388,15 +437,20 @@ impl<'a> Linter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::parser::Parser;
     use crate::dsl::lexer::lex;
+    use crate::dsl::parser::Parser;
 
     fn parse_and_lint(src: &str) -> Result<WorkflowExecutionPlan, String> {
         let (tokens, _) = lex(src);
         let mut p = Parser::new(tokens);
         let ast = p.parse_workflow().expect("parse failed");
         let reg = StubPlaceholderRegistry::new().with_demo_bindings();
-        lint(&ast, &reg).map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+        lint(&ast, &reg).map_err(|errs| {
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
     }
 
     #[test]

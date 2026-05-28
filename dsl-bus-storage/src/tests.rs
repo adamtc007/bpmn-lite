@@ -15,9 +15,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    insert_inbox, insert_outbox, lookup_inbox, mark_inbox_processed, mark_outbox_retry,
-    mark_outbox_submitted, select_pending_outbox, BusEndpoint, InboxEntry, InboxStatus,
-    InsertOutcome, OutboxEntry, OutboxStatus,
+    BusEndpoint, InboxEntry, InboxStatus, InsertOutcome, OutboxEntry, OutboxStatus, insert_inbox,
+    insert_outbox, lookup_inbox, mark_inbox_processed, mark_outbox_retry, mark_outbox_submitted,
+    select_pending_outbox,
 };
 
 const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
@@ -146,7 +146,10 @@ async fn outbox_mark_submitted_records_execution_id_and_transitions_status() {
     let mut tx = pool.begin().await.unwrap();
     let rows = select_pending_outbox(&mut tx, 10).await.unwrap();
     tx.commit().await.unwrap();
-    assert!(rows.is_empty(), "submitted row must not appear on pending sweep");
+    assert!(
+        rows.is_empty(),
+        "submitted row must not appear on pending sweep"
+    );
 
     let row = fetch_row_by_id(&pool, entry.id).await;
     assert_eq!(row.status, OutboxStatus::Submitted);
@@ -169,7 +172,10 @@ async fn outbox_mark_retry_bumps_attempt_count_and_defers_next_attempt() {
     let mut tx = pool.begin().await.unwrap();
     let immediate = select_pending_outbox(&mut tx, 10).await.unwrap();
     tx.commit().await.unwrap();
-    assert!(immediate.is_empty(), "deferred row must be invisible to sweep");
+    assert!(
+        immediate.is_empty(),
+        "deferred row must be invisible to sweep"
+    );
 
     let row = fetch_row_by_id(&pool, entry.id).await;
     assert_eq!(row.status, OutboxStatus::Pending);
@@ -199,7 +205,11 @@ async fn outbox_concurrent_select_uses_skip_locked() {
     tx_b.commit().await.unwrap();
 
     assert_eq!(rows_a.len(), 4);
-    assert_eq!(rows_b.len(), 0, "second tx must observe FOR UPDATE SKIP LOCKED");
+    assert_eq!(
+        rows_b.len(),
+        0,
+        "second tx must observe FOR UPDATE SKIP LOCKED"
+    );
 }
 
 // ── Inbox ────────────────────────────────────────────────────────────

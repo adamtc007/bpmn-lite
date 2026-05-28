@@ -1,18 +1,18 @@
 //! Sender task — drains the outbox and dispatches payloads to peers.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient;
 use dsl_bus_protocol::v1::result_service_client::ResultServiceClient;
 use dsl_bus_protocol::v1::{InvocationRequest, InvocationResult};
 use dsl_bus_storage::{
-    mark_outbox_retry, mark_outbox_submitted, select_pending_outbox, BusEndpoint, OutboxEntry,
+    BusEndpoint, OutboxEntry, mark_outbox_retry, mark_outbox_submitted, select_pending_outbox,
 };
 use prost::Message;
 use sqlx::PgPool;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{Notify, watch};
 use tracing::{debug, warn};
 
 use crate::client::PeerRegistry;
@@ -229,9 +229,7 @@ fn submission_status_label(status: i32) -> &'static str {
         SubmissionStatus::Accepted => "accepted but no execution_id",
         SubmissionStatus::Duplicate => "duplicate (no execution_id)",
         SubmissionStatus::RejectedVerbUnknown => "rejected: verb unknown",
-        SubmissionStatus::RejectedVersionIncompatible => {
-            "rejected: catalogue version incompatible"
-        }
+        SubmissionStatus::RejectedVersionIncompatible => "rejected: catalogue version incompatible",
         SubmissionStatus::RejectedAuthority => "rejected: authority denied",
         SubmissionStatus::RejectedMalformed => "rejected: malformed request",
     }

@@ -221,9 +221,7 @@ impl BusServerBuilder {
             outbox_notifier: self
                 .outbox_notifier
                 .expect("BusServerBuilder.outbox_notifier is required"),
-            bind_addr: self
-                .bind_addr
-                .expect("BusServerBuilder.bind is required"),
+            bind_addr: self.bind_addr.expect("BusServerBuilder.bind is required"),
             enable_entity_service: self.enable_entity_service,
             enable_sem_os_service: self.enable_sem_os_service,
         }

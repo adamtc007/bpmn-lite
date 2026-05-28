@@ -8,12 +8,12 @@
 //! - `age_band`   — properties + edge cases for age_band
 //! - `kyc_status` — properties + edge cases for kyc_status
 
-pub mod age_band;
-pub mod booking;
-pub mod compare;
-pub mod fixtures;
-pub mod kyc_status;
-pub mod strategies;
+pub(crate) mod age_band;
+pub(crate) mod booking;
+pub(crate) mod compare;
+pub(crate) mod fixtures;
+pub(crate) mod kyc_status;
+pub(crate) mod strategies;
 
 use dmn_lite_engine::{reference, vm};
 use dmn_lite_types::{EvalError, values::TypedInputContext};
@@ -25,7 +25,7 @@ use crate::differential::{compare::compare_results, fixtures::Fixture};
 ///
 /// Returns `Ok(())` on agreement, `Err(TestCaseError::Fail)` with a
 /// human-readable divergence description on disagreement.
-pub fn assert_equivalent(
+pub(crate) fn assert_equivalent(
     fixture: &Fixture,
     input: &TypedInputContext,
 ) -> Result<(), TestCaseError> {

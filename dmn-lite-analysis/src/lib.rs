@@ -38,6 +38,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![deny(unreachable_pub)]
 
 mod cost;
 mod gap;

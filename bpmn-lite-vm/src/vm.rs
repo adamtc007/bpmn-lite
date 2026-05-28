@@ -356,7 +356,7 @@ impl Vm {
                         &message_name,
                         &correlation_key,
                         &msg_id,
-                        b"",  // empty payload — payload bindings deferred (parity with WaitMsg's reads)
+                        b"", // empty payload — payload bindings deferred (parity with WaitMsg's reads)
                         None,
                         PUBLISHED_MESSAGE_TTL_MS,
                         Some(instance.instance_id),

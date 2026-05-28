@@ -166,10 +166,8 @@ mod tests {
     // that fails to apply on a fresh database. T2B.8 only needs the
     // two new tables, so apply them directly here — the production
     // migration runner is the right place to fix 026, not this test.
-    const PENDING_MIGRATION: &str =
-        include_str!("../migrations/033_bpmn_pending_invocation.sql");
-    const PROCESS_MIGRATION: &str =
-        include_str!("../migrations/034_bpmn_process_instance.sql");
+    const PENDING_MIGRATION: &str = include_str!("../migrations/033_bpmn_pending_invocation.sql");
+    const PROCESS_MIGRATION: &str = include_str!("../migrations/034_bpmn_process_instance.sql");
 
     pub(crate) async fn setup_t2b8_pool() -> PgPool {
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
@@ -185,8 +183,14 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::raw_sql(PENDING_MIGRATION).execute(&pool).await.unwrap();
-        sqlx::raw_sql(PROCESS_MIGRATION).execute(&pool).await.unwrap();
+        sqlx::raw_sql(PENDING_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(PROCESS_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 

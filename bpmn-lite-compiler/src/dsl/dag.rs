@@ -32,24 +32,37 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
 
     // Check acyclicity via DFS
     if let Some(cycle) = find_cycle(&plan.start_node, &adj) {
-        errors.push(DagError { message: format!("cycle detected: {}", cycle.join(" → ")) });
+        errors.push(DagError {
+            message: format!("cycle detected: {}", cycle.join(" → ")),
+        });
     }
 
     // Check all nodes reachable from start
     let reachable = bfs_reachable(&plan.start_node, &adj);
     for id in plan.nodes.keys() {
         if !reachable.contains(id.as_str()) {
-            errors.push(DagError { message: format!("node '{id}' is unreachable from start") });
+            errors.push(DagError {
+                message: format!("node '{id}' is unreachable from start"),
+            });
         }
     }
 
     // Check at least one end-event reachable
-    let has_end = plan.nodes.values().any(|n| matches!(n, ExecutionNode::EndEvent(_)));
+    let has_end = plan
+        .nodes
+        .values()
+        .any(|n| matches!(n, ExecutionNode::EndEvent(_)));
     if !has_end {
-        errors.push(DagError { message: "no end-event in workflow".into() });
+        errors.push(DagError {
+            message: "no end-event in workflow".into(),
+        });
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn build_adjacency(plan: &WorkflowExecutionPlan) -> HashMap<&str, Vec<&str>> {
@@ -171,6 +184,9 @@ mod tests {
         let plan = crate::dsl::linter::lint(&ast, &reg).expect("lint failed");
         let result = validate_dag(&plan);
         assert!(result.is_err(), "expected dag to reject unreachable node");
-        assert!(result.unwrap_err().iter().any(|e| e.message.contains("unreachable")));
+        assert!(result
+            .unwrap_err()
+            .iter()
+            .any(|e| e.message.contains("unreachable")));
     }
 }

@@ -76,8 +76,14 @@ impl<'a> Lexer<'a> {
             }
             let ch = self.src[self.pos];
             match ch {
-                b'(' => { self.emit(TokenKind::LParen); self.pos += 1; }
-                b')' => { self.emit(TokenKind::RParen); self.pos += 1; }
+                b'(' => {
+                    self.emit(TokenKind::LParen);
+                    self.pos += 1;
+                }
+                b')' => {
+                    self.emit(TokenKind::RParen);
+                    self.pos += 1;
+                }
                 b'"' => self.lex_string(),
                 b':' => self.lex_keyword(),
                 b'@' => self.lex_placeholder(),
@@ -92,12 +98,18 @@ impl<'a> Lexer<'a> {
             }
         }
         let eof_offset = self.pos;
-        self.tokens.push(Token { kind: TokenKind::Eof, offset: eof_offset });
+        self.tokens.push(Token {
+            kind: TokenKind::Eof,
+            offset: eof_offset,
+        });
         (self.tokens, self.errors)
     }
 
     fn emit(&mut self, kind: TokenKind) {
-        self.tokens.push(Token { kind, offset: self.pos });
+        self.tokens.push(Token {
+            kind,
+            offset: self.pos,
+        });
     }
 
     fn skip_whitespace_and_comments(&mut self) {
@@ -105,7 +117,9 @@ impl<'a> Lexer<'a> {
             match self.src[self.pos] {
                 // v0.6 §10 uses comma as a visual separator inside :inputs lists.
                 // Treat it as whitespace — it carries no semantic meaning.
-                b' ' | b'\t' | b'\n' | b'\r' | b',' => { self.pos += 1; }
+                b' ' | b'\t' | b'\n' | b'\r' | b',' => {
+                    self.pos += 1;
+                }
                 b';' => {
                     // Line comment: skip to end of line
                     while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
@@ -123,11 +137,17 @@ impl<'a> Lexer<'a> {
         let mut s = String::new();
         loop {
             if self.pos >= self.src.len() {
-                self.errors.push(LexError { offset: start, message: "unterminated string".into() });
+                self.errors.push(LexError {
+                    offset: start,
+                    message: "unterminated string".into(),
+                });
                 break;
             }
             match self.src[self.pos] {
-                b'"' => { self.pos += 1; break; }
+                b'"' => {
+                    self.pos += 1;
+                    break;
+                }
                 b'\\' => {
                     self.pos += 1;
                     if self.pos < self.src.len() {
@@ -135,10 +155,16 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                 }
-                ch => { s.push(ch as char); self.pos += 1; }
+                ch => {
+                    s.push(ch as char);
+                    self.pos += 1;
+                }
             }
         }
-        self.tokens.push(Token { kind: TokenKind::StrLit(s), offset: start });
+        self.tokens.push(Token {
+            kind: TokenKind::StrLit(s),
+            offset: start,
+        });
     }
 
     fn lex_keyword(&mut self) {
@@ -146,9 +172,15 @@ impl<'a> Lexer<'a> {
         self.pos += 1; // skip ':'
         let name = self.take_symbol_chars();
         if name.is_empty() {
-            self.errors.push(LexError { offset: start, message: "bare ':' is not a keyword".into() });
+            self.errors.push(LexError {
+                offset: start,
+                message: "bare ':' is not a keyword".into(),
+            });
         } else {
-            self.tokens.push(Token { kind: TokenKind::Keyword(name), offset: start });
+            self.tokens.push(Token {
+                kind: TokenKind::Keyword(name),
+                offset: start,
+            });
         }
     }
 
@@ -157,16 +189,25 @@ impl<'a> Lexer<'a> {
         self.pos += 1; // skip '@'
         let name = self.take_symbol_chars();
         if name.is_empty() {
-            self.errors.push(LexError { offset: start, message: "bare '@' is not a placeholder".into() });
+            self.errors.push(LexError {
+                offset: start,
+                message: "bare '@' is not a placeholder".into(),
+            });
         } else {
-            self.tokens.push(Token { kind: TokenKind::Placeholder(name), offset: start });
+            self.tokens.push(Token {
+                kind: TokenKind::Placeholder(name),
+                offset: start,
+            });
         }
     }
 
     fn lex_symbol(&mut self) {
         let start = self.pos;
         let name = self.take_symbol_chars();
-        self.tokens.push(Token { kind: TokenKind::Symbol(name), offset: start });
+        self.tokens.push(Token {
+            kind: TokenKind::Symbol(name),
+            offset: start,
+        });
     }
 
     /// Consume characters that are valid inside a symbol or keyword name.
@@ -244,7 +285,8 @@ mod tests {
         assert!(matches!(&k[0], TokenKind::Keyword(s) if s == "verb"));
         assert!(
             matches!(&k[1], TokenKind::Symbol(s) if s == "ob-poc:cbu.create"),
-            "got: {:?}", &k[1]
+            "got: {:?}",
+            &k[1]
         );
     }
 

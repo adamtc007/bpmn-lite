@@ -152,10 +152,8 @@ mod tests {
     // because the pre-existing migration 026 has a broken
     // `GRANT CONNECT ON DATABASE current_database()` that can't be
     // applied to a fresh DB. Apply only the two T2B.8 migrations.
-    const PENDING_MIGRATION: &str =
-        include_str!("../migrations/033_bpmn_pending_invocation.sql");
-    const PROCESS_MIGRATION: &str =
-        include_str!("../migrations/034_bpmn_process_instance.sql");
+    const PENDING_MIGRATION: &str = include_str!("../migrations/033_bpmn_pending_invocation.sql");
+    const PROCESS_MIGRATION: &str = include_str!("../migrations/034_bpmn_process_instance.sql");
 
     async fn setup() -> PostgresBpmnProcessInstanceStore {
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
@@ -170,8 +168,14 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::raw_sql(PENDING_MIGRATION).execute(&pool).await.unwrap();
-        sqlx::raw_sql(PROCESS_MIGRATION).execute(&pool).await.unwrap();
+        sqlx::raw_sql(PENDING_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(PROCESS_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("TRUNCATE bpmn_process_instance")
             .execute(&pool)
             .await
@@ -233,12 +237,10 @@ mod tests {
         let store = setup().await;
         let id = Uuid::now_v7();
         store.insert(fresh(id)).await.unwrap();
-        let res = sqlx::query(
-            "UPDATE bpmn_process_instance SET status = 'Bogus' WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&store.pool)
-        .await;
+        let res = sqlx::query("UPDATE bpmn_process_instance SET status = 'Bogus' WHERE id = $1")
+            .bind(id)
+            .execute(&store.pool)
+            .await;
         assert!(res.is_err());
     }
 
@@ -272,13 +274,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
-            store
-                .list_by_status(ProcessStatus::Failed)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(store
+            .list_by_status(ProcessStatus::Failed)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

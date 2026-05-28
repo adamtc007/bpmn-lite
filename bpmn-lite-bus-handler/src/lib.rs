@@ -107,9 +107,8 @@ impl ResultDispatcher for BpmnLiteBusHandler {
         ctx: ResultContext,
         outcome: ExecutionOutcome,
     ) -> Result<(), BusServerError> {
-        let kind = ExecutionOutcomeKind::try_from(outcome.kind).unwrap_or(
-            ExecutionOutcomeKind::OutcomeUnspecified,
-        );
+        let kind = ExecutionOutcomeKind::try_from(outcome.kind)
+            .unwrap_or(ExecutionOutcomeKind::OutcomeUnspecified);
         let input = ProcessAdvanceInput {
             idempotency_key: ctx.idempotency_key,
             execution_id: ctx.execution_id,

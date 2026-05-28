@@ -144,7 +144,7 @@ impl EmitContext {
 ///
 /// This function is total: all type and semantic errors must have been caught
 /// by the Phase 1.2 compiler before calling `emit`.
-pub fn emit(typed: TypedDecision, source_text: &str) -> CompiledDecision {
+pub(crate) fn emit(typed: TypedDecision, source_text: &str) -> CompiledDecision {
     let mut ctx = EmitContext::new();
 
     let n_rules = typed.rules.len();

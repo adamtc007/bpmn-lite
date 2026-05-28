@@ -21,7 +21,7 @@ use crate::AnalysisConfig;
 use crate::region::{FieldRegion, RuleRegion, intersect};
 
 /// Run pairwise overlap analysis.
-pub fn analyse(
+pub(crate) fn analyse(
     decision: &TypedDecision,
     regions: &[RuleRegion],
     config: &AnalysisConfig,
@@ -65,7 +65,7 @@ pub fn analyse(
 
 /// Intersect two `RuleRegion`s field by field.  Returns the per-field summary
 /// when every field intersection is non-empty.
-pub fn intersect_regions(a: &RuleRegion, b: &RuleRegion) -> Option<OverlapSummary> {
+pub(crate) fn intersect_regions(a: &RuleRegion, b: &RuleRegion) -> Option<OverlapSummary> {
     let mut per_field: Vec<FieldOverlap> = Vec::with_capacity(a.fields.len());
     for (fa, fb) in a.fields.iter().zip(b.fields.iter()) {
         let merged = intersect(fa, fb);

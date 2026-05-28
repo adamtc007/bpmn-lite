@@ -9,36 +9,34 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
-use dmn_lite_compiler::{
-    compile_and_verify, load_catalogue_from_path, CompileAndVerifyError,
-};
+use anyhow::{Context, Result, anyhow};
+use dmn_lite_compiler::{CompileAndVerifyError, compile_and_verify, load_catalogue_from_path};
 use dmn_lite_types::compiled::VerifiedDecision;
 
 /// One compiled decision plus the source text it came from (the source
 /// is forwarded to the VM trace for human-readable predicate
 /// descriptions).
-pub(crate)struct CatalogueEntry {
-    pub(crate)source_text: String,
-    pub(crate)verified: VerifiedDecision,
+pub(crate) struct CatalogueEntry {
+    pub(crate) source_text: String,
+    pub(crate) verified: VerifiedDecision,
 }
 
 /// Final assembled catalogue: every decision id → its compiled+verified
 /// artifact. `len()` mirrors `allowlist`, not the raw directory listing.
-pub(crate)struct DecisionCatalogue {
+pub(crate) struct DecisionCatalogue {
     by_id: HashMap<String, CatalogueEntry>,
 }
 
 impl DecisionCatalogue {
-    pub(crate)fn get(&self, id: &str) -> Option<&CatalogueEntry> {
+    pub(crate) fn get(&self, id: &str) -> Option<&CatalogueEntry> {
         self.by_id.get(id)
     }
 
-    pub(crate)fn ids(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn ids(&self) -> impl Iterator<Item = &str> {
         self.by_id.keys().map(String::as_str)
     }
 
-    pub(crate)fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.by_id.len()
     }
 }
@@ -47,17 +45,20 @@ impl DecisionCatalogue {
 /// appears in `allowlist`, using `catalogue_toml_path` for Sem OS
 /// resolution. Decisions absent from the directory but listed in the
 /// allowlist surface as `Err` so misconfiguration is caught at startup.
-pub(crate)fn build(
+pub(crate) fn build(
     decisions_dir: &Path,
     catalogue_toml_path: &Path,
     allowlist: &[String],
 ) -> Result<DecisionCatalogue> {
-    let catalogue = load_catalogue_from_path(catalogue_toml_path)
-        .with_context(|| format!("load Sem OS catalogue from {}", catalogue_toml_path.display()))?;
+    let catalogue = load_catalogue_from_path(catalogue_toml_path).with_context(|| {
+        format!(
+            "load Sem OS catalogue from {}",
+            catalogue_toml_path.display()
+        )
+    })?;
 
     let mut by_id: HashMap<String, CatalogueEntry> = HashMap::new();
-    let allow: std::collections::HashSet<&str> =
-        allowlist.iter().map(String::as_str).collect();
+    let allow: std::collections::HashSet<&str> = allowlist.iter().map(String::as_str).collect();
 
     let read_dir = std::fs::read_dir(decisions_dir)
         .with_context(|| format!("read decisions dir {}", decisions_dir.display()))?;
@@ -68,8 +69,8 @@ pub(crate)fn build(
         if path.extension().and_then(|s| s.to_str()) != Some("dmn-lite") {
             continue;
         }
-        let source_text = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let source_text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let source = dmn_lite_parser::parse(&source_text)
             .map_err(|e| anyhow!("parse {}: {e:?}", path.display()))?;
 
@@ -88,14 +89,15 @@ pub(crate)fn build(
             continue;
         }
 
-        let verified = compile_and_verify(source, &catalogue, &source_text).map_err(|e| match e {
-            CompileAndVerifyError::Compile(errs) => {
-                anyhow!("compile {}: {} error(s)", path.display(), errs.errors.len())
-            }
-            CompileAndVerifyError::Verify(v) => {
-                anyhow!("verify {}: {v:?}", path.display())
-            }
-        })?;
+        let verified =
+            compile_and_verify(source, &catalogue, &source_text).map_err(|e| match e {
+                CompileAndVerifyError::Compile(errs) => {
+                    anyhow!("compile {}: {} error(s)", path.display(), errs.errors.len())
+                }
+                CompileAndVerifyError::Verify(v) => {
+                    anyhow!("verify {}: {v:?}", path.display())
+                }
+            })?;
 
         tracing::info!(
             decision = %decision_name,

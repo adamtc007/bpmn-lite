@@ -8,15 +8,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dmn_lite_bus_handler::{
-    DecisionEvaluator, DecisionEvaluatorError, DecisionOutcome,
-};
+use dmn_lite_bus_handler::{DecisionEvaluator, DecisionEvaluatorError, DecisionOutcome};
 use dmn_lite_engine::evaluate as engine_evaluate;
 use dmn_lite_types::ir::{FieldSchema, ResolvedType, TypedValue};
 use dmn_lite_types::values::TypedInputContextBuilder;
 use dsl_bus_protocol::v1::{
-    typed_value::Value as ProtoTypedValueKind, ExecutionOutcomeKind, ResolvedBinding,
-    TypedValue as ProtoTypedValue,
+    ExecutionOutcomeKind, ResolvedBinding, TypedValue as ProtoTypedValue,
+    typed_value::Value as ProtoTypedValueKind,
 };
 use uuid::Uuid;
 
@@ -42,9 +40,10 @@ impl DecisionEvaluator for CatalogueDecisionEvaluator {
         _catalogue_version: &str,
         inputs: Vec<ResolvedBinding>,
     ) -> Result<DecisionOutcome, DecisionEvaluatorError> {
-        let entry = self.catalogue.get(local_decision_id).ok_or_else(|| {
-            DecisionEvaluatorError::UnknownDecision(local_decision_id.to_owned())
-        })?;
+        let entry = self
+            .catalogue
+            .get(local_decision_id)
+            .ok_or_else(|| DecisionEvaluatorError::UnknownDecision(local_decision_id.to_owned()))?;
 
         evaluate_entry(entry, inputs)
     }
@@ -55,22 +54,21 @@ fn evaluate_entry(
     inputs: Vec<ResolvedBinding>,
 ) -> Result<DecisionOutcome, DecisionEvaluatorError> {
     let compiled = entry.verified.as_compiled();
-    let input_ctx =
-        build_input_context(&compiled.input_schema, &inputs).map_err(|msg| {
-            DecisionEvaluatorError::Malformed(format!("{}: {msg}", compiled.name))
-        })?;
+    let input_ctx = build_input_context(&compiled.input_schema, &inputs)
+        .map_err(|msg| DecisionEvaluatorError::Malformed(format!("{}: {msg}", compiled.name)))?;
 
     let output = engine_evaluate(&entry.verified, &input_ctx, &entry.source_text)
-        .map_err(|e| {
-            DecisionEvaluatorError::Internal(format!("{}: {e:?}", compiled.name))
-        })?;
+        .map_err(|e| DecisionEvaluatorError::Internal(format!("{}: {e:?}", compiled.name)))?;
 
     let bindings = output_to_bindings(&compiled.output_schema, &output.output)?;
 
     Ok(DecisionOutcome {
         execution_id: Uuid::now_v7(),
         kind: ExecutionOutcomeKind::Committed,
-        detail: format!("evaluated decision '{}' via dmn-lite stack VM", compiled.name),
+        detail: format!(
+            "evaluated decision '{}' via dmn-lite stack VM",
+            compiled.name
+        ),
         bindings,
     })
 }
@@ -91,9 +89,7 @@ fn build_input_context(
             .ok_or_else(|| format!("unknown input field '{}'", binding.name))?;
 
         let typed = match (&field.field_type, value_msg.value.as_ref()) {
-            (ResolvedType::Bool, Some(ProtoTypedValueKind::BoolValue(b))) => {
-                TypedValue::Bool(*b)
-            }
+            (ResolvedType::Bool, Some(ProtoTypedValueKind::BoolValue(b))) => TypedValue::Bool(*b),
             (ResolvedType::Integer, Some(ProtoTypedValueKind::IntValue(n))) => {
                 TypedValue::Integer(*n)
             }
@@ -107,7 +103,7 @@ fn build_input_context(
             // The dmn-lite-bridge crate has a richer resolver pathway
             // for in-process FFI; the bus contract is simpler — the
             // sender must already have resolved to a string symbol
-                // that the engine then matches via const-pool lookup.
+            // that the engine then matches via const-pool lookup.
             (ResolvedType::Enum { .. }, Some(ProtoTypedValueKind::StringValue(s))) => {
                 TypedValue::Str(s.clone())
             }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dsl_bus_protocol::v1::{InvocationRequest, InvocationResult};
-use dsl_bus_storage::{insert_outbox, BusEndpoint, InsertOutcome, OutboxEntry};
+use dsl_bus_storage::{BusEndpoint, InsertOutcome, OutboxEntry, insert_outbox};
 use prost::Message;
 use sqlx::PgPool;
 use thiserror::Error;
@@ -102,7 +102,12 @@ pub struct OutboxNotifier {
 impl OutboxNotifier {
     pub(crate) fn new() -> (Self, Arc<Notify>) {
         let inner = Arc::new(Notify::new());
-        (Self { inner: inner.clone() }, inner)
+        (
+            Self {
+                inner: inner.clone(),
+            },
+            inner,
+        )
     }
 
     /// Wake the sender task. Cheap, coalescing, never blocks.
@@ -196,8 +201,8 @@ impl BusClient {
         // time rather than from inside the sender loop.
         self.peers.endpoint(target_domain)?;
 
-        let key = from_proto_opt(&req.idempotency_key)?
-            .ok_or(BusClientError::MissingIdempotencyKey)?;
+        let key =
+            from_proto_opt(&req.idempotency_key)?.ok_or(BusClientError::MissingIdempotencyKey)?;
 
         if req.source_domain.is_empty() {
             req.source_domain = self.local_domain.as_str().to_owned();

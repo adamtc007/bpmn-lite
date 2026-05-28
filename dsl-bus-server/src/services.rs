@@ -19,7 +19,7 @@ use dsl_bus_protocol::v1::{
     ValidationIssue, ValidationOutcome, ValidationResult,
 };
 use dsl_bus_storage::{
-    insert_inbox, insert_outbox, lookup_inbox, BusEndpoint, InboxEntry, OutboxEntry,
+    BusEndpoint, InboxEntry, OutboxEntry, insert_inbox, insert_outbox, lookup_inbox,
 };
 use prost::Message;
 use sqlx::PgPool;
@@ -108,7 +108,10 @@ impl InvocationService for InvocationServiceImpl {
         let key = match from_proto_opt(&req.idempotency_key) {
             Ok(Some(k)) => k,
             Ok(None) => {
-                return reject(SubmissionStatus::RejectedMalformed, "idempotency_key missing");
+                return reject(
+                    SubmissionStatus::RejectedMalformed,
+                    "idempotency_key missing",
+                );
             }
             Err(err) => {
                 return reject(SubmissionStatus::RejectedMalformed, &err.to_string());
@@ -318,7 +321,10 @@ impl ResultService for ResultServiceImpl {
 // ── helpers ──────────────────────────────────────────────────────────
 
 pub(crate) fn strip_domain_prefix(verb_id: &str) -> &str {
-    verb_id.split_once(':').map(|(_, rest)| rest).unwrap_or(verb_id)
+    verb_id
+        .split_once(':')
+        .map(|(_, rest)| rest)
+        .unwrap_or(verb_id)
 }
 
 fn build_invocation_result(
@@ -356,7 +362,6 @@ fn reject_result(status: ReceiptStatus, detail: &str) -> Response<ResultAck> {
 fn internal_status<R, E: std::fmt::Display>(err: E) -> Result<R, Status> {
     Err(Status::internal(err.to_string()))
 }
-
 
 // ── A3 §2.2 — EntityService stub ─────────────────────────────────────
 //

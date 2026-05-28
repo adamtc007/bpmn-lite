@@ -79,11 +79,7 @@ pub struct BpmnProcessInstance {
 
 impl BpmnProcessInstance {
     /// Fresh instance at the start node, in `Created` status.
-    pub fn new(
-        id: Uuid,
-        workflow_id: impl Into<String>,
-        start_node: impl Into<String>,
-    ) -> Self {
+    pub fn new(id: Uuid, workflow_id: impl Into<String>, start_node: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {
             id,
@@ -183,7 +179,11 @@ impl BpmnProcessInstanceStore for MemoryBpmnProcessInstanceStore {
         status: ProcessStatus,
     ) -> anyhow::Result<Vec<BpmnProcessInstance>> {
         let guard = unpoison(self.by_id.lock());
-        Ok(guard.values().filter(|p| p.status == status).cloned().collect())
+        Ok(guard
+            .values()
+            .filter(|p| p.status == status)
+            .cloned()
+            .collect())
     }
 }
 
@@ -269,13 +269,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
-            store
-                .list_by_status(ProcessStatus::Failed)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(store
+            .list_by_status(ProcessStatus::Failed)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

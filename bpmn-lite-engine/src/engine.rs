@@ -4,11 +4,11 @@ use bpmn_lite_compiler::{lowering, parser, verifier};
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::ffi_bindings::{BindingSource, BindingTarget, Literal};
+use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::{apply_completion, compute_hash, json_path, TickOutcome, Vm};
 use ffi_dispatcher::FfiDispatcher;
 use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
-use bpmn_lite_types::session_stack::SessionStackState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 #[allow(unused_imports)]
@@ -460,9 +460,7 @@ impl BpmnLiteEngine {
         // The discriminator is plan_hash: Some = plan path, None = bytecode path.
         // WaitingOnSubmission / WaitingOnInvocation instances are skipped by the
         // ProcessState::Running guard inside PlanWalker::advance.
-        if let (Some(bus_client), Some(pending_store)) =
-            (&self.bus_client, &self.pending_store)
-        {
+        if let (Some(bus_client), Some(pending_store)) = (&self.bus_client, &self.pending_store) {
             // Peek at the instance state before full load.
             if let Some(inst) = self.store.load_instance(instance_id).await? {
                 if inst.plan_hash.is_some() {

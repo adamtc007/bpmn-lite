@@ -85,8 +85,8 @@ impl Manifest {
 
     /// Read a manifest from disk, parse, and validate.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ManifestError> {
-        let text = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| ManifestError::Io(e.to_string()))?;
+        let text =
+            std::fs::read_to_string(path.as_ref()).map_err(|e| ManifestError::Io(e.to_string()))?;
         Self::load_from_yaml(&text)
     }
 
@@ -102,7 +102,9 @@ impl Manifest {
 
     /// Look up a decision by id (unqualified).
     pub fn lookup_decision(&self, id: &str) -> Option<&DecisionEntry> {
-        self.decision_index.get(id).and_then(|i| self.decisions.get(*i))
+        self.decision_index
+            .get(id)
+            .and_then(|i| self.decisions.get(*i))
     }
 
     /// Look up a type definition by name.
@@ -237,8 +239,8 @@ pub struct OutputSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDependency {
-    pub kind: String,         // "NaturalKey" | "EntityUuid" | ...
-    pub from_input: String,   // which input contributes the key
+    pub kind: String,       // "NaturalKey" | "EntityUuid" | ...
+    pub from_input: String, // which input contributes the key
     #[serde(default)]
     pub entity_type: Option<String>,
 }

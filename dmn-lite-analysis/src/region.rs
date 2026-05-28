@@ -27,7 +27,7 @@ use crate::intervals::IntervalSet;
 
 /// Constraint on a single input field, derived from a rule's `:when` predicates.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FieldRegion {
+pub(crate) enum FieldRegion {
     /// Empty — never matches (intersection of contradictory predicates).
     Empty,
     /// Any value including null (the field is unconstrained by this rule).
@@ -64,7 +64,7 @@ pub enum FieldRegion {
 
 /// Per-rule region: one `FieldRegion` per input field, in source order.
 #[derive(Debug, Clone)]
-pub struct RuleRegion {
+pub(crate) struct RuleRegion {
     /// One entry per input field, indexed by `FieldId.0`.
     pub fields: Vec<FieldRegion>,
     /// True when this rule is a `:when (*)` catch-all.
@@ -74,7 +74,7 @@ pub struct RuleRegion {
 // ── Top-level: compute all regions ────────────────────────────────────────────
 
 /// Compute the rule region for every rule in source order.
-pub fn compute_all(decision: &TypedDecision, catalogue: &Catalogue) -> Vec<RuleRegion> {
+pub(crate) fn compute_all(decision: &TypedDecision, catalogue: &Catalogue) -> Vec<RuleRegion> {
     decision
         .rules
         .iter()
@@ -403,13 +403,13 @@ fn collect_touched_fields(pred: &TypedPredicate, out: &mut BTreeSet<usize>) {
 // ── Field region operations ───────────────────────────────────────────────────
 
 /// In-place intersection: `*dst = dst ∩ other`.
-pub fn intersect_field(dst: &mut FieldRegion, other: FieldRegion) {
+pub(crate) fn intersect_field(dst: &mut FieldRegion, other: FieldRegion) {
     let new = intersect(dst, &other);
     *dst = new;
 }
 
 /// Intersection of two field regions.
-pub fn intersect(a: &FieldRegion, b: &FieldRegion) -> FieldRegion {
+pub(crate) fn intersect(a: &FieldRegion, b: &FieldRegion) -> FieldRegion {
     use FieldRegion::*;
     match (a, b) {
         (Empty, _) | (_, Empty) => Empty,
@@ -506,7 +506,7 @@ fn union_field(a: &FieldRegion, b: &FieldRegion) -> FieldRegion {
 
 /// True when `a` is a subset of `b`.  Catch-all (Any on every field) is a
 /// superset of everything; Empty is a subset of everything.
-pub fn is_subset_of(a: &FieldRegion, b: &FieldRegion) -> bool {
+pub(crate) fn is_subset_of(a: &FieldRegion, b: &FieldRegion) -> bool {
     use FieldRegion::*;
     match (a, b) {
         (Empty, _) => true,
@@ -543,7 +543,7 @@ pub fn is_subset_of(a: &FieldRegion, b: &FieldRegion) -> bool {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// All `ValueId`s declared in a catalogue domain, looked up by `DomainId`.
-pub fn catalogue_values(domain_id: DomainId, catalogue: &Catalogue) -> Vec<ValueId> {
+pub(crate) fn catalogue_values(domain_id: DomainId, catalogue: &Catalogue) -> Vec<ValueId> {
     let domain = catalogue
         .domains()
         .find(|d| d.domain_id == domain_id)

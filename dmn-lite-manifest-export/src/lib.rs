@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use dmn_lite_types::ast::{DecisionAst, LiteralAst, PredicateAst, Source, TypeRefAst, WhenAst};
 use dsl_manifest::{DecisionEntry, DecisionOutput, InputSpec, Manifest, TypeEntry, VerbEntry};
 use serde::Deserialize;
@@ -82,7 +82,11 @@ fn naive_utc_from_unix(mut secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let mut days = secs.div_euclid(24);
 
     days += 719_468;
-    let era = if days >= 0 { days / 146_097 } else { (days - 146_096) / 146_097 };
+    let era = if days >= 0 {
+        days / 146_097
+    } else {
+        (days - 146_096) / 146_097
+    };
     let doe = days - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
@@ -101,16 +105,16 @@ fn naive_utc_from_unix(mut secs: i64) -> (i64, u32, u32, u32, u32, u32) {
 /// the decisions keyed by decision name.
 pub(crate) fn load_source_catalogue(dir: &Path) -> Result<BTreeMap<String, DecisionAst>> {
     let mut out = BTreeMap::new();
-    let read_dir = std::fs::read_dir(dir)
-        .with_context(|| format!("read decisions dir {}", dir.display()))?;
+    let read_dir =
+        std::fs::read_dir(dir).with_context(|| format!("read decisions dir {}", dir.display()))?;
     for entry in read_dir {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("dmn-lite") {
             continue;
         }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let source: Source = dmn_lite_parser::parse(&text)
             .map_err(|e| anyhow!("parse {}: {e:?}", path.display()))?;
         for decision in source.decisions {
@@ -246,9 +250,10 @@ fn type_entries_for_decision(decision: &DecisionAst) -> Vec<TypeEntry> {
 fn register_type(acc: &mut BTreeMap<String, TypeEntry>, domain: &str, type_ref: &TypeRefAst) {
     let kind = match type_ref {
         TypeRefAst::Enum(_) => "enum",
-        TypeRefAst::Bool(_) | TypeRefAst::Integer(_) | TypeRefAst::Decimal(_) | TypeRefAst::String(_) => {
-            "primitive"
-        }
+        TypeRefAst::Bool(_)
+        | TypeRefAst::Integer(_)
+        | TypeRefAst::Decimal(_)
+        | TypeRefAst::String(_) => "primitive",
     };
     acc.entry(domain.to_owned()).or_insert_with(|| TypeEntry {
         name: domain.to_owned(),
@@ -429,8 +434,7 @@ pub fn export_to_path(
     let cfg = ExporterConfig::new(domain, catalogue_version);
     let yaml = export_to_yaml(decisions_dir, &allow, &cfg)?;
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     std::fs::write(output_path, &yaml)
         .with_context(|| format!("write {}", output_path.display()))?;
