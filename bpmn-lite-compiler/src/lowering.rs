@@ -441,6 +441,27 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 }
             }
 
+            IRNode::SendTask {
+                message_name,
+                corr_key_source,
+                ..
+            } => {
+                let name_id = intern_flag(&mut flag_intern, message_name);
+                message_name_map.insert(name_id, message_name.clone());
+                let corr_reg = parse_corr_reg(corr_key_source);
+
+                instructions.push(Instr::PublishMessage {
+                    name: name_id,
+                    corr_reg,
+                });
+
+                let successors = get_successors(graph, node_idx);
+                if let Some(next) = successors.first() {
+                    let target = node_addr.get(next).copied().unwrap_or(0);
+                    instructions.push(Instr::Jump { target });
+                }
+            }
+
             IRNode::HumanWait {
                 name: msg_name,
                 corr_key_source,
@@ -741,6 +762,7 @@ fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> Addr {
         IRNode::BoundaryError { .. } => 0,    // structural only — no bytecode emitted
         IRNode::DataObject { .. } => 0,       // structural only — no bytecode emitted
         IRNode::FfiServiceTask { .. } => 2,   // ExecFfi + Jump
+        IRNode::SendTask { .. } => 2,         // PublishMessage + Jump
     }
 }
 

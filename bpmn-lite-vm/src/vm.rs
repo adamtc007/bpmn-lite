@@ -7,6 +7,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const MESSAGE_CLAIM_MS: u64 = 30_000;
+/// TTL for messages published by `Instr::PublishMessage` (Send Task).
+/// Matches `bpmn-lite-engine::DEFAULT_MESSAGE_TTL_MS`.
+const PUBLISHED_MESSAGE_TTL_MS: u64 = 300_000;
 
 /// Result of a single VM tick on a fiber.
 #[derive(Debug)]
@@ -327,6 +330,50 @@ impl Vm {
                 Ok(TickOutcome::Parked(WaitState::Timer {
                     deadline_ms: *deadline_ms,
                 }))
+            }
+
+            Instr::PublishMessage { name, corr_reg } => {
+                let corr_key = if (*corr_reg as usize) < fiber.regs.len() {
+                    fiber.regs[*corr_reg as usize].clone()
+                } else {
+                    Value::Bool(false)
+                };
+                let message_name = message_name_key(program, *name);
+                let correlation_key = value_key(&corr_key);
+
+                // Publish-side msg_id is deterministically derived from the
+                // (instance, fiber, pc) triple so re-execution of the same
+                // PublishMessage instruction is idempotent at the buffer.
+                let msg_id = format!(
+                    "publish:{}:{}:{}",
+                    instance.instance_id, fiber.fiber_id, fiber.pc
+                );
+
+                let buffer_result = self
+                    .store
+                    .buffer_message(
+                        &instance.tenant_id,
+                        &message_name,
+                        &correlation_key,
+                        &msg_id,
+                        b"",  // empty payload — payload bindings deferred (parity with WaitMsg's reads)
+                        None,
+                        PUBLISHED_MESSAGE_TTL_MS,
+                        Some(instance.instance_id),
+                    )
+                    .await?;
+
+                if matches!(buffer_result, BufferMessageResult::Inserted) {
+                    pending_events.push(RuntimeEvent::MessageBuffered {
+                        message_name: message_name.clone(),
+                        correlation_key: correlation_key.clone(),
+                        msg_id,
+                        expires_at: now_ms() + PUBLISHED_MESSAGE_TTL_MS as i64,
+                    });
+                }
+
+                fiber.pc += 1;
+                Ok(TickOutcome::Continue)
             }
 
             Instr::WaitMsg {

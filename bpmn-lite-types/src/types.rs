@@ -172,6 +172,17 @@ pub enum Instr {
         corr_reg: u8,
     },
 
+    /// Publish a message into the engine's message buffer (BPMN Send Task).
+    ///
+    /// Fire-and-continue. The interned message `name` is paired with the value
+    /// in register `corr_reg` (the correlation key) and inserted into the same
+    /// buffer that `WaitMsg`/`signal_inner` read from. No fiber parking, no
+    /// reply expected; the next instruction executes on the same tick.
+    PublishMessage {
+        name: u32,
+        corr_reg: u8,
+    },
+
     // Race semantics
     /// Race: wait for the first of N arms to resolve.
     WaitAny {

@@ -440,8 +440,24 @@ fn handle_open_tag(
                 *timer_kind = None;
             }
         }
+        "sendTask" if *in_process => {
+            let id = get_attr(e, "id")?;
+            let name = get_attr_opt(e, "name").unwrap_or_default();
+            if is_empty {
+                let idx = graph.add_node(IRNode::SendTask {
+                    id: id.clone(),
+                    name: name.clone(),
+                    message_name: name,
+                    corr_key_source: "0".to_string(),
+                });
+                node_map.insert(id, idx);
+            } else {
+                *current_element = Some(ElementContext::SendTask { id, name });
+                *extension_corr_key = None;
+            }
+        }
         // Unsupported elements inside process
-        "scriptTask" | "businessRuleTask" | "sendTask" | "receiveTask" | "manualTask"
+        "scriptTask" | "businessRuleTask" | "receiveTask" | "manualTask"
         | "subProcess" | "callActivity" | "eventBasedGateway" | "complexGateway"
             if *in_process =>
         {
@@ -544,6 +560,18 @@ fn handle_close_tag(
                     id: id.clone(),
                     name,
                     task_kind,
+                    corr_key_source,
+                });
+                node_map.insert(id, idx);
+            }
+        }
+        "sendTask" => {
+            if let Some(ElementContext::SendTask { id, name }) = current_element.take() {
+                let corr_key_source = extension_corr_key.take().unwrap_or_else(|| "0".to_string());
+                let idx = graph.add_node(IRNode::SendTask {
+                    id: id.clone(),
+                    name: name.clone(),
+                    message_name: name,
                     corr_key_source,
                 });
                 node_map.insert(id, idx);
@@ -686,6 +714,10 @@ enum ElementContext {
         name: String,
     },
     UserTask {
+        id: String,
+        name: String,
+    },
+    SendTask {
         id: String,
         name: String,
     },

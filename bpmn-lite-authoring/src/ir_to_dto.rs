@@ -221,6 +221,17 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
                 id
             ))
         }
+
+        // SendTask is currently only authored via BPMN XML; a YAML-authoring
+        // round-trip would need a `NodeDto::SendTask` variant + dto_to_ir arm.
+        // Calibration-probe scope (see ~/Downloads/send-task-calibration-prompt.md).
+        IRNode::SendTask { id, .. } => {
+            return Err(anyhow::anyhow!(
+                "ir_to_dto: unsupported node type at id '{}' (SendTask is currently \
+                 XML-authored only — YAML DTO support not implemented)",
+                id
+            ))
+        }
     };
     Ok(dto)
 }

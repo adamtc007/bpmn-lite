@@ -121,6 +121,22 @@ pub enum IRNode {
         inputs: Vec<FfiInputBinding>,
         outputs: Vec<FfiOutputBinding>,
     },
+
+    /// BPMN Send Task — publishes a message and continues.
+    ///
+    /// Fire-and-continue semantics: a `(message_name, correlation_key)` pair is
+    /// published into the engine's message buffer at execution time, then the
+    /// token advances on the outgoing flow. No waiting (that is Receive Task).
+    SendTask {
+        id: String,
+        name: String,
+        /// Message name to publish. Taken from the BPMN task `name` attribute
+        /// (mirroring `IntermediateCatchEvent` message-name convention).
+        message_name: String,
+        /// Register index whose value is used as the correlation key at publish
+        /// time (mirrors `IRNode::MessageWait::corr_key_source`).
+        corr_key_source: String,
+    },
 }
 
 // ── C-minimal expression language ────────────────────────────────────────────
@@ -183,6 +199,7 @@ impl IRNode {
             IRNode::GatewayInclusive { id, .. } => id,
             IRNode::DataObject { id, .. } => id,
             IRNode::FfiServiceTask { id, .. } => id,
+            IRNode::SendTask { id, .. } => id,
         }
     }
 }
