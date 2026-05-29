@@ -270,7 +270,73 @@ pub trait ProcessStore: Send + Sync {
         tenant_id: &str,
         detection_point: &str,
     ) -> Result<()>;
+
+    /// Read the current arrive count for a join barrier.
+    async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16>;
+
+    /// Commit a batch of tick operations atomically.
+    async fn commit_tick(
+        &self,
+        instance_id: Uuid,
+        tenant_id: &str,
+        ops: &[TickOperation],
+    ) -> Result<()>;
 }
+
+#[derive(Debug, Clone)]
+pub enum TickOperation {
+    SaveFiber { fiber: Fiber },
+    DeleteFiber { fiber_id: Uuid },
+    DeleteAllFibers,
+    JoinArrive { join_id: JoinId },
+    JoinReset { join_id: JoinId },
+    EnqueueJob { job: JobActivation },
+    CancelJobsForInstance,
+    AppendEvent { event: RuntimeEvent },
+    SaveIncident { incident: Incident },
+    SaveInstance { instance: ProcessInstance },
+    UpdateInstanceState { state: ProcessState },
+    ReleaseBufferedMessageClaim { message: ClaimedBufferedMessage },
+    ConsumeBufferedMessage { message: ClaimedBufferedMessage },
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionContext {
+    pub instance_id: Uuid,
+    pub tenant_id: String,
+    pub ops: Vec<TickOperation>,
+}
+
+impl TransactionContext {
+    pub fn new(instance_id: Uuid, tenant_id: String) -> Self {
+        Self {
+            instance_id,
+            tenant_id,
+            ops: Vec::new(),
+        }
+    }
+
+    pub fn add_op(&mut self, op: TickOperation) {
+        self.ops.push(op);
+    }
+
+    pub fn get_join_count(&self, join_id: JoinId, base_count: u16) -> u16 {
+        let mut count = base_count;
+        for op in &self.ops {
+            match op {
+                TickOperation::JoinArrive { join_id: jid } if *jid == join_id => {
+                    count += 1;
+                }
+                TickOperation::JoinReset { join_id: jid } if *jid == join_id => {
+                    count = 0;
+                }
+                _ => {}
+            }
+        }
+        count
+    }
+}
+
 
 tokio::task_local! {
     pub static TENANT_ID: String;

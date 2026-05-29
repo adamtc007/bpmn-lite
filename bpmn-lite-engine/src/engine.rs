@@ -1,7 +1,7 @@
 // authoring dep removed in Phase 2.7 — see lib.rs
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{lowering, parser, verifier};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TransactionContext, TickOperation};
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::ffi_bindings::{BindingSource, BindingTarget, Literal};
 use bpmn_lite_types::*;
@@ -498,22 +498,21 @@ impl BpmnLiteEngine {
 
         let fibers = self.store.load_fibers(instance_id).await?;
 
-        'fiber_loop: for fiber in fibers {
+        let mut tx_ctx = TransactionContext::new(instance_id, instance.tenant_id.clone());
+
+        'fiber_loop: for fiber in &fibers {
             if fiber.wait != WaitState::Running {
                 continue;
             }
 
-            let mut fiber = fiber;
+            let mut fiber = fiber.clone();
             let vm = Vm::new(self.store.clone());
 
             // Inner loop allows re-running the fiber after an in-process FFI call.
             loop {
                 let outcome = vm
-                    .run_fiber(&mut fiber, &mut instance, &program, 1000)
+                    .run_fiber(&mut fiber, &mut instance, &program, 1000, &mut tx_ctx)
                     .await?;
-
-                // Save updated instance (flags + counters)
-                self.store.save_instance(&instance).await?;
 
                 match outcome {
                     TickOutcome::ExecFfi {
@@ -521,6 +520,13 @@ impl BpmnLiteEngine {
                         pc,
                         invocation_id,
                     } => {
+                        // First commit any accumulated operations so the FFI sees them
+                        if !tx_ctx.ops.is_empty() {
+                            self.store
+                                .commit_tick(instance_id, &instance.tenant_id, &tx_ctx.ops)
+                                .await?;
+                            tx_ctx.ops.clear();
+                        }
                         let incident = self
                             .handle_ffi_dispatch(
                                 &mut instance,
@@ -543,22 +549,6 @@ impl BpmnLiteEngine {
                         break;
                     }
                     TickOutcome::Ended => {
-                        // Fiber ended — check if all fibers are done
-                        let remaining = self.store.load_fibers(instance_id).await?;
-                        if remaining.is_empty() {
-                            self.store
-                                .update_instance_state(
-                                    instance_id,
-                                    ProcessState::Completed { at: now_ms() },
-                                )
-                                .await?;
-                            self.store
-                                .append_event(
-                                    instance_id,
-                                    &RuntimeEvent::Completed { at: now_ms() },
-                                )
-                                .await?;
-                        }
                         break;
                     }
                     TickOutcome::Terminated => {
@@ -566,48 +556,39 @@ impl BpmnLiteEngine {
                         let terminating_fiber_id = fiber.fiber_id;
 
                         // 1. Emit WaitCancelled for all OTHER fibers with active waits
-                        let all_fibers = self.store.load_fibers(instance_id).await?;
-                        for other in &all_fibers {
+                        for other in &fibers {
                             if other.fiber_id == terminating_fiber_id {
                                 continue;
                             }
                             let wait_desc = describe_wait(&other.wait);
                             if !wait_desc.is_empty() {
-                                self.store
-                                    .append_event(
-                                        instance_id,
-                                        &RuntimeEvent::WaitCancelled {
-                                            fiber_id: other.fiber_id,
-                                            wait_desc,
-                                            reason: "terminate_end_event".to_string(),
-                                        },
-                                    )
-                                    .await?;
+                                tx_ctx.add_op(TickOperation::AppendEvent {
+                                    event: RuntimeEvent::WaitCancelled {
+                                        fiber_id: other.fiber_id,
+                                        wait_desc,
+                                        reason: "terminate_end_event".to_string(),
+                                    },
+                                });
                             }
                         }
 
                         // 2. Purge pending/inflight jobs
-                        self.store.cancel_jobs_for_instance(instance_id).await?;
+                        tx_ctx.add_op(TickOperation::CancelJobsForInstance);
 
                         // 3. Delete ALL fibers (including the terminating one)
-                        self.store.delete_all_fibers(instance_id).await?;
+                        tx_ctx.add_op(TickOperation::DeleteAllFibers);
 
                         // 4. Set state → Terminated
                         let at = now_ms();
-                        self.store
-                            .update_instance_state(instance_id, ProcessState::Terminated { at })
-                            .await?;
+                        instance.state = ProcessState::Terminated { at };
 
                         // 5. Emit Terminated event
-                        self.store
-                            .append_event(
-                                instance_id,
-                                &RuntimeEvent::Terminated {
-                                    at,
-                                    fiber_id: terminating_fiber_id,
-                                },
-                            )
-                            .await?;
+                        tx_ctx.add_op(TickOperation::AppendEvent {
+                            event: RuntimeEvent::Terminated {
+                                at,
+                                fiber_id: terminating_fiber_id,
+                            },
+                        });
 
                         // 6. BREAK — no more fibers to process
                         break 'fiber_loop;
@@ -619,6 +600,46 @@ impl BpmnLiteEngine {
                 }
             } // end inner FFI-retry loop
         } // end 'fiber_loop
+
+        // Calculate remaining fibers in-memory using tx_ctx operations
+        let mut final_fibers = fibers.clone();
+        for op in &tx_ctx.ops {
+            match op {
+                TickOperation::DeleteAllFibers => {
+                    final_fibers.clear();
+                }
+                TickOperation::DeleteFiber { fiber_id } => {
+                    final_fibers.retain(|f| f.fiber_id != *fiber_id);
+                }
+                TickOperation::SaveFiber { fiber } => {
+                    if let Some(pos) = final_fibers.iter().position(|f| f.fiber_id == fiber.fiber_id) {
+                        final_fibers[pos] = fiber.clone();
+                    } else {
+                        final_fibers.push(fiber.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If the instance completed (no fibers left), update its state
+        if final_fibers.is_empty() && !matches!(instance.state, ProcessState::Terminated { .. } | ProcessState::Failed { .. } | ProcessState::Completed { .. }) {
+            let at = now_ms();
+            instance.state = ProcessState::Completed { at };
+            tx_ctx.add_op(TickOperation::AppendEvent {
+                event: RuntimeEvent::Completed { at },
+            });
+        }
+
+        // Save updated instance (flags + counters + state)
+        tx_ctx.add_op(TickOperation::SaveInstance { instance: instance.clone() });
+
+        // Commit the tick transaction
+        if !tx_ctx.ops.is_empty() {
+            self.store
+                .commit_tick(instance_id, &instance.tenant_id, &tx_ctx.ops)
+                .await?;
+        }
 
         // --- Boundary timer promotion pass: Job → Race ---
         let fibers_for_promotion = self.store.load_fibers(instance_id).await?;

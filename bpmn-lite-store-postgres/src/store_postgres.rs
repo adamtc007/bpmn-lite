@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TickOperation};
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::integrity::compute_instance_integrity_hash;
 use bpmn_lite_types::*;
@@ -1886,6 +1886,289 @@ impl ProcessStore for PostgresProcessStore {
 
         Ok(())
     }
+
+    async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+        let row = sqlx::query(
+            "SELECT arrive_count FROM join_barriers WHERE instance_id = $1 AND join_id = $2",
+        )
+        .bind(instance_id)
+        .bind(join_id as i32)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            None => Ok(0),
+            Some(row) => {
+                use sqlx::Row;
+                let count: i16 = row.get("arrive_count");
+                Ok(count as u16)
+            }
+        }
+    }
+
+    async fn commit_tick(
+        &self,
+        instance_id: Uuid,
+        tenant_id: &str,
+        ops: &[TickOperation],
+    ) -> Result<()> {
+        let lease_owner = "unused";
+        let ops = ops.to_vec();
+        self.execute_tenant_scoped(tenant_id, &lease_owner, |tx| Box::pin(async move {
+            for op in &ops {
+                Self::apply_op(tx, instance_id, op).await?;
+            }
+            Ok(())
+        })).await
+    }
+}
+
+impl PostgresProcessStore {
+    async fn apply_op(
+        tx: &mut TenantTx<'_>,
+        instance_id: Uuid,
+        op: &TickOperation,
+    ) -> Result<()> {
+        match op {
+            TickOperation::SaveFiber { fiber } => {
+                let stack = serde_json::to_value(&fiber.stack)?;
+                let regs = serde_json::to_value(&fiber.regs)?;
+                let wait_state = serde_json::to_value(&fiber.wait)?;
+
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
+                        pc = EXCLUDED.pc,
+                        stack = EXCLUDED.stack,
+                        regs = EXCLUDED.regs,
+                        wait_state = EXCLUDED.wait_state,
+                        loop_epoch = EXCLUDED.loop_epoch
+                    "#,
+                )
+                .bind(instance_id)
+                .bind(fiber.fiber_id)
+                .bind(fiber.pc as i32)
+                .bind(&stack)
+                .bind(&regs)
+                .bind(&wait_state)
+                .bind(fiber.loop_epoch as i32)
+                .execute(&mut *tx.tx)
+                .await?;
+
+                if result.rows_affected() == 0 {
+                    return Err(anyhow!(
+                        "save_fiber affected 0 rows for instance {} fiber {}; \
+                         parent instance may be missing or RLS rejected",
+                        instance_id,
+                        fiber.fiber_id
+                    ));
+                }
+            }
+            TickOperation::DeleteFiber { fiber_id } => {
+                sqlx::query("DELETE FROM fibers WHERE instance_id = $1 AND fiber_id = $2")
+                    .bind(instance_id)
+                    .bind(fiber_id)
+                    .execute(&mut *tx.tx)
+                    .await?;
+            }
+            TickOperation::DeleteAllFibers => {
+                sqlx::query("DELETE FROM fibers WHERE instance_id = $1")
+                    .bind(instance_id)
+                    .execute(&mut *tx.tx)
+                    .await?;
+            }
+            TickOperation::JoinArrive { join_id } => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO join_barriers (instance_id, join_id, arrive_count)
+                    VALUES ($1, $2, 1)
+                    ON CONFLICT (instance_id, join_id) DO UPDATE
+                        SET arrive_count = join_barriers.arrive_count + 1
+                    "#,
+                )
+                .bind(instance_id)
+                .bind(*join_id as i32)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::JoinReset { join_id } => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO join_barriers (instance_id, join_id, arrive_count)
+                    VALUES ($1, $2, 0)
+                    ON CONFLICT (instance_id, join_id) DO UPDATE
+                        SET arrive_count = 0
+                    "#,
+                )
+                .bind(instance_id)
+                .bind(*join_id as i32)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::EnqueueJob { job } => {
+                Self::enqueue_job_inner(tx, job).await?;
+            }
+            TickOperation::CancelJobsForInstance => {
+                Self::cancel_jobs_for_instance_inner(tx, instance_id).await?;
+            }
+            TickOperation::AppendEvent { event } => {
+                let event_json = serde_json::to_value(event)?;
+                sqlx::query(
+                    r#"
+                    WITH seq AS (
+                        INSERT INTO event_sequences (instance_id, next_seq)
+                        VALUES ($1, 1)
+                        ON CONFLICT (instance_id) DO UPDATE
+                            SET next_seq = event_sequences.next_seq + 1
+                        RETURNING next_seq
+                    )
+                    INSERT INTO event_log (instance_id, seq, event)
+                    SELECT $1, seq.next_seq, $2
+                    FROM seq
+                    "#,
+                )
+                .bind(instance_id)
+                .bind(&event_json)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::SaveIncident { incident } => {
+                Self::save_incident_inner(tx, incident).await?;
+            }
+            TickOperation::SaveInstance { instance } => {
+                let flags = serde_json::to_value(&instance.flags)?;
+                let counters = serde_json::to_value(&instance.counters)?;
+                let join_expected = serde_json::to_value(&instance.join_expected)?;
+                let state = serde_json::to_value(&instance.state)?;
+                let session_stack = serde_json::to_value(&instance.session_stack)?;
+                let created_at = epoch_ms_to_datetime(instance.created_at);
+                let integrity_hash = compute_instance_integrity_hash(instance);
+
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO process_instances (
+                        instance_id, tenant_id, process_key, bytecode_version, domain_payload,
+                        domain_payload_hash, session_stack, flags, counters, join_expected, state,
+                        correlation_id, entry_id, runbook_id, created_at, integrity_hash,
+                        plan_hash, current_node_id, placeholder_values
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                              $17, $18, $19)
+                    ON CONFLICT (instance_id) DO UPDATE SET
+                        domain_payload = EXCLUDED.domain_payload,
+                        domain_payload_hash = EXCLUDED.domain_payload_hash,
+                        session_stack = EXCLUDED.session_stack,
+                        flags = EXCLUDED.flags,
+                        counters = EXCLUDED.counters,
+                        join_expected = EXCLUDED.join_expected,
+                        state = EXCLUDED.state,
+                        correlation_id = EXCLUDED.correlation_id,
+                        plan_hash = EXCLUDED.plan_hash,
+                        current_node_id = EXCLUDED.current_node_id,
+                        placeholder_values = EXCLUDED.placeholder_values
+                    "#,
+                )
+                .bind(instance.instance_id)
+                .bind(&instance.tenant_id)
+                .bind(&instance.process_key)
+                .bind(&instance.bytecode_version[..])
+                .bind(instance.domain_payload.as_ref())
+                .bind(&instance.domain_payload_hash[..])
+                .bind(&session_stack)
+                .bind(&flags)
+                .bind(&counters)
+                .bind(&join_expected)
+                .bind(&state)
+                .bind(&instance.correlation_id)
+                .bind(instance.entry_id)
+                .bind(instance.runbook_id)
+                .bind(created_at)
+                .bind(&integrity_hash[..])
+                .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
+                .bind(instance.current_node_id.as_deref())
+                .bind(instance.placeholder_values.as_ref())
+                .execute(&mut *tx.tx)
+                .await?;
+
+                tx.assert_rows_affected(&result, 1, "save_instance")?;
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (instance_id, payload_hash) DO NOTHING
+                    "#,
+                )
+                .bind(instance.instance_id)
+                .bind(&instance.domain_payload_hash[..])
+                .bind(instance.domain_payload.as_ref())
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::UpdateInstanceState { state } => {
+                let state_val = serde_json::to_value(state)?;
+                let result = sqlx::query(
+                    "UPDATE process_instances SET state = $1 WHERE instance_id = $2",
+                )
+                .bind(&state_val)
+                .bind(instance_id)
+                .execute(&mut *tx.tx)
+                .await?;
+
+                tx.assert_rows_affected(&result, 1, "update_instance_state")?;
+            }
+            TickOperation::ReleaseBufferedMessageClaim { message } => {
+                sqlx::query(
+                    r#"
+                    UPDATE message_buffer
+                    SET claim_token = NULL,
+                        claim_until = NULL
+                    WHERE tenant_id = $1
+                      AND message_name = $2
+                      AND correlation_key = $3
+                      AND msg_id = $4
+                      AND claim_token = $5
+                    "#,
+                )
+                .bind(&message.message.tenant_id)
+                .bind(&message.message.message_name)
+                .bind(&message.message.correlation_key)
+                .bind(&message.message.msg_id)
+                .bind(&message.claim_token)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::ConsumeBufferedMessage { message } => {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE message_buffer
+                    SET consumed_at = now(),
+                        status = 'consumed'
+                    WHERE tenant_id = $1
+                      AND message_name = $2
+                      AND correlation_key = $3
+                      AND msg_id = $4
+                      AND claim_token = $5
+                      AND claim_until = $6
+                      AND consumed_at IS NULL
+                    "#,
+                )
+                .bind(&message.message.tenant_id)
+                .bind(&message.message.message_name)
+                .bind(&message.message.correlation_key)
+                .bind(&message.message.msg_id)
+                .bind(&message.claim_token)
+                .bind(epoch_ms_to_datetime(message.claim_until))
+                .execute(&mut *tx.tx)
+                .await?;
+
+                if result.rows_affected() != 1 {
+                    return Err(anyhow::anyhow!("failed to consume message: claim expired or already consumed"));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PostgresProcessStore {
@@ -3591,5 +3874,107 @@ mod tests {
 
         let loaded = store.load_instance(iid).await.unwrap().unwrap();
         assert!(matches!(loaded.state, ProcessState::Completed { at: 1700000000000 }));
+    }
+
+    /// C2: Postgres single-transaction atomicity test (the decisive proof)
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_commit_tick_atomicity() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // 1. Seed a process instance in a known persisted state
+        // (one parent fiber, join count 0, known payload)
+        let parent_fiber_id = Uuid::now_v7();
+        let parent_fiber = Fiber::new(parent_fiber_id, 0);
+
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        inst.domain_payload = "initial_payload".to_string().into();
+        inst.domain_payload_hash = [1u8; 32];
+        inst.state = ProcessState::Running;
+        
+        store.save_instance(&inst).await.unwrap();
+        store.save_fiber(iid, &parent_fiber).await.unwrap();
+
+        // 2. Build a tick op-record with several ops:
+        // - Spawn child fiber 1
+        // - Spawn child fiber 2
+        // - Arrive at join barrier
+        // - Delete parent fiber
+        // - Consume a message designed to FAIL (because it is not claimed, or invalid token)
+        let child1 = Fiber::new(Uuid::now_v7(), 1);
+        let child2 = Fiber::new(Uuid::now_v7(), 1);
+        
+        let msg = ClaimedBufferedMessage {
+            message: BufferedMessage {
+                tenant_id: tenant_id.to_string(),
+                message_name: "nonexistent".to_string(),
+                correlation_key: "nonexistent".to_string(),
+                msg_id: "nonexistent".to_string(),
+                payload: vec![],
+                payload_hash: None,
+                process_instance_id: Some(iid),
+                received_at: 0,
+                expires_at: 300000,
+            },
+            claim_token: "wrong-token".to_string(),
+            claim_until: 9999999999,
+        };
+
+        let ops = vec![
+            TickOperation::SaveFiber { fiber: child1.clone() },
+            TickOperation::SaveFiber { fiber: child2.clone() },
+            TickOperation::JoinArrive { join_id: 100 },
+            TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
+            TickOperation::ConsumeBufferedMessage { message: msg }, // FAIL!
+        ];
+
+        // 3. Run the engine's atomic apply; assert it returns Err
+        let res = store.commit_tick(iid, tenant_id, &ops).await;
+        assert!(res.is_err(), "Expected transaction to fail and roll back");
+
+        // 4. Query the Postgres database directly and assert NONE of the ops persisted:
+        // - parent fiber intact
+        // - zero child fibers
+        // - join count still 0
+        // - no new event rows
+        // - instance state/payload unchanged
+        let fibers = store.load_fibers(iid).await.unwrap();
+        assert_eq!(fibers.len(), 1, "Rollback failed: expected exactly 1 fiber (parent)");
+        assert_eq!(fibers[0].fiber_id, parent_fiber_id, "Rollback failed: parent fiber not intact");
+
+        let join_count = store.join_get(iid, 100).await.unwrap();
+        assert_eq!(join_count, 0, "Rollback failed: join count updated");
+
+        let events = store.read_events(iid, 0).await.unwrap();
+        assert_eq!(events.len(), 0, "Rollback failed: events appended");
+
+        let loaded_inst = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded_inst.domain_payload.as_ref(), "initial_payload");
+
+        // 5. Re-run the tick without the failing op; assert it commits and all ops persist correctly
+        let successful_ops = vec![
+            TickOperation::SaveFiber { fiber: child1.clone() },
+            TickOperation::SaveFiber { fiber: child2.clone() },
+            TickOperation::JoinArrive { join_id: 100 },
+            TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
+            TickOperation::UpdateInstanceState { state: ProcessState::Completed { at: 123456 } },
+        ];
+        let res2 = store.commit_tick(iid, tenant_id, &successful_ops).await;
+        assert!(res2.is_ok(), "Expected transaction to succeed: {:?}", res2);
+
+        let fibers = store.load_fibers(iid).await.unwrap();
+        assert_eq!(fibers.len(), 2, "Expected exactly 2 child fibers");
+        assert!(fibers.iter().any(|f| f.fiber_id == child1.fiber_id));
+        assert!(fibers.iter().any(|f| f.fiber_id == child2.fiber_id));
+        assert!(!fibers.iter().any(|f| f.fiber_id == parent_fiber_id));
+
+        let join_count = store.join_get(iid, 100).await.unwrap();
+        assert_eq!(join_count, 1);
+
+        let loaded_inst = store.load_instance(iid).await.unwrap().unwrap();
+        assert!(matches!(loaded_inst.state, ProcessState::Completed { at: 123456 }));
     }
 }

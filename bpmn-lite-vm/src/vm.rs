@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TickOperation, TransactionContext};
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::*;
 use std::collections::BTreeMap;
@@ -52,11 +52,12 @@ impl Vm {
         instance: &mut ProcessInstance,
         program: &CompiledProgram,
     ) -> Result<TickOutcome> {
-        let mut pending_events = Vec::new();
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = self
-            .tick_fiber_inner(fiber, instance, program, &mut pending_events)
+            .tick_fiber_inner(fiber, instance, program, &mut tx_ctx)
             .await?;
-        self.flush_events(instance.instance_id, &mut pending_events)
+        self.store
+            .commit_tick(instance.instance_id, &instance.tenant_id, &tx_ctx.ops)
             .await?;
         Ok(outcome)
     }
@@ -66,7 +67,7 @@ impl Vm {
         fiber: &mut Fiber,
         instance: &mut ProcessInstance,
         program: &CompiledProgram,
-        pending_events: &mut Vec<RuntimeEvent>,
+        tx_ctx: &mut TransactionContext,
     ) -> Result<TickOutcome> {
         let pc = fiber.pc as usize;
         if pc >= program.program.len() {
@@ -145,9 +146,11 @@ impl Vm {
                     .pop()
                     .ok_or_else(|| anyhow!("StoreFlag: stack underflow"))?;
                 instance.flags.insert(*key, val.clone());
-                pending_events.push(RuntimeEvent::FlagSet {
-                    key: *key,
-                    value: val,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::FlagSet {
+                        key: *key,
+                        value: val,
+                    },
                 });
                 fiber.pc += 1;
                 Ok(TickOutcome::Continue)
@@ -215,19 +218,21 @@ impl Vm {
                 };
 
                 // Emit event
-                pending_events.push(RuntimeEvent::JobActivated {
-                    job_key: job_key.clone(),
-                    task_type: task_type_str,
-                    service_task_id,
-                    pc: fiber.pc,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::JobActivated {
+                        job_key: job_key.clone(),
+                        task_type: task_type_str,
+                        service_task_id,
+                        pc: fiber.pc,
+                    },
                 });
 
                 // Enqueue job
-                self.store.enqueue_job(&activation).await?;
+                tx_ctx.add_op(TickOperation::EnqueueJob { job: activation });
 
                 // Park fiber — do NOT advance pc
                 fiber.wait = WaitState::Job { job_key };
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
 
                 Ok(TickOutcome::Parked(fiber.wait.clone()))
             }
@@ -239,45 +244,53 @@ impl Vm {
                 for target in targets.iter().copied() {
                     let child_id = Uuid::now_v7();
                     let child = Fiber::new(child_id, target);
-                    self.store.save_fiber(instance.instance_id, &child).await?;
-                    pending_events.push(RuntimeEvent::FiberSpawned {
-                        fiber_id: child_id,
-                        pc: target,
-                        parent: Some(fiber.fiber_id),
+                    tx_ctx.add_op(TickOperation::SaveFiber { fiber: child });
+                    tx_ctx.add_op(TickOperation::AppendEvent {
+                        event: RuntimeEvent::FiberSpawned {
+                            fiber_id: child_id,
+                            pc: target,
+                            parent: Some(fiber.fiber_id),
+                        },
                     });
                     child_ids.push(child_id);
                     target_addrs.push(target);
                 }
 
-                pending_events.push(RuntimeEvent::Forked {
-                    fork_id: format!("pc_{}", fiber.pc),
-                    child_fibers: child_ids,
-                    targets: target_addrs,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::Forked {
+                        fork_id: format!("pc_{}", fiber.pc),
+                        child_fibers: child_ids,
+                        targets: target_addrs,
+                    },
                 });
 
                 // Parent fiber ends after fork
-                self.store
-                    .delete_fiber(instance.instance_id, fiber.fiber_id)
-                    .await?;
+                tx_ctx.add_op(TickOperation::DeleteFiber { fiber_id: fiber.fiber_id });
 
                 Ok(TickOutcome::Ended)
             }
 
             Instr::Join { id, expected, next } => {
-                let count = self.store.join_arrive(instance.instance_id, *id).await?;
+                let base_count = self.store.join_get(instance.instance_id, *id).await?;
+                let count = tx_ctx.get_join_count(*id, base_count) + 1;
 
-                pending_events.push(RuntimeEvent::JoinArrived {
-                    join_id: *id,
-                    fiber_id: fiber.fiber_id,
+                tx_ctx.add_op(TickOperation::JoinArrive { join_id: *id });
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::JoinArrived {
+                        join_id: *id,
+                        fiber_id: fiber.fiber_id,
+                    },
                 });
 
                 if count >= *expected {
                     // All branches arrived — release
-                    self.store.join_reset(instance.instance_id, *id).await?;
-                    pending_events.push(RuntimeEvent::JoinReleased {
-                        join_id: *id,
-                        next_pc: *next,
-                        released_fiber_id: fiber.fiber_id,
+                    tx_ctx.add_op(TickOperation::JoinReset { join_id: *id });
+                    tx_ctx.add_op(TickOperation::AppendEvent {
+                        event: RuntimeEvent::JoinReleased {
+                            join_id: *id,
+                            next_pc: *next,
+                            released_fiber_id: fiber.fiber_id,
+                        },
                     });
                     fiber.pc = *next;
                     fiber.wait = WaitState::Running;
@@ -285,11 +298,9 @@ impl Vm {
                 } else {
                     // Wait for more branches
                     fiber.wait = WaitState::Join { join_id: *id };
-                    self.store.save_fiber(instance.instance_id, fiber).await?;
+                    tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                     // Delete this fiber — it's consumed by the join
-                    self.store
-                        .delete_fiber(instance.instance_id, fiber.fiber_id)
-                        .await?;
+                    tx_ctx.add_op(TickOperation::DeleteFiber { fiber_id: fiber.fiber_id });
                     Ok(TickOutcome::Ended)
                 }
             }
@@ -303,12 +314,14 @@ impl Vm {
                 fiber.wait = WaitState::Timer {
                     deadline_ms: deadline,
                 };
-                pending_events.push(RuntimeEvent::WaitTimerSet {
-                    fiber_id: fiber.fiber_id,
-                    deadline_ms: deadline,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::WaitTimerSet {
+                        fiber_id: fiber.fiber_id,
+                        deadline_ms: deadline,
+                    },
                 });
                 fiber.pc += 1; // advance past wait so resume continues
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                 Ok(TickOutcome::Parked(WaitState::Timer {
                     deadline_ms: deadline,
                 }))
@@ -318,12 +331,14 @@ impl Vm {
                 fiber.wait = WaitState::Timer {
                     deadline_ms: *deadline_ms,
                 };
-                pending_events.push(RuntimeEvent::WaitTimerSet {
-                    fiber_id: fiber.fiber_id,
-                    deadline_ms: *deadline_ms,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::WaitTimerSet {
+                        fiber_id: fiber.fiber_id,
+                        deadline_ms: *deadline_ms,
+                    },
                 });
                 fiber.pc += 1;
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                 Ok(TickOutcome::Parked(WaitState::Timer {
                     deadline_ms: *deadline_ms,
                 }))
@@ -380,24 +395,17 @@ impl Vm {
                     ];
                     fiber.pc += 1;
                     fiber.wait = WaitState::Running;
-                    if self
-                        .store
-                        .atomic_consume_buffered_message(
-                            instance,
-                            fiber,
-                            &buffered,
-                            payload_update.as_ref(),
-                            &events,
-                        )
-                        .await?
-                    {
-                        if let Some(payload_update) = payload_update {
-                            instance.domain_payload = Arc::from(payload_update.payload.as_str());
-                            instance.domain_payload_hash = payload_update.payload_hash;
-                        }
-                        return Ok(TickOutcome::Continue);
+                    
+                    if let Some(payload_update) = &payload_update {
+                        instance.domain_payload = Arc::from(payload_update.payload.as_str());
+                        instance.domain_payload_hash = payload_update.payload_hash;
                     }
-                    let _ = self.store.release_buffered_message_claim(&buffered).await?;
+                    tx_ctx.add_op(TickOperation::ConsumeBufferedMessage { message: buffered.clone() });
+                    for event in events {
+                        tx_ctx.add_op(TickOperation::AppendEvent { event });
+                    }
+                    tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
+                    return Ok(TickOutcome::Continue);
                 }
 
                 fiber.wait = WaitState::Msg {
@@ -406,13 +414,15 @@ impl Vm {
                     corr_key: corr_key.clone(),
                 };
 
-                pending_events.push(RuntimeEvent::WaitMsgSubscribed {
-                    fiber_id: fiber.fiber_id,
-                    name: *name,
-                    corr_key,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::WaitMsgSubscribed {
+                        fiber_id: fiber.fiber_id,
+                        name: *name,
+                        corr_key,
+                    },
                 });
                 fiber.pc += 1;
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                 Ok(TickOutcome::Parked(fiber.wait.clone()))
             }
 
@@ -422,10 +432,12 @@ impl Vm {
                     arms.iter().map(|a| a.into()).collect();
 
                 // Emit RaceRegistered event
-                pending_events.push(RuntimeEvent::RaceRegistered {
-                    race_id: *race_id,
-                    fiber_id: fiber.fiber_id,
-                    arms: arm_descs,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::RaceRegistered {
+                        race_id: *race_id,
+                        fiber_id: fiber.fiber_id,
+                        arms: arm_descs,
+                    },
                 });
 
                 for (i, arm) in arms.iter().enumerate() {
@@ -491,26 +503,17 @@ impl Vm {
                             }
                             fiber.pc = resume_at;
                             fiber.wait = WaitState::Running;
-                            if self
-                                .store
-                                .atomic_consume_buffered_message(
-                                    instance,
-                                    fiber,
-                                    &buffered,
-                                    payload_update.as_ref(),
-                                    &events,
-                                )
-                                .await?
-                            {
-                                if let Some(payload_update) = payload_update {
-                                    instance.domain_payload =
-                                        Arc::from(payload_update.payload.as_str());
-                                    instance.domain_payload_hash = payload_update.payload_hash;
-                                }
-                                pending_events.clear();
-                                return Ok(TickOutcome::Continue);
+                            if let Some(payload_update) = &payload_update {
+                                instance.domain_payload =
+                                    Arc::from(payload_update.payload.as_str());
+                                instance.domain_payload_hash = payload_update.payload_hash;
                             }
-                            let _ = self.store.release_buffered_message_claim(&buffered).await?;
+                            tx_ctx.add_op(TickOperation::ConsumeBufferedMessage { message: buffered.clone() });
+                            for event in events {
+                                tx_ctx.add_op(TickOperation::AppendEvent { event });
+                            }
+                            tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
+                            return Ok(TickOutcome::Continue);
                         }
                     }
                 }
@@ -523,10 +526,12 @@ impl Vm {
                         } else {
                             Value::Bool(false)
                         };
-                        pending_events.push(RuntimeEvent::WaitMsgSubscribed {
-                            fiber_id: fiber.fiber_id,
-                            name: *name,
-                            corr_key,
+                        tx_ctx.add_op(TickOperation::AppendEvent {
+                            event: RuntimeEvent::WaitMsgSubscribed {
+                                fiber_id: fiber.fiber_id,
+                                name: *name,
+                                corr_key,
+                            },
                         });
                     }
                 }
@@ -550,7 +555,7 @@ impl Vm {
                     cycle_remaining: None,
                     cycle_fired_count: 0,
                 };
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
 
                 Ok(TickOutcome::Parked(fiber.wait.clone()))
             }
@@ -567,10 +572,12 @@ impl Vm {
                 *count += 1;
                 let new_value = *count;
                 fiber.loop_epoch += 1;
-                pending_events.push(RuntimeEvent::CounterIncremented {
-                    counter_id: *counter_id,
-                    new_value,
-                    loop_epoch: fiber.loop_epoch,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::CounterIncremented {
+                        counter_id: *counter_id,
+                        new_value,
+                        loop_epoch: fiber.loop_epoch,
+                    },
                 });
                 fiber.pc += 1;
                 Ok(TickOutcome::Continue)
@@ -640,14 +647,16 @@ impl Vm {
                             resolved_at: None,
                             resolution: None,
                         };
-                        self.store.save_incident(&incident).await?;
-                        pending_events.push(RuntimeEvent::IncidentCreated {
-                            incident_id,
-                            service_task_id: gateway_id,
-                            job_key: None,
+                        tx_ctx.add_op(TickOperation::SaveIncident { incident });
+                        tx_ctx.add_op(TickOperation::AppendEvent {
+                            event: RuntimeEvent::IncidentCreated {
+                                incident_id,
+                                service_task_id: gateway_id,
+                                job_key: None,
+                            },
                         });
                         fiber.wait = WaitState::Incident { incident_id };
-                        self.store.save_fiber(instance.instance_id, fiber).await?;
+                        tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                         instance.state = ProcessState::Failed { incident_id };
                         return Ok(TickOutcome::Parked(WaitState::Incident { incident_id }));
                     }
@@ -663,27 +672,29 @@ impl Vm {
                 for &target in &taken_targets {
                     let child_id = Uuid::now_v7();
                     let child = Fiber::new(child_id, target);
-                    self.store.save_fiber(instance.instance_id, &child).await?;
-                    pending_events.push(RuntimeEvent::FiberSpawned {
-                        fiber_id: child_id,
-                        pc: target,
-                        parent: Some(fiber.fiber_id),
+                    tx_ctx.add_op(TickOperation::SaveFiber { fiber: child });
+                    tx_ctx.add_op(TickOperation::AppendEvent {
+                        event: RuntimeEvent::FiberSpawned {
+                            fiber_id: child_id,
+                            pc: target,
+                            parent: Some(fiber.fiber_id),
+                        },
                     });
                     child_ids.push(child_id);
                 }
 
                 // Emit InclusiveForkTaken event
-                pending_events.push(RuntimeEvent::InclusiveForkTaken {
-                    gateway_id: format!("pc_{}", fiber.pc),
-                    branches_taken: taken_targets.clone(),
-                    join_id: *join_id,
-                    expected: taken_targets.len() as u16,
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::InclusiveForkTaken {
+                        gateway_id: format!("pc_{}", fiber.pc),
+                        branches_taken: taken_targets.clone(),
+                        join_id: *join_id,
+                        expected: taken_targets.len() as u16,
+                    },
                 });
 
                 // Delete parent fiber (same pattern as Fork)
-                self.store
-                    .delete_fiber(instance.instance_id, fiber.fiber_id)
-                    .await?;
+                tx_ctx.add_op(TickOperation::DeleteFiber { fiber_id: fiber.fiber_id });
                 Ok(TickOutcome::Ended)
             }
 
@@ -691,23 +702,29 @@ impl Vm {
                 let expected =
                     instance.join_expected.get(id).copied().ok_or_else(|| {
                         anyhow!("JoinDynamic: no expected count for join_id {}", id)
-                    })?;
+                     })?;
 
-                let count = self.store.join_arrive(instance.instance_id, *id).await?;
+                let base_count = self.store.join_get(instance.instance_id, *id).await?;
+                let count = tx_ctx.get_join_count(*id, base_count) + 1;
 
-                pending_events.push(RuntimeEvent::JoinArrived {
-                    join_id: *id,
-                    fiber_id: fiber.fiber_id,
+                tx_ctx.add_op(TickOperation::JoinArrive { join_id: *id });
+                tx_ctx.add_op(TickOperation::AppendEvent {
+                    event: RuntimeEvent::JoinArrived {
+                        join_id: *id,
+                        fiber_id: fiber.fiber_id,
+                    },
                 });
 
                 if count >= expected {
                     // All branches arrived — release
-                    self.store.join_reset(instance.instance_id, *id).await?;
+                    tx_ctx.add_op(TickOperation::JoinReset { join_id: *id });
                     instance.join_expected.remove(id); // clean up dynamic expected
-                    pending_events.push(RuntimeEvent::JoinReleased {
-                        join_id: *id,
-                        next_pc: *next,
-                        released_fiber_id: fiber.fiber_id,
+                    tx_ctx.add_op(TickOperation::AppendEvent {
+                        event: RuntimeEvent::JoinReleased {
+                            join_id: *id,
+                            next_pc: *next,
+                            released_fiber_id: fiber.fiber_id,
+                        },
                     });
                     // Advance pc AFTER event is recorded (PITR determinism)
                     fiber.pc = *next;
@@ -715,17 +732,13 @@ impl Vm {
                     Ok(TickOutcome::Continue)
                 } else {
                     // Wait for more — consume this fiber (do NOT save before delete)
-                    self.store
-                        .delete_fiber(instance.instance_id, fiber.fiber_id)
-                        .await?;
+                    tx_ctx.add_op(TickOperation::DeleteFiber { fiber_id: fiber.fiber_id });
                     Ok(TickOutcome::Ended)
                 }
             }
 
             Instr::End => {
-                self.store
-                    .delete_fiber(instance.instance_id, fiber.fiber_id)
-                    .await?;
+                tx_ctx.add_op(TickOperation::DeleteFiber { fiber_id: fiber.fiber_id });
                 Ok(TickOutcome::Ended)
             }
 
@@ -751,9 +764,9 @@ impl Vm {
                     resolved_at: None,
                     resolution: None,
                 };
-                self.store.save_incident(&incident).await?;
+                tx_ctx.add_op(TickOperation::SaveIncident { incident });
                 fiber.wait = WaitState::Incident { incident_id };
-                self.store.save_fiber(instance.instance_id, fiber).await?;
+                tx_ctx.add_op(TickOperation::SaveFiber { fiber: fiber.clone() });
                 Ok(TickOutcome::Failed { code: *code })
             }
 
@@ -781,39 +794,20 @@ impl Vm {
         instance: &mut ProcessInstance,
         program: &CompiledProgram,
         max_steps: usize,
+        tx_ctx: &mut TransactionContext,
     ) -> Result<TickOutcome> {
-        let mut pending_events = Vec::new();
         for _ in 0..max_steps {
             match self
-                .tick_fiber_inner(fiber, instance, program, &mut pending_events)
+                .tick_fiber_inner(fiber, instance, program, tx_ctx)
                 .await?
             {
                 TickOutcome::Continue => continue,
                 other => {
-                    self.flush_events(instance.instance_id, &mut pending_events)
-                        .await?;
                     return Ok(other);
                 }
             }
         }
-        self.flush_events(instance.instance_id, &mut pending_events)
-            .await?;
         Ok(TickOutcome::Continue)
-    }
-
-    async fn flush_events(
-        &self,
-        instance_id: Uuid,
-        pending_events: &mut Vec<RuntimeEvent>,
-    ) -> Result<()> {
-        if pending_events.is_empty() {
-            return Ok(());
-        }
-        self.store
-            .batch_append_events(instance_id, pending_events)
-            .await?;
-        pending_events.clear();
-        Ok(())
     }
 
     /// Resume a fiber parked on a job. Fiber-resume ONLY — no mutation of
@@ -1264,8 +1258,9 @@ mod tests {
         // Resume and run to completion
         let fibers = store.load_fibers(instance.instance_id).await.unwrap();
         let mut fiber = fibers[0].clone();
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = vm
-            .run_fiber(&mut fiber, &mut instance, &program, 100)
+            .run_fiber(&mut fiber, &mut instance, &program, 100, &mut tx_ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, TickOutcome::Ended));
@@ -1287,7 +1282,12 @@ mod tests {
         store.save_instance(&instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
-        vm.run_fiber(&mut fiber, &mut instance, &program, 100)
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
+        vm.run_fiber(&mut fiber, &mut instance, &program, 100, &mut tx_ctx)
+            .await
+            .unwrap();
+        store
+            .commit_tick(instance.instance_id, &instance.tenant_id, &tx_ctx.ops)
             .await
             .unwrap();
 
@@ -1733,8 +1733,9 @@ mod tests {
         assert_eq!(fiber.wait, WaitState::Running);
 
         // Run to completion
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = vm
-            .run_fiber(&mut fiber, &mut instance, &program, 10)
+            .run_fiber(&mut fiber, &mut instance, &program, 10, &mut tx_ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, TickOutcome::Ended));
@@ -2161,8 +2162,9 @@ mod tests {
         assert_eq!(fiber.pc, 1);
         assert_eq!(fiber.wait, WaitState::Running);
 
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = vm
-            .run_fiber(&mut fiber, &mut instance, &program, 10)
+            .run_fiber(&mut fiber, &mut instance, &program, 10, &mut tx_ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, TickOutcome::Ended));
@@ -2272,8 +2274,9 @@ mod tests {
         // Ack the job using stored key
         store.ack_job(&actual_job_key).await.unwrap();
 
+        let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = vm
-            .run_fiber(&mut fiber, &mut instance, &program, 10)
+            .run_fiber(&mut fiber, &mut instance, &program, 10, &mut tx_ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, TickOutcome::Ended));

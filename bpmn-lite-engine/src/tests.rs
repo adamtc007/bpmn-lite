@@ -1,5 +1,5 @@
 use super::*;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TransactionContext};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::{compute_hash, TickOutcome, Vm};
@@ -2253,8 +2253,9 @@ async fn t_loop_3_counter_starts_at_zero() {
         .await
         .unwrap();
 
+    let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
     let outcome = vm
-        .run_fiber(&mut fiber, &mut instance, &program, 100)
+        .run_fiber(&mut fiber, &mut instance, &program, 100, &mut tx_ctx)
         .await
         .unwrap();
 
