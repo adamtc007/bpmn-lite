@@ -198,13 +198,41 @@ impl PostgresProcessStore {
         Ok(())
     }
 
+    async fn list_tenants(&self) -> Result<Vec<String>> {
+        use sqlx::Row;
+        let rows = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
+            .fetch_all(&self.pool)
+            .await;
+        match rows {
+            Ok(rows) => {
+                let tenants: Vec<String> = rows.iter().map(|r| r.get::<String, _>("tenant_id")).collect();
+                if tenants.is_empty() {
+                    Ok(vec!["default".to_string()])
+                } else {
+                    Ok(tenants)
+                }
+            }
+            Err(_) => Ok(vec!["default".to_string()]),
+        }
+    }
+
     pub async fn resolve_tenant_id(&self, instance_id: Uuid) -> Result<String> {
-        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_tenant_id($1)")
-            .bind(instance_id)
-            .fetch_one(&self.pool)
-            .await
-            .context("resolve_tenant_id: failed to call function")?;
-        row.0.ok_or_else(|| anyhow!("resolve_tenant_id: instance not found"))
+        let tenants = self.list_tenants().await?;
+        for tenant_id in tenants {
+            let mut tx = self.pool.begin().await?;
+            if let Err(_) = Self::set_tenant_context(&mut tx, &tenant_id).await {
+                continue;
+            }
+            let exists_res: Result<bool, sqlx::Error> = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM process_instances WHERE instance_id = $1)")
+                .bind(instance_id)
+                .fetch_one(&mut *tx)
+                .await;
+            let _ = tx.commit().await;
+            if let Ok(true) = exists_res {
+                return Ok(tenant_id);
+            }
+        }
+        Err(anyhow!("resolve_tenant_id: instance not found"))
     }
 }
 
@@ -234,6 +262,7 @@ impl ProcessStore for PostgresProcessStore {
         let tenant_id = instance.tenant_id.clone();
         let lease_owner = lease_owner.to_string();
         let instance = instance.clone();
+        self.ensure_tenant(&tenant_id).await?;
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             let flags = serde_json::to_value(&instance.flags)?;
             let counters = serde_json::to_value(&instance.counters)?;
@@ -436,14 +465,18 @@ impl ProcessStore for PostgresProcessStore {
     // ── Fibers ──
 
     async fn save_fiber(&self, instance_id: Uuid, fiber: &Fiber) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let stack = serde_json::to_value(&fiber.stack)?;
         let regs = serde_json::to_value(&fiber.regs)?;
         let wait_state = serde_json::to_value(&fiber.wait)?;
 
         let result = sqlx::query(
             r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                 pc = EXCLUDED.pc,
                 stack = EXCLUDED.stack,
@@ -459,7 +492,8 @@ impl ProcessStore for PostgresProcessStore {
         .bind(&regs)
         .bind(&wait_state)
         .bind(fiber.loop_epoch as i32)
-        .execute(&self.pool)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
         .await?;
 
         // A18 — rows_affected validation. INSERT ... ON CONFLICT DO UPDATE
@@ -474,17 +508,24 @@ impl ProcessStore for PostgresProcessStore {
             ));
         }
 
+        tx.commit().await?;
         Ok(())
     }
 
     async fn load_fiber(&self, instance_id: Uuid, fiber_id: Uuid) -> Result<Option<Fiber>> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let row = sqlx::query(
             "SELECT fiber_id, pc, stack, regs, wait_state, loop_epoch FROM fibers WHERE instance_id = $1 AND fiber_id = $2",
         )
         .bind(instance_id)
         .bind(fiber_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         match row {
             None => Ok(None),
@@ -509,12 +550,18 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn load_fibers(&self, instance_id: Uuid) -> Result<Vec<Fiber>> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let rows = sqlx::query(
             "SELECT fiber_id, pc, stack, regs, wait_state, loop_epoch FROM fibers WHERE instance_id = $1",
         )
         .bind(instance_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let mut fibers = Vec::with_capacity(rows.len());
         for row in rows {
@@ -538,29 +585,45 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn delete_fiber(&self, instance_id: Uuid, fiber_id: Uuid) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         sqlx::query("DELETE FROM fibers WHERE instance_id = $1 AND fiber_id = $2")
             .bind(instance_id)
             .bind(fiber_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     async fn delete_all_fibers(&self, instance_id: Uuid) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         sqlx::query("DELETE FROM fibers WHERE instance_id = $1")
             .bind(instance_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     // ── Join barriers ──
 
     async fn join_arrive(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let row = sqlx::query(
             r#"
-            INSERT INTO join_barriers (instance_id, join_id, arrive_count)
-            VALUES ($1, $2, 1)
+            INSERT INTO join_barriers (instance_id, join_id, arrive_count, tenant_id)
+            VALUES ($1, $2, 1, $3)
             ON CONFLICT (instance_id, join_id) DO UPDATE
                 SET arrive_count = join_barriers.arrive_count + 1
             RETURNING arrive_count
@@ -568,35 +631,50 @@ impl ProcessStore for PostgresProcessStore {
         )
         .bind(instance_id)
         .bind(join_id as i32)
-        .fetch_one(&self.pool)
+        .bind(&tenant_id)
+        .fetch_one(&mut *tx)
         .await?;
 
         use sqlx::Row;
         let count: i16 = row.get("arrive_count");
+        tx.commit().await?;
         Ok(count as u16)
     }
 
     async fn join_reset(&self, instance_id: Uuid, join_id: JoinId) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         sqlx::query(
             r#"
-            INSERT INTO join_barriers (instance_id, join_id, arrive_count)
-            VALUES ($1, $2, 0)
+            INSERT INTO join_barriers (instance_id, join_id, arrive_count, tenant_id)
+            VALUES ($1, $2, 0, $3)
             ON CONFLICT (instance_id, join_id) DO UPDATE
                 SET arrive_count = 0
             "#,
         )
         .bind(instance_id)
         .bind(join_id as i32)
-        .execute(&self.pool)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     async fn join_delete_all(&self, instance_id: Uuid) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         sqlx::query("DELETE FROM join_barriers WHERE instance_id = $1")
             .bind(instance_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -640,19 +718,24 @@ impl ProcessStore for PostgresProcessStore {
         instance_id: Uuid,
         msg_id: &str,
     ) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO message_dedupe (tenant_id, instance_id, msg_id)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (tenant_id, instance_id, msg_id) DO NOTHING
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(instance_id)
-        .bind(msg_id)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() == 1)
+        let tenant_id_str = tenant_id.to_string();
+        let tenant_id_for_query = tenant_id_str.clone();
+        let msg_id_str = msg_id.to_string();
+        self.with_tenant(&tenant_id_str, |tx| Box::pin(async move {
+            let result = sqlx::query(
+                r#"
+                INSERT INTO message_dedupe (tenant_id, instance_id, msg_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (tenant_id, instance_id, msg_id) DO NOTHING
+                "#,
+            )
+            .bind(&tenant_id_for_query)
+            .bind(instance_id)
+            .bind(&msg_id_str)
+            .execute(&mut **tx)
+            .await?;
+            Ok(result.rows_affected() == 1)
+        })).await
     }
 
     // ── Job queue ──
@@ -899,6 +982,9 @@ impl ProcessStore for PostgresProcessStore {
         process_instance_id: Option<Uuid>,
     ) -> Result<BufferMessageResult> {
         let expires_at = chrono::Utc::now() + chrono::Duration::milliseconds(ttl_ms as i64);
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, tenant_id).await?;
+
         let result = sqlx::query(
             r#"
             INSERT INTO message_buffer (
@@ -917,8 +1003,11 @@ impl ProcessStore for PostgresProcessStore {
         .bind(payload_hash.map(|hash| hash.to_vec()))
         .bind(expires_at)
         .bind(process_instance_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
+
         if result.rows_affected() == 1 {
             Ok(BufferMessageResult::Inserted)
         } else {
@@ -935,6 +1024,9 @@ impl ProcessStore for PostgresProcessStore {
     ) -> Result<Option<ClaimedBufferedMessage>> {
         let claim_until = chrono::Utc::now() + chrono::Duration::milliseconds(claim_ms as i64);
         let claim_token = Uuid::now_v7().to_string();
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, tenant_id).await?;
+
         let row = sqlx::query(
             r#"
             WITH picked AS (
@@ -976,8 +1068,10 @@ impl ProcessStore for PostgresProcessStore {
         .bind(correlation_key)
         .bind(&claim_token)
         .bind(claim_until)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -1013,6 +1107,9 @@ impl ProcessStore for PostgresProcessStore {
     ) -> Result<bool> {
         let lease_owner = "unused";
         let tenant_id = instance.tenant_id.clone();
+        if tenant_id != message.message.tenant_id {
+            return Err(anyhow::anyhow!("tenant_id mismatch: cross-tenant message consumption blocked"));
+        }
         let instance = instance.clone();
         let fiber = fiber.clone();
         let message = message.clone();
@@ -1091,14 +1188,15 @@ impl ProcessStore for PostgresProcessStore {
             if let Some(payload_update) = &payload_update {
                 sqlx::query(
                     r#"
-                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload, tenant_id)
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (instance_id, payload_hash) DO NOTHING
                     "#,
                 )
                 .bind(instance.instance_id)
                 .bind(&payload_update.payload_hash[..])
                 .bind(&payload_update.payload)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -1109,8 +1207,8 @@ impl ProcessStore for PostgresProcessStore {
 
             sqlx::query(
                 r#"
-                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                     pc = EXCLUDED.pc,
                     stack = EXCLUDED.stack,
@@ -1126,6 +1224,7 @@ impl ProcessStore for PostgresProcessStore {
             .bind(&regs)
             .bind(&wait_state)
             .bind(fiber.loop_epoch as i32)
+            .bind(&tx.tenant_id)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -1134,19 +1233,20 @@ impl ProcessStore for PostgresProcessStore {
                 sqlx::query(
                     r#"
                     WITH seq AS (
-                        INSERT INTO event_sequences (instance_id, next_seq)
-                        VALUES ($1, 1)
+                        INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                        VALUES ($1, 1, $3)
                         ON CONFLICT (instance_id) DO UPDATE
                             SET next_seq = event_sequences.next_seq + 1
-                        RETURNING next_seq
+                        RETURNING next_seq, tenant_id
                     )
-                    INSERT INTO event_log (instance_id, seq, event)
-                    SELECT $1, seq.next_seq, $2
+                    INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                    SELECT $1, seq.next_seq, $2, seq.tenant_id
                     FROM seq
                     "#,
                 )
                 .bind(instance.instance_id)
                 .bind(&event_json)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -1162,6 +1262,10 @@ impl ProcessStore for PostgresProcessStore {
         &self,
         message: &ClaimedBufferedMessage,
     ) -> Result<bool> {
+        let tenant_id = &message.message.tenant_id;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, tenant_id).await?;
+
         let result = sqlx::query(
             r#"
             UPDATE message_buffer
@@ -1182,81 +1286,128 @@ impl ProcessStore for PostgresProcessStore {
         .bind(&message.message.correlation_key)
         .bind(&message.message.msg_id)
         .bind(&message.claim_token)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(result.rows_affected() == 1)
     }
 
     async fn reclaim_stale_buffered_message_claims(&self) -> Result<u32> {
-        let result = sqlx::query(
-            r#"
-            UPDATE message_buffer
-            SET claim_token = NULL,
-                claimed_at = NULL,
-                claim_until = NULL,
-                status = 'buffered'
-            WHERE consumed_at IS NULL
-              AND claim_token IS NOT NULL
-              AND claim_until <= now()
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() as u32)
+        let tenants = self.list_tenants().await?;
+        let mut total_affected = 0;
+        for tenant_id in tenants {
+            let mut tx = self.pool.begin().await?;
+            if let Err(_) = Self::set_tenant_context(&mut tx, &tenant_id).await {
+                continue;
+            }
+            let result = sqlx::query(
+                r#"
+                UPDATE message_buffer
+                SET claim_token = NULL,
+                    claimed_at = NULL,
+                    claim_until = NULL,
+                    status = 'buffered'
+                WHERE consumed_at IS NULL
+                  AND claim_token IS NOT NULL
+                  AND claim_until <= now()
+                "#,
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            total_affected += result.rows_affected() as u32;
+        }
+        Ok(total_affected)
     }
 
     async fn prune_expired_messages(&self) -> Result<u32> {
-        let rows = sqlx::query(
-            r#"
-            DELETE FROM message_buffer
-            WHERE consumed_at IS NULL
-              AND expires_at <= now()
-            RETURNING process_instance_id, message_name, correlation_key, msg_id
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        use sqlx::Row;
-        for row in &rows {
-            let instance_id: Option<Uuid> = row.get("process_instance_id");
-            if let Some(instance_id) = instance_id {
-                self.append_event(
-                    instance_id,
-                    &RuntimeEvent::BufferedMessageExpired {
+        let tenants = self.list_tenants().await?;
+        let mut total_pruned = 0;
+        for tenant_id in tenants {
+            let mut tx = self.pool.begin().await?;
+            if let Err(_) = Self::set_tenant_context(&mut tx, &tenant_id).await {
+                continue;
+            }
+            let rows = sqlx::query(
+                r#"
+                DELETE FROM message_buffer
+                WHERE consumed_at IS NULL
+                  AND expires_at <= now()
+                RETURNING process_instance_id, message_name, correlation_key, msg_id
+                "#,
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+
+            use sqlx::Row;
+            for row in &rows {
+                let instance_id: Option<Uuid> = row.get("process_instance_id");
+                if let Some(instance_id) = instance_id {
+                    let event = RuntimeEvent::BufferedMessageExpired {
                         message_name: row.get("message_name"),
                         correlation_key: row.get("correlation_key"),
                         msg_id: row.get("msg_id"),
-                    },
-                )
-                .await?;
+                    };
+                    let event_json = serde_json::to_value(&event)?;
+
+                    sqlx::query(
+                        r#"
+                        WITH seq AS (
+                            INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                            VALUES ($1, 1, $3)
+                            ON CONFLICT (instance_id) DO UPDATE
+                                SET next_seq = event_sequences.next_seq + 1
+                            RETURNING next_seq
+                        )
+                        INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                        SELECT $1, seq.next_seq, $2, $3
+                        FROM seq
+                        "#,
+                    )
+                    .bind(instance_id)
+                    .bind(&event_json)
+                    .bind(&tenant_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("prune_expired_messages: failed to append BufferedMessageExpired event")?;
+
+                    notify_event_tx(&mut tx, instance_id).await?;
+                }
             }
+
+            tx.commit().await?;
+            total_pruned += rows.len() as u32;
         }
-        Ok(rows.len() as u32)
+        Ok(total_pruned)
     }
 
     // ── Event log ──
 
     async fn append_event(&self, instance_id: Uuid, event: &RuntimeEvent) -> Result<u64> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
         let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
         let event_json = serde_json::to_value(event)?;
 
         let row = sqlx::query(
             r#"
             WITH seq AS (
-                INSERT INTO event_sequences (instance_id, next_seq)
-                VALUES ($1, 1)
+                INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                VALUES ($1, 1, $3)
                 ON CONFLICT (instance_id) DO UPDATE
                     SET next_seq = event_sequences.next_seq + 1
                 RETURNING next_seq
             )
-            INSERT INTO event_log (instance_id, seq, event)
-            SELECT $1, seq.next_seq, $2
+            INSERT INTO event_log (instance_id, seq, event, tenant_id)
+            SELECT $1, seq.next_seq, $2, $3
             FROM seq
             RETURNING seq
             "#,
         )
         .bind(instance_id)
         .bind(&event_json)
+        .bind(&tenant_id)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -1268,27 +1419,30 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn batch_append_events(&self, instance_id: Uuid, events: &[RuntimeEvent]) -> Result<u64> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
         let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
         let mut last_seq = 0;
         for event in events {
             let event_json = serde_json::to_value(event)?;
             let row = sqlx::query(
                 r#"
                 WITH seq AS (
-                    INSERT INTO event_sequences (instance_id, next_seq)
-                    VALUES ($1, 1)
+                    INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                    VALUES ($1, 1, $3)
                     ON CONFLICT (instance_id) DO UPDATE
                         SET next_seq = event_sequences.next_seq + 1
                     RETURNING next_seq
                 )
-                INSERT INTO event_log (instance_id, seq, event)
-                SELECT $1, seq.next_seq, $2
+                INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                SELECT $1, seq.next_seq, $2, $3
                 FROM seq
                 RETURNING seq
                 "#,
             )
             .bind(instance_id)
             .bind(&event_json)
+            .bind(&tenant_id)
             .fetch_one(&mut *tx)
             .await?;
 
@@ -1308,13 +1462,19 @@ impl ProcessStore for PostgresProcessStore {
         instance_id: Uuid,
         from_seq: u64,
     ) -> Result<Vec<(u64, RuntimeEvent)>> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let rows = sqlx::query(
             "SELECT seq, event FROM event_log WHERE instance_id = $1 AND seq >= $2 ORDER BY seq",
         )
         .bind(instance_id)
         .bind(from_seq as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let mut events = Vec::with_capacity(rows.len());
         for row in rows {
@@ -1335,18 +1495,25 @@ impl ProcessStore for PostgresProcessStore {
         hash: &[u8; 32],
         payload: &str,
     ) -> Result<()> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         sqlx::query(
             r#"
-            INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-            VALUES ($1, $2, $3)
+            INSERT INTO payload_history (instance_id, payload_hash, domain_payload, tenant_id)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (instance_id, payload_hash) DO NOTHING
             "#,
         )
         .bind(instance_id)
         .bind(&hash[..])
         .bind(payload)
-        .execute(&self.pool)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1355,13 +1522,19 @@ impl ProcessStore for PostgresProcessStore {
         instance_id: Uuid,
         hash: &[u8; 32],
     ) -> Result<Option<String>> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let row = sqlx::query(
             "SELECT domain_payload FROM payload_history WHERE instance_id = $1 AND payload_hash = $2",
         )
         .bind(instance_id)
         .bind(&hash[..])
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         match row {
             None => Ok(None),
@@ -1504,8 +1677,8 @@ impl ProcessStore for PostgresProcessStore {
 
             sqlx::query(
                 r#"
-                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 "#,
             )
             .bind(instance.instance_id)
@@ -1515,6 +1688,7 @@ impl ProcessStore for PostgresProcessStore {
             .bind(&regs)
             .bind(&wait_state)
             .bind(root_fiber.loop_epoch as i32)
+            .bind(&tx.tenant_id)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -1524,20 +1698,21 @@ impl ProcessStore for PostgresProcessStore {
             let row = sqlx::query(
                 r#"
                 WITH seq AS (
-                    INSERT INTO event_sequences (instance_id, next_seq)
-                    VALUES ($1, 1)
+                    INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                    VALUES ($1, 1, $3)
                     ON CONFLICT (instance_id) DO UPDATE
                         SET next_seq = event_sequences.next_seq + 1
-                    RETURNING next_seq
+                    RETURNING next_seq, tenant_id
                 )
-                INSERT INTO event_log (instance_id, seq, event)
-                SELECT $1, seq.next_seq, $2
+                INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                SELECT $1, seq.next_seq, $2, seq.tenant_id
                 FROM seq
                 RETURNING seq
                 "#,
             )
             .bind(instance.instance_id)
             .bind(&event_json)
+            .bind(&tx.tenant_id)
             .fetch_one(&mut *tx.tx)
             .await?;
 
@@ -1629,14 +1804,15 @@ impl ProcessStore for PostgresProcessStore {
             // 3. INSERT payload_history ON CONFLICT
             sqlx::query(
                 r#"
-                INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-                VALUES ($1, $2, $3)
+                INSERT INTO payload_history (instance_id, payload_hash, domain_payload, tenant_id)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (instance_id, payload_hash) DO NOTHING
                 "#,
             )
             .bind(instance.instance_id)
             .bind(&instance.domain_payload_hash[..])
             .bind(instance.domain_payload.as_ref())
+            .bind(&tx.tenant_id)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -1646,19 +1822,20 @@ impl ProcessStore for PostgresProcessStore {
                 sqlx::query(
                     r#"
                     WITH seq AS (
-                        INSERT INTO event_sequences (instance_id, next_seq)
-                        VALUES ($1, 1)
+                        INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                        VALUES ($1, 1, $3)
                         ON CONFLICT (instance_id) DO UPDATE
                             SET next_seq = event_sequences.next_seq + 1
-                        RETURNING next_seq
+                        RETURNING next_seq, tenant_id
                     )
-                    INSERT INTO event_log (instance_id, seq, event)
-                    SELECT $1, seq.next_seq, $2
+                    INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                    SELECT $1, seq.next_seq, $2, seq.tenant_id
                     FROM seq
                     "#,
                 )
                 .bind(instance.instance_id)
                 .bind(&event_json)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -1855,41 +2032,47 @@ impl ProcessStore for PostgresProcessStore {
         detection_point: &str,
     ) -> Result<()> {
         let lease_owner = lease_owner.to_string();
-        self.execute_tenant_scoped(tenant_id, &lease_owner, |tx| Box::pin(async move {
-            Self::quarantine_instance_inner(tx, instance_id).await
-        })).await?;
+        let tenant_id_str = tenant_id.to_string();
+        let detection_point_str = detection_point.to_string();
+        self.execute_tenant_scoped(&tenant_id_str, &lease_owner, |tx| Box::pin(async move {
+            Self::quarantine_instance_inner(tx, instance_id).await?;
 
-        // 2. Append InstanceQuarantined event to the audit log.
-        let now = chrono::Utc::now();
-        let now_ms = now.timestamp_millis();
-        let event = RuntimeEvent::InstanceQuarantined {
-            instance_id,
-            tenant_id: tenant_id.to_string(),
-            detection_point: detection_point.to_string(),
-            failure_reason: "integrity_hash_mismatch".to_string(),
-            detected_at: now_ms,
-        };
-        let event_json = serde_json::to_value(&event)?;
+            // 2. Append InstanceQuarantined event to the audit log.
+            let now = chrono::Utc::now();
+            let now_ms = now.timestamp_millis();
+            let event = RuntimeEvent::InstanceQuarantined {
+                instance_id,
+                tenant_id: tx.tenant_id.clone(),
+                detection_point: detection_point_str,
+                failure_reason: "integrity_hash_mismatch".to_string(),
+                detected_at: now_ms,
+            };
+            let event_json = serde_json::to_value(&event)?;
 
-        sqlx::query(
-            r#"
-            WITH seq AS (
-                INSERT INTO event_sequences (instance_id, next_seq)
-                VALUES ($1, 1)
-                ON CONFLICT (instance_id) DO UPDATE
-                    SET next_seq = event_sequences.next_seq + 1
-                RETURNING next_seq
+            sqlx::query(
+                r#"
+                WITH seq AS (
+                    INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                    VALUES ($1, 1, $3)
+                    ON CONFLICT (instance_id) DO UPDATE
+                        SET next_seq = event_sequences.next_seq + 1
+                    RETURNING next_seq, tenant_id
+                )
+                INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                SELECT $1, seq.next_seq, $2, seq.tenant_id
+                FROM seq
+                "#,
             )
-            INSERT INTO event_log (instance_id, seq, event)
-            SELECT $1, seq.next_seq, $2
-            FROM seq
-            "#,
-        )
-        .bind(instance_id)
-        .bind(&event_json)
-        .execute(&self.pool)
-        .await
-        .context("quarantine_instance: failed to append InstanceQuarantined event")?;
+            .bind(instance_id)
+            .bind(&event_json)
+            .bind(&tx.tenant_id)
+            .execute(&mut *tx.tx)
+            .await
+            .context("quarantine_instance: failed to append InstanceQuarantined event")?;
+
+            notify_event_tx(&mut tx.tx, instance_id).await?;
+            Ok(())
+        })).await?;
 
         tracing::warn!(
             instance_id = %instance_id,
@@ -1902,21 +2085,29 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let mut tx = self.pool.begin().await?;
+        Self::set_tenant_context(&mut tx, &tenant_id).await?;
+
         let row = sqlx::query(
             "SELECT arrive_count FROM join_barriers WHERE instance_id = $1 AND join_id = $2",
         )
         .bind(instance_id)
         .bind(join_id as i32)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-        match row {
-            None => Ok(0),
+
+        let count = match row {
+            None => 0,
             Some(row) => {
                 use sqlx::Row;
                 let count: i16 = row.get("arrive_count");
-                Ok(count as u16)
+                count as u16
             }
-        }
+        };
+
+        tx.commit().await?;
+        Ok(count)
     }
 
     async fn commit_tick(
@@ -1985,8 +2176,8 @@ impl PostgresProcessStore {
 
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                         pc = EXCLUDED.pc,
                         stack = EXCLUDED.stack,
@@ -2002,6 +2193,7 @@ impl PostgresProcessStore {
                 .bind(&regs)
                 .bind(&wait_state)
                 .bind(fiber.loop_epoch as i32)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
 
@@ -2030,28 +2222,30 @@ impl PostgresProcessStore {
             TickOperation::JoinArrive { join_id } => {
                 sqlx::query(
                     r#"
-                    INSERT INTO join_barriers (instance_id, join_id, arrive_count)
-                    VALUES ($1, $2, 1)
+                    INSERT INTO join_barriers (instance_id, join_id, arrive_count, tenant_id)
+                    VALUES ($1, $2, 1, $3)
                     ON CONFLICT (instance_id, join_id) DO UPDATE
                         SET arrive_count = join_barriers.arrive_count + 1
                     "#,
                 )
                 .bind(instance_id)
                 .bind(*join_id as i32)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
             TickOperation::JoinReset { join_id } => {
                 sqlx::query(
                     r#"
-                    INSERT INTO join_barriers (instance_id, join_id, arrive_count)
-                    VALUES ($1, $2, 0)
+                    INSERT INTO join_barriers (instance_id, join_id, arrive_count, tenant_id)
+                    VALUES ($1, $2, 0, $3)
                     ON CONFLICT (instance_id, join_id) DO UPDATE
                         SET arrive_count = 0
                     "#,
                 )
                 .bind(instance_id)
                 .bind(*join_id as i32)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -2066,19 +2260,20 @@ impl PostgresProcessStore {
                 sqlx::query(
                     r#"
                     WITH seq AS (
-                        INSERT INTO event_sequences (instance_id, next_seq)
-                        VALUES ($1, 1)
+                        INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                        VALUES ($1, 1, $3)
                         ON CONFLICT (instance_id) DO UPDATE
                             SET next_seq = event_sequences.next_seq + 1
-                        RETURNING next_seq
+                        RETURNING next_seq, tenant_id
                     )
-                    INSERT INTO event_log (instance_id, seq, event)
-                    SELECT $1, seq.next_seq, $2
+                    INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                    SELECT $1, seq.next_seq, $2, seq.tenant_id
                     FROM seq
                     "#,
                 )
                 .bind(instance_id)
                 .bind(&event_json)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -2145,14 +2340,15 @@ impl PostgresProcessStore {
 
                 sqlx::query(
                     r#"
-                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload, tenant_id)
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (instance_id, payload_hash) DO NOTHING
                     "#,
                 )
                 .bind(instance.instance_id)
                 .bind(&instance.domain_payload_hash[..])
                 .bind(instance.domain_payload.as_ref())
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -2223,9 +2419,9 @@ impl PostgresProcessStore {
                     r#"
                     INSERT INTO bpmn_pending_invocation (
                         callout_id, process_instance_id, node_id, target_domain, verb_id,
-                        idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
+                        idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at, tenant_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     ON CONFLICT DO NOTHING
                     "#,
                 )
@@ -2239,6 +2435,7 @@ impl PostgresProcessStore {
                 .bind(pending.submitted_at)
                 .bind(pending.ack_received_at)
                 .bind(pending.timeout_at)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -4187,6 +4384,54 @@ mod tests {
         inst_b.process_key = "process-B".to_string();
         admin_store.save_instance("unused", &inst_b).await.unwrap();
 
+        // Admin inserts child rows for tenant-B
+        let fib_id_b = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, 0, '[]'::jsonb, '{}'::jsonb, 'null'::jsonb, 0, $3)
+            "#
+        )
+        .bind(iid_b)
+        .bind(fib_id_b)
+        .bind(tenant_b)
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        let call_id_b = Uuid::now_v7();
+        let idem_key_b = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO bpmn_pending_invocation (
+                callout_id, process_instance_id, node_id, target_domain, verb_id,
+                idempotency_key, execution_id, tenant_id
+            )
+            VALUES ($1, $2, 'node-1', 'domain', 'verb', $3, NULL, $4)
+            "#
+        )
+        .bind(call_id_b)
+        .bind(iid_b)
+        .bind(idem_key_b)
+        .bind(tenant_b)
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        let msg_id_b = format!("msg-b-{}", Uuid::now_v7());
+        sqlx::query(
+            r#"
+            INSERT INTO message_buffer (
+                tenant_id, message_name, correlation_key, msg_id, payload,
+                expires_at, status
+            ) VALUES ($1, 'msg-b', 'corr-b', $2, 'payload'::bytea, now() + interval '1 hour', 'buffered')
+            "#
+        )
+        .bind(tenant_b)
+        .bind(&msg_id_b)
+        .execute(&admin_pool)
+        .await
+        .unwrap();
 
         // 2. Connect as bpmn_lite_app non-superuser
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
@@ -4228,6 +4473,28 @@ mod tests {
         assert_eq!(visible_rows[0].0, iid_a, "Visible row must belong to tenant A");
         assert_eq!(visible_rows[0].1, "tenant-A", "Visible row must have tenant-A ID");
 
+        // Assert Tenant A cannot read Tenant B's child rows
+        let visible_fibers: Vec<(Uuid,)> = sqlx::query_as("SELECT fiber_id FROM fibers WHERE instance_id = $1")
+            .bind(iid_b)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        assert!(visible_fibers.is_empty(), "Tenant A context must not see Tenant B fibers");
+
+        let visible_calls: Vec<(Uuid,)> = sqlx::query_as("SELECT callout_id FROM bpmn_pending_invocation WHERE process_instance_id = $1")
+            .bind(iid_b)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        assert!(visible_calls.is_empty(), "Tenant A context must not see Tenant B pending invocations");
+
+        let visible_msgs: Vec<(String,)> = sqlx::query_as("SELECT msg_id FROM message_buffer WHERE msg_id = $1")
+            .bind(&msg_id_b)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        assert!(visible_msgs.is_empty(), "Tenant A context must not see Tenant B message buffer rows");
+
         // 5. Write isolation: with app.tenant_id = tenant_a, update/delete B affects 0 rows
         let update_res = sqlx::query("UPDATE process_instances SET state = '\"Completed\"'::jsonb WHERE instance_id = $1")
             .bind(iid_b)
@@ -4242,6 +4509,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(delete_res.rows_affected(), 0, "Delete on Tenant B row under Tenant A context must affect 0 rows");
+
+        let update_msg_res = sqlx::query("UPDATE message_buffer SET status = 'consumed' WHERE msg_id = $1")
+            .bind(&msg_id_b)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(update_msg_res.rows_affected(), 0, "Update on Tenant B message_buffer row under Tenant A context must affect 0 rows");
+
+        // Assert writes with Tenant B tenant_id under Tenant A context are rejected by WITH CHECK
+        let write_fib_res = sqlx::query(
+            r#"
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, 0, '[]'::jsonb, '{}'::jsonb, 'null'::jsonb, 0, $3)
+            "#
+        )
+        .bind(iid_b)
+        .bind(Uuid::now_v7())
+        .bind(tenant_b)
+        .execute(&mut *tx)
+        .await;
+        assert!(write_fib_res.is_err(), "Write to fibers with tenant-B ID under tenant-A context must fail WITH CHECK");
+
+        let write_call_res = sqlx::query(
+            r#"
+            INSERT INTO bpmn_pending_invocation (
+                callout_id, process_instance_id, node_id, target_domain, verb_id,
+                idempotency_key, execution_id, tenant_id
+            )
+            VALUES ($1, $2, 'node-1', 'domain', 'verb', $3, NULL, $4)
+            "#
+        )
+        .bind(Uuid::now_v7())
+        .bind(iid_b)
+        .bind(Uuid::now_v7())
+        .bind(tenant_b)
+        .execute(&mut *tx)
+        .await;
+        assert!(write_call_res.is_err(), "Write to bpmn_pending_invocation with tenant-B ID under tenant-A context must fail WITH CHECK");
+
+        let write_msg_res = sqlx::query(
+            r#"
+            INSERT INTO message_buffer (
+                tenant_id, message_name, correlation_key, msg_id, payload,
+                expires_at, status
+            ) VALUES ($1, 'msg-b-new', 'corr-b', $2, 'payload'::bytea, now() + interval '1 hour', 'buffered')
+            "#
+        )
+        .bind(tenant_b)
+        .bind(format!("msg-b-new-{}", Uuid::now_v7()))
+        .execute(&mut *tx)
+        .await;
+        assert!(write_msg_res.is_err(), "Write to message_buffer with tenant-B ID under tenant-A context must fail WITH CHECK");
 
         tx.rollback().await.unwrap();
     }
