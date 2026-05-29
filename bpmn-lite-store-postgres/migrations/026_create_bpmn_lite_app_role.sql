@@ -47,10 +47,15 @@ $$;
 -- database identifier, so use dynamic SQL for the current database.
 DO $$
 BEGIN
-    EXECUTE format(
-        'GRANT CONNECT ON DATABASE %I TO bpmn_lite_app',
-        current_database()
-    );
+    BEGIN
+        EXECUTE format(
+            'GRANT CONNECT ON DATABASE %I TO bpmn_lite_app',
+            current_database()
+        );
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'Could not grant CONNECT on database to bpmn_lite_app: %', SQLERRM;
+    END;
 END
 $$;
 

@@ -297,7 +297,7 @@ impl Vm {
             Instr::WaitFor { ms } => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_millis() as u64;
                 let deadline = now + *ms;
                 fiber.wait = WaitState::Timer {
@@ -534,7 +534,7 @@ impl Vm {
                 // Park fiber in Race wait state — do NOT advance pc
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_millis() as u64;
                 let timer_deadline_ms = arms.iter().find_map(|arm| match arm {
                     WaitArm::Timer { duration_ms, .. } => Some(now + duration_ms),
@@ -1017,7 +1017,7 @@ pub fn compute_hash(data: &str) -> [u8; 32] {
 fn now_ms() -> Timestamp {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -2363,5 +2363,17 @@ mod tests {
             "Should reject multi-timer. Errors: {:?}",
             e2
         );
+    }
+
+    #[test]
+    fn test_t1_2_clock_backstep_safety() {
+        let reference = std::time::SystemTime::now();
+        let earlier = reference - std::time::Duration::from_secs(60);
+        
+        let res = earlier.duration_since(reference);
+        assert!(res.is_err(), "NTP backstep must result in duration_since returning an Err");
+        
+        let safe_duration = res.unwrap_or_default();
+        assert_eq!(safe_duration, std::time::Duration::ZERO, "Safe fallback must be Duration::ZERO");
     }
 }

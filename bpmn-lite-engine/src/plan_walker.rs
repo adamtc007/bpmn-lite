@@ -184,8 +184,22 @@ impl PlanWalker {
             return Ok(AdvanceOutcome::NotRunnable);
         }
 
-        let callout_id = Uuid::now_v7();
-        let idempotency_key = Uuid::now_v7();
+        let pending_rows = self.pending_store.list_for_process(instance.instance_id).await?;
+        let matching_row = pending_rows.iter().find(|r| r.node_id == node_id);
+
+        let attempt_count = if matching_row.is_some() {
+            retry_count
+        } else {
+            0
+        };
+
+        let (callout_id, idempotency_key) = if let Some(ref row) = matching_row {
+            (row.callout_id, row.idempotency_key)
+        } else {
+            let callout_id = derive_uuid("callout_id", instance.instance_id, &node_id, attempt_count);
+            let idempotency_key = derive_uuid("idempotency_key", instance.instance_id, &node_id, attempt_count);
+            (callout_id, idempotency_key)
+        };
 
         let placeholder_vals =
             deserialize_placeholder_values(instance.placeholder_values.as_ref());
@@ -373,6 +387,20 @@ fn uuid_to_proto(id: Uuid) -> ProtoUuid {
     }
 }
 
+fn derive_uuid(salt: &str, instance_id: Uuid, node_id: &str, attempt_count: u64) -> Uuid {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(salt.as_bytes());
+    hasher.update(instance_id.as_bytes());
+    hasher.update(node_id.as_bytes());
+    hasher.update(&attempt_count.to_le_bytes());
+    let hash = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash.as_bytes()[0..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1 (RFC 4122)
+    Uuid::from_bytes(bytes)
+}
+
 // ── unit tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -488,5 +516,23 @@ mod tests {
 
         let outcome = walker.advance(id).await.unwrap();
         assert!(matches!(outcome, AdvanceOutcome::NotRunnable));
+    }
+
+    #[test]
+    fn test_t1_3_deterministic_idempotency_key() {
+        let instance_id = Uuid::now_v7();
+        let node_id = "service-task-1";
+        let attempt_count = 2;
+
+        let key1 = derive_uuid("idempotency_key", instance_id, node_id, attempt_count);
+        let key2 = derive_uuid("idempotency_key", instance_id, node_id, attempt_count);
+
+        assert_eq!(key1, key2, "Derived idempotency keys must be identical");
+
+        let callout1 = derive_uuid("callout_id", instance_id, node_id, attempt_count);
+        let callout2 = derive_uuid("callout_id", instance_id, node_id, attempt_count);
+
+        assert_eq!(callout1, callout2, "Derived callout IDs must be identical");
+        assert_ne!(key1, callout1, "Different salts must produce different UUIDs");
     }
 }

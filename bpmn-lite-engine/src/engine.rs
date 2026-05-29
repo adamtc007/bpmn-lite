@@ -619,7 +619,7 @@ impl BpmnLiteEngine {
         let fibers_for_promotion = self.store.load_fibers(instance_id).await?;
         let now_promo = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         for fiber in &fibers_for_promotion {
@@ -689,7 +689,7 @@ impl BpmnLiteEngine {
         let fibers_after = self.store.load_fibers(instance_id).await?;
         let now_race = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         for fiber in fibers_after {

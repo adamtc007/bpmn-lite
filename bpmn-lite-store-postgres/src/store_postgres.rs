@@ -1160,7 +1160,7 @@ impl ProcessStore for PostgresProcessStore {
         let join_expected = serde_json::to_value(&instance.join_expected)?;
         let state = serde_json::to_value(&instance.state)?;
 
-        sqlx::query(
+        let process_instances_result = sqlx::query(
             r#"
             UPDATE process_instances
             SET domain_payload = $2,
@@ -1181,6 +1181,14 @@ impl ProcessStore for PostgresProcessStore {
         .bind(&state)
         .execute(&mut *tx)
         .await?;
+
+        if process_instances_result.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Err(anyhow::anyhow!(
+                "atomic_consume_buffered_message: process_instances update affected {} rows, expected 1 (likely RLS violation or invalid instance_id)",
+                process_instances_result.rows_affected()
+            ));
+        }
 
         if let Some(payload_update) = payload_update {
             sqlx::query(
@@ -2020,7 +2028,7 @@ impl ProcessStore for PostgresProcessStore {
     ) -> Result<()> {
         // 1. Mark the row as quarantined. Use a separate pool connection
         //    so the quarantine persists even if the caller's transaction rolls back.
-        sqlx::query(
+        let quarantine_result = sqlx::query(
             "UPDATE process_instances \
              SET quarantine_state = 'integrity_violation' \
              WHERE instance_id = $1",
@@ -2029,6 +2037,13 @@ impl ProcessStore for PostgresProcessStore {
         .execute(&self.pool)
         .await
         .context("quarantine_instance: failed to set quarantine_state")?;
+
+        if quarantine_result.rows_affected() != 1 {
+            return Err(anyhow::anyhow!(
+                "quarantine_instance: process_instances update affected {} rows, expected 1 (likely RLS violation or invalid instance_id)",
+                quarantine_result.rows_affected()
+            ));
+        }
 
         // 2. Append InstanceQuarantined event to the audit log.
         let now = chrono::Utc::now();
@@ -3230,5 +3245,100 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(result.is_err(), "FK constraint must reject unknown pool_id");
+    }
+
+    /// E-invariant T1.1: Verify RLS mutations return an error when tenant context is unset.
+    #[tokio::test]
+    #[ignore]
+    async fn test_t1_1_rls_mutations_fail_without_tenant_context() {
+        let (admin_pool, admin_store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "tenant-t1-1";
+
+        // 1. Insert a process instance as superuser (bypassing RLS)
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        admin_store.save_instance(&inst).await.unwrap();
+
+        // 2. Connect to the database as the non-superuser bpmn_lite_app
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
+        let app_url = if url.contains("@") {
+            let parts: Vec<&str> = url.split('@').collect();
+            let host_part = parts[1];
+            format!("postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}", host_part)
+        } else {
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test".to_string()
+        };
+
+        let app_pool = PgPool::connect(&app_url)
+            .await
+            .expect("Failed to connect as bpmn_lite_app");
+        let app_store = PostgresProcessStore::new(app_pool.clone());
+
+        // 3. Test Site B: quarantine_instance without setting tenant context
+        // Should return Err because process_instances UPDATE affects 0 rows due to RLS.
+        let quar_res = app_store.quarantine_instance(iid, tenant_id, "test_t1_1").await;
+        assert!(quar_res.is_err(), "quarantine_instance must fail without tenant context");
+
+        // 4. Test Site A: atomic_consume_buffered_message
+        // We first need a claimed message in the buffer.
+        let msg_id = format!("msg-t1-1-{}", Uuid::now_v7());
+        let message_name = "test-message";
+        let correlation_key = "corr-t1-1";
+        
+        let claim_token = Uuid::now_v7();
+        let claim_until_ms = (chrono::Utc::now() + chrono::Duration::seconds(60)).timestamp_millis();
+        let claim_until_dt = epoch_ms_to_datetime(claim_until_ms);
+        sqlx::query(
+            r#"
+            INSERT INTO message_buffer (
+                tenant_id, message_name, correlation_key, msg_id, payload,
+                payload_hash, expires_at, process_instance_id, claim_token, claim_until, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'claimed')
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(message_name)
+        .bind(correlation_key)
+        .bind(&msg_id)
+        .bind(b"payload".to_vec())
+        .bind(None::<Vec<u8>>)
+        .bind(chrono::Utc::now() + chrono::Duration::seconds(60))
+        .bind(iid)
+        .bind(claim_token)
+        .bind(claim_until_dt)
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        let claimed_msg = ClaimedBufferedMessage {
+            message: BufferedMessage {
+                tenant_id: tenant_id.to_string(),
+                message_name: message_name.to_string(),
+                correlation_key: correlation_key.to_string(),
+                msg_id: msg_id.to_string(),
+                payload: b"payload".to_vec(),
+                payload_hash: None,
+                received_at: 0,
+                expires_at: 0,
+                process_instance_id: Some(iid),
+            },
+            claim_token: claim_token.to_string(),
+            claim_until: claim_until_ms,
+        };
+
+        let fiber = Fiber::new(Uuid::now_v7(), 0);
+
+        let consume_res = app_store.atomic_consume_buffered_message(
+            &inst,
+            &fiber,
+            &claimed_msg,
+            None,
+            &[],
+        ).await;
+
+        assert!(consume_res.is_err(), "atomic_consume_buffered_message must fail (return Err) without tenant context");
     }
 }
