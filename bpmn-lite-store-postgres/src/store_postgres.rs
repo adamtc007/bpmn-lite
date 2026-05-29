@@ -200,9 +200,6 @@ impl PostgresProcessStore {
     }
 
     pub async fn resolve_tenant_id(&self, instance_id: Uuid) -> Result<String> {
-        if let Some(t) = bpmn_lite_store::store::get_tenant_id() {
-            return Ok(t);
-        }
         let row: (String,) = sqlx::query_as("SELECT tenant_id FROM process_instances WHERE instance_id = $1")
             .bind(instance_id)
             .fetch_one(&self.pool)
@@ -234,9 +231,9 @@ pub struct StaleReclaimInfo {
 impl ProcessStore for PostgresProcessStore {
     // ── Instance ──
 
-    async fn save_instance(&self, instance: &ProcessInstance) -> Result<()> {
-        let lease_owner = "unused";
+    async fn save_instance(&self, lease_owner: &str, instance: &ProcessInstance) -> Result<()> {
         let tenant_id = instance.tenant_id.clone();
+        let lease_owner = lease_owner.to_string();
         let instance = instance.clone();
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             let flags = serde_json::to_value(&instance.flags)?;
@@ -268,6 +265,7 @@ impl ProcessStore for PostgresProcessStore {
                     plan_hash = EXCLUDED.plan_hash,
                     current_node_id = EXCLUDED.current_node_id,
                     placeholder_values = EXCLUDED.placeholder_values
+                WHERE process_instances.lease_owner = $20
                 "#,
             )
             .bind(instance.instance_id)
@@ -289,6 +287,7 @@ impl ProcessStore for PostgresProcessStore {
             .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
             .bind(instance.current_node_id.as_deref())
             .bind(instance.placeholder_values.as_ref())
+            .bind(&tx.lease_owner)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -358,16 +357,17 @@ impl ProcessStore for PostgresProcessStore {
         }
     }
 
-    async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()> {
-        let tenant_id = self.resolve_tenant_id(id).await?;
-        let lease_owner = "unused";
+    async fn update_instance_state(&self, tenant_id: &str, lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()> {
+        let tenant_id = tenant_id.to_string();
+        let lease_owner = lease_owner.to_string();
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             let state_json = serde_json::to_value(&state)?;
             let result = sqlx::query(
-                "UPDATE process_instances SET state = $1 WHERE instance_id = $2",
+                "UPDATE process_instances SET state = $1 WHERE instance_id = $2 AND lease_owner = $3",
             )
             .bind(&state_json)
             .bind(id)
+            .bind(&tx.lease_owner)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -377,19 +377,22 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn update_instance_flags(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         id: Uuid,
         flags: &BTreeMap<FlagKey, Value>,
     ) -> Result<()> {
-        let tenant_id = self.resolve_tenant_id(id).await?;
-        let lease_owner = "unused";
+        let tenant_id = tenant_id.to_string();
+        let lease_owner = lease_owner.to_string();
         let flags = flags.clone();
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             let flags_json = serde_json::to_value(&flags)?;
             let result = sqlx::query(
-                "UPDATE process_instances SET flags = $1 WHERE instance_id = $2",
+                "UPDATE process_instances SET flags = $1 WHERE instance_id = $2 AND lease_owner = $3",
             )
             .bind(&flags_json)
             .bind(id)
+            .bind(&tx.lease_owner)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -399,21 +402,24 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn update_instance_payload(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         id: Uuid,
         payload: &str,
         hash: &[u8; 32],
     ) -> Result<()> {
-        let tenant_id = self.resolve_tenant_id(id).await?;
-        let lease_owner = "unused";
+        let tenant_id = tenant_id.to_string();
+        let lease_owner = lease_owner.to_string();
         let payload = payload.to_string();
         let hash = *hash;
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             let result = sqlx::query(
-                "UPDATE process_instances SET domain_payload = $1, domain_payload_hash = $2 WHERE instance_id = $3",
+                "UPDATE process_instances SET domain_payload = $1, domain_payload_hash = $2 WHERE instance_id = $3 AND lease_owner = $4",
             )
             .bind(&payload)
             .bind(&hash[..])
             .bind(id)
+            .bind(&tx.lease_owner)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -671,18 +677,13 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn ack_job(&self, job_key: &str) -> Result<()> {
-        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
-            Some(t) => t,
-            None => {
-                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-                    .bind(job_key)
-                    .fetch_optional(&self.pool)
-                    .await?;
-                match row {
-                    Some(r) => r.0,
-                    None => return Ok(()),
-                }
-            }
+        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+            .bind(job_key)
+            .fetch_optional(&self.pool)
+            .await?;
+        let tenant_id = match row {
+            Some(r) => r.0,
+            None => return Ok(()),
         };
         let lease_owner = "unused";
         let job_key = job_key.to_string();
@@ -726,18 +727,13 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         not_before_ms: i64,
     ) -> Result<bool> {
-        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
-            Some(t) => t,
-            None => {
-                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-                    .bind(job_key)
-                    .fetch_optional(&self.pool)
-                    .await?;
-                match row {
-                    Some(r) => r.0,
-                    None => return Ok(false),
-                }
-            }
+        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+            .bind(job_key)
+            .fetch_optional(&self.pool)
+            .await?;
+        let tenant_id = match row {
+            Some(r) => r.0,
+            None => return Ok(false),
         };
         let job_key = job_key.to_string();
         let claim_token = claim_token.to_string();
@@ -757,18 +753,13 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         incident_id: Uuid,
     ) -> Result<bool> {
-        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
-            Some(t) => t,
-            None => {
-                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-                    .bind(job_key)
-                    .fetch_optional(&self.pool)
-                    .await?;
-                match row {
-                    Some(r) => r.0,
-                    None => return Ok(false),
-                }
-            }
+        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+            .bind(job_key)
+            .fetch_optional(&self.pool)
+            .await?;
+        let tenant_id = match row {
+            Some(r) => r.0,
+            None => return Ok(false),
         };
         let job_key = job_key.to_string();
         let claim_token = claim_token.to_string();
@@ -1446,6 +1437,8 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn atomic_start(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         root_fiber: &Fiber,
         event: &RuntimeEvent,
@@ -1455,8 +1448,8 @@ impl ProcessStore for PostgresProcessStore {
         // the scheduler even if the main transaction rolls back.
         self.ensure_tenant(&instance.tenant_id).await?;
 
-        let lease_owner = "unused";
-        let tenant_id = instance.tenant_id.clone();
+        let lease_owner = lease_owner.to_string();
+        let tenant_id = tenant_id.to_string();
         let instance = instance.clone();
         let root_fiber = root_fiber.clone();
         let event = event.clone();
@@ -1556,12 +1549,14 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn atomic_complete(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         completion: &JobCompletion,
         events: &[RuntimeEvent],
     ) -> Result<()> {
-        let lease_owner = "unused";
-        let tenant_id = instance.tenant_id.clone();
+        let lease_owner = lease_owner.to_string();
+        let tenant_id = tenant_id.to_string();
         let instance = instance.clone();
         let completion = completion.clone();
         let events = events.to_vec();
@@ -1591,6 +1586,7 @@ impl ProcessStore for PostgresProcessStore {
                     join_expected = EXCLUDED.join_expected,
                     state = EXCLUDED.state,
                     correlation_id = EXCLUDED.correlation_id
+                WHERE process_instances.lease_owner = $16
                 "#,
             )
             .bind(instance.instance_id)
@@ -1608,6 +1604,7 @@ impl ProcessStore for PostgresProcessStore {
             .bind(instance.entry_id)
             .bind(instance.runbook_id)
             .bind(created_at)
+            .bind(&tx.lease_owner)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -1838,9 +1835,10 @@ impl ProcessStore for PostgresProcessStore {
         &self,
         instance_id: Uuid,
         tenant_id: &str,
+        lease_owner: &str,
         detection_point: &str,
     ) -> Result<()> {
-        let lease_owner = "unused";
+        let lease_owner = lease_owner.to_string();
         self.execute_tenant_scoped(tenant_id, &lease_owner, |tx| Box::pin(async move {
             Self::quarantine_instance_inner(tx, instance_id).await
         })).await?;
@@ -1909,14 +1907,49 @@ impl ProcessStore for PostgresProcessStore {
         &self,
         instance_id: Uuid,
         tenant_id: &str,
+        lease_owner: &str,
         ops: &[TickOperation],
     ) -> Result<()> {
-        let lease_owner = "unused";
+        let lease_owner = lease_owner.to_string();
         let ops = ops.to_vec();
         self.execute_tenant_scoped(tenant_id, &lease_owner, |tx| Box::pin(async move {
             for op in &ops {
                 Self::apply_op(tx, instance_id, op).await?;
             }
+
+            // Post-ops check in the same transaction: release lease if parked/terminal
+            let state_val: serde_json::Value = sqlx::query_scalar(
+                "SELECT state FROM process_instances WHERE instance_id = $1"
+            )
+            .bind(instance_id)
+            .fetch_one(&mut *tx.tx)
+            .await?;
+
+            let parsed_state: ProcessState = serde_json::from_value(state_val)?;
+
+            let has_running_fiber: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM fibers WHERE instance_id = $1 AND wait_state = '\"Running\"'::jsonb)"
+            )
+            .bind(instance_id)
+            .fetch_one(&mut *tx.tx)
+            .await?;
+
+            let is_runnable = matches!(parsed_state, ProcessState::Running) && has_running_fiber;
+
+            if !is_runnable {
+                sqlx::query(
+                    r#"
+                    UPDATE process_instances
+                    SET lease_owner = NULL,
+                        lease_until = now() - interval '1 second'
+                    WHERE instance_id = $1
+                    "#
+                )
+                .bind(instance_id)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+
             Ok(())
         })).await
     }
@@ -2066,6 +2099,7 @@ impl PostgresProcessStore {
                         plan_hash = EXCLUDED.plan_hash,
                         current_node_id = EXCLUDED.current_node_id,
                         placeholder_values = EXCLUDED.placeholder_values
+                    WHERE process_instances.lease_owner = $20
                     "#,
                 )
                 .bind(instance.instance_id)
@@ -2087,6 +2121,7 @@ impl PostgresProcessStore {
                 .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
                 .bind(instance.current_node_id.as_deref())
                 .bind(instance.placeholder_values.as_ref())
+                .bind(&tx.lease_owner)
                 .execute(&mut *tx.tx)
                 .await?;
 
@@ -2108,10 +2143,11 @@ impl PostgresProcessStore {
             TickOperation::UpdateInstanceState { state } => {
                 let state_val = serde_json::to_value(state)?;
                 let result = sqlx::query(
-                    "UPDATE process_instances SET state = $1 WHERE instance_id = $2",
+                    "UPDATE process_instances SET state = $1 WHERE instance_id = $2 AND lease_owner = $3",
                 )
                 .bind(&state_val)
                 .bind(instance_id)
+                .bind(&tx.lease_owner)
                 .execute(&mut *tx.tx)
                 .await?;
 
@@ -2706,7 +2742,7 @@ mod tests {
         let id = Uuid::now_v7();
         let inst = make_instance(id);
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
 
         assert_eq!(loaded.instance_id, id);
@@ -2747,7 +2783,7 @@ mod tests {
             trace_sequence: 17,
         };
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
 
         inst.session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
             client_group_id: mutated_scope_id,
@@ -2782,7 +2818,7 @@ mod tests {
         let fid = Uuid::now_v7();
 
         // Need an instance first (FK constraint)
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         let mut fiber = Fiber::new(fid, 10);
         fiber.wait = WaitState::Job {
@@ -2818,7 +2854,7 @@ mod tests {
     async fn test_pg_join_barrier() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         let join_id: JoinId = 0;
         assert_eq!(store.join_arrive(iid, join_id).await.unwrap(), 1);
@@ -2859,7 +2895,7 @@ mod tests {
         let (_pool, store) = setup().await;
         let task_type = "create_case".to_string();
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         for i in 0..3 {
             store
@@ -2923,7 +2959,7 @@ mod tests {
     async fn test_pg_event_log() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         for i in 0..5 {
             let event = RuntimeEvent::FlagSet {
@@ -2947,7 +2983,7 @@ mod tests {
     async fn test_pg_payload_history() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         let payload_v1 = r#"{"version":1}"#;
         let hash_v1 = test_hash(payload_v1);
@@ -3062,7 +3098,7 @@ mod tests {
     async fn test_pg_incidents() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         for i in 0..2 {
             store
@@ -3093,13 +3129,16 @@ mod tests {
     async fn test_pg_instance_updates() {
         let (_pool, store) = setup().await;
         let id = Uuid::now_v7();
-        store.save_instance(&make_instance(id)).await.unwrap();
+        store.save_instance("test-owner", &make_instance(id)).await.unwrap();
 
+        // Claim transition
+        let claimed = store.claim_instance_for_transition("default", id, "test-owner", 30000).await.unwrap();
+        assert!(claimed);
 
         // Update state
         let new_state = ProcessState::Completed { at: 1700001000000 };
         store
-            .update_instance_state(id, new_state.clone())
+            .update_instance_state("default", "test-owner", id, new_state.clone())
             .await
             .unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
@@ -3107,7 +3146,7 @@ mod tests {
 
         // Update flags
         let new_flags = BTreeMap::from([(5, Value::Bool(false))]);
-        store.update_instance_flags(id, &new_flags).await.unwrap();
+        store.update_instance_flags("default", "test-owner", id, &new_flags).await.unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
         assert_eq!(loaded.flags.len(), 1);
         assert_eq!(loaded.flags[&5], Value::Bool(false));
@@ -3116,7 +3155,7 @@ mod tests {
         let new_payload = r#"{"updated":true}"#;
         let new_hash = test_hash(new_payload);
         store
-            .update_instance_payload(id, new_payload, &new_hash)
+            .update_instance_payload("default", "test-owner", id, new_payload, &new_hash)
             .await
             .unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
@@ -3130,7 +3169,7 @@ mod tests {
     async fn test_pg_teardown() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         // Save 3 fibers
         for _ in 0..3 {
@@ -3161,7 +3200,7 @@ mod tests {
         let store = Arc::new(store);
         let task_type = "concurrent_task".to_string();
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         // Enqueue 3 jobs
         for i in 0..3 {
@@ -3316,11 +3355,11 @@ mod tests {
 
         let iid_a = Uuid::now_v7();
         let iid_b = Uuid::now_v7();
-        store.save_instance(&make_instance(iid_a)).await.unwrap();
+        store.save_instance("default", &make_instance(iid_a)).await.unwrap();
 
         let mut inst_b = make_instance(iid_b);
         inst_b.instance_id = iid_b;
-        store.save_instance(&inst_b).await.unwrap();
+        store.save_instance("default", &inst_b).await.unwrap();
 
         // 2 jobs for instance A, 1 for instance B
         for i in 0..2 {
@@ -3437,7 +3476,7 @@ mod tests {
     async fn test_a18_enqueue_job_duplicate_is_idempotent() {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         let activation = JobActivation {
             job_key: "a18-dup-job".to_string(),
@@ -3523,7 +3562,7 @@ mod tests {
         let fid = Uuid::now_v7();
 
         store
-            .save_instance(&make_instance(iid))
+            .save_instance("default", &make_instance(iid))
             .await
             .expect("save_instance happy path must succeed");
 
@@ -3547,7 +3586,7 @@ mod tests {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
 
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         let loaded = store.load_instance(iid).await.unwrap().unwrap();
         assert!(
@@ -3570,7 +3609,11 @@ mod tests {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
 
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("test-owner", &make_instance(iid)).await.unwrap();
+
+        // Claim it
+        let claimed = store.claim_instance_for_transition("default", iid, "test-owner", 30000).await.unwrap();
+        assert!(claimed);
 
         let original_hash = store
             .load_instance(iid)
@@ -3581,7 +3624,7 @@ mod tests {
 
         // Re-save (simulates tick updating state/flags).
         let inst = store.load_instance(iid).await.unwrap().unwrap();
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("test-owner", &inst).await.unwrap();
 
         let after_hash = store
             .load_instance(iid)
@@ -3600,7 +3643,7 @@ mod tests {
         let (pool, store) = setup().await;
         let iid = Uuid::now_v7();
 
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         // The immutability trigger (migration 029) blocks tenant_id mutation
         // at the DB level — defense in depth above the application integrity
@@ -3628,9 +3671,9 @@ mod tests {
         let (pool, store) = setup().await;
         let iid = Uuid::now_v7();
 
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
         store
-            .quarantine_instance(iid, "default", "grpc_handler")
+            .quarantine_instance(iid, "default", "default", "grpc_handler")
             .await
             .expect("quarantine_instance must succeed");
 
@@ -3669,11 +3712,11 @@ mod tests {
         let (_pool, store) = setup().await;
         let iid = Uuid::now_v7();
 
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         // Quarantine the instance.
         store
-            .quarantine_instance(iid, "default", "scheduler_claim")
+            .quarantine_instance(iid, "default", "default", "scheduler_claim")
             .await
             .unwrap();
 
@@ -3766,7 +3809,7 @@ mod tests {
         // 1. Insert a process instance as superuser (bypassing RLS)
         let mut inst = make_instance(iid);
         inst.tenant_id = tenant_id.to_string();
-        admin_store.save_instance(&inst).await.unwrap();
+        admin_store.save_instance("default", &inst).await.unwrap();
 
         // 2. Connect to the database as the non-superuser bpmn_lite_app
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
@@ -3787,7 +3830,7 @@ mod tests {
 
         // 3. Test Site B: quarantine_instance without setting tenant context
         // Should return Err because process_instances UPDATE affects 0 rows due to RLS.
-        let quar_res = app_store.quarantine_instance(iid, tenant_id, "test_t1_1").await;
+        let quar_res = app_store.quarantine_instance(iid, tenant_id, "default", "test_t1_1").await;
         assert!(quar_res.is_err(), "quarantine_instance must fail without tenant context");
 
         // 4. Test Site A: atomic_consume_buffered_message
@@ -3850,30 +3893,110 @@ mod tests {
         assert!(consume_res.is_err(), "atomic_consume_buffered_message must fail (return Err) without tenant context");
     }
 
-    /// E-invariant T2.3: Verify that state-advancing writes succeed without any lease scope set.
+    /// RISK-009: Lease fencing re-enabled. A worker with the wrong lease owner is rejected.
     #[tokio::test]
     #[ignore]
-    async fn test_t2_3_no_lease_fence_success() {
-        let (_pool, store) = setup().await;
+    async fn test_risk_009_lease_fence_rejection() {
+        let (pool, store) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
-        // 1. Insert an instance
+        // 1. Seed instance
         let mut inst = make_instance(iid);
         inst.tenant_id = tenant_id.to_string();
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("owner-a", &inst).await.unwrap();
 
-        // 2. Claim it under owner "worker-current"
-        let claimed = store.claim_instance_for_transition(tenant_id, iid, "worker-current", 30000).await.unwrap();
+        // 2. Claim it under owner-a
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "owner-a", 30000).await.unwrap();
         assert!(claimed);
 
-        // 3. Attempt state-advancing write with NO lease scope set (which previously failed due to "default-lease-owner" mismatch)
-        // This simulates the startup recovery scan or the federated bus callback advance.
-        let res = store.update_instance_state(iid, ProcessState::Completed { at: 1700000000000 }).await;
-        assert!(res.is_ok(), "Write without active lease scope must succeed: {:?}", res);
+        // 3. Force lease expiry in DB
+        sqlx::query("UPDATE process_instances SET lease_until = now() - interval '1 second' WHERE instance_id = $1")
+            .bind(iid)
+            .execute(&pool)
+            .await
+            .unwrap();
 
+        // 4. Owner-b claims the expired lease
+        let claimed_b = store.claim_instance_for_transition(tenant_id, iid, "owner-b", 30000).await.unwrap();
+        assert!(claimed_b);
+
+        // 5. Stale owner-a tries to write -> must be rejected (returns error because rows_affected == 0 in update_instance_state)
+        let res_stale = store.update_instance_state(tenant_id, "owner-a", iid, ProcessState::Completed { at: 222 }).await;
+        assert!(res_stale.is_err(), "Stale owner-a write must fail the fence");
+
+        // 6. Current owner-b tries to write -> succeeds
+        let res_current = store.update_instance_state(tenant_id, "owner-b", iid, ProcessState::Completed { at: 333 }).await;
+        assert!(res_current.is_ok(), "Current owner-b write must succeed");
+    }
+
+    /// Regression healed correctly: bus_runtime::advance and detect_interrupted_ffi_calls write successfully by claiming the lease.
+    #[tokio::test]
+    #[ignore]
+    async fn test_regression_healed_by_claim() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // 1. Seed instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("scheduler", &inst).await.unwrap();
+        
+        // Simulating park-release:
+        sqlx::query("UPDATE process_instances SET lease_owner = NULL, lease_until = NULL WHERE instance_id = $1")
+            .bind(iid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // 2. A resumer (e.g. bus callback or recovery) claims the lease and writes
+        let resumer_owner = "bus-resumer-x";
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, resumer_owner, 30000).await.unwrap();
+        assert!(claimed, "Resumer must claim the released lease");
+
+        // 3. Write state-advancing change under the claimed owner
+        let res_write = store.update_instance_state(tenant_id, resumer_owner, iid, ProcessState::Completed { at: 999 }).await;
+        assert!(res_write.is_ok(), "Resumer write under held lease must succeed");
+
+        // 4. Assert that the write occurred under the claimed owner in the DB
         let loaded = store.load_instance(iid).await.unwrap().unwrap();
-        assert!(matches!(loaded.state, ProcessState::Completed { at: 1700000000000 }));
+        assert!(matches!(loaded.state, ProcessState::Completed { at: 999 }));
+    }
+
+    /// E-invariant: After a tick parks an instance, a different worker can claim the lease successfully (lease was released).
+    #[tokio::test]
+    #[ignore]
+    async fn test_park_releases_lease() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // 1. Seed instance with state = Running
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        inst.state = ProcessState::Running;
+        store.save_instance("owner-a", &inst).await.unwrap();
+
+        // 2. Claim it under owner-a
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "owner-a", 30000).await.unwrap();
+        assert!(claimed);
+
+        // 3. Commit a tick that has no running fibers (parks the instance)
+        // Since no fibers exist in the fibers table for this instance, has_running_fiber is false.
+        store.commit_tick(iid, tenant_id, "owner-a", &[]).await.unwrap();
+
+        // 4. Verify lease is released (lease_owner is NULL)
+        let row: (Option<String>,) = sqlx::query_as("SELECT lease_owner FROM process_instances WHERE instance_id = $1")
+            .bind(iid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(row.0.is_none(), "Lease owner must be cleared after park");
+
+        // 5. A different worker (owner-b) can claim it successfully
+        let claimed_b = store.claim_instance_for_transition(tenant_id, iid, "owner-b", 30000).await.unwrap();
+        assert!(claimed_b, "Different worker must be able to claim the released lease");
     }
 
     /// C2: Postgres single-transaction atomicity test (the decisive proof)
@@ -3895,7 +4018,9 @@ mod tests {
         inst.domain_payload_hash = [1u8; 32];
         inst.state = ProcessState::Running;
         
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "default", 30000).await.unwrap();
+        assert!(claimed);
         store.save_fiber(iid, &parent_fiber).await.unwrap();
 
         // 2. Build a tick op-record with several ops:
@@ -3932,7 +4057,7 @@ mod tests {
         ];
 
         // 3. Run the engine's atomic apply; assert it returns Err
-        let res = store.commit_tick(iid, tenant_id, &ops).await;
+        let res = store.commit_tick(iid, tenant_id, "default", &ops).await;
         assert!(res.is_err(), "Expected transaction to fail and roll back");
 
         // 4. Query the Postgres database directly and assert NONE of the ops persisted:
@@ -3962,7 +4087,7 @@ mod tests {
             TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
             TickOperation::UpdateInstanceState { state: ProcessState::Completed { at: 123456 } },
         ];
-        let res2 = store.commit_tick(iid, tenant_id, &successful_ops).await;
+        let res2 = store.commit_tick(iid, tenant_id, "default", &successful_ops).await;
         assert!(res2.is_ok(), "Expected transaction to succeed: {:?}", res2);
 
         let fibers = store.load_fibers(iid).await.unwrap();

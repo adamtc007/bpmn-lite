@@ -815,7 +815,7 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     let issues = tenant_a.scan_recoverable_inconsistencies().await.unwrap();
     let kinds = issues
@@ -2245,7 +2245,7 @@ async fn t_loop_3_counter_starts_at_zero() {
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     let mut fiber = Fiber::new(Uuid::now_v7(), 0);
     store
@@ -2433,7 +2433,7 @@ async fn t_ig_1_all_branches_taken() {
     let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
     inst.flags.insert(0, Value::Bool(true)); // high_risk
     inst.flags.insert(1, Value::Bool(true)); // pep_flagged
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 
     // Tick → ForkInclusive evaluates: all 3 taken → 3 fibers spawned
     engine.tick_instance(instance_id).await.unwrap();
@@ -2843,7 +2843,7 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
     let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
     inst.flags.insert(0, Value::Bool(true));
     // flag 1 not set = false
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 
     engine.tick_instance(instance_id).await.unwrap();
 
@@ -3207,7 +3207,7 @@ async fn t_auth_2_inclusive_gateway_yaml() {
         let mut inst = store.load_instance(iid).await.unwrap().unwrap();
         inst.flags.insert(0, Value::Bool(true));
         // flag_b (key 1) not set = defaults to false
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
     }
 
     // Tick — ForkInclusive should spawn 2 fibers (unconditional + flag_a)

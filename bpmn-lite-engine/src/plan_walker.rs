@@ -62,7 +62,7 @@ impl PlanWalker {
     }
 
     /// Advance instance `instance_id` until the next callout or end event.
-    pub async fn advance(&self, instance_id: Uuid) -> Result<AdvanceOutcome> {
+    pub async fn advance(&self, instance_id: Uuid, owner: &str) -> Result<AdvanceOutcome> {
         let mut instance = self
             .store
             .load_instance(instance_id)
@@ -95,7 +95,7 @@ impl PlanWalker {
             match node {
                 ExecutionNode::StartEvent(n) => {
                     instance.current_node_id = Some(n.next.clone());
-                    self.store.save_instance(&instance).await?;
+                    self.store.save_instance(owner, &instance).await?;
                 }
 
                 ExecutionNode::ExclusiveGateway(gw) => {
@@ -104,12 +104,12 @@ impl PlanWalker {
                     match evaluate_gateway(gw, &placeholder_vals) {
                         Ok(next) => {
                             instance.current_node_id = Some(next.to_owned());
-                            self.store.save_instance(&instance).await?;
+                            self.store.save_instance(owner, &instance).await?;
                         }
                         Err(reason) => {
                             instance.state =
                                 ProcessState::Failed { incident_id: Uuid::now_v7() };
-                            self.store.save_instance(&instance).await?;
+                            self.store.save_instance(owner, &instance).await?;
                             tracing::error!(
                                 instance_id = %instance_id,
                                 reason = %reason,
@@ -127,6 +127,7 @@ impl PlanWalker {
                             task.id.clone(),
                             task.verb_fqn.clone(),
                             task.static_args.clone(),
+                            owner,
                         )
                         .await;
                 }
@@ -138,6 +139,7 @@ impl PlanWalker {
                             task.id.clone(),
                             task.decision_id.clone(),
                             HashMap::new(),
+                            owner,
                         )
                         .await;
                 }
@@ -146,7 +148,7 @@ impl PlanWalker {
                     let now = chrono::Utc::now().timestamp_millis();
                     instance.state = ProcessState::Completed { at: now };
                     instance.current_node_id = Some(end.id.clone());
-                    self.store.save_instance(&instance).await?;
+                    self.store.save_instance(owner, &instance).await?;
                     return Ok(AdvanceOutcome::Completed {
                         node_id: end.id.clone(),
                         status: end.status.clone(),
@@ -165,6 +167,7 @@ impl PlanWalker {
         node_id: String,
         fqn: String,
         static_args: HashMap<String, String>,
+        owner: &str,
     ) -> Result<AdvanceOutcome> {
         let (target_domain, verb_id) = split_verb_fqn(&fqn)?;
 
@@ -180,7 +183,7 @@ impl PlanWalker {
         const MAX_RETRIES: u64 = 3;
         if retry_count >= MAX_RETRIES {
             instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
-            self.store.save_instance(instance).await?;
+            self.store.save_instance(owner, instance).await?;
             return Ok(AdvanceOutcome::NotRunnable);
         }
 
@@ -243,7 +246,7 @@ impl PlanWalker {
             );
             instance.placeholder_values = serde_json::to_value(&pv).ok();
             instance.state = ProcessState::Running; // tick will retry
-            self.store.save_instance(instance).await?;
+            self.store.save_instance(owner, instance).await?;
             tracing::warn!(
                 instance_id = %instance.instance_id,
                 node_id = %node_id,
@@ -260,7 +263,7 @@ impl PlanWalker {
             node_id: node_id.clone(),
         };
         instance.current_node_id = Some(node_id.clone());
-        self.store.save_instance(instance).await?;
+        self.store.save_instance(owner, instance).await?;
 
         Ok(AdvanceOutcome::Submitted {
             callout_id,
@@ -272,6 +275,7 @@ impl PlanWalker {
     /// Start a new plan-based process instance.
     pub async fn start_process(
         &self,
+        lease_owner: &str,
         plan: &WorkflowExecutionPlan,
         tenant_id: impl Into<String>,
         initial_variables: HashMap<String, serde_json::Value>,
@@ -309,7 +313,7 @@ impl PlanWalker {
             current_node_id: Some(plan.start_node.clone()),
             placeholder_values,
         };
-        self.store.save_instance(&instance).await?;
+        self.store.save_instance(lease_owner, &instance).await?;
         Ok(instance_id)
     }
 }
@@ -464,11 +468,11 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf");
         let id = walker
-            .start_process(&plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new())
             .await
             .unwrap();
 
-        let outcome = walker.advance(id).await.unwrap();
+        let outcome = walker.advance(id, "default").await.unwrap();
         assert!(
             matches!(outcome, AdvanceOutcome::Completed { .. }),
             "expected Completed"
@@ -483,15 +487,15 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf2");
         let id = walker
-            .start_process(&plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new())
             .await
             .unwrap();
 
         let mut inst = store.load_instance(id).await.unwrap().unwrap();
         inst.state = ProcessState::Completed { at: 0 };
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
 
-        let outcome = walker.advance(id).await.unwrap();
+        let outcome = walker.advance(id, "default").await.unwrap();
         assert!(matches!(outcome, AdvanceOutcome::NotRunnable));
     }
 
@@ -501,16 +505,16 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf3");
         let id = walker
-            .start_process(&plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new())
             .await
             .unwrap();
 
         // Clear plan_hash so advance treats it as a bytecode instance.
         let mut inst = store.load_instance(id).await.unwrap().unwrap();
         inst.plan_hash = None;
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
 
-        let outcome = walker.advance(id).await.unwrap();
+        let outcome = walker.advance(id, "default").await.unwrap();
         assert!(matches!(outcome, AdvanceOutcome::NotRunnable));
     }
 

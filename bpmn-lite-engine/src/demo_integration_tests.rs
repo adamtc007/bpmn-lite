@@ -67,7 +67,7 @@ async fn inject_running(
         merged.extend(placeholders);
         inst.placeholder_values = serde_json::to_value(&merged).ok();
     }
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ async fn t4_start_process_creates_correct_initial_state() {
     let walker = make_walker(store.clone(), pending).await;
 
     let id = walker
-        .start_process(&plan, "demo", demo_initial_vars("Allianz AM", "FUND_MANDATE"))
+        .start_process("default", &plan, "demo", demo_initial_vars("Allianz AM", "FUND_MANDATE"))
         .await
         .unwrap();
 
@@ -119,7 +119,7 @@ async fn run_full_path_demo(client_type_input: &str, cbu_type_output: &str) {
 
     let cbu_id = Uuid::now_v7();
     let id = walker
-        .start_process(&plan, "demo", demo_initial_vars("Test Client", client_type_input))
+        .start_process("default", &plan, "demo", demo_initial_vars("Test Client", client_type_input))
         .await
         .unwrap();
 
@@ -138,7 +138,7 @@ async fn run_full_path_demo(client_type_input: &str, cbu_type_output: &str) {
     // moves current_node_id to the matching add-* task, then tries to
     // dispatch that task (which fails on MemoryStore). NotRunnable is
     // returned but the current_node was already advanced by the gateway.
-    let _ = walker.advance(id).await.unwrap();
+    let _ = walker.advance(id, "default").await.unwrap();
     let inst_after_gw = store.load_instance(id).await.unwrap().unwrap();
     let expected_add = match cbu_type_output {
         "corporate" => "add-corp".to_owned(),
@@ -154,7 +154,7 @@ async fn run_full_path_demo(client_type_input: &str, cbu_type_output: &str) {
     inject_running(&store, id, "end", HashMap::new()).await;
 
     // `advance()` processes EndEvent → Completed("Operational").
-    let outcome = walker.advance(id).await.unwrap();
+    let outcome = walker.advance(id, "default").await.unwrap();
     assert!(
         matches!(outcome, AdvanceOutcome::Completed { ref status, .. } if status == "Operational"),
         "expected Completed(Operational), got {:?}",

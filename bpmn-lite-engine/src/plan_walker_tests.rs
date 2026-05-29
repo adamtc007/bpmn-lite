@@ -190,7 +190,7 @@ async fn inject_waiting_instance(
         current_node_id: Some(node_id.to_owned()),
         placeholder_values: None,
     };
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
     instance_id
 }
 
@@ -218,7 +218,7 @@ async fn simulate_result_delivery(
         pv.insert(name.to_owned(), val);
         inst.placeholder_values = serde_json::to_value(&pv).ok();
     }
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 }
 
 // ── DoD #41 — ob-poc full round-trip ─────────────────────────────────
@@ -259,7 +259,7 @@ async fn dod_41_ob_poc_full_round_trip() {
 
     // Tick: walker advances through EndEvent → Completed.
     let walker = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker.advance(instance_id).await.unwrap();
+    let outcome = walker.advance(instance_id, "default").await.unwrap();
     assert!(
         matches!(outcome, AdvanceOutcome::Completed { ref status, .. } if status == "Operational"),
         "expected Completed(Operational) — got {:?}",
@@ -307,7 +307,7 @@ async fn dod_42_dmn_lite_full_round_trip() {
     ).await;
 
     let walker = make_walker(store.clone(), pending).await;
-    let outcome = walker.advance(instance_id).await.unwrap();
+    let outcome = walker.advance(instance_id, "default").await.unwrap();
     // Walker: Running on "gateway" → evaluates @cbu-type="fund" → end-fund → Completed.
     assert!(
         matches!(outcome, AdvanceOutcome::Completed { ref status, .. } if status == "FundOnboarded"),
@@ -338,7 +338,7 @@ async fn dod_44_crash_mid_outbox_recovery() {
     // in-memory restart — the process state persisted, outbox pending).
     // The process is still WaitingOnSubmission → advance returns NotRunnable.
     let walker_v2 = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
+    let outcome = walker_v2.advance(instance_id, "default").await.unwrap();
     assert!(
         matches!(outcome, AdvanceOutcome::NotRunnable),
         "WaitingOnSubmission must not advance until result arrives"
@@ -355,7 +355,7 @@ async fn dod_44_crash_mid_outbox_recovery() {
     ).await;
 
     // Advance → Completed.
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
+    let outcome = walker_v2.advance(instance_id, "default").await.unwrap();
     assert!(matches!(outcome, AdvanceOutcome::Completed { .. }));
 }
 
@@ -382,13 +382,13 @@ async fn dod_45_crash_mid_ack_reconciliation() {
             execution_id,
             node_id: "create-cbu".to_owned(),
         };
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
     }
 
     // "Restart": fresh walker over the same store.
     // Instance is WaitingOnInvocation → NotRunnable.
     let walker_v2 = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
+    let outcome = walker_v2.advance(instance_id, "default").await.unwrap();
     assert!(
         matches!(outcome, AdvanceOutcome::NotRunnable),
         "WaitingOnInvocation must not advance until result arrives"
@@ -404,6 +404,6 @@ async fn dod_45_crash_mid_ack_reconciliation() {
         None,
     ).await;
 
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
+    let outcome = walker_v2.advance(instance_id, "default").await.unwrap();
     assert!(matches!(outcome, AdvanceOutcome::Completed { .. }));
 }

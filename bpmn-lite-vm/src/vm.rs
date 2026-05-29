@@ -51,13 +51,14 @@ impl Vm {
         fiber: &mut Fiber,
         instance: &mut ProcessInstance,
         program: &CompiledProgram,
+        lease_owner: &str,
     ) -> Result<TickOutcome> {
         let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = self
             .tick_fiber_inner(fiber, instance, program, &mut tx_ctx)
             .await?;
         self.store
-            .commit_tick(instance.instance_id, &instance.tenant_id, &tx_ctx.ops)
+            .commit_tick(instance.instance_id, &instance.tenant_id, lease_owner, &tx_ctx.ops)
             .await?;
         Ok(outcome)
     }
@@ -916,6 +917,7 @@ impl Vm {
         &self,
         instance: &mut ProcessInstance,
         failure: &JobFailure,
+        lease_owner: &str,
     ) -> Result<()> {
         let fibers = self.store.load_fibers(instance.instance_id).await?;
         let parked = fibers
@@ -957,7 +959,7 @@ impl Vm {
             self.store.save_fiber(instance.instance_id, &fiber).await?;
 
             instance.state = ProcessState::Failed { incident_id };
-            self.store.save_instance(instance).await?;
+            self.store.save_instance(lease_owner, instance).await?;
         }
 
         Ok(())
@@ -1088,7 +1090,7 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -1098,7 +1100,7 @@ mod tests {
 
         // Tick — should park on first ExecNative
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(
@@ -1133,7 +1135,7 @@ mod tests {
             .unwrap();
         assert!(resumed.is_some(), "Fiber should be resumed");
         apply_completion(&mut instance, &completion1);
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         assert_eq!(instance.domain_payload.as_ref(), payload_after_1);
 
         // Load resumed fiber
@@ -1145,7 +1147,7 @@ mod tests {
 
         // Tick again — should park on second ExecNative
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(
@@ -1180,7 +1182,7 @@ mod tests {
             .unwrap();
         assert!(resumed.is_some());
         apply_completion(&mut instance, &completion2);
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         // Load resumed fiber and tick to End
         let fibers = store.load_fibers(instance.instance_id).await.unwrap();
@@ -1188,7 +1190,7 @@ mod tests {
         assert_eq!(fiber.pc, 2);
 
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(outcome, TickOutcome::Ended));
@@ -1214,7 +1216,7 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -1223,7 +1225,7 @@ mod tests {
             .unwrap();
 
         // Tick — parks on ExecNative
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1279,7 +1281,7 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
@@ -1287,7 +1289,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .commit_tick(instance.instance_id, &instance.tenant_id, &tx_ctx.ops)
+            .commit_tick(instance.instance_id, &instance.tenant_id, "default", &tx_ctx.ops)
             .await
             .unwrap();
 
@@ -1314,7 +1316,7 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -1323,7 +1325,7 @@ mod tests {
             .unwrap();
 
         // First tick — parks
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         let jobs = store
@@ -1359,7 +1361,7 @@ mod tests {
         // Simulate re-delivery: create a new fiber at pc=0 (as if restarted)
         let mut fiber2 = Fiber::new(Uuid::now_v7(), 0);
         let outcome = vm
-            .tick_fiber(&mut fiber2, &mut instance, &program)
+            .tick_fiber(&mut fiber2, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1398,14 +1400,14 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
             .save_fiber(instance.instance_id, &fiber)
             .await
             .unwrap();
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1452,7 +1454,7 @@ mod tests {
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
 
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(
@@ -1470,7 +1472,7 @@ mod tests {
         let mut instance = make_instance();
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
 
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1492,7 +1494,7 @@ mod tests {
         let mut instance = make_instance();
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
 
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1521,7 +1523,7 @@ mod tests {
         let mut instance = make_instance();
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
 
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1557,7 +1559,7 @@ mod tests {
         ]);
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -1566,7 +1568,7 @@ mod tests {
             .unwrap();
 
         // Tick — parks
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1602,6 +1604,8 @@ mod tests {
         apply_completion(&mut instance, &completion);
         store
             .atomic_complete(
+                &instance.tenant_id,
+                "default",
                 &instance,
                 &completion,
                 &[RuntimeEvent::JobCompleted {
@@ -1697,7 +1701,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store
             .store_program(program.bytecode_version, &program)
             .await
@@ -1711,7 +1715,7 @@ mod tests {
 
         // Tick — should park in Race
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(
@@ -1825,7 +1829,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store
             .store_program(program.bytecode_version, &program)
             .await
@@ -1838,7 +1842,7 @@ mod tests {
             .unwrap();
 
         // Tick — parks in Race
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -1913,7 +1917,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -1922,7 +1926,7 @@ mod tests {
             .unwrap();
 
         // Tick to park
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 
@@ -2008,7 +2012,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
 
         let mut fiber = Fiber::new(Uuid::now_v7(), 0);
         store
@@ -2017,7 +2021,7 @@ mod tests {
             .unwrap();
 
         // Tick to park
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(fiber.wait, WaitState::Race { .. }));
@@ -2100,7 +2104,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store
             .store_program(program.bytecode_version, &program)
             .await
@@ -2113,7 +2117,7 @@ mod tests {
             .await
             .unwrap();
         let outcome = vm
-            .tick_fiber(&mut fiber, &mut instance, &program)
+            .tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
         assert!(matches!(
@@ -2222,7 +2226,7 @@ mod tests {
         };
 
         let mut instance = make_instance();
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store
             .store_program(program.bytecode_version, &program)
             .await
@@ -2233,7 +2237,7 @@ mod tests {
             .save_fiber(instance.instance_id, &fiber)
             .await
             .unwrap();
-        vm.tick_fiber(&mut fiber, &mut instance, &program)
+        vm.tick_fiber(&mut fiber, &mut instance, &program, "default")
             .await
             .unwrap();
 

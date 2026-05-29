@@ -341,7 +341,7 @@ async fn create_instance(
         current_node_id: Some(plan.start_node.clone()),
         placeholder_values,
     };
-    store.save_instance(&instance).await?;
+    store.save_instance("default", &instance).await?;
     Ok(instance_id)
 }
 
@@ -367,7 +367,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
         match plan.nodes.get(&node_id) {
             Some(ExecutionNode::StartEvent(n)) => {
                 inst.current_node_id = Some(n.next.clone());
-                let _ = store.save_instance(&inst).await;
+                let _ = store.save_instance("default", &inst).await;
             }
             Some(ExecutionNode::ExclusiveGateway(gw)) => {
                 let chosen = gw.flows.iter().find(|f| {
@@ -376,7 +376,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                 });
                 if let Some(flow) = chosen {
                     inst.current_node_id = Some(flow.next.clone());
-                    let _ = store.save_instance(&inst).await;
+                    let _ = store.save_instance("default", &inst).await;
                 } else {
                     break;
                 }
@@ -386,7 +386,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                     at: chrono::Utc::now().timestamp_millis(),
                 };
                 inst.current_node_id = Some(end.id.clone());
-                let _ = store.save_instance(&inst).await;
+                let _ = store.save_instance("default", &inst).await;
                 break;
             }
             // ServiceTask / BusinessRuleTask — stop here, user drives next step.
@@ -484,5 +484,5 @@ async fn apply_step(
         pv.insert(name.to_owned(), val);
     }
     inst.placeholder_values = serde_json::to_value(&pv).ok();
-    let _ = store.save_instance(&inst).await;
+    let _ = store.save_instance("default", &inst).await;
 }

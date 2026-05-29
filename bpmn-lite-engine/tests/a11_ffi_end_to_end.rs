@@ -199,7 +199,7 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
         .expect("load instance")
         .expect("instance must exist");
     instance.flags.insert(score_key, Value::I64(100));
-    store.save_instance(&instance).await.expect("save instance");
+    store.save_instance("default", &instance).await.expect("save instance");
 
     // Run the instance — ExecFfi fires, decision evaluates, do_eligible = 1.
     engine
@@ -273,7 +273,7 @@ async fn a11_no_match_score_produces_tier_zero() {
     // Score = 99 → catch-all fires → tier = 0.
     let mut instance = store.load_instance(instance_id).await.unwrap().unwrap();
     instance.flags.insert(score_key, Value::I64(99));
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     engine.run_instance(instance_id).await.expect("run");
 
@@ -325,7 +325,7 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
 
     let mut instance = store.load_instance(instance_id).await.unwrap().unwrap();
     instance.flags.insert(score_key, Value::I64(100));
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     engine.run_instance(instance_id).await.expect("run");
 

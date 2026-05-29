@@ -14,12 +14,12 @@ use uuid::Uuid;
 pub trait ProcessStore: Send + Sync {
     // ── Instance ──
 
-    async fn save_instance(&self, instance: &ProcessInstance) -> Result<()>;
+    async fn save_instance(&self, lease_owner: &str, instance: &ProcessInstance) -> Result<()>;
     async fn load_instance(&self, id: Uuid) -> Result<Option<ProcessInstance>>;
-    async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()>;
-    async fn update_instance_flags(&self, id: Uuid, flags: &BTreeMap<FlagKey, Value>)
+    async fn update_instance_state(&self, tenant_id: &str, lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()>;
+    async fn update_instance_flags(&self, tenant_id: &str, lease_owner: &str, id: Uuid, flags: &BTreeMap<FlagKey, Value>)
         -> Result<()>;
-    async fn update_instance_payload(&self, id: Uuid, payload: &str, hash: &[u8; 32])
+    async fn update_instance_payload(&self, tenant_id: &str, lease_owner: &str, id: Uuid, payload: &str, hash: &[u8; 32])
         -> Result<()>;
 
     // ── Fibers ──
@@ -187,6 +187,8 @@ pub trait ProcessStore: Send + Sync {
     /// Returns the event sequence number.
     async fn atomic_start(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         root_fiber: &Fiber,
         event: &RuntimeEvent,
@@ -195,6 +197,8 @@ pub trait ProcessStore: Send + Sync {
     /// Atomically complete a job: save instance + dedupe + payload version + events + ack job.
     async fn atomic_complete(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         completion: &JobCompletion,
         events: &[RuntimeEvent],
@@ -268,6 +272,7 @@ pub trait ProcessStore: Send + Sync {
         &self,
         instance_id: Uuid,
         tenant_id: &str,
+        lease_owner: &str,
         detection_point: &str,
     ) -> Result<()>;
 
@@ -279,6 +284,7 @@ pub trait ProcessStore: Send + Sync {
         &self,
         instance_id: Uuid,
         tenant_id: &str,
+        lease_owner: &str,
         ops: &[TickOperation],
     ) -> Result<()>;
 }
@@ -338,10 +344,4 @@ impl TransactionContext {
 }
 
 
-tokio::task_local! {
-    pub static TENANT_ID: String;
-}
 
-pub fn get_tenant_id() -> Option<String> {
-    TENANT_ID.try_with(|t| t.clone()).ok()
-}

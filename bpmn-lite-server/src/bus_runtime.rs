@@ -140,6 +140,15 @@ impl ProcessAdvancer for StoreBackedAdvancer {
                 ))
             })?;
 
+        let owner = format!("bus-resumer-{}", Uuid::now_v7());
+        let claimed = self.store
+            .claim_instance_for_transition(&instance.tenant_id, instance.instance_id, &owner, 30_000)
+            .await
+            .map_err(|e| ProcessAdvancerError::Internal(format!("claim instance: {e}")))?;
+        if !claimed {
+            return Err(ProcessAdvancerError::Internal("failed to claim instance lease for bus resume".to_owned()));
+        }
+
         let is_success = matches!(
             input.outcome_kind,
             ExecutionOutcomeKind::Committed | ExecutionOutcomeKind::IdempotentReplayReturned
@@ -166,6 +175,9 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             }
             instance.state = ProcessState::Running;
         } else if let ExecutionOutcomeKind::OutcomeUnspecified = input.outcome_kind {
+            let _ = self.store
+                .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
+                .await;
             return Err(ProcessAdvancerError::Malformed(
                 "ExecutionOutcomeKind::OutcomeUnspecified — peer must populate kind".to_owned(),
             ));
@@ -174,10 +186,19 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
         }
 
-        self.store
-            .save_instance(&instance)
-            .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("save instance: {e}")))?;
+        let save_res = self.store
+            .save_instance(&owner, &instance)
+            .await;
+
+        let release_res = self.store
+            .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
+            .await;
+
+        match (save_res, release_res) {
+            (Err(e), _) => return Err(ProcessAdvancerError::Internal(format!("save instance: {e}"))),
+            (_, Err(e)) => return Err(ProcessAdvancerError::Internal(format!("release instance: {e}"))),
+            (Ok(()), Ok(())) => {}
+        }
 
         tracing::info!(
             execution_id = %input.execution_id,

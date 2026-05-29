@@ -90,7 +90,7 @@ fn now_ms() -> i64 {
 impl ProcessStore for MemoryStore {
     // ── Instance ──
 
-    async fn save_instance(&self, instance: &ProcessInstance) -> Result<()> {
+    async fn save_instance(&self, _lease_owner: &str, instance: &ProcessInstance) -> Result<()> {
         let mut w = self.inner.write().await;
         w.instances.insert(instance.instance_id, instance.clone());
         Ok(())
@@ -101,7 +101,7 @@ impl ProcessStore for MemoryStore {
         Ok(r.instances.get(&id).cloned())
     }
 
-    async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()> {
+    async fn update_instance_state(&self, _tenant_id: &str, _lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()> {
         let mut w = self.inner.write().await;
         let inst = w
             .instances
@@ -113,6 +113,8 @@ impl ProcessStore for MemoryStore {
 
     async fn update_instance_flags(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         id: Uuid,
         flags: &BTreeMap<FlagKey, Value>,
     ) -> Result<()> {
@@ -127,6 +129,8 @@ impl ProcessStore for MemoryStore {
 
     async fn update_instance_payload(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         id: Uuid,
         payload: &str,
         hash: &[u8; 32],
@@ -728,6 +732,8 @@ impl ProcessStore for MemoryStore {
 
     async fn atomic_start(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         instance: &ProcessInstance,
         root_fiber: &Fiber,
         event: &RuntimeEvent,
@@ -753,6 +759,8 @@ impl ProcessStore for MemoryStore {
 
     async fn atomic_complete(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         instance: &ProcessInstance,
         completion: &JobCompletion,
         events: &[RuntimeEvent],
@@ -944,6 +952,7 @@ impl ProcessStore for MemoryStore {
         &self,
         instance_id: Uuid,
         _tenant_id: &str,
+        _lease_owner: &str,
         _detection_point: &str,
     ) -> Result<()> {
         let mut guard = self.inner.write().await;
@@ -962,6 +971,7 @@ impl ProcessStore for MemoryStore {
         &self,
         instance_id: Uuid,
         _tenant_id: &str,
+        _lease_owner: &str,
         ops: &[TickOperation],
     ) -> Result<()> {
         let mut w = self.inner.write().await;
@@ -1065,6 +1075,19 @@ impl ProcessStore for MemoryStore {
                 }
             }
         }
+
+        // Release the lease if the instance is parked/terminal
+        let is_runnable = if let Some(inst) = w.instances.get(&instance_id) {
+            let has_running_fiber = w.fibers.iter().any(|((iid, _), f)| iid == &instance_id && f.wait == WaitState::Running);
+            matches!(inst.state, ProcessState::Running) && has_running_fiber
+        } else {
+            false
+        };
+
+        if !is_runnable {
+            w.transition_leases.remove(&instance_id);
+        }
+
         Ok(())
     }
 }
@@ -1112,7 +1135,7 @@ mod tests {
         let id = Uuid::now_v7();
         let inst = make_instance(id);
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
 
         assert_eq!(loaded.instance_id, id);
@@ -1146,7 +1169,7 @@ mod tests {
             trace_sequence: 7,
         };
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
 
         inst.session_stack.session_id = mutated_session_id;
         inst.session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
@@ -1247,7 +1270,7 @@ mod tests {
         for i in 0..3 {
             let instance_id = Uuid::now_v7();
             store
-                .save_instance(&make_instance(instance_id))
+                .save_instance("default", &make_instance(instance_id))
                 .await
                 .unwrap();
             store
@@ -1331,7 +1354,7 @@ mod tests {
         let task_type = "create_case".to_string();
         let instance_id = Uuid::now_v7();
         store
-            .save_instance(&make_instance(instance_id))
+            .save_instance("default", &make_instance(instance_id))
             .await
             .unwrap();
 
@@ -1473,7 +1496,7 @@ mod tests {
             name: 1,
             corr_key: Value::Bool(false),
         };
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store.save_fiber(instance_id, &fiber).await.unwrap();
 
         assert_eq!(
@@ -1572,7 +1595,7 @@ mod tests {
         let mutated_session_id = Uuid::new_v4();
 
         store
-            .save_instance(&make_instance(instance_id))
+            .save_instance("default", &make_instance(instance_id))
             .await
             .unwrap();
 
@@ -1697,7 +1720,7 @@ mod tests {
     async fn test_transition_lease_excludes_other_owner_until_release() {
         let store = MemoryStore::new();
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         assert!(store
             .claim_instance_for_transition("default", iid, "owner-a", 5_000)
@@ -1764,7 +1787,7 @@ mod tests {
             placeholder_values: None,
         };
         
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store.save_fiber(instance_id, &parent_fiber).await.unwrap();
         
         // 2. Build tick operations with an injecting failure (wrong token claim)
@@ -1798,7 +1821,7 @@ mod tests {
         ];
         
         // 3. Commit tick - expect failure
-        let res = store.commit_tick(instance_id, "default", &ops).await;
+        let res = store.commit_tick(instance_id, "default", "default", &ops).await;
         assert!(res.is_err());
         
         // 4. Assert post-rollback state equals pre-tick state
@@ -1816,7 +1839,7 @@ mod tests {
             TickOperation::JoinArrive { join_id: 10 },
             TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
         ];
-        store.commit_tick(instance_id, "default", &successful_ops).await.unwrap();
+        store.commit_tick(instance_id, "default", "default", &successful_ops).await.unwrap();
         
         // 6. Assert correct completed state
         let loaded_fibers = store.load_fibers(instance_id).await.unwrap();
@@ -1856,7 +1879,7 @@ mod tests {
             current_node_id: None,
             placeholder_values: None,
         };
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         
         // Build a transactional update that fails
         let msg = ClaimedBufferedMessage {
@@ -1881,7 +1904,7 @@ mod tests {
             TickOperation::ConsumeBufferedMessage { message: msg }, // Fail!
         ];
         
-        let res = store.commit_tick(instance_id, "default", &ops).await;
+        let res = store.commit_tick(instance_id, "default", "default", &ops).await;
         assert!(res.is_err());
         
         // Assert neither state updated nor event logged
@@ -1896,7 +1919,7 @@ mod tests {
             TickOperation::UpdateInstanceState { state: ProcessState::Completed { at: 12345 } },
             TickOperation::AppendEvent { event: RuntimeEvent::Completed { at: 12345 } },
         ];
-        store.commit_tick(instance_id, "default", &successful_ops).await.unwrap();
+        store.commit_tick(instance_id, "default", "default", &successful_ops).await.unwrap();
         
         // Assert both updated
         let loaded = store.load_instance(instance_id).await.unwrap().unwrap();

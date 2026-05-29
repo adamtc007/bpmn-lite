@@ -227,9 +227,7 @@ impl BpmnLiteEngine {
         Fut: std::future::Future<Output = Result<T>>,
     {
         self.claim_transition_as(instance_id, owner).await?;
-        let result = bpmn_lite_store::store::TENANT_ID.scope(self.tenant_id.clone(), async {
-            operation().await
-        }).await;
+        let result = operation().await;
         let release_result = self.release_transition_as(instance_id, owner).await;
         match (result, release_result) {
             (Ok(value), Ok(())) => Ok(value),
@@ -401,11 +399,10 @@ impl BpmnLiteEngine {
             instance_id,
             bytecode_version: params.bytecode_version,
         };
-        bpmn_lite_store::store::TENANT_ID.scope(tenant_id, async move {
-            store
-                .atomic_start(&instance_clone, &root_fiber_clone, &event_clone)
-                .await
-        }).await?;
+        let owner = self.transition_owner.clone();
+        store
+            .atomic_start(&tenant_id, &owner, &instance_clone, &root_fiber_clone, &event_clone)
+            .await?;
 
         Ok(instance_id)
     }
@@ -455,12 +452,12 @@ impl BpmnLiteEngine {
 
     async fn tick_instance_as_owner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
         self.run_guarded_transition(instance_id, owner, || async {
-            self.tick_instance_inner(instance_id).await
+            self.tick_instance_inner(instance_id, owner).await
         })
         .await
     }
 
-    async fn tick_instance_inner(&self, instance_id: Uuid) -> Result<()> {
+    async fn tick_instance_inner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
         // T3 — plan-based instances bypass the fiber VM entirely.
         // The discriminator is plan_hash: Some = plan path, None = bytecode path.
         // WaitingOnSubmission / WaitingOnInvocation instances are skipped by the
@@ -477,7 +474,7 @@ impl BpmnLiteEngine {
                             pending_store.clone(),
                             bus_client.clone(),
                         );
-                        let _ = walker.advance(instance_id).await?;
+                        let _ = walker.advance(instance_id, owner).await?;
                     }
                     return Ok(());
                 }
@@ -523,7 +520,7 @@ impl BpmnLiteEngine {
                         // First commit any accumulated operations so the FFI sees them
                         if !tx_ctx.ops.is_empty() {
                             self.store
-                                .commit_tick(instance_id, &instance.tenant_id, &tx_ctx.ops)
+                                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
                                 .await?;
                             tx_ctx.ops.clear();
                         }
@@ -534,6 +531,7 @@ impl BpmnLiteEngine {
                                 &program,
                                 invocation_id,
                                 pc,
+                                owner,
                             )
                             .await?;
                         if incident {
@@ -637,7 +635,7 @@ impl BpmnLiteEngine {
         // Commit the tick transaction
         if !tx_ctx.ops.is_empty() {
             self.store
-                .commit_tick(instance_id, &instance.tenant_id, &tx_ctx.ops)
+                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
                 .await?;
         }
 
@@ -958,6 +956,7 @@ impl BpmnLiteEngine {
         program: &CompiledProgram,
         invocation_id: Uuid,
         pc: Addr,
+        owner: &str,
     ) -> Result<bool> {
         // No dispatcher → create an incident.
         let Some(dispatcher) = &self.ffi_dispatcher else {
@@ -971,7 +970,7 @@ impl BpmnLiteEngine {
                 )
                 .await?;
             instance.state = ProcessState::Failed { incident_id };
-            self.store.save_instance(instance).await?;
+            self.store.save_instance(owner, instance).await?;
             return Ok(true); // incident
         };
 
@@ -1038,7 +1037,7 @@ impl BpmnLiteEngine {
                     .create_incident(instance, fiber, pc, ErrorClass::Transient, &msg)
                     .await?;
                 instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(instance).await?;
+                self.store.save_instance(owner, instance).await?;
                 Ok(true)
             }
             Ok(FfiResult::Success {
@@ -1141,7 +1140,7 @@ impl BpmnLiteEngine {
                     .create_incident(instance, fiber, pc, ec, &message)
                     .await?;
                 instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(instance).await?;
+                self.store.save_instance(owner, instance).await?;
                 Ok(true)
             }
         }
@@ -1303,6 +1302,7 @@ impl BpmnLiteEngine {
                 domain_payload,
                 expected_instance_payload_hash,
                 orch_flags,
+                &owner,
             )
             .await
         })
@@ -1343,6 +1343,7 @@ impl BpmnLiteEngine {
         domain_payload: &str,
         expected_instance_payload_hash: [u8; 32],
         orch_flags: BTreeMap<String, Value>,
+        owner: &str,
     ) -> Result<()> {
         let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
 
@@ -1451,7 +1452,7 @@ impl BpmnLiteEngine {
                 Vec::new()
             };
             self.store
-                .atomic_complete(&instance, &completion, &events)
+                .atomic_complete(&instance.tenant_id, owner, &instance, &completion, &events)
                 .await?;
         } else {
             // No fiber matched — ghost signal
@@ -1478,7 +1479,7 @@ impl BpmnLiteEngine {
         let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
-            self.fail_job_inner(job_key, error_class, message, None)
+            self.fail_job_inner(job_key, error_class, message, None, &owner)
                 .await
         })
         .await
@@ -1510,6 +1511,7 @@ impl BpmnLiteEngine {
                 error_class,
                 message,
                 Some((worker_id, claim_token)),
+                &owner,
             )
             .await
         })
@@ -1522,6 +1524,7 @@ impl BpmnLiteEngine {
         error_class: ErrorClass,
         message: &str,
         worker_claim: Option<(&str, &str)>,
+        owner: &str,
     ) -> Result<()> {
         let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
 
@@ -1663,7 +1666,7 @@ impl BpmnLiteEngine {
 
         let mut instance = instance;
         instance.state = ProcessState::Failed { incident_id };
-        self.store.save_instance(&instance).await?;
+        self.store.save_instance(owner, &instance).await?;
         if let Some((worker_id, claim_token)) = worker_claim {
             let _ = self
                 .store
@@ -1983,12 +1986,16 @@ impl BpmnLiteEngine {
     pub async fn cancel(&self, instance_id: Uuid, reason: &str) -> Result<()> {
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
-            self.cancel_inner(instance_id, reason).await
+            self.cancel_inner(instance_id, reason, &owner).await
         })
         .await
     }
 
-    async fn cancel_inner(&self, instance_id: Uuid, reason: &str) -> Result<()> {
+    async fn cancel_inner(&self, instance_id: Uuid, reason: &str, owner: &str) -> Result<()> {
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("instance {} not found for cancel", instance_id))?;
+        let tenant_id = &instance.tenant_id;
+
         // 1. Emit WaitCancelled per parked fiber (before deletion)
         let fibers = self.store.load_fibers(instance_id).await?;
         for fiber in &fibers {
@@ -2013,6 +2020,8 @@ impl BpmnLiteEngine {
         // 3. Update state, delete fibers, emit Cancelled
         self.store
             .update_instance_state(
+                tenant_id,
+                owner,
                 instance_id,
                 ProcessState::Cancelled {
                     reason: reason.to_string(),
@@ -2290,11 +2299,20 @@ impl BpmnLiteEngine {
                                 return Ok(());
                             }
 
+                            let owner = format!("startup-recovery-{}", Uuid::now_v7());
+                            let claimed = self.store
+                                .claim_instance_for_transition(&instance.tenant_id, instance_id, &owner, 30_000)
+                                .await?;
+                            if !claimed {
+                                return Err(anyhow!("failed to claim instance lease for startup recovery"));
+                            }
+
                             // Fibers are stored separately from the instance.
                             let mut fibers = self.store.load_fibers(instance_id).await?;
                             let fiber_idx = fibers.iter().position(|f| f.pc == *caller_pc);
                             let Some(idx) = fiber_idx else {
                                 tracing::warn!(%instance_id, "A17: fiber at pc={} not found; skipping", caller_pc);
+                                self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await?;
                                 return Ok(());
                             };
 
@@ -2326,7 +2344,11 @@ impl BpmnLiteEngine {
                             fibers[idx].wait = WaitState::Incident { incident_id };
                             self.store.save_fiber(instance_id, &fibers[idx]).await?;
                             instance.state = ProcessState::Failed { incident_id };
-                            self.store.save_instance(&instance).await?;
+                            
+                            let save_res = self.store.save_instance(&owner, &instance).await;
+                            let release_res = self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await;
+                            save_res?;
+                            release_res?;
                             Ok(())
                         }.await;
 
