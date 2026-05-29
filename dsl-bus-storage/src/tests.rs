@@ -37,10 +37,7 @@ async fn setup() -> PgPool {
     sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
     sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
 
-    let mut migrator = sqlx::migrate!("./migrations");
-    // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 1)
-    // because the engine and dsl-bus-storage migrations share the same database schema in tests.
-    migrator.set_ignore_missing(true);
+    let migrator = sqlx::migrate!("./migrations");
     migrator.run(&pool)
         .await
         .expect("run migrations");

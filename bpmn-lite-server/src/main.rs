@@ -65,6 +65,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let admin_store =
                     bpmn_lite_store_postgres::PostgresProcessStore::new(admin_pool.clone());
                 admin_store.migrate().await?;
+
+                // Run bus migrations under admin role with search_path=dsl_bus
+                let mut bus_admin_url = admin_url.to_string();
+                if bus_admin_url.contains('?') {
+                    bus_admin_url.push_str("&options=-csearch_path%3Ddsl_bus");
+                } else {
+                    bus_admin_url.push_str("?options=-csearch_path%3Ddsl_bus");
+                }
+                let bus_admin_pool = sqlx::PgPool::connect(&bus_admin_url).await?;
+                dsl_bus_storage::migrate(&bus_admin_pool).await?;
+                bus_admin_pool.close().await;
+
                 admin_pool.close().await;
                 tracing::info!("Migrations applied; admin pool closed");
             }
@@ -81,6 +93,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // No admin URL — run migrations through the runtime pool
                 // (legacy / dev path).
                 pg.migrate().await?;
+
+                // Also run bus migrations
+                let mut bus_url = url.clone();
+                if bus_url.contains('?') {
+                    bus_url.push_str("&options=-csearch_path%3Ddsl_bus");
+                } else {
+                    bus_url.push_str("?options=-csearch_path%3Ddsl_bus");
+                }
+                let bus_pool_migrator = sqlx::PgPool::connect(&bus_url).await?;
+                dsl_bus_storage::migrate(&bus_pool_migrator).await?;
+                bus_pool_migrator.close().await;
+
                 tracing::info!("Using PostgresProcessStore (migrations applied via runtime pool)");
             } else {
                 tracing::info!(

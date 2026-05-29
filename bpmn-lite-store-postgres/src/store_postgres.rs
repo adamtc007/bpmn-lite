@@ -2736,10 +2736,7 @@ mod tests {
         let pool = PgPool::connect(&url).await.expect("connect to db");
 
         // Run migrations
-        let mut migrator = sqlx::migrate!("./migrations");
-        // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 900001)
-        // because the engine and dsl-bus-storage migrations share the same database schema in tests.
-        migrator.set_ignore_missing(true);
+        let migrator = sqlx::migrate!("./migrations");
         migrator.run(&pool)
             .await
             .expect("run migrations");
@@ -2748,41 +2745,50 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let grant_sql = format!("GRANT CONNECT, TEMPORARY, CREATE ON DATABASE \"{}\" TO bpmn_lite_app", db_name);
+        let grant_sql = format!("GRANT CONNECT, TEMPORARY ON DATABASE \"{}\" TO bpmn_lite_app", db_name);
         sqlx::query(&grant_sql).execute(&pool).await.unwrap();
         sqlx::query("GRANT USAGE ON SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
-        sqlx::query("GRANT ALL ON ALL TABLES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
-        sqlx::query("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
+        sqlx::query("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
+        sqlx::query("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
 
         sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (900001, 900002)")
-            .execute(&pool)
-            .await
-            .ok();
-        sqlx::query("CREATE SCHEMA dsl_bus AUTHORIZATION bpmn_lite_app")
+        sqlx::query("CREATE SCHEMA dsl_bus")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("GRANT USAGE, CREATE ON SCHEMA dsl_bus TO bpmn_lite_app")
+        sqlx::query("GRANT USAGE ON SCHEMA dsl_bus TO bpmn_lite_app")
             .execute(&pool)
             .await
             .unwrap();
+
+        // Run bus migrations under admin role with search_path=dsl_bus
+        let mut bus_admin_url = url.clone();
+        if bus_admin_url.contains('?') {
+            bus_admin_url.push_str("&options=-csearch_path%3Ddsl_bus");
+        } else {
+            bus_admin_url.push_str("?options=-csearch_path%3Ddsl_bus");
+        }
+        let bus_admin_pool = PgPool::connect(&bus_admin_url).await.expect("connect to db for bus migrations");
+        dsl_bus_storage::migrate(&bus_admin_pool)
+            .await
+            .expect("run bus migrations");
+        bus_admin_pool.close().await;
+
+        // Grant bpmn_lite_app DML-only privileges on dsl_bus tables and sequences
+        sqlx::query("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dsl_bus TO bpmn_lite_app").execute(&pool).await.unwrap();
+        sqlx::query("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA dsl_bus TO bpmn_lite_app").execute(&pool).await.unwrap();
 
         use std::str::FromStr;
         let mut options = sqlx::postgres::PgConnectOptions::from_str(&url).expect("parse db url");
         options = options.username("bpmn_lite_app").password("bpmn_lite_app_dev_password");
         let app_pool = PgPool::connect_with(options).await.expect("connect as bpmn_lite_app");
 
-        dsl_bus_storage::migrate(&app_pool)
-            .await
-            .expect("run bus migrations");
-
         // Truncate all tables
         sqlx::query("TRUNCATE dsl_bus.outbox CASCADE")
-            .execute(&app_pool)
+            .execute(&pool)
             .await
             .unwrap();
 

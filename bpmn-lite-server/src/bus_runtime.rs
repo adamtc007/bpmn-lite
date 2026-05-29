@@ -66,8 +66,7 @@ pub(crate) struct BusRuntimeConfig {
 }
 
 pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime> {
-    dsl_bus_storage::migrate(&config.pool).await?;
-
+    // Startup as bpmn_lite_app role assumes database schema is already migrated by admin role.
     let client = config.client;
     let notifier = client.outbox_notifier();
     let sender = client.start_sender();

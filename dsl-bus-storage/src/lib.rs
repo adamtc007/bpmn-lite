@@ -83,8 +83,7 @@ pub use types::{
 pub async fn migrate(pool: &sqlx::PgPool) -> std::result::Result<(), sqlx::migrate::MigrateError> {
     ensure_bus_schema(pool).await?;
 
-    let mut migrator = sqlx::migrate!("./migrations");
-    migrator.set_ignore_missing(true);
+    let migrator = sqlx::migrate!("./migrations");
     migrator.run(pool).await
 }
 
