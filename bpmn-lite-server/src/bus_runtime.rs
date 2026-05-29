@@ -128,19 +128,41 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             return Ok(());
         };
 
-        let mut instance = self
-            .store
-            .load_instance(row.process_instance_id)
-            .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("load instance: {e}")))?
-            .ok_or_else(|| {
-                ProcessAdvancerError::Internal(format!(
+        let owner = format!("bus-resumer-{}", Uuid::now_v7());
+
+        let mut instance = match self.store.load_instance(row.process_instance_id).await {
+            Ok(Some(inst)) => inst,
+            Ok(None) => {
+                return Err(ProcessAdvancerError::Internal(format!(
                     "pending row referenced unknown instance {}",
                     row.process_instance_id
-                ))
-            })?;
+                )));
+            }
+            Err(e) => {
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(
+                        process_instance_id = %row.process_instance_id,
+                        error = %e,
+                        "IntegrityViolation during load_instance in bus advance; quarantining instance"
+                    );
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(
+                            process_instance_id = %row.process_instance_id,
+                            error = %q_err,
+                            "Failed to quarantine instance after IntegrityViolation during load_instance"
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(ProcessAdvancerError::Internal(format!("load instance: {e}")));
+            }
+        };
 
-        let owner = format!("bus-resumer-{}", Uuid::now_v7());
         let claimed = self.store
             .claim_instance_for_transition(&instance.tenant_id, instance.instance_id, &owner, 30_000)
             .await
@@ -202,6 +224,26 @@ impl ProcessAdvancer for StoreBackedAdvancer {
         match commit_res {
             Err(e) => {
                 if e.is::<bpmn_lite_store::store::AlreadyConsumedError>() {
+                    return Ok(());
+                }
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(
+                        process_instance_id = %instance.instance_id,
+                        error = %e,
+                        "IntegrityViolation during commit_tick in bus advance; quarantining instance"
+                    );
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(
+                            process_instance_id = %instance.instance_id,
+                            error = %q_err,
+                            "Failed to quarantine instance after IntegrityViolation during commit_tick"
+                        );
+                    }
                     return Ok(());
                 }
                 return Err(ProcessAdvancerError::Internal(format!("commit tick: {e}")));

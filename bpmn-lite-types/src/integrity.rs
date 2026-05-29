@@ -224,3 +224,12 @@ mod tests {
         );
     }
 }
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("IntegrityViolation: instance {instance_id} (tenant {tenant_id}) failed integrity check at {detection_point}")]
+pub struct IntegrityViolation {
+    pub instance_id: uuid::Uuid,
+    pub tenant_id: String,
+    pub detection_point: String,
+}
+

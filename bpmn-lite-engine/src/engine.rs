@@ -436,7 +436,19 @@ impl BpmnLiteEngine {
         let mut ticked = 0u32;
         for id in ids {
             if let Err(e) = self.tick_instance_as_owner(id, owner).await {
-                tracing::warn!(instance_id = %id, error = %e, "tick_instance_ids: instance tick failed");
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(instance_id = %id, error = %e, "IntegrityViolation detected in tick_instance_ids_as_owner; quarantining instance");
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(instance_id = %id, error = %q_err, "Failed to quarantine instance after IntegrityViolation");
+                    }
+                } else {
+                    tracing::warn!(instance_id = %id, error = %e, "tick_instance_ids: instance tick failed");
+                }
             }
             ticked += 1;
         }
@@ -447,7 +459,25 @@ impl BpmnLiteEngine {
     /// Jobs are left in the queue — use `activate_jobs()` to dequeue them.
     pub async fn tick_instance(&self, instance_id: Uuid) -> Result<()> {
         let owner = self.transition_owner.clone();
-        self.tick_instance_as_owner(instance_id, &owner).await
+        match self.tick_instance_as_owner(instance_id, &owner).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(instance_id = %instance_id, error = %e, "IntegrityViolation detected in tick_instance; quarantining instance");
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(instance_id = %instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in tick_instance");
+                    }
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     async fn tick_instance_as_owner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
@@ -1371,10 +1401,11 @@ impl BpmnLiteEngine {
         // ── Guard 3: payload hash ──
         let expected = compute_hash(&instance.domain_payload);
         if expected_instance_payload_hash != expected {
-            return Err(anyhow!(
-                "Payload hash mismatch on complete_job: job_key={}",
-                job_key
-            ));
+            return Err(anyhow::anyhow!(bpmn_lite_types::integrity::IntegrityViolation {
+                instance_id,
+                tenant_id: instance.tenant_id.clone(),
+                detection_point: format!("complete_job_inner:payload_hash_mismatch:job_key={}", job_key),
+            }));
         }
 
         let program = self
@@ -2353,7 +2384,20 @@ impl BpmnLiteEngine {
                         }.await;
 
                         if let Err(e) = result {
-                            tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
+                            if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                                tracing::error!(%instance_id, error = %e, "IntegrityViolation detected in startup recovery; quarantining instance");
+                                let q_owner = format!("startup-recovery-quarantine-{}", Uuid::now_v7());
+                                if let Err(q_err) = self.store.quarantine_instance(
+                                    violation.instance_id,
+                                    &violation.tenant_id,
+                                    &q_owner,
+                                    &violation.detection_point,
+                                ).await {
+                                    tracing::error!(%instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in startup recovery");
+                                }
+                            } else {
+                                tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
+                            }
                         }
                     }
                     _ => {

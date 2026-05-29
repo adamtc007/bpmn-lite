@@ -468,6 +468,7 @@ dependencies = [
  "chrono",
  "dsl-bus-storage",
  "ffi-catalogue",
+ "ffi-dispatcher",
  "ffi-types",
  "serde",
  "serde_json",
@@ -485,6 +486,7 @@ dependencies = [
  "blake3",
  "serde",
  "serde_json",
+ "thiserror",
  "tracing",
  "uuid",
 ]

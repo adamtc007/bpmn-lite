@@ -4499,4 +4499,435 @@ mod tests {
 
         assert!(res_rec1 != res_rec2, "Exactly one recovery runner must claim the instance");
     }
+
+    struct ViolatingTestStore {
+        inner: Arc<PostgresProcessStore>,
+        violate_instance_id: Uuid,
+        should_fail_load_integrity: std::sync::atomic::AtomicBool,
+        should_fail_commit_integrity: std::sync::atomic::AtomicBool,
+        should_fail_generic: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl ProcessStore for ViolatingTestStore {
+        async fn save_instance(&self, lease_owner: &str, instance: &ProcessInstance) -> Result<()> {
+            self.inner.save_instance(lease_owner, instance).await
+        }
+        async fn load_instance(&self, id: Uuid) -> Result<Option<ProcessInstance>> {
+            if id == self.violate_instance_id {
+                if self.should_fail_load_integrity.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(anyhow!(bpmn_lite_types::integrity::IntegrityViolation {
+                        instance_id: id,
+                        tenant_id: "default".to_string(),
+                        detection_point: "test_violation_load".to_string(),
+                    }));
+                }
+                if self.should_fail_generic.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(anyhow!("generic load failure"));
+                }
+            }
+            self.inner.load_instance(id).await
+        }
+        async fn update_instance_state(&self, tenant_id: &str, lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()> {
+            self.inner.update_instance_state(tenant_id, lease_owner, id, state).await
+        }
+        async fn update_instance_flags(&self, tenant_id: &str, lease_owner: &str, id: Uuid, flags: &BTreeMap<FlagKey, Value>) -> Result<()> {
+            self.inner.update_instance_flags(tenant_id, lease_owner, id, flags).await
+        }
+        async fn update_instance_payload(&self, tenant_id: &str, lease_owner: &str, id: Uuid, payload: &str, hash: &[u8; 32]) -> Result<()> {
+            self.inner.update_instance_payload(tenant_id, lease_owner, id, payload, hash).await
+        }
+        async fn save_fiber(&self, instance_id: Uuid, fiber: &Fiber) -> Result<()> {
+            self.inner.save_fiber(instance_id, fiber).await
+        }
+        async fn load_fiber(&self, instance_id: Uuid, fiber_id: Uuid) -> Result<Option<Fiber>> {
+            self.inner.load_fiber(instance_id, fiber_id).await
+        }
+        async fn load_fibers(&self, instance_id: Uuid) -> Result<Vec<Fiber>> {
+            self.inner.load_fibers(instance_id).await
+        }
+        async fn delete_fiber(&self, instance_id: Uuid, fiber_id: Uuid) -> Result<()> {
+            self.inner.delete_fiber(instance_id, fiber_id).await
+        }
+        async fn delete_all_fibers(&self, instance_id: Uuid) -> Result<()> {
+            self.inner.delete_all_fibers(instance_id).await
+        }
+        async fn join_arrive(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+            self.inner.join_arrive(instance_id, join_id).await
+        }
+        async fn join_reset(&self, instance_id: Uuid, join_id: JoinId) -> Result<()> {
+            self.inner.join_reset(instance_id, join_id).await
+        }
+        async fn join_delete_all(&self, instance_id: Uuid) -> Result<()> {
+            self.inner.join_delete_all(instance_id).await
+        }
+        async fn dedupe_get(&self, key: &str) -> Result<Option<JobCompletion>> {
+            self.inner.dedupe_get(key).await
+        }
+        async fn dedupe_put(&self, key: &str, completion: &JobCompletion) -> Result<()> {
+            self.inner.dedupe_put(key, completion).await
+        }
+        async fn record_message_delivery(&self, tenant_id: &str, instance_id: Uuid, msg_id: &str) -> Result<bool> {
+            self.inner.record_message_delivery(tenant_id, instance_id, msg_id).await
+        }
+        async fn enqueue_job(&self, activation: &JobActivation) -> Result<()> {
+            self.inner.enqueue_job(activation).await
+        }
+        async fn dequeue_jobs(&self, task_types: &[String], max: usize, tenant_id: &str, worker_id: &str, lease_ms: u64) -> Result<Vec<JobActivation>> {
+            self.inner.dequeue_jobs(task_types, max, tenant_id, worker_id, lease_ms).await
+        }
+        async fn ack_job(&self, job_key: &str) -> Result<()> {
+            self.inner.ack_job(job_key).await
+        }
+        async fn validate_job_claim(&self, job_key: &str, worker_id: &str, claim_token: &str) -> Result<bool> {
+            self.inner.validate_job_claim(job_key, worker_id, claim_token).await
+        }
+        async fn retry_claimed_job(&self, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, not_before_ms: i64) -> Result<bool> {
+            self.inner.retry_claimed_job(job_key, worker_id, claim_token, error_class, error_message, not_before_ms).await
+        }
+        async fn dead_letter_claimed_job(&self, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, incident_id: Uuid) -> Result<bool> {
+            self.inner.dead_letter_claimed_job(job_key, worker_id, claim_token, error_class, error_message, incident_id).await
+        }
+        async fn cancel_jobs_for_instance(&self, instance_id: Uuid) -> Result<Vec<String>> {
+            self.inner.cancel_jobs_for_instance(instance_id).await
+        }
+        async fn store_program(&self, version: [u8; 32], program: &CompiledProgram) -> Result<()> {
+            self.inner.store_program(version, program).await
+        }
+        async fn load_program(&self, version: [u8; 32]) -> Result<Option<CompiledProgram>> {
+            self.inner.load_program(version).await
+        }
+        async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> Result<()> {
+            self.inner.store_plan(plan_hash, plan_json).await
+        }
+        async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
+            self.inner.load_plan(plan_hash).await
+        }
+        async fn dead_letter_put(&self, name: u32, corr_key: &Value, payload: &[u8], ttl_ms: u64) -> Result<()> {
+            self.inner.dead_letter_put(name, corr_key, payload, ttl_ms).await
+        }
+        async fn dead_letter_take(&self, name: u32, corr_key: &Value) -> Result<Option<Vec<u8>>> {
+            self.inner.dead_letter_take(name, corr_key).await
+        }
+        async fn buffer_message(&self, tenant_id: &str, message_name: &str, correlation_key: &str, msg_id: &str, payload: &[u8], payload_hash: Option<[u8; 32]>, ttl_ms: u64, process_instance_id: Option<Uuid>) -> Result<BufferMessageResult> {
+            self.inner.buffer_message(tenant_id, message_name, correlation_key, msg_id, payload, payload_hash, ttl_ms, process_instance_id).await
+        }
+        async fn claim_buffered_message(&self, tenant_id: &str, message_name: &str, correlation_key: &str, claim_ms: u64) -> Result<Option<ClaimedBufferedMessage>> {
+            self.inner.claim_buffered_message(tenant_id, message_name, correlation_key, claim_ms).await
+        }
+        async fn atomic_consume_buffered_message(&self, instance: &ProcessInstance, fiber: &Fiber, message: &ClaimedBufferedMessage, payload_update: Option<&PayloadUpdate>, events: &[RuntimeEvent]) -> Result<bool> {
+            self.inner.atomic_consume_buffered_message(instance, fiber, message, payload_update, events).await
+        }
+        async fn release_buffered_message_claim(&self, message: &ClaimedBufferedMessage) -> Result<bool> {
+            self.inner.release_buffered_message_claim(message).await
+        }
+        async fn reclaim_stale_buffered_message_claims(&self) -> Result<u32> {
+            self.inner.reclaim_stale_buffered_message_claims().await
+        }
+        async fn prune_expired_messages(&self) -> Result<u32> {
+            self.inner.prune_expired_messages().await
+        }
+        async fn append_event(&self, instance_id: Uuid, event: &RuntimeEvent) -> Result<u64> {
+            self.inner.append_event(instance_id, event).await
+        }
+        async fn read_events(&self, instance_id: Uuid, from_seq: u64) -> Result<Vec<(u64, RuntimeEvent)>> {
+            self.inner.read_events(instance_id, from_seq).await
+        }
+        async fn save_payload_version(&self, instance_id: Uuid, hash: &[u8; 32], payload: &str) -> Result<()> {
+            self.inner.save_payload_version(instance_id, hash, payload).await
+        }
+        async fn load_payload_version(&self, instance_id: Uuid, hash: &[u8; 32]) -> Result<Option<String>> {
+            self.inner.load_payload_version(instance_id, hash).await
+        }
+        async fn save_incident(&self, incident: &Incident) -> Result<()> {
+            self.inner.save_incident(incident).await
+        }
+        async fn load_incidents(&self, instance_id: Uuid) -> Result<Vec<Incident>> {
+            self.inner.load_incidents(instance_id).await
+        }
+        async fn atomic_start(&self, tenant_id: &str, lease_owner: &str, instance: &ProcessInstance, root_fiber: &Fiber, event: &RuntimeEvent) -> Result<u64> {
+            self.inner.atomic_start(tenant_id, lease_owner, instance, root_fiber, event).await
+        }
+        async fn atomic_complete(&self, tenant_id: &str, lease_owner: &str, instance: &ProcessInstance, completion: &JobCompletion, events: &[RuntimeEvent]) -> Result<()> {
+            self.inner.atomic_complete(tenant_id, lease_owner, instance, completion, events).await
+        }
+        async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> Result<u32> {
+            self.inner.reclaim_stale_jobs(timeout_ms).await
+        }
+        async fn prune_dedupe_cache(&self, older_than_ms: u64) -> Result<u32> {
+            self.inner.prune_dedupe_cache(older_than_ms).await
+        }
+        async fn list_running_instances(&self, tenant_id: &str) -> Result<Vec<Uuid>> {
+            self.inner.list_running_instances(tenant_id).await
+        }
+        async fn claim_running_instances(&self, tenant_id: &str, owner: &str, limit: usize, lease_ms: u64) -> Result<Vec<Uuid>> {
+            self.inner.claim_running_instances(tenant_id, owner, limit, lease_ms).await
+        }
+        async fn claim_instance_for_transition(&self, tenant_id: &str, instance_id: Uuid, owner: &str, lease_ms: u64) -> Result<bool> {
+            self.inner.claim_instance_for_transition(tenant_id, instance_id, owner, lease_ms).await
+        }
+        async fn release_instance_transition(&self, tenant_id: &str, instance_id: Uuid, owner: &str) -> Result<()> {
+            self.inner.release_instance_transition(tenant_id, instance_id, owner).await
+        }
+        async fn health_check(&self) -> Result<()> {
+            self.inner.health_check().await
+        }
+        async fn ensure_tenant(&self, tenant_id: &str) -> Result<()> {
+            self.inner.ensure_tenant(tenant_id).await
+        }
+        async fn list_tenants(&self) -> Result<Vec<String>> {
+            self.inner.list_tenants().await
+        }
+        async fn list_tenants_in_pool(&self, pool_id: &str) -> Result<Vec<String>> {
+            self.inner.list_tenants_in_pool(pool_id).await
+        }
+        async fn quarantine_instance(&self, instance_id: Uuid, tenant_id: &str, lease_owner: &str, detection_point: &str) -> Result<()> {
+            self.inner.quarantine_instance(instance_id, tenant_id, lease_owner, detection_point).await
+        }
+        async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+            self.inner.join_get(instance_id, join_id).await
+        }
+        async fn commit_tick(&self, instance_id: Uuid, tenant_id: &str, lease_owner: &str, ops: &[TickOperation]) -> Result<()> {
+            if instance_id == self.violate_instance_id && self.should_fail_commit_integrity.load(std::sync::atomic::Ordering::Relaxed) {
+                let lease_owner_owned = lease_owner.to_string();
+                let tenant_id_owned = tenant_id.to_string();
+                let tenant_id_for_closure = tenant_id.to_string();
+                let ops = ops.to_vec();
+                return self.inner.execute_tenant_scoped(&tenant_id_owned, &lease_owner_owned, |tx| Box::pin(async move {
+                    for op in &ops {
+                        PostgresProcessStore::apply_op(tx, instance_id, op).await?;
+                    }
+
+                    // Post-ops check in the same transaction: release lease if parked/terminal
+                    let state_val: serde_json::Value = sqlx::query_scalar(
+                        "SELECT state FROM process_instances WHERE instance_id = $1"
+                    )
+                    .bind(instance_id)
+                    .fetch_one(&mut *tx.tx)
+                    .await?;
+
+                    let parsed_state: ProcessState = serde_json::from_value(state_val)?;
+
+                    let has_running_fiber: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM fibers WHERE instance_id = $1 AND wait_state = '\"Running\"'::jsonb)"
+                    )
+                    .bind(instance_id)
+                    .fetch_one(&mut *tx.tx)
+                    .await?;
+
+                    let is_runnable = matches!(parsed_state, ProcessState::Running) && has_running_fiber;
+
+                    if !is_runnable {
+                        sqlx::query(
+                            r#"
+                            UPDATE process_instances
+                            SET lease_owner = NULL,
+                                lease_until = now() - interval '1 second'
+                            WHERE instance_id = $1
+                            "#
+                        )
+                        .bind(instance_id)
+                        .execute(&mut *tx.tx)
+                        .await?;
+                    }
+
+                    Err(anyhow!(bpmn_lite_types::integrity::IntegrityViolation {
+                        instance_id,
+                        tenant_id: tenant_id_for_closure,
+                        detection_point: "test_violation_commit".to_string(),
+                    }))
+                })).await;
+            }
+            self.inner.commit_tick(instance_id, tenant_id, lease_owner, ops).await
+        }
+    }
+
+    /// E-invariant #1 & #2: Violation -> quarantine, not crash, not churn. Quarantine survives rollback.
+    /// Drives a tick through the production path, rolls it back, and verifies state changes do not persist while quarantine does.
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_integrity_violation_quarantines_and_rolls_back() {
+        let (_pool, store) = setup().await;
+        let store = Arc::new(store);
+        let engine = BpmnLiteEngine::new(store.clone());
+
+        // 1. Compile and start a process instance.
+        let compiled = engine.compile(SMOKE_BPMN).await.unwrap();
+        let version = compiled.bytecode_version;
+
+        let payload = r#"{"case_id":"test-123"}"#;
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        let iid = engine
+            .start("smoke_proc", version, payload, hash, "test-corr-1")
+            .await
+            .unwrap();
+
+        // Check pre-tick state: quarantine_state is None, fiber pc is 0.
+        let loaded_before = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded_before.quarantine_state, None);
+        let fibers_before = store.load_fibers(iid).await.unwrap();
+        assert_eq!(fibers_before[0].pc, 0);
+
+        // 2. Wrap the store in ViolatingTestStore, violating on commit_tick.
+        let violating_store = Arc::new(ViolatingTestStore {
+            inner: store.clone(),
+            violate_instance_id: iid,
+            should_fail_load_integrity: std::sync::atomic::AtomicBool::new(false),
+            should_fail_commit_integrity: std::sync::atomic::AtomicBool::new(true),
+            should_fail_generic: std::sync::atomic::AtomicBool::new(false),
+        });
+        let engine_with_violating_store = BpmnLiteEngine::new(violating_store.clone());
+
+        // 3. Drive the tick. The engine will run the fiber, try to commit_tick,
+        // which fails with IntegrityViolation, rolls back, and then quarantines.
+        let tick_res = engine_with_violating_store.tick_instance(iid).await;
+        assert!(tick_res.is_ok(), "Tick must return Ok(()) (graceful skip) on IntegrityViolation, got {:?}", tick_res);
+
+        // 4. Assert both halves post-rollback:
+        // A. The state change (instance's current_node_id and job queue enqueueing) did NOT persist (rolled back).
+        let loaded_after = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded_after.current_node_id.as_deref(), None, "Instance current_node_id must be rolled back (still None)");
+
+        // Job queue must not contain any jobs for our instance
+        let jobs = store.dequeue_jobs(&["do_work".to_string()], 100, "default", "test-worker", 5000).await.unwrap();
+        let has_job_for_our_instance = jobs.iter().any(|j| j.process_instance_id == iid);
+        assert!(!has_job_for_our_instance, "Job for our instance must not have been enqueued (rolled back)");
+
+        // B. The quarantine_state DID persist (due to separate connection write).
+        assert_eq!(loaded_after.quarantine_state.as_deref(), Some("integrity_violation"), "quarantine_state must survive rollback");
+
+        // C. Quarantined instance is excluded from claims.
+        let claimed = store.claim_running_instances("default", "test-scheduler", 10, 5000).await.unwrap();
+        assert!(!claimed.contains(&iid), "quarantined instance must not be returned by claim_running_instances");
+    }
+
+    /// E-invariant #3: Discrimination / no over-quarantine.
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_non_integrity_failure_does_not_quarantine() {
+        let (_pool, store) = setup().await;
+        let store = Arc::new(store);
+        let iid = Uuid::now_v7();
+
+        store.ensure_tenant("default").await.unwrap();
+        let inst = make_instance(iid);
+        store.save_instance("test-owner", &inst).await.unwrap();
+
+        let violating_store = Arc::new(ViolatingTestStore {
+            inner: store.clone(),
+            violate_instance_id: iid,
+            should_fail_load_integrity: std::sync::atomic::AtomicBool::new(false),
+            should_fail_commit_integrity: std::sync::atomic::AtomicBool::new(false),
+            should_fail_generic: std::sync::atomic::AtomicBool::new(true),
+        });
+
+        let engine = BpmnLiteEngine::new(violating_store.clone());
+
+        let tick_res = engine.tick_instance(iid).await;
+        assert!(tick_res.is_err(), "Tick must propagate non-integrity errors, got {:?}", tick_res);
+
+        let loaded = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded.quarantine_state, None, "Ordinary failure must not quarantine instance");
+
+        let claimed = store.claim_running_instances("default", "test-scheduler", 10, 5000).await.unwrap();
+        assert!(claimed.contains(&iid), "Ordinary failed instance must remain claimable/retryable");
+    }
+
+    /// Recovery path: a corrupt instance encountered during detect_interrupted_ffi_calls
+    /// is quarantined (under the recovery owner), does not abort the scan, and recovery
+    /// continues to other instances.
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_integrity_violation_in_startup_recovery() {
+        let (pool, store) = setup().await;
+        let store = Arc::new(store);
+
+        let iid_corrupt = Uuid::now_v7();
+        let iid_healthy = Uuid::now_v7();
+
+        store.ensure_tenant("default").await.unwrap();
+
+        // 1. Publish FFI template as NonIdempotent
+        let template_id = [1u8; 32];
+        let template_id_hex = hex(&template_id);
+        use ffi_catalogue::FfiTemplateStore;
+        let ffi_store = Arc::new(crate::ffi_template_store::PostgresFfiTemplateStore::new(pool.clone()));
+        let template = ffi_types::FfiTemplate {
+            template_id,
+            owner_type: "dmn-decision".to_string(),
+            owner_metadata: "CheckEligibility".as_bytes().to_vec(),
+            input_schema: vec![],
+            output_schema: vec![],
+            idempotency: ffi_types::Idempotency::NonIdempotent,
+            tenant_id: "default".to_string(),
+            published_at: 1700000000000,
+            publisher: "test".to_string(),
+        };
+        ffi_store.publish(&template).await.unwrap();
+
+        // Build FfiDispatcher and cache
+        let catalogue = Arc::new(ffi_catalogue::FfiCatalogue::new(ffi_store));
+        catalogue.load_into_cache("default").await.unwrap();
+        let dispatcher = Arc::new(ffi_dispatcher::FfiDispatcher::new(catalogue));
+
+        // 2. Save both instances
+        let inst_corrupt = make_instance(iid_corrupt);
+        let inst_healthy = make_instance(iid_healthy);
+        store.save_instance("test-owner", &inst_corrupt).await.unwrap();
+        store.save_instance("test-owner", &inst_healthy).await.unwrap();
+
+        // Save a fiber for both, so the incident creator can locate the fiber at pc = 0
+        let fiber_corrupt = Fiber::new(Uuid::now_v7(), 0);
+        let fiber_healthy = Fiber::new(Uuid::now_v7(), 0);
+        store.save_fiber(iid_corrupt, &fiber_corrupt).await.unwrap();
+        store.save_fiber(iid_healthy, &fiber_healthy).await.unwrap();
+
+        // Append pending Ffi invocation event to both
+        let ev_corrupt = RuntimeEvent::FfiInvocationPending {
+            invocation_id: Uuid::now_v7(),
+            template_id_hex: template_id_hex.clone(),
+            caller_task_id: "task1".to_string(),
+            caller_pc: 0,
+            owner_type: "engine".to_string(),
+        };
+        let ev_healthy = RuntimeEvent::FfiInvocationPending {
+            invocation_id: Uuid::now_v7(),
+            template_id_hex: template_id_hex.clone(),
+            caller_task_id: "task1".to_string(),
+            caller_pc: 0,
+            owner_type: "engine".to_string(),
+        };
+        store.append_event(iid_corrupt, &ev_corrupt).await.unwrap();
+        store.append_event(iid_healthy, &ev_healthy).await.unwrap();
+
+        // 3. Wrap in ViolatingTestStore. We return IntegrityViolation on load_instance for iid_corrupt.
+        let violating_store = Arc::new(ViolatingTestStore {
+            inner: store.clone(),
+            violate_instance_id: iid_corrupt,
+            should_fail_load_integrity: std::sync::atomic::AtomicBool::new(true),
+            should_fail_commit_integrity: std::sync::atomic::AtomicBool::new(false),
+            should_fail_generic: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let engine = BpmnLiteEngine::new(violating_store.clone()).with_ffi_dispatcher(dispatcher);
+
+        // 4. Run detect_interrupted_ffi_calls. It should recover 1 (healthy), quarantine corrupt, and complete.
+        let recovered = engine.detect_interrupted_ffi_calls("default").await.unwrap();
+        assert_eq!(recovered, 2, "Both pending invocations should be scanned");
+
+        // 5. Assert:
+        // A. iid_corrupt is quarantined
+        let corrupt_loaded = store.load_instance(iid_corrupt).await.unwrap().unwrap();
+        assert_eq!(corrupt_loaded.quarantine_state.as_deref(), Some("integrity_violation"));
+
+        // B. iid_healthy was successfully recovered (its state is Failed due to incident creation)
+        let healthy_loaded = store.load_instance(iid_healthy).await.unwrap().unwrap();
+        assert!(matches!(healthy_loaded.state, ProcessState::Failed { .. }), "Healthy instance must be Failed, got {:?}", healthy_loaded.state);
+        assert_eq!(healthy_loaded.quarantine_state, None, "Healthy instance must not be quarantined");
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
 }
+
