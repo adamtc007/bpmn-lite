@@ -158,12 +158,25 @@ impl MockServer {
 // ── Test helpers ─────────────────────────────────────────────────────
 
 async fn setup_pool() -> PgPool {
-    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+    let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
+    if url.contains('?') {
+        url.push_str("&options=-csearch_path%3Ddsl_bus");
+    } else {
+        url.push_str("?options=-csearch_path%3Ddsl_bus");
+    }
     let pool = PgPool::connect(&url).await.expect("connect");
-    sqlx::migrate!("../dsl-bus-storage/migrations")
-        .run(&pool)
+
+    // Clean drop/recreation of dsl_bus to isolate migrations in tests
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
+    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+
+    let mut migrator = sqlx::migrate!("../dsl-bus-storage/migrations");
+    // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 1)
+    // because the engine and dsl-bus-storage migrations share the same database schema in tests.
+    migrator.set_ignore_missing(true);
+    migrator.run(&pool)
         .await
         .expect("migrations");
     sqlx::query("TRUNCATE outbox").execute(&pool).await.unwrap();

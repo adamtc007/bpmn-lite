@@ -2202,6 +2202,72 @@ impl PostgresProcessStore {
                     return Err(anyhow::anyhow!("failed to consume message: claim expired or already consumed"));
                 }
             }
+            TickOperation::InsertPendingInvocation { pending } => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO bpmn_pending_invocation (
+                        callout_id, process_instance_id, node_id, target_domain, verb_id,
+                        idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT DO NOTHING
+                    "#,
+                )
+                .bind(pending.callout_id)
+                .bind(pending.process_instance_id)
+                .bind(&pending.node_id)
+                .bind(&pending.target_domain)
+                .bind(&pending.verb_id)
+                .bind(pending.idempotency_key)
+                .bind(pending.execution_id)
+                .bind(pending.submitted_at)
+                .bind(pending.ack_received_at)
+                .bind(pending.timeout_at)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::InsertOutbox { id, target_domain, target_endpoint, payload, idempotency_key, callout_id } => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO dsl_bus.outbox (
+                        id, target_domain, target_endpoint, payload, idempotency_key,
+                        execution_id, callout_id, status, attempt_count, next_attempt_at,
+                        last_error, created_at, submitted_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ON CONFLICT (idempotency_key, target_endpoint) DO NOTHING
+                    "#,
+                )
+                .bind(id)
+                .bind(target_domain)
+                .bind(target_endpoint)
+                .bind(payload)
+                .bind(idempotency_key)
+                .bind(None::<Uuid>)
+                .bind(callout_id)
+                .bind("pending")
+                .bind(0i16)
+                .bind(chrono::Utc::now())
+                .bind(None::<String>)
+                .bind(chrono::Utc::now())
+                .bind(None::<chrono::DateTime<chrono::Utc>>)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+            TickOperation::TakePendingInvocation { execution_id } => {
+                let result = sqlx::query(
+                    r#"
+                    DELETE FROM bpmn_pending_invocation
+                    WHERE execution_id = $1
+                    "#,
+                )
+                .bind(execution_id)
+                .execute(&mut *tx.tx)
+                .await?;
+                if result.rows_affected() != 1 {
+                    return Err(anyhow::anyhow!(bpmn_lite_store::store::AlreadyConsumedError));
+                }
+            }
         }
         Ok(())
     }
@@ -2639,6 +2705,8 @@ impl PostgresProcessStore {
 mod tests {
     use super::*;
     use bpmn_lite_engine::BpmnLiteEngine;
+    use bpmn_lite_store::pending::{PendingInvocation, PendingInvocationStore};
+    use crate::pending_store::PostgresPendingInvocationStore;
     use sqlx::PgPool;
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -2652,12 +2720,24 @@ mod tests {
         let pool = PgPool::connect(&url).await.expect("connect to db");
 
         // Run migrations
-        sqlx::migrate!("./migrations")
-            .run(&pool)
+        let mut migrator = sqlx::migrate!("./migrations");
+        // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 900001)
+        // because the engine and dsl-bus-storage migrations share the same database schema in tests.
+        migrator.set_ignore_missing(true);
+        migrator.run(&pool)
             .await
             .expect("run migrations");
 
+        dsl_bus_storage::migrate(&pool)
+            .await
+            .expect("run bus migrations");
+
         // Truncate all tables
+        sqlx::query("TRUNCATE dsl_bus.outbox CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         sqlx::query("TRUNCATE process_instances CASCADE")
             .execute(&pool)
             .await
@@ -4101,5 +4181,322 @@ mod tests {
 
         let loaded_inst = store.load_instance(iid).await.unwrap().unwrap();
         assert!(matches!(loaded_inst.state, ProcessState::Completed { at: 123456 }));
+    }
+
+    /// E-invariant: Emit atomicity (RISK-003). Atomically inserts outbox, pending, and saves instance, rolling back completely on failure.
+    #[tokio::test]
+    #[ignore]
+    async fn test_risk_003_emit_atomicity() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // Seed instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("default", &inst).await.unwrap();
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "default", 30000).await.unwrap();
+        assert!(claimed);
+
+        // Build a pending record
+        let callout_id = Uuid::now_v7();
+        let pending = PendingInvocation::new(
+            callout_id,
+            iid,
+            "node-1",
+            "domain-x",
+            "verb-y",
+            Uuid::now_v7(),
+        );
+
+        // Build operations: insert pending, insert outbox, save instance, AND a failing op (e.g. consume message designed to fail)
+        let fail_msg = ClaimedBufferedMessage {
+            message: BufferedMessage {
+                tenant_id: tenant_id.to_string(),
+                message_name: "nonexistent".to_string(),
+                correlation_key: "nonexistent".to_string(),
+                msg_id: "nonexistent".to_string(),
+                payload: vec![],
+                payload_hash: None,
+                process_instance_id: Some(iid),
+                received_at: 0,
+                expires_at: 300000,
+            },
+            claim_token: "wrong-token".to_string(),
+            claim_until: 9999999999,
+        };
+
+        let ops = vec![
+            TickOperation::InsertPendingInvocation { pending: pending.clone() },
+            TickOperation::InsertOutbox {
+                id: Uuid::now_v7(),
+                target_domain: "domain-x".to_string(),
+                target_endpoint: "invocation".to_string(),
+                payload: vec![1, 2, 3],
+                idempotency_key: pending.idempotency_key,
+                callout_id,
+            },
+            TickOperation::SaveInstance { instance: inst.clone() },
+            TickOperation::ConsumeBufferedMessage { message: fail_msg }, // FAIL!
+        ];
+
+        let commit_res = store.commit_tick(iid, tenant_id, "default", &ops).await;
+        assert!(commit_res.is_err(), "Expected emit commit to fail and roll back");
+
+        // Verify no pending row, no outbox row, and instance not advanced
+        let pending_row: (i64,) = sqlx::query_as("SELECT count(*) FROM bpmn_pending_invocation WHERE callout_id = $1")
+            .bind(callout_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pending_row.0, 0, "Rollback failed: pending row found");
+
+        let outbox_row: (i64,) = sqlx::query_as("SELECT count(*) FROM dsl_bus.outbox WHERE callout_id = $1")
+            .bind(callout_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(outbox_row.0, 0, "Rollback failed: outbox row found");
+
+        // Now run the successful commit
+        let successful_ops = vec![
+            TickOperation::InsertPendingInvocation { pending: pending.clone() },
+            TickOperation::InsertOutbox {
+                id: Uuid::now_v7(),
+                target_domain: "domain-x".to_string(),
+                target_endpoint: "invocation".to_string(),
+                payload: vec![1, 2, 3],
+                idempotency_key: pending.idempotency_key,
+                callout_id,
+            },
+        ];
+        store.commit_tick(iid, tenant_id, "default", &successful_ops).await.unwrap();
+
+        // Verify both rows now exist
+        let pending_row2: (i64,) = sqlx::query_as("SELECT count(*) FROM bpmn_pending_invocation WHERE callout_id = $1")
+            .bind(callout_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pending_row2.0, 1, "Pending row not found after successful commit");
+
+        let outbox_row2: (i64,) = sqlx::query_as("SELECT count(*) FROM dsl_bus.outbox WHERE callout_id = $1")
+            .bind(callout_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(outbox_row2.0, 1, "Outbox row not found after successful commit");
+    }
+
+    /// E-invariant: Duplicate-result idempotency (RISK-004). Delivering the same result twice results in a no-op on the second run.
+    #[tokio::test]
+    #[ignore]
+    async fn test_risk_004_duplicate_result_idempotency() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // Seed instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("default", &inst).await.unwrap();
+
+        // Write a pending invocation row with execution_id
+        let callout_id = Uuid::now_v7();
+        let execution_id = Uuid::now_v7();
+        let mut pending = PendingInvocation::new(
+            callout_id,
+            iid,
+            "node-1",
+            "domain-x",
+            "verb-y",
+            Uuid::now_v7(),
+        );
+        pending.execution_id = Some(execution_id);
+        
+        let p_store = PostgresPendingInvocationStore::new(pool.clone());
+        p_store.insert(pending.clone()).await.unwrap();
+
+        // Claim transition lease for the first delivery
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "owner-first", 30000).await.unwrap();
+        assert!(claimed);
+
+        // First delivery: commit take pending + state change
+        inst.state = ProcessState::Running; // advance state
+        let ops = vec![
+            TickOperation::TakePendingInvocation { execution_id },
+            TickOperation::SaveInstance { instance: inst.clone() },
+        ];
+        let first_res = store.commit_tick(iid, tenant_id, "owner-first", &ops).await;
+        assert!(first_res.is_ok(), "First delivery must succeed");
+
+        // Release first lease manually (as we didn't park)
+        store.release_instance_transition(tenant_id, iid, "owner-first").await.unwrap();
+
+        // Second delivery (re-delivery of same execution_id):
+        // Claim transition lease for the second delivery
+        let claimed_second = store.claim_instance_for_transition(tenant_id, iid, "owner-second", 30000).await.unwrap();
+        assert!(claimed_second);
+
+        // Try to commit the exact same ops (re-delivery)
+        let second_ops = vec![
+            TickOperation::TakePendingInvocation { execution_id },
+            TickOperation::SaveInstance { instance: inst.clone() },
+        ];
+        let second_res = store.commit_tick(iid, tenant_id, "owner-second", &second_ops).await;
+        assert!(second_res.is_err(), "Second delivery must fail because row is already gone");
+        assert!(second_res.unwrap_err().to_string().contains("already consumed"));
+    }
+
+    /// E-invariant F2 negative test: a non-dedup commit_tick failure on the advance path (e.g. lease fence failure)
+    /// must not be swallowed as AlreadyConsumedError. The error must propagate and the pending row must NOT be deleted.
+    #[tokio::test]
+    #[ignore]
+    async fn test_risk_004_negative_other_failures_propagate() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // Seed instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("default", &inst).await.unwrap();
+
+        // Write a pending invocation row
+        let callout_id = Uuid::now_v7();
+        let execution_id = Uuid::now_v7();
+        let mut pending = PendingInvocation::new(
+            callout_id,
+            iid,
+            "node-1",
+            "domain-x",
+            "verb-y",
+            Uuid::now_v7(),
+        );
+        pending.execution_id = Some(execution_id);
+
+        let p_store = PostgresPendingInvocationStore::new(pool.clone());
+        p_store.insert(pending.clone()).await.unwrap();
+
+        // Claim the lease under "actual-owner"
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "actual-owner", 30000).await.unwrap();
+        assert!(claimed);
+
+        // Attempt commit_tick under a different owner "wrong-owner" -> should fail due to lease fence rejection!
+        let ops = vec![
+            TickOperation::TakePendingInvocation { execution_id },
+            TickOperation::SaveInstance { instance: inst.clone() },
+        ];
+        let res = store.commit_tick(iid, tenant_id, "wrong-owner", &ops).await;
+        assert!(res.is_err(), "Expected lease fence error to propagate");
+        
+        let err = res.unwrap_err();
+        // Assert it is NOT AlreadyConsumedError
+        assert!(!err.is::<bpmn_lite_store::store::AlreadyConsumedError>(), "Lease fence error must not be masked as AlreadyConsumedError");
+        
+        // Assert that the pending row was NOT deleted (since the transaction rolled back)
+        let row_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bpmn_pending_invocation WHERE execution_id = $1")
+            .bind(execution_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count.0, 1, "Pending row must still exist since transaction rolled back");
+    }
+
+    /// E-invariant: Concurrent Claim races and Concurrent Recovery (T3.3.1)
+    #[tokio::test]
+    #[ignore]
+    async fn test_concurrent_claim_and_recovery() {
+        let (pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // Seed instance with state = Running, lease expired
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        inst.state = ProcessState::Running;
+        store.save_instance("default", &inst).await.unwrap();
+
+        // Claim and expire it
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "owner-temp", 30000).await.unwrap();
+        assert!(claimed);
+        sqlx::query("UPDATE process_instances SET lease_until = now() - interval '1 second' WHERE instance_id = $1")
+            .bind(iid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Race two claimers concurrently
+        let store_arc = Arc::new(store);
+        let s1 = store_arc.clone();
+        let s2 = store_arc.clone();
+
+        let t1 = tokio::spawn(async move {
+            s1.claim_instance_for_transition("default", iid, "claimer-1", 30000).await
+        });
+        let t2 = tokio::spawn(async move {
+            s2.claim_instance_for_transition("default", iid, "claimer-2", 30000).await
+        });
+
+        let r1 = t1.await.unwrap().unwrap();
+        let r2 = t2.await.unwrap().unwrap();
+
+        // Assert exactly one won, and the other returned false (loser no-ops gracefully)
+        assert!(r1 != r2, "Exactly one claimer must succeed");
+        assert!(r1 || r2, "At least one claimer must succeed");
+
+        // Now test concurrent recovery:
+        // Set the instance to Failed (simulating crash)
+        let mut inst = store_arc.load_instance(iid).await.unwrap().unwrap();
+        inst.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
+        // Save using whichever won the lease
+        let active_owner = if r1 { "claimer-1" } else { "claimer-2" };
+        store_arc.save_instance(active_owner, &inst).await.unwrap();
+
+        // Expire lease again so it's reclaimable by recovery
+        sqlx::query("UPDATE process_instances SET lease_until = now() - interval '1 second' WHERE instance_id = $1")
+            .bind(iid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Simulating two recovery processes racing
+        let s1_rec = store_arc.clone();
+        let s2_rec = store_arc.clone();
+
+        let rec1 = tokio::spawn(async move {
+            let owner = "recovery-1";
+            let claimed = s1_rec.claim_instance_for_transition("default", iid, owner, 30000).await.unwrap();
+            if claimed {
+                // Recover the instance
+                let mut inst = s1_rec.load_instance(iid).await.unwrap().unwrap();
+                inst.state = ProcessState::Running;
+                s1_rec.save_instance(owner, &inst).await.unwrap();
+                s1_rec.release_instance_transition("default", iid, owner).await.unwrap();
+                true
+            } else {
+                false
+            }
+        });
+
+        let rec2 = tokio::spawn(async move {
+            let owner = "recovery-2";
+            let claimed = s2_rec.claim_instance_for_transition("default", iid, owner, 30000).await.unwrap();
+            if claimed {
+                // Recover the instance
+                let mut inst = s2_rec.load_instance(iid).await.unwrap().unwrap();
+                inst.state = ProcessState::Running;
+                s2_rec.save_instance(owner, &inst).await.unwrap();
+                s2_rec.release_instance_transition("default", iid, owner).await.unwrap();
+                true
+            } else {
+                false
+            }
+        });
+
+        let res_rec1 = rec1.await.unwrap();
+        let res_rec2 = rec2.await.unwrap();
+
+        assert!(res_rec1 != res_rec2, "Exactly one recovery runner must claim the instance");
     }
 }

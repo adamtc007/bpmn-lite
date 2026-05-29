@@ -14,14 +14,13 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, GatewayExecNode, WorkflowExecutionPlan};
 use bpmn_lite_store::pending::{PendingInvocation, PendingInvocationStore};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TickOperation};
 use bpmn_lite_types::types::{ProcessInstance, ProcessState};
 use dsl_bus_client::BusClient;
 use dsl_bus_protocol::v1::{
     typed_value::Value as ProtoValueKind, InvocationRequest, ResolvedBinding,
     TypedValue as ProtoTypedValue, Uuid as ProtoUuid,
 };
-use dsl_bus_storage::{insert_outbox, BusEndpoint, OutboxEntry};
 use bpmn_lite_types::session_stack::SessionStackState;
 use prost::Message;
 use uuid::Uuid;
@@ -81,6 +80,8 @@ impl PlanWalker {
             .ok_or_else(|| anyhow!("plan_walker: plan hash not found"))?;
         let plan: WorkflowExecutionPlan = serde_json::from_str(&plan_json)?;
 
+        let mut ops = Vec::new();
+
         loop {
             let current = instance
                 .current_node_id
@@ -95,7 +96,6 @@ impl PlanWalker {
             match node {
                 ExecutionNode::StartEvent(n) => {
                     instance.current_node_id = Some(n.next.clone());
-                    self.store.save_instance(owner, &instance).await?;
                 }
 
                 ExecutionNode::ExclusiveGateway(gw) => {
@@ -104,12 +104,12 @@ impl PlanWalker {
                     match evaluate_gateway(gw, &placeholder_vals) {
                         Ok(next) => {
                             instance.current_node_id = Some(next.to_owned());
-                            self.store.save_instance(owner, &instance).await?;
                         }
                         Err(reason) => {
                             instance.state =
                                 ProcessState::Failed { incident_id: Uuid::now_v7() };
-                            self.store.save_instance(owner, &instance).await?;
+                            ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                            self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
                             tracing::error!(
                                 instance_id = %instance_id,
                                 reason = %reason,
@@ -121,34 +121,45 @@ impl PlanWalker {
                 }
 
                 ExecutionNode::ServiceTask(task) => {
-                    return self
+                    let outcome = self
                         .dispatch_callout(
                             &mut instance,
                             task.id.clone(),
                             task.verb_fqn.clone(),
                             task.static_args.clone(),
-                            owner,
+                            &mut ops,
                         )
-                        .await;
+                        .await?;
+                    self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
+                    if let AdvanceOutcome::Submitted { .. } = &outcome {
+                        self.bus_client.outbox_notifier().notify();
+                    }
+                    return Ok(outcome);
                 }
 
                 ExecutionNode::BusinessRuleTask(task) => {
-                    return self
+                    let outcome = self
                         .dispatch_callout(
                             &mut instance,
                             task.id.clone(),
                             task.decision_id.clone(),
                             HashMap::new(),
-                            owner,
+                            &mut ops,
                         )
-                        .await;
+                        .await?;
+                    self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
+                    if let AdvanceOutcome::Submitted { .. } = &outcome {
+                        self.bus_client.outbox_notifier().notify();
+                    }
+                    return Ok(outcome);
                 }
 
                 ExecutionNode::EndEvent(end) => {
                     let now = chrono::Utc::now().timestamp_millis();
                     instance.state = ProcessState::Completed { at: now };
                     instance.current_node_id = Some(end.id.clone());
-                    self.store.save_instance(owner, &instance).await?;
+                    ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                    self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
                     return Ok(AdvanceOutcome::Completed {
                         node_id: end.id.clone(),
                         status: end.status.clone(),
@@ -167,7 +178,7 @@ impl PlanWalker {
         node_id: String,
         fqn: String,
         static_args: HashMap<String, String>,
-        owner: &str,
+        ops: &mut Vec<TickOperation>,
     ) -> Result<AdvanceOutcome> {
         let (target_domain, verb_id) = split_verb_fqn(&fqn)?;
 
@@ -183,7 +194,7 @@ impl PlanWalker {
         const MAX_RETRIES: u64 = 3;
         if retry_count >= MAX_RETRIES {
             instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
-            self.store.save_instance(owner, instance).await?;
+            ops.push(TickOperation::SaveInstance { instance: instance.clone() });
             return Ok(AdvanceOutcome::NotRunnable);
         }
 
@@ -225,45 +236,26 @@ impl PlanWalker {
             verb_id,
             idempotency_key,
         );
-        self.pending_store.insert(pending).await?;
+        ops.push(TickOperation::InsertPendingInvocation { pending });
 
         // Write outbox row — sender will dispatch to the peer.
         let payload = req.encode_to_vec();
-        let entry = OutboxEntry::new_pending(
-            Uuid::now_v7(),
-            target_domain.to_owned(),
-            BusEndpoint::Invocation,
+        let outbox_id = Uuid::now_v7();
+        ops.push(TickOperation::InsertOutbox {
+            id: outbox_id,
+            target_domain: target_domain.to_owned(),
+            target_endpoint: "invocation".to_owned(),
             payload,
             idempotency_key,
-        )
-        .with_callout_id(callout_id);
-        if let Err(e) = insert_outbox(self.bus_client.pool(), &entry).await {
-            // Increment retry counter and surface as transient failure.
-            let mut pv = deserialize_placeholder_values(instance.placeholder_values.as_ref());
-            pv.insert(
-                "__retry_count".to_owned(),
-                serde_json::Value::Number((retry_count + 1).into()),
-            );
-            instance.placeholder_values = serde_json::to_value(&pv).ok();
-            instance.state = ProcessState::Running; // tick will retry
-            self.store.save_instance(owner, instance).await?;
-            tracing::warn!(
-                instance_id = %instance.instance_id,
-                node_id = %node_id,
-                retry_count = retry_count + 1,
-                error = %e,
-                "plan_walker: outbox insert failed; will retry on next tick"
-            );
-            return Ok(AdvanceOutcome::NotRunnable);
-        }
-        self.bus_client.outbox_notifier().notify();
+            callout_id,
+        });
 
         instance.state = ProcessState::WaitingOnSubmission {
             callout_id,
             node_id: node_id.clone(),
         };
         instance.current_node_id = Some(node_id.clone());
-        self.store.save_instance(owner, instance).await?;
+        ops.push(TickOperation::SaveInstance { instance: instance.clone() });
 
         Ok(AdvanceOutcome::Submitted {
             callout_id,

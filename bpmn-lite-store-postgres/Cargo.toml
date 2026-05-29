@@ -32,6 +32,7 @@ tracing = { workspace = true }
 bpmn-lite-engine = { path = "../bpmn-lite-engine" }
 bpmn-lite-vm = { path = "../bpmn-lite-vm" }
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
 tokio = { workspace = true, features = ["test-util"] }
 blake3 = { workspace = true }
 

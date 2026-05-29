@@ -23,13 +23,25 @@ use crate::{
 const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
 
 async fn setup() -> PgPool {
-    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+    let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
+    if url.contains('?') {
+        url.push_str("&options=-csearch_path%3Ddsl_bus");
+    } else {
+        url.push_str("?options=-csearch_path%3Ddsl_bus");
+    }
     let pool = PgPool::connect(&url).await.expect("connect to db");
 
-    sqlx::migrate!("./migrations")
-        .run(&pool)
+    // Clean drop/recreation of dsl_bus to isolate migrations in tests
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
+    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+
+    let mut migrator = sqlx::migrate!("./migrations");
+    // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 1)
+    // because the engine and dsl-bus-storage migrations share the same database schema in tests.
+    migrator.set_ignore_missing(true);
+    migrator.run(&pool)
         .await
         .expect("run migrations");
 
@@ -45,13 +57,15 @@ async fn setup() -> PgPool {
 }
 
 fn sample_outbox(idempotency_key: Uuid) -> OutboxEntry {
-    OutboxEntry::new_pending(
+    let mut entry = OutboxEntry::new_pending(
         Uuid::now_v7(),
         "ob-poc",
         BusEndpoint::Invocation,
         b"protobuf-bytes-here".to_vec(),
         idempotency_key,
-    )
+    );
+    entry.next_attempt_at = chrono::Utc::now() - chrono::Duration::hours(1);
+    entry
 }
 
 fn sample_inbox(idempotency_key: Uuid) -> InboxEntry {

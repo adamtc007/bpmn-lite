@@ -26,7 +26,7 @@ use bpmn_lite_bus_handler::{
 };
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_store::pending::PendingInvocationStore;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TickOperation};
 use bpmn_lite_store_postgres::PostgresPendingInvocationStore;
 use bpmn_lite_types::types::ProcessState;
 use dsl_bus_client::BusClient;
@@ -120,12 +120,12 @@ impl ProcessAdvancer for StoreBackedAdvancer {
     async fn advance(&self, input: ProcessAdvanceInput) -> Result<(), ProcessAdvancerError> {
         let row = self
             .pending
-            .take_by_execution_id(input.execution_id)
+            .lookup_by_execution_id(input.execution_id)
             .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("take pending: {e}")))?;
+            .map_err(|e| ProcessAdvancerError::Internal(format!("lookup pending: {e}")))?;
 
         let Some(row) = row else {
-            return Err(ProcessAdvancerError::UnknownExecution(input.execution_id));
+            return Ok(());
         };
 
         let mut instance = self
@@ -186,18 +186,31 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
         }
 
-        let save_res = self.store
-            .save_instance(&owner, &instance)
+        let ops = vec![
+            TickOperation::TakePendingInvocation { execution_id: input.execution_id },
+            TickOperation::SaveInstance { instance: instance.clone() },
+        ];
+
+        let commit_res = self.store
+            .commit_tick(instance.instance_id, &instance.tenant_id, &owner, &ops)
             .await;
 
         let release_res = self.store
             .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
             .await;
 
-        match (save_res, release_res) {
-            (Err(e), _) => return Err(ProcessAdvancerError::Internal(format!("save instance: {e}"))),
-            (_, Err(e)) => return Err(ProcessAdvancerError::Internal(format!("release instance: {e}"))),
-            (Ok(()), Ok(())) => {}
+        match commit_res {
+            Err(e) => {
+                if e.is::<bpmn_lite_store::store::AlreadyConsumedError>() {
+                    return Ok(());
+                }
+                return Err(ProcessAdvancerError::Internal(format!("commit tick: {e}")));
+            }
+            Ok(()) => {
+                if let Err(e) = release_res {
+                    return Err(ProcessAdvancerError::Internal(format!("release instance: {e}")));
+                }
+            }
         }
 
         tracing::info!(

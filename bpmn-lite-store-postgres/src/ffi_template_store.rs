@@ -233,7 +233,11 @@ mod tests {
     async fn setup_pool() -> Option<PgPool> {
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL").ok()?;
         let pool = PgPool::connect(&url).await.ok()?;
-        sqlx::migrate!("./migrations").run(&pool).await.ok()?;
+        let mut migrator = sqlx::migrate!("./migrations");
+        // NOTE: Temporary test-only workaround for migration version collisions (VersionMissing 900001)
+        // because the engine and dsl-bus-storage migrations share the same database schema in tests.
+        migrator.set_ignore_missing(true);
+        migrator.run(&pool).await.ok()?;
         // Clean ffi_template between tests.
         sqlx::query("DELETE FROM ffi_template")
             .execute(&pool)

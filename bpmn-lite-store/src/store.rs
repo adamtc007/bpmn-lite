@@ -304,6 +304,16 @@ pub enum TickOperation {
     UpdateInstanceState { state: ProcessState },
     ReleaseBufferedMessageClaim { message: ClaimedBufferedMessage },
     ConsumeBufferedMessage { message: ClaimedBufferedMessage },
+    InsertPendingInvocation { pending: crate::pending::PendingInvocation },
+    InsertOutbox {
+        id: Uuid,
+        target_domain: String,
+        target_endpoint: String,
+        payload: Vec<u8>,
+        idempotency_key: Uuid,
+        callout_id: Uuid,
+    },
+    TakePendingInvocation { execution_id: Uuid },
 }
 
 #[derive(Debug, Clone)]
@@ -343,5 +353,6 @@ impl TransactionContext {
     }
 }
 
-
-
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("TakePendingInvocation: already consumed")]
+pub struct AlreadyConsumedError;

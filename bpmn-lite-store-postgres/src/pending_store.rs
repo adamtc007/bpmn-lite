@@ -102,6 +102,24 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         row.map(row_to_record).transpose()
     }
 
+    async fn lookup_by_execution_id(
+        &self,
+        execution_id: Uuid,
+    ) -> anyhow::Result<Option<PendingInvocation>> {
+        let row = sqlx::query(
+            r#"
+            SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
+                   idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
+              FROM bpmn_pending_invocation
+             WHERE execution_id = $1
+            "#,
+        )
+        .bind(execution_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_record).transpose()
+    }
+
     async fn lookup_by_callout_id(
         &self,
         callout_id: Uuid,

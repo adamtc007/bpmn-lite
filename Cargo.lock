@@ -448,6 +448,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -465,6 +466,7 @@ dependencies = [
  "bpmn-lite-types",
  "bpmn-lite-vm",
  "chrono",
+ "dsl-bus-storage",
  "ffi-catalogue",
  "ffi-types",
  "serde",

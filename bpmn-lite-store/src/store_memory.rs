@@ -1,4 +1,5 @@
 use crate::store::{ProcessStore, TickOperation};
+use crate::pending::PendingInvocationStore;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bpmn_lite_types::events::RuntimeEvent;
@@ -29,11 +30,13 @@ struct Inner {
     payload_history: HashMap<(Uuid, [u8; 32]), String>,
     incidents: HashMap<Uuid, Vec<Incident>>,
     transition_leases: HashMap<Uuid, (String, Instant)>,
+    outbox: HashMap<Uuid, (String, String, Vec<u8>, Uuid, Uuid)>,
 }
 
 /// In-memory implementation of `ProcessStore` for POC/testing.
 pub struct MemoryStore {
     inner: RwLock<Inner>,
+    pub pending_store: crate::pending::MemoryPendingInvocationStore,
 }
 
 impl MemoryStore {
@@ -58,7 +61,9 @@ impl MemoryStore {
                 payload_history: HashMap::new(),
                 incidents: HashMap::new(),
                 transition_leases: HashMap::new(),
+                outbox: HashMap::new(),
             }),
+            pending_store: crate::pending::MemoryPendingInvocationStore::new(),
         }
     }
 }
@@ -1072,6 +1077,18 @@ impl ProcessStore for MemoryStore {
                     w.message_buffer.remove(&key);
                     w.message_buffer_claims.remove(&key);
                     w.message_buffer_consumed.insert(key);
+                }
+                TickOperation::InsertPendingInvocation { pending } => {
+                    self.pending_store.insert(pending.clone()).await?;
+                }
+                TickOperation::InsertOutbox { id, target_domain, target_endpoint, payload, idempotency_key, callout_id } => {
+                    w.outbox.insert(*id, (target_domain.clone(), target_endpoint.clone(), payload.clone(), *idempotency_key, *callout_id));
+                }
+                TickOperation::TakePendingInvocation { execution_id } => {
+                    let taken = self.pending_store.take_by_execution_id(*execution_id).await?;
+                    if taken.is_none() {
+                        return Err(anyhow::anyhow!(crate::store::AlreadyConsumedError));
+                    }
                 }
             }
         }
