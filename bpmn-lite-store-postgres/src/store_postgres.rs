@@ -60,6 +60,60 @@ fn datetime_to_epoch_ms(dt: chrono::DateTime<chrono::Utc>) -> i64 {
     dt.timestamp_millis()
 }
 
+pub struct TenantTx<'c> {
+    pub tx: sqlx::Transaction<'c, sqlx::Postgres>,
+    pub tenant_id: String,
+    pub lease_owner: String,
+}
+
+impl<'c> TenantTx<'c> {
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
+    pub fn lease_owner(&self) -> &str {
+        &self.lease_owner
+    }
+
+    pub fn assert_rows_affected(&self, result: &sqlx::postgres::PgQueryResult, expected: u64, msg: &str) -> Result<()> {
+        let rows = result.rows_affected();
+        if rows != expected {
+            return Err(anyhow!("{} (affected {} rows, expected {})", msg, rows, expected));
+        }
+        Ok(())
+    }
+}
+
+pub async fn execute_tenant_scoped_on_pool<F, T>(
+    pool: &sqlx::PgPool,
+    tenant_id: &str,
+    lease_owner: &str,
+    f: F,
+) -> Result<T>
+where
+    F: for<'b, 'c> FnOnce(&'b mut TenantTx<'c>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'b>> + Send,
+    T: Send,
+{
+    let tx = pool.begin().await.context("execute_tenant_scoped: begin transaction")?;
+
+    // FORK: SET LOCAL app.tenant_id OR predicate enforcement inserted here in T3
+    // LEASE FENCING DEFERRED TO T3 — must be designed with the park→wake→reclaim lease lifecycle (bus-callback + recovery are non-tick writers). See RISK-009.
+
+    let mut tenant_tx = TenantTx {
+        tx,
+        tenant_id: tenant_id.to_string(),
+        lease_owner: lease_owner.to_string(),
+    };
+
+    let result = f(&mut tenant_tx).await;
+
+    if result.is_ok() {
+        tenant_tx.tx.commit().await.context("execute_tenant_scoped: commit transaction")?;
+    }
+
+    result
+}
+
 /// PostgreSQL-backed implementation of `ProcessStore`.
 pub struct PostgresProcessStore {
     pool: sqlx::PgPool,
@@ -68,6 +122,14 @@ pub struct PostgresProcessStore {
 impl PostgresProcessStore {
     pub fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn execute_tenant_scoped<F, T>(&self, tenant_id: &str, lease_owner: &str, f: F) -> Result<T>
+    where
+        F: for<'b, 'c> FnOnce(&'b mut TenantTx<'c>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'b>> + Send,
+        T: Send,
+    {
+        execute_tenant_scoped_on_pool(&self.pool, tenant_id, lease_owner, f).await
     }
 
     /// A18 — Execute `f` inside a transaction with `app.tenant_id` set via
@@ -136,6 +198,18 @@ impl PostgresProcessStore {
             .context("failed to set tenant context for RLS")?;
         Ok(())
     }
+
+    pub async fn resolve_tenant_id(&self, instance_id: Uuid) -> Result<String> {
+        if let Some(t) = bpmn_lite_store::store::get_tenant_id() {
+            return Ok(t);
+        }
+        let row: (String,) = sqlx::query_as("SELECT tenant_id FROM process_instances WHERE instance_id = $1")
+            .bind(instance_id)
+            .fetch_one(&self.pool)
+            .await
+            .context("resolve_tenant_id: instance not found")?;
+        Ok(row.0)
+    }
 }
 
 async fn notify_event_tx(
@@ -150,86 +224,77 @@ async fn notify_event_tx(
     Ok(())
 }
 
+pub struct StaleReclaimInfo {
+    pub job_key: String,
+    pub process_instance_id: Uuid,
+    pub previous_worker_id: Option<String>,
+}
+
 #[async_trait]
 impl ProcessStore for PostgresProcessStore {
     // ── Instance ──
 
     async fn save_instance(&self, instance: &ProcessInstance) -> Result<()> {
-        let flags = serde_json::to_value(&instance.flags)?;
-        let counters = serde_json::to_value(&instance.counters)?;
-        let join_expected = serde_json::to_value(&instance.join_expected)?;
-        let state = serde_json::to_value(&instance.state)?;
-        let session_stack = serde_json::to_value(&instance.session_stack)?;
-        let created_at = epoch_ms_to_datetime(instance.created_at);
-        // A19 — compute integrity hash over immutable fields at creation.
-        // integrity_hash is excluded from the ON CONFLICT DO UPDATE clause so
-        // it is written once and never overwritten by subsequent updates.
-        let integrity_hash = compute_instance_integrity_hash(instance);
+        let lease_owner = "unused";
+        let tenant_id = instance.tenant_id.clone();
+        let instance = instance.clone();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let flags = serde_json::to_value(&instance.flags)?;
+            let counters = serde_json::to_value(&instance.counters)?;
+            let join_expected = serde_json::to_value(&instance.join_expected)?;
+            let state = serde_json::to_value(&instance.state)?;
+            let session_stack = serde_json::to_value(&instance.session_stack)?;
+            let created_at = epoch_ms_to_datetime(instance.created_at);
+            let integrity_hash = compute_instance_integrity_hash(&instance);
 
-        let result = sqlx::query(
-            r#"
-            INSERT INTO process_instances (
-                instance_id, tenant_id, process_key, bytecode_version, domain_payload,
-                domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at, integrity_hash,
-                plan_hash, current_node_id, placeholder_values
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                      $17, $18, $19)
-            ON CONFLICT (instance_id) DO UPDATE SET
-                domain_payload = EXCLUDED.domain_payload,
-                domain_payload_hash = EXCLUDED.domain_payload_hash,
-                session_stack = EXCLUDED.session_stack,
-                flags = EXCLUDED.flags,
-                counters = EXCLUDED.counters,
-                join_expected = EXCLUDED.join_expected,
-                state = EXCLUDED.state,
-                correlation_id = EXCLUDED.correlation_id,
-                plan_hash = EXCLUDED.plan_hash,
-                current_node_id = EXCLUDED.current_node_id,
-                placeholder_values = EXCLUDED.placeholder_values
-            -- Immutable fields (tenant_id, process_key, bytecode_version, entry_id,
-            -- runbook_id, created_at, integrity_hash) are omitted: migration 029
-            -- trigger rejects any UPDATE that changes them. quarantine_state is
-            -- owned exclusively by quarantine_instance().
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(&instance.tenant_id)
-        .bind(&instance.process_key)
-        .bind(&instance.bytecode_version[..])
-        .bind(instance.domain_payload.as_ref())
-        .bind(&instance.domain_payload_hash[..])
-        .bind(&session_stack)
-        .bind(&flags)
-        .bind(&counters)
-        .bind(&join_expected)
-        .bind(&state)
-        .bind(&instance.correlation_id)
-        .bind(instance.entry_id)
-        .bind(instance.runbook_id)
-        .bind(created_at)
-        .bind(&integrity_hash[..])
-        .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
-        .bind(instance.current_node_id.as_deref())
-        .bind(instance.placeholder_values.as_ref())
-        .execute(&self.pool)
-        .await?;
+            let result = sqlx::query(
+                r#"
+                INSERT INTO process_instances (
+                    instance_id, tenant_id, process_key, bytecode_version, domain_payload,
+                    domain_payload_hash, session_stack, flags, counters, join_expected, state,
+                    correlation_id, entry_id, runbook_id, created_at, integrity_hash,
+                    plan_hash, current_node_id, placeholder_values
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                          $17, $18, $19)
+                ON CONFLICT (instance_id) DO UPDATE SET
+                    domain_payload = EXCLUDED.domain_payload,
+                    domain_payload_hash = EXCLUDED.domain_payload_hash,
+                    session_stack = EXCLUDED.session_stack,
+                    flags = EXCLUDED.flags,
+                    counters = EXCLUDED.counters,
+                    join_expected = EXCLUDED.join_expected,
+                    state = EXCLUDED.state,
+                    correlation_id = EXCLUDED.correlation_id,
+                    plan_hash = EXCLUDED.plan_hash,
+                    current_node_id = EXCLUDED.current_node_id,
+                    placeholder_values = EXCLUDED.placeholder_values
+                "#,
+            )
+            .bind(instance.instance_id)
+            .bind(&instance.tenant_id)
+            .bind(&instance.process_key)
+            .bind(&instance.bytecode_version[..])
+            .bind(instance.domain_payload.as_ref())
+            .bind(&instance.domain_payload_hash[..])
+            .bind(&session_stack)
+            .bind(&flags)
+            .bind(&counters)
+            .bind(&join_expected)
+            .bind(&state)
+            .bind(&instance.correlation_id)
+            .bind(instance.entry_id)
+            .bind(instance.runbook_id)
+            .bind(created_at)
+            .bind(&integrity_hash[..])
+            .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
+            .bind(instance.current_node_id.as_deref())
+            .bind(instance.placeholder_values.as_ref())
+            .execute(&mut *tx.tx)
+            .await?;
 
-        // A18 — rows_affected validation. INSERT ... ON CONFLICT DO UPDATE
-        // must touch exactly one row. Zero means RLS rejection, missing
-        // parent FK, or other silent failure.
-        if result.rows_affected() == 0 {
-            return Err(anyhow!(
-                "save_instance affected 0 rows for instance {} (tenant={}); \
-                 possible RLS rejection or constraint violation",
-                instance.instance_id,
-                instance.tenant_id
-            ));
-        }
-
-        Ok(())
+            tx.assert_rows_affected(&result, 1, "save_instance")
+        })).await
     }
-
     async fn load_instance(&self, id: Uuid) -> Result<Option<ProcessInstance>> {
         let row = sqlx::query(
             r#"
@@ -294,17 +359,20 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()> {
-        let state_json = serde_json::to_value(&state)?;
-        let result = sqlx::query("UPDATE process_instances SET state = $1 WHERE instance_id = $2")
+        let tenant_id = self.resolve_tenant_id(id).await?;
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let state_json = serde_json::to_value(&state)?;
+            let result = sqlx::query(
+                "UPDATE process_instances SET state = $1 WHERE instance_id = $2",
+            )
             .bind(&state_json)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx.tx)
             .await?;
 
-        if result.rows_affected() == 0 {
-            return Err(anyhow!("instance not found: {id}"));
-        }
-        Ok(())
+            tx.assert_rows_affected(&result, 1, "update_instance_state")
+        })).await
     }
 
     async fn update_instance_flags(
@@ -312,17 +380,21 @@ impl ProcessStore for PostgresProcessStore {
         id: Uuid,
         flags: &BTreeMap<FlagKey, Value>,
     ) -> Result<()> {
-        let flags_json = serde_json::to_value(flags)?;
-        let result = sqlx::query("UPDATE process_instances SET flags = $1 WHERE instance_id = $2")
+        let tenant_id = self.resolve_tenant_id(id).await?;
+        let lease_owner = "unused";
+        let flags = flags.clone();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let flags_json = serde_json::to_value(&flags)?;
+            let result = sqlx::query(
+                "UPDATE process_instances SET flags = $1 WHERE instance_id = $2",
+            )
             .bind(&flags_json)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx.tx)
             .await?;
 
-        if result.rows_affected() == 0 {
-            return Err(anyhow!("instance not found: {id}"));
-        }
-        Ok(())
+            tx.assert_rows_affected(&result, 1, "update_instance_flags")
+        })).await
     }
 
     async fn update_instance_payload(
@@ -331,19 +403,22 @@ impl ProcessStore for PostgresProcessStore {
         payload: &str,
         hash: &[u8; 32],
     ) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE process_instances SET domain_payload = $1, domain_payload_hash = $2 WHERE instance_id = $3",
-        )
-        .bind(payload)
-        .bind(&hash[..])
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let tenant_id = self.resolve_tenant_id(id).await?;
+        let lease_owner = "unused";
+        let payload = payload.to_string();
+        let hash = *hash;
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let result = sqlx::query(
+                "UPDATE process_instances SET domain_payload = $1, domain_payload_hash = $2 WHERE instance_id = $3",
+            )
+            .bind(&payload)
+            .bind(&hash[..])
+            .bind(id)
+            .execute(&mut *tx.tx)
+            .await?;
 
-        if result.rows_affected() == 0 {
-            return Err(anyhow!("instance not found: {id}"));
-        }
-        Ok(())
+            tx.assert_rows_affected(&result, 1, "update_instance_payload")
+        })).await
     }
 
     // ── Fibers ──
@@ -571,68 +646,12 @@ impl ProcessStore for PostgresProcessStore {
     // ── Job queue ──
 
     async fn enqueue_job(&self, activation: &JobActivation) -> Result<()> {
-        let orch_flags = serde_json::to_value(&activation.orch_flags)?;
-        let session_stack = serde_json::to_value(&activation.session_stack)?;
-
-        let result = sqlx::query(
-            r#"
-            INSERT INTO job_queue (
-                job_key, tenant_id, process_instance_id, task_type, service_task_id,
-                domain_payload, domain_payload_hash, session_stack, orch_flags, retries_remaining,
-                entry_id, runbook_id
-            ) VALUES ($1, (SELECT tenant_id FROM process_instances WHERE instance_id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ON CONFLICT (job_key) DO NOTHING
-            "#,
-        )
-        .bind(&activation.job_key)
-        .bind(activation.process_instance_id)
-        .bind(&activation.task_type)
-        .bind(&activation.service_task_id)
-        .bind(&activation.domain_payload)
-        .bind(&activation.domain_payload_hash[..])
-        .bind(&session_stack)
-        .bind(&orch_flags)
-        .bind(activation.retries_remaining as i32)
-        .bind(activation.entry_id)
-        .bind(activation.runbook_id)
-        .execute(&self.pool)
-        .await?;
-
-        // A18 — rows_affected validation. INSERT with `ON CONFLICT DO NOTHING`
-        // legitimately produces 0 rows on duplicate job_key (idempotent
-        // re-enqueue). But it also produces 0 rows if the parent instance
-        // subquery resolves to NULL (parent missing or RLS rejection) —
-        // in that case the row insert would have a NULL tenant_id, which
-        // the NOT NULL constraint rejects. So 0 here is ambiguous: either
-        // benign duplicate, or unsignalled failure. We check the parent
-        // existence explicitly to disambiguate.
-        if result.rows_affected() == 0 {
-            // Distinguish duplicate vs missing parent. If the job_key
-            // already exists, we accept it (idempotent). Otherwise, the
-            // parent instance is missing or RLS rejected.
-            let existing: Option<(String,)> =
-                sqlx::query_as("SELECT job_key FROM job_queue WHERE job_key = $1")
-                    .bind(&activation.job_key)
-                    .fetch_optional(&self.pool)
-                    .await?;
-
-            if existing.is_none() {
-                return Err(anyhow!(
-                    "enqueue_job affected 0 rows for job {} (instance {}); \
-                     parent instance missing, RLS rejected, or NOT NULL \
-                     constraint violation on tenant_id",
-                    activation.job_key,
-                    activation.process_instance_id
-                ));
-            }
-            // Duplicate job_key — benign idempotent re-enqueue, fall through.
-            tracing::debug!(
-                job_key = %activation.job_key,
-                "enqueue_job: duplicate job_key, idempotent no-op"
-            );
-        }
-
-        Ok(())
+        let lease_owner = "unused";
+        let tenant_id = activation.tenant_id.clone();
+        let activation = activation.clone();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            Self::enqueue_job_inner(tx, &activation).await
+        })).await
     }
 
     async fn dequeue_jobs(
@@ -643,115 +662,33 @@ impl ProcessStore for PostgresProcessStore {
         worker_id: &str,
         lease_ms: u64,
     ) -> Result<Vec<JobActivation>> {
-        let rows = sqlx::query(
-            r#"
-            WITH claimed AS (
-                SELECT job_key
-                FROM job_queue
-                WHERE status = 'pending'
-                  AND tenant_id = $3
-                  AND task_type = ANY($1)
-                  AND (not_before IS NULL OR not_before <= now())
-                ORDER BY created_at
-                LIMIT $2
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE job_queue
-            SET status = 'claimed',
-                claimed_at = now(),
-                worker_id = $4,
-                claim_token = md5(random()::text || clock_timestamp()::text),
-                claim_expires_at = now() + make_interval(secs => $5::float / 1000.0),
-                attempt_count = attempt_count + 1
-            FROM claimed
-            WHERE job_queue.job_key = claimed.job_key
-            RETURNING job_queue.job_key,
-                      job_queue.tenant_id,
-                      job_queue.process_instance_id,
-                      job_queue.task_type,
-                      job_queue.service_task_id,
-                      job_queue.domain_payload,
-                      job_queue.domain_payload_hash,
-                      job_queue.session_stack,
-                      job_queue.orch_flags,
-                      job_queue.retries_remaining,
-                      job_queue.entry_id,
-                      job_queue.runbook_id,
-                      job_queue.worker_id,
-                      job_queue.claim_token,
-                      job_queue.claim_expires_at,
-                      job_queue.attempt_count,
-                      job_queue.failure_count,
-                      job_queue.not_before
-            "#,
-        )
-        .bind(task_types)
-        .bind(max as i64)
-        .bind(tenant_id)
-        .bind(worker_id)
-        .bind(lease_ms as f64)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut result = Vec::with_capacity(rows.len());
-        for row in rows {
-            use sqlx::Row;
-            let hash: Vec<u8> = row.get("domain_payload_hash");
-            let session_stack_json: serde_json::Value = row.get("session_stack");
-            let orch_flags_json: serde_json::Value = row.get("orch_flags");
-            let retries: i32 = row.get("retries_remaining");
-            let claim_expires_at: Option<chrono::DateTime<chrono::Utc>> =
-                row.get("claim_expires_at");
-            let not_before: Option<chrono::DateTime<chrono::Utc>> = row.get("not_before");
-            let attempt_count: i32 = row.get("attempt_count");
-            let failure_count: i32 = row.get("failure_count");
-
-            result.push(JobActivation {
-                job_key: row.get("job_key"),
-                tenant_id: row.get("tenant_id"),
-                process_instance_id: row.get("process_instance_id"),
-                task_type: row.get("task_type"),
-                service_task_id: row.get("service_task_id"),
-                domain_payload: row.get("domain_payload"),
-                domain_payload_hash: bytes_to_hash(hash)?,
-                session_stack: serde_json::from_value(session_stack_json)?,
-                orch_flags: serde_json::from_value(orch_flags_json)?,
-                retries_remaining: retries as u32,
-                entry_id: row.get("entry_id"),
-                runbook_id: row.get("runbook_id"),
-                worker_id: row.get("worker_id"),
-                claim_token: row.get("claim_token"),
-                claim_expires_at: claim_expires_at.map(datetime_to_epoch_ms),
-                attempt_count: attempt_count as u32,
-                failure_count: failure_count as u32,
-                not_before: not_before.map(datetime_to_epoch_ms),
-            });
-        }
-        Ok(result)
+        let task_types = task_types.to_vec();
+        let tenant_id_owned = tenant_id.to_string();
+        let worker_id_owned = worker_id.to_string();
+        self.execute_tenant_scoped(&tenant_id_owned, &worker_id_owned, |tx| Box::pin(async move {
+            Self::dequeue_jobs_inner(tx, &task_types, max, lease_ms).await
+        })).await
     }
 
     async fn ack_job(&self, job_key: &str) -> Result<()> {
-        let result = sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
-            .bind(job_key)
-            .execute(&self.pool)
-            .await?;
-
-        // A18 — rows_affected validation. A 0-row DELETE on ack_job is
-        // legitimate: a concurrent worker may have already acked, the
-        // claim may have expired and been reclaimed elsewhere, or the
-        // job may have been cancelled. Treat as a soft signal (debug
-        // log) rather than an error to preserve current orchestrator
-        // behavior. A18-Session-2 may revisit this to return a typed
-        // AckOutcome { Acked, AlreadyAcked } once the caller side is
-        // ready to discriminate.
-        if result.rows_affected() == 0 {
-            tracing::debug!(
-                job_key = %job_key,
-                "ack_job: 0 rows deleted (already acked, expired, or cancelled)"
-            );
-        }
-
-        Ok(())
+        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
+            Some(t) => t,
+            None => {
+                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+                    .bind(job_key)
+                    .fetch_optional(&self.pool)
+                    .await?;
+                match row {
+                    Some(r) => r.0,
+                    None => return Ok(()),
+                }
+            }
+        };
+        let lease_owner = "unused";
+        let job_key = job_key.to_string();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            Self::ack_job_inner(tx, &job_key).await
+        })).await
     }
 
     async fn validate_job_claim(
@@ -789,37 +726,26 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         not_before_ms: i64,
     ) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE job_queue
-            SET status = 'pending',
-                claimed_at = NULL,
-                worker_id = NULL,
-                claim_token = NULL,
-                claim_expires_at = NULL,
-                not_before = $4,
-                retries_remaining = GREATEST(retries_remaining - 1, 0),
-                failure_count = failure_count + 1,
-                last_failed_at = now(),
-                last_error_class = $5,
-                last_error_message = $6,
-                last_error = $6
-            WHERE job_key = $1
-              AND status = 'claimed'
-              AND worker_id = $2
-              AND claim_token = $3
-              AND claim_expires_at > now()
-            "#,
-        )
-        .bind(job_key)
-        .bind(worker_id)
-        .bind(claim_token)
-        .bind(epoch_ms_to_datetime(not_before_ms))
-        .bind(error_class)
-        .bind(error_message)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() == 1)
+        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
+            Some(t) => t,
+            None => {
+                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+                    .bind(job_key)
+                    .fetch_optional(&self.pool)
+                    .await?;
+                match row {
+                    Some(r) => r.0,
+                    None => return Ok(false),
+                }
+            }
+        };
+        let job_key = job_key.to_string();
+        let claim_token = claim_token.to_string();
+        let error_class = error_class.to_string();
+        let error_message = error_message.to_string();
+        self.execute_tenant_scoped(&tenant_id, worker_id, |tx| Box::pin(async move {
+            Self::retry_claimed_job_inner(tx, &job_key, &claim_token, &error_class, &error_message, not_before_ms).await
+        })).await
     }
 
     async fn dead_letter_claimed_job(
@@ -831,49 +757,34 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         incident_id: Uuid,
     ) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE job_queue
-            SET status = 'dead_lettered',
-                claimed_at = NULL,
-                worker_id = NULL,
-                claim_token = NULL,
-                claim_expires_at = NULL,
-                failure_count = failure_count + 1,
-                last_failed_at = now(),
-                dead_lettered_at = now(),
-                last_error_class = $4,
-                last_error_message = $5,
-                last_error = $5,
-                incident_id = $6
-            WHERE job_key = $1
-              AND status = 'claimed'
-              AND worker_id = $2
-              AND claim_token = $3
-              AND claim_expires_at > now()
-            "#,
-        )
-        .bind(job_key)
-        .bind(worker_id)
-        .bind(claim_token)
-        .bind(error_class)
-        .bind(error_message)
-        .bind(incident_id)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() == 1)
+        let tenant_id = match bpmn_lite_store::store::get_tenant_id() {
+            Some(t) => t,
+            None => {
+                let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
+                    .bind(job_key)
+                    .fetch_optional(&self.pool)
+                    .await?;
+                match row {
+                    Some(r) => r.0,
+                    None => return Ok(false),
+                }
+            }
+        };
+        let job_key = job_key.to_string();
+        let claim_token = claim_token.to_string();
+        let error_class = error_class.to_string();
+        let error_message = error_message.to_string();
+        self.execute_tenant_scoped(&tenant_id, worker_id, |tx| Box::pin(async move {
+            Self::dead_letter_claimed_job_inner(tx, &job_key, &claim_token, &error_class, &error_message, incident_id).await
+        })).await
     }
 
     async fn cancel_jobs_for_instance(&self, instance_id: Uuid) -> Result<Vec<String>> {
-        let rows = sqlx::query(
-            "DELETE FROM job_queue WHERE process_instance_id = $1 AND status IN ('pending', 'claimed') RETURNING job_key",
-        )
-        .bind(instance_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        use sqlx::Row;
-        Ok(rows.iter().map(|r| r.get("job_key")).collect())
+        let tenant_id = self.resolve_tenant_id(instance_id).await?;
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            Self::cancel_jobs_for_instance_inner(tx, instance_id).await
+        })).await
     }
 
     // ── Program store ──
@@ -1114,149 +1025,151 @@ impl ProcessStore for PostgresProcessStore {
         payload_update: Option<&PayloadUpdate>,
         events: &[RuntimeEvent],
     ) -> Result<bool> {
-        let mut tx = self.pool.begin().await?;
-
-        let result = sqlx::query(
-            r#"
-            UPDATE message_buffer
-            SET consumed_at = now(),
-                consumed_by_instance_id = $5,
-                consumed_by_fiber_id = $6,
-                status = 'consumed'
-            WHERE tenant_id = $1
-              AND message_name = $2
-              AND correlation_key = $3
-              AND msg_id = $4
-              AND claim_token = $7
-              AND claim_until = $8
-              AND consumed_at IS NULL
-            "#,
-        )
-        .bind(&message.message.tenant_id)
-        .bind(&message.message.message_name)
-        .bind(&message.message.correlation_key)
-        .bind(&message.message.msg_id)
-        .bind(instance.instance_id)
-        .bind(fiber.fiber_id)
-        .bind(&message.claim_token)
-        .bind(epoch_ms_to_datetime(message.claim_until))
-        .execute(&mut *tx)
-        .await?;
-
-        if result.rows_affected() != 1 {
-            tx.rollback().await?;
-            return Ok(false);
-        }
-
-        let payload = payload_update
-            .map(|payload_update| payload_update.payload.as_str())
-            .unwrap_or(instance.domain_payload.as_ref());
-        let payload_hash = payload_update
-            .map(|payload_update| payload_update.payload_hash)
-            .unwrap_or(instance.domain_payload_hash);
-
-        let flags = serde_json::to_value(&instance.flags)?;
-        let counters = serde_json::to_value(&instance.counters)?;
-        let join_expected = serde_json::to_value(&instance.join_expected)?;
-        let state = serde_json::to_value(&instance.state)?;
-
-        let process_instances_result = sqlx::query(
-            r#"
-            UPDATE process_instances
-            SET domain_payload = $2,
-                domain_payload_hash = $3,
-                flags = $4,
-                counters = $5,
-                join_expected = $6,
-                state = $7
-            WHERE instance_id = $1
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(payload)
-        .bind(&payload_hash[..])
-        .bind(&flags)
-        .bind(&counters)
-        .bind(&join_expected)
-        .bind(&state)
-        .execute(&mut *tx)
-        .await?;
-
-        if process_instances_result.rows_affected() != 1 {
-            tx.rollback().await?;
-            return Err(anyhow::anyhow!(
-                "atomic_consume_buffered_message: process_instances update affected {} rows, expected 1 (likely RLS violation or invalid instance_id)",
-                process_instances_result.rows_affected()
-            ));
-        }
-
-        if let Some(payload_update) = payload_update {
-            sqlx::query(
+        let lease_owner = "unused";
+        let tenant_id = instance.tenant_id.clone();
+        let instance = instance.clone();
+        let fiber = fiber.clone();
+        let message = message.clone();
+        let payload_update = payload_update.cloned();
+        let events = events.to_vec();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let result = sqlx::query(
                 r#"
-                INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (instance_id, payload_hash) DO NOTHING
+                UPDATE message_buffer
+                SET consumed_at = now(),
+                    consumed_by_instance_id = $5,
+                    consumed_by_fiber_id = $6,
+                    status = 'consumed'
+                WHERE tenant_id = $1
+                  AND message_name = $2
+                  AND correlation_key = $3
+                  AND msg_id = $4
+                  AND claim_token = $7
+                  AND claim_until = $8
+                  AND consumed_at IS NULL
+                "#,
+            )
+            .bind(&message.message.tenant_id)
+            .bind(&message.message.message_name)
+            .bind(&message.message.correlation_key)
+            .bind(&message.message.msg_id)
+            .bind(instance.instance_id)
+            .bind(fiber.fiber_id)
+            .bind(&message.claim_token)
+            .bind(epoch_ms_to_datetime(message.claim_until))
+            .execute(&mut *tx.tx)
+            .await?;
+
+            if result.rows_affected() != 1 {
+                return Ok(false);
+            }
+
+            let payload = payload_update
+                .as_ref()
+                .map(|payload_update| payload_update.payload.as_str())
+                .unwrap_or(instance.domain_payload.as_ref());
+            let payload_hash = payload_update
+                .as_ref()
+                .map(|payload_update| payload_update.payload_hash)
+                .unwrap_or(instance.domain_payload_hash);
+
+            let flags = serde_json::to_value(&instance.flags)?;
+            let counters = serde_json::to_value(&instance.counters)?;
+            let join_expected = serde_json::to_value(&instance.join_expected)?;
+            let state = serde_json::to_value(&instance.state)?;
+
+            let process_instances_result = sqlx::query(
+                r#"
+                UPDATE process_instances
+                SET domain_payload = $2,
+                    domain_payload_hash = $3,
+                    flags = $4,
+                    counters = $5,
+                    join_expected = $6,
+                    state = $7
+                WHERE instance_id = $1
                 "#,
             )
             .bind(instance.instance_id)
-            .bind(&payload_update.payload_hash[..])
-            .bind(&payload_update.payload)
-            .execute(&mut *tx)
+            .bind(payload)
+            .bind(&payload_hash[..])
+            .bind(&flags)
+            .bind(&counters)
+            .bind(&join_expected)
+            .bind(&state)
+            .execute(&mut *tx.tx)
             .await?;
-        }
 
-        let stack = serde_json::to_value(&fiber.stack)?;
-        let regs = serde_json::to_value(&fiber.regs)?;
-        let wait_state = serde_json::to_value(&fiber.wait)?;
-        sqlx::query(
-            r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
-                pc = EXCLUDED.pc,
-                stack = EXCLUDED.stack,
-                regs = EXCLUDED.regs,
-                wait_state = EXCLUDED.wait_state,
-                loop_epoch = EXCLUDED.loop_epoch
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(fiber.fiber_id)
-        .bind(fiber.pc as i32)
-        .bind(&stack)
-        .bind(&regs)
-        .bind(&wait_state)
-        .bind(fiber.loop_epoch as i32)
-        .execute(&mut *tx)
-        .await?;
+            tx.assert_rows_affected(&process_instances_result, 1, "atomic_consume_buffered_message: process_instances update")?;
 
-        for event in events {
-            let event_json = serde_json::to_value(event)?;
-            sqlx::query(
-                r#"
-                WITH seq AS (
-                    INSERT INTO event_sequences (instance_id, next_seq)
-                    VALUES ($1, 1)
-                    ON CONFLICT (instance_id) DO UPDATE
-                        SET next_seq = event_sequences.next_seq + 1
-                    RETURNING next_seq
+            if let Some(payload_update) = &payload_update {
+                sqlx::query(
+                    r#"
+                    INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (instance_id, payload_hash) DO NOTHING
+                    "#,
                 )
-                INSERT INTO event_log (instance_id, seq, event)
-                SELECT $1, seq.next_seq, $2
-                FROM seq
+                .bind(instance.instance_id)
+                .bind(&payload_update.payload_hash[..])
+                .bind(&payload_update.payload)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+
+            let stack = serde_json::to_value(&fiber.stack)?;
+            let regs = serde_json::to_value(&fiber.regs)?;
+            let wait_state = serde_json::to_value(&fiber.wait)?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
+                    pc = EXCLUDED.pc,
+                    stack = EXCLUDED.stack,
+                    regs = EXCLUDED.regs,
+                    wait_state = EXCLUDED.wait_state,
+                    loop_epoch = EXCLUDED.loop_epoch
                 "#,
             )
             .bind(instance.instance_id)
-            .bind(&event_json)
-            .execute(&mut *tx)
+            .bind(fiber.fiber_id)
+            .bind(fiber.pc as i32)
+            .bind(&stack)
+            .bind(&regs)
+            .bind(&wait_state)
+            .bind(fiber.loop_epoch as i32)
+            .execute(&mut *tx.tx)
             .await?;
-        }
 
-        if !events.is_empty() {
-            notify_event_tx(&mut tx, instance.instance_id).await?;
-        }
-        tx.commit().await?;
-        Ok(true)
+            for event in &events {
+                let event_json = serde_json::to_value(event)?;
+                sqlx::query(
+                    r#"
+                    WITH seq AS (
+                        INSERT INTO event_sequences (instance_id, next_seq)
+                        VALUES ($1, 1)
+                        ON CONFLICT (instance_id) DO UPDATE
+                            SET next_seq = event_sequences.next_seq + 1
+                        RETURNING next_seq
+                    )
+                    INSERT INTO event_log (instance_id, seq, event)
+                    SELECT $1, seq.next_seq, $2
+                    FROM seq
+                    "#,
+                )
+                .bind(instance.instance_id)
+                .bind(&event_json)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+
+            if !events.is_empty() {
+                notify_event_tx(&mut tx.tx, instance.instance_id).await?;
+            }
+            Ok(true)
+        })).await
     }
 
     async fn release_buffered_message_claim(
@@ -1476,47 +1389,14 @@ impl ProcessStore for PostgresProcessStore {
     // ── Incidents ──
 
     async fn save_incident(&self, incident: &Incident) -> Result<()> {
-        let error_class = serde_json::to_value(&incident.error_class)?;
-        let created_at = epoch_ms_to_datetime(incident.created_at);
-        let resolved_at = incident.resolved_at.map(epoch_ms_to_datetime);
-
-        let result = sqlx::query(
-            r#"
-            INSERT INTO incidents (
-                incident_id, process_instance_id, fiber_id, service_task_id,
-                bytecode_addr, error_class, message, retry_count,
-                created_at, resolved_at, resolution
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            "#,
-        )
-        .bind(incident.incident_id)
-        .bind(incident.process_instance_id)
-        .bind(incident.fiber_id)
-        .bind(&incident.service_task_id)
-        .bind(incident.bytecode_addr as i32)
-        .bind(&error_class)
-        .bind(&incident.message)
-        .bind(incident.retry_count as i32)
-        .bind(created_at)
-        .bind(resolved_at)
-        .bind(&incident.resolution)
-        .execute(&self.pool)
-        .await?;
-
-        // A18 — rows_affected validation. A straight INSERT with no
-        // ON CONFLICT clause must produce exactly 1 row. Zero means
-        // RLS rejected (when migration 025's policy applies) or the
-        // parent process_instance was deleted concurrently.
-        if result.rows_affected() == 0 {
-            return Err(anyhow!(
-                "save_incident affected 0 rows for incident {} (instance {}); \
-                 parent missing, RLS rejected, or constraint violation",
-                incident.incident_id,
-                incident.process_instance_id
-            ));
-        }
-
-        Ok(())
+        let tenant_id = self.resolve_tenant_id(incident.process_instance_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("save_incident for incident {}: {}", incident.incident_id, e))?;
+        let lease_owner = "unused";
+        let incident = incident.clone();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            Self::save_incident_inner(tx, &incident).await
+        })).await
     }
 
     async fn load_incidents(&self, instance_id: Uuid) -> Result<Vec<Incident>> {
@@ -1575,187 +1455,78 @@ impl ProcessStore for PostgresProcessStore {
         // the scheduler even if the main transaction rolls back.
         self.ensure_tenant(&instance.tenant_id).await?;
 
-        let mut tx = self.pool.begin().await?;
-        Self::set_tenant_context(&mut tx, &instance.tenant_id).await?;
+        let lease_owner = "unused";
+        let tenant_id = instance.tenant_id.clone();
+        let instance = instance.clone();
+        let root_fiber = root_fiber.clone();
+        let event = event.clone();
 
-        // 1. INSERT process_instances
-        let flags = serde_json::to_value(&instance.flags)?;
-        let counters = serde_json::to_value(&instance.counters)?;
-        let join_expected = serde_json::to_value(&instance.join_expected)?;
-        let state = serde_json::to_value(&instance.state)?;
-        let session_stack = serde_json::to_value(&instance.session_stack)?;
-        let created_at = epoch_ms_to_datetime(instance.created_at);
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            // 1. INSERT process_instances
+            let flags = serde_json::to_value(&instance.flags)?;
+            let counters = serde_json::to_value(&instance.counters)?;
+            let join_expected = serde_json::to_value(&instance.join_expected)?;
+            let state = serde_json::to_value(&instance.state)?;
+            let session_stack = serde_json::to_value(&instance.session_stack)?;
+            let created_at = epoch_ms_to_datetime(instance.created_at);
 
-        sqlx::query(
-            r#"
-            INSERT INTO process_instances (
-                instance_id, tenant_id, process_key, bytecode_version, domain_payload,
-                domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at,
-                plan_hash, current_node_id, placeholder_values
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                      $16, $17, $18)
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(&instance.tenant_id)
-        .bind(&instance.process_key)
-        .bind(&instance.bytecode_version[..])
-        .bind(instance.domain_payload.as_ref())
-        .bind(&instance.domain_payload_hash[..])
-        .bind(&session_stack)
-        .bind(&flags)
-        .bind(&counters)
-        .bind(&join_expected)
-        .bind(&state)
-        .bind(&instance.correlation_id)
-        .bind(instance.entry_id)
-        .bind(instance.runbook_id)
-        .bind(created_at)
-        .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
-        .bind(instance.current_node_id.as_deref())
-        .bind(instance.placeholder_values.as_ref())
-        .execute(&mut *tx)
-        .await?;
-
-        // 2. INSERT fiber
-        let stack = serde_json::to_value(&root_fiber.stack)?;
-        let regs = serde_json::to_value(&root_fiber.regs)?;
-        let wait_state = serde_json::to_value(&root_fiber.wait)?;
-
-        sqlx::query(
-            r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(root_fiber.fiber_id)
-        .bind(root_fiber.pc as i32)
-        .bind(&stack)
-        .bind(&regs)
-        .bind(&wait_state)
-        .bind(root_fiber.loop_epoch as i32)
-        .execute(&mut *tx)
-        .await?;
-
-        // 3. Append event (sequence + log)
-        let event_json = serde_json::to_value(event)?;
-
-        let row = sqlx::query(
-            r#"
-            WITH seq AS (
-                INSERT INTO event_sequences (instance_id, next_seq)
-                VALUES ($1, 1)
-                ON CONFLICT (instance_id) DO UPDATE
-                    SET next_seq = event_sequences.next_seq + 1
-                RETURNING next_seq
-            )
-            INSERT INTO event_log (instance_id, seq, event)
-            SELECT $1, seq.next_seq, $2
-            FROM seq
-            RETURNING seq
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(&event_json)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        use sqlx::Row;
-        let seq: i64 = row.get("seq");
-
-        notify_event_tx(&mut tx, instance.instance_id).await?;
-        tx.commit().await?;
-        Ok(seq as u64)
-    }
-
-    async fn atomic_complete(
-        &self,
-        instance: &ProcessInstance,
-        completion: &JobCompletion,
-        events: &[RuntimeEvent],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        Self::set_tenant_context(&mut tx, &instance.tenant_id).await?;
-
-        // 1. UPSERT process_instances
-        let flags = serde_json::to_value(&instance.flags)?;
-        let counters = serde_json::to_value(&instance.counters)?;
-        let join_expected = serde_json::to_value(&instance.join_expected)?;
-        let state = serde_json::to_value(&instance.state)?;
-        let session_stack = serde_json::to_value(&instance.session_stack)?;
-        let created_at = epoch_ms_to_datetime(instance.created_at);
-
-        sqlx::query(
-            r#"
-            INSERT INTO process_instances (
-                instance_id, tenant_id, process_key, bytecode_version, domain_payload,
-                domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                correlation_id, entry_id, runbook_id, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            ON CONFLICT (instance_id) DO UPDATE SET
-                domain_payload = EXCLUDED.domain_payload,
-                domain_payload_hash = EXCLUDED.domain_payload_hash,
-                session_stack = EXCLUDED.session_stack,
-                flags = EXCLUDED.flags,
-                counters = EXCLUDED.counters,
-                join_expected = EXCLUDED.join_expected,
-                state = EXCLUDED.state,
-                correlation_id = EXCLUDED.correlation_id
-            -- Immutable fields omitted: migration 029 trigger enforces them.
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(&instance.tenant_id)
-        .bind(&instance.process_key)
-        .bind(&instance.bytecode_version[..])
-        .bind(instance.domain_payload.as_ref())
-        .bind(&instance.domain_payload_hash[..])
-        .bind(&session_stack)
-        .bind(&flags)
-        .bind(&counters)
-        .bind(&join_expected)
-        .bind(&state)
-        .bind(&instance.correlation_id)
-        .bind(instance.entry_id)
-        .bind(instance.runbook_id)
-        .bind(created_at)
-        .execute(&mut *tx)
-        .await?;
-
-        // 2. INSERT dedupe_cache ON CONFLICT
-        let completion_json = serde_json::to_value(completion)?;
-        sqlx::query(
-            r#"
-            INSERT INTO dedupe_cache (job_key, completion)
-            VALUES ($1, $2)
-            ON CONFLICT (job_key) DO UPDATE SET completion = EXCLUDED.completion
-            "#,
-        )
-        .bind(&completion.job_key)
-        .bind(&completion_json)
-        .execute(&mut *tx)
-        .await?;
-
-        // 3. INSERT payload_history ON CONFLICT
-        sqlx::query(
-            r#"
-            INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (instance_id, payload_hash) DO NOTHING
-            "#,
-        )
-        .bind(instance.instance_id)
-        .bind(&instance.domain_payload_hash[..])
-        .bind(instance.domain_payload.as_ref())
-        .execute(&mut *tx)
-        .await?;
-
-        // 4. Append completion events in the same transaction.
-        for event in events {
-            let event_json = serde_json::to_value(event)?;
             sqlx::query(
+                r#"
+                INSERT INTO process_instances (
+                    instance_id, tenant_id, process_key, bytecode_version, domain_payload,
+                    domain_payload_hash, session_stack, flags, counters, join_expected, state,
+                    correlation_id, entry_id, runbook_id, created_at,
+                    plan_hash, current_node_id, placeholder_values
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                          $16, $17, $18)
+                "#,
+            )
+            .bind(instance.instance_id)
+            .bind(&instance.tenant_id)
+            .bind(&instance.process_key)
+            .bind(&instance.bytecode_version[..])
+            .bind(instance.domain_payload.as_ref())
+            .bind(&instance.domain_payload_hash[..])
+            .bind(&session_stack)
+            .bind(&flags)
+            .bind(&counters)
+            .bind(&join_expected)
+            .bind(&state)
+            .bind(&instance.correlation_id)
+            .bind(instance.entry_id)
+            .bind(instance.runbook_id)
+            .bind(created_at)
+            .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
+            .bind(instance.current_node_id.as_deref())
+            .bind(instance.placeholder_values.as_ref())
+            .execute(&mut *tx.tx)
+            .await?;
+
+            // 2. INSERT fiber
+            let stack = serde_json::to_value(&root_fiber.stack)?;
+            let regs = serde_json::to_value(&root_fiber.regs)?;
+            let wait_state = serde_json::to_value(&root_fiber.wait)?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+            )
+            .bind(instance.instance_id)
+            .bind(root_fiber.fiber_id)
+            .bind(root_fiber.pc as i32)
+            .bind(&stack)
+            .bind(&regs)
+            .bind(&wait_state)
+            .bind(root_fiber.loop_epoch as i32)
+            .execute(&mut *tx.tx)
+            .await?;
+
+            // 3. Append event (sequence + log)
+            let event_json = serde_json::to_value(event)?;
+
+            let row = sqlx::query(
                 r#"
                 WITH seq AS (
                     INSERT INTO event_sequences (instance_id, next_seq)
@@ -1767,93 +1538,165 @@ impl ProcessStore for PostgresProcessStore {
                 INSERT INTO event_log (instance_id, seq, event)
                 SELECT $1, seq.next_seq, $2
                 FROM seq
+                RETURNING seq
                 "#,
             )
             .bind(instance.instance_id)
             .bind(&event_json)
-            .execute(&mut *tx)
+            .fetch_one(&mut *tx.tx)
             .await?;
-        }
 
-        // 5. ACK job in the same transaction as completion state.
-        sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
+            use sqlx::Row;
+            let seq: i64 = row.get("seq");
+
+            notify_event_tx(&mut tx.tx, instance.instance_id).await?;
+            Ok(seq as u64)
+        })).await
+    }
+
+    async fn atomic_complete(
+        &self,
+        instance: &ProcessInstance,
+        completion: &JobCompletion,
+        events: &[RuntimeEvent],
+    ) -> Result<()> {
+        let lease_owner = "unused";
+        let tenant_id = instance.tenant_id.clone();
+        let instance = instance.clone();
+        let completion = completion.clone();
+        let events = events.to_vec();
+
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            // 1. UPSERT process_instances
+            let flags = serde_json::to_value(&instance.flags)?;
+            let counters = serde_json::to_value(&instance.counters)?;
+            let join_expected = serde_json::to_value(&instance.join_expected)?;
+            let state = serde_json::to_value(&instance.state)?;
+            let session_stack = serde_json::to_value(&instance.session_stack)?;
+            let created_at = epoch_ms_to_datetime(instance.created_at);
+
+            let result = sqlx::query(
+                r#"
+                INSERT INTO process_instances (
+                    instance_id, tenant_id, process_key, bytecode_version, domain_payload,
+                    domain_payload_hash, session_stack, flags, counters, join_expected, state,
+                    correlation_id, entry_id, runbook_id, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ON CONFLICT (instance_id) DO UPDATE SET
+                    domain_payload = EXCLUDED.domain_payload,
+                    domain_payload_hash = EXCLUDED.domain_payload_hash,
+                    session_stack = EXCLUDED.session_stack,
+                    flags = EXCLUDED.flags,
+                    counters = EXCLUDED.counters,
+                    join_expected = EXCLUDED.join_expected,
+                    state = EXCLUDED.state,
+                    correlation_id = EXCLUDED.correlation_id
+                "#,
+            )
+            .bind(instance.instance_id)
+            .bind(&instance.tenant_id)
+            .bind(&instance.process_key)
+            .bind(&instance.bytecode_version[..])
+            .bind(instance.domain_payload.as_ref())
+            .bind(&instance.domain_payload_hash[..])
+            .bind(&session_stack)
+            .bind(&flags)
+            .bind(&counters)
+            .bind(&join_expected)
+            .bind(&state)
+            .bind(&instance.correlation_id)
+            .bind(instance.entry_id)
+            .bind(instance.runbook_id)
+            .bind(created_at)
+            .execute(&mut *tx.tx)
+            .await?;
+
+            tx.assert_rows_affected(&result, 1, "atomic_complete: process_instances update")?;
+
+            // 2. INSERT dedupe_cache ON CONFLICT
+            let completion_json = serde_json::to_value(&completion)?;
+            sqlx::query(
+                r#"
+                INSERT INTO dedupe_cache (job_key, completion)
+                VALUES ($1, $2)
+                ON CONFLICT (job_key) DO UPDATE SET completion = EXCLUDED.completion
+                "#,
+            )
             .bind(&completion.job_key)
-            .execute(&mut *tx)
+            .bind(&completion_json)
+            .execute(&mut *tx.tx)
             .await?;
 
-        if !events.is_empty() {
-            notify_event_tx(&mut tx, instance.instance_id).await?;
-        }
+            // 3. INSERT payload_history ON CONFLICT
+            sqlx::query(
+                r#"
+                INSERT INTO payload_history (instance_id, payload_hash, domain_payload)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (instance_id, payload_hash) DO NOTHING
+                "#,
+            )
+            .bind(instance.instance_id)
+            .bind(&instance.domain_payload_hash[..])
+            .bind(instance.domain_payload.as_ref())
+            .execute(&mut *tx.tx)
+            .await?;
 
-        tx.commit().await?;
-        Ok(())
+            // 4. Append completion events in the same transaction.
+            for event in &events {
+                let event_json = serde_json::to_value(event)?;
+                sqlx::query(
+                    r#"
+                    WITH seq AS (
+                        INSERT INTO event_sequences (instance_id, next_seq)
+                        VALUES ($1, 1)
+                        ON CONFLICT (instance_id) DO UPDATE
+                            SET next_seq = event_sequences.next_seq + 1
+                        RETURNING next_seq
+                    )
+                    INSERT INTO event_log (instance_id, seq, event)
+                    SELECT $1, seq.next_seq, $2
+                    FROM seq
+                    "#,
+                )
+                .bind(instance.instance_id)
+                .bind(&event_json)
+                .execute(&mut *tx.tx)
+                .await?;
+            }
+
+            // 5. ACK job in the same transaction as completion state.
+            sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
+                .bind(&completion.job_key)
+                .execute(&mut *tx.tx)
+                .await?;
+
+            if !events.is_empty() {
+                notify_event_tx(&mut tx.tx, instance.instance_id).await?;
+            }
+            Ok(())
+        })).await
     }
 
     // ── Durability maintenance ──
 
     async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> Result<u32> {
-        let rows = sqlx::query(
-            r#"
-            WITH stale AS (
-                SELECT job_key, process_instance_id, worker_id AS previous_worker_id, retries_remaining
-                FROM job_queue
-                WHERE status = 'claimed'
-                  AND claimed_at < now() - make_interval(secs => $1::float / 1000.0)
-                FOR UPDATE SKIP LOCKED
-            ),
-            dead_lettered AS (
-                UPDATE job_queue
-                SET status = 'dead_lettered',
-                    claimed_at = NULL,
-                    worker_id = NULL,
-                    claim_token = NULL,
-                    claim_expires_at = NULL,
-                    dead_lettered_at = now(),
-                    last_failed_at = now(),
-                    last_error = 'stale claimed job exhausted retry budget'
-                FROM stale
-                WHERE job_queue.job_key = stale.job_key
-                  AND stale.retries_remaining <= 1
-                RETURNING job_queue.job_key, job_queue.process_instance_id, stale.previous_worker_id
-            ),
-            reclaimed AS (
-                UPDATE job_queue
-                SET status = 'pending',
-                    claimed_at = NULL,
-                    worker_id = NULL,
-                    claim_token = NULL,
-                    claim_expires_at = NULL,
-                    retries_remaining = job_queue.retries_remaining - 1,
-                    last_failed_at = now(),
-                    last_error = 'stale claimed job reclaimed'
-                FROM stale
-                WHERE job_queue.job_key = stale.job_key
-                  AND stale.retries_remaining > 1
-                RETURNING job_queue.job_key, job_queue.process_instance_id, stale.previous_worker_id
-            )
-            SELECT job_key, process_instance_id, previous_worker_id FROM reclaimed
-            UNION ALL
-            SELECT job_key, process_instance_id, previous_worker_id FROM dead_lettered
-            "#,
-        )
-        .bind(timeout_ms as f64)
-        .fetch_all(&self.pool)
-        .await?;
+        let lease_owner = "unused";
+        let reclaims = self.execute_tenant_scoped("system", &lease_owner, |tx| Box::pin(async move {
+            Self::reclaim_stale_jobs_inner(tx, timeout_ms).await
+        })).await?;
 
-        use sqlx::Row;
-        for row in &rows {
-            let instance_id: Uuid = row.get("process_instance_id");
-            let previous_worker_id: Option<String> = row.get("previous_worker_id");
+        let count = reclaims.len() as u32;
+        for item in reclaims {
             self.append_event(
-                instance_id,
+                item.process_instance_id,
                 &RuntimeEvent::JobReclaimed {
-                    job_key: row.get("job_key"),
-                    previous_worker_id,
+                    job_key: item.job_key,
+                    previous_worker_id: item.previous_worker_id,
                 },
             )
             .await?;
         }
-        Ok(rows.len() as u32)
+        Ok(count)
     }
 
     async fn prune_dedupe_cache(&self, older_than_ms: u64) -> Result<u32> {
@@ -1895,6 +1738,7 @@ impl ProcessStore for PostgresProcessStore {
         limit: usize,
         lease_ms: u64,
     ) -> Result<Vec<Uuid>> {
+        // CROSS-TENANT SCHEDULER CLAIM — intentionally bypasses the tenant-scoped funnel. Under fork-A (RLS enforced) this must be redesigned: per-tenant iteration OR a BYPASSRLS/privileged claim role. See RISK-001 / fork decision.
         let rows = sqlx::query(
             r#"
             WITH candidates AS (
@@ -1935,25 +1779,9 @@ impl ProcessStore for PostgresProcessStore {
         owner: &str,
         lease_ms: u64,
     ) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE process_instances
-            SET lease_owner = $3,
-                lease_until = now() + make_interval(secs => $4::float / 1000.0),
-                last_tick_at = now()
-            WHERE tenant_id = $1
-              AND instance_id = $2
-              AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(instance_id)
-        .bind(owner)
-        .bind(lease_ms as f64)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() == 1)
+        self.execute_tenant_scoped(tenant_id, owner, |tx| Box::pin(async move {
+            Self::claim_instance_for_transition_inner(tx, instance_id, lease_ms).await
+        })).await
     }
 
     async fn release_instance_transition(
@@ -1962,23 +1790,9 @@ impl ProcessStore for PostgresProcessStore {
         instance_id: Uuid,
         owner: &str,
     ) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE process_instances
-            SET lease_owner = NULL,
-                lease_until = NULL
-            WHERE tenant_id = $1
-              AND instance_id = $2
-              AND lease_owner = $3
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(instance_id)
-        .bind(owner)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
+        self.execute_tenant_scoped(tenant_id, owner, |tx| Box::pin(async move {
+            Self::release_instance_transition_inner(tx, instance_id).await
+        })).await
     }
 
     async fn health_check(&self) -> Result<()> {
@@ -2026,24 +1840,10 @@ impl ProcessStore for PostgresProcessStore {
         tenant_id: &str,
         detection_point: &str,
     ) -> Result<()> {
-        // 1. Mark the row as quarantined. Use a separate pool connection
-        //    so the quarantine persists even if the caller's transaction rolls back.
-        let quarantine_result = sqlx::query(
-            "UPDATE process_instances \
-             SET quarantine_state = 'integrity_violation' \
-             WHERE instance_id = $1",
-        )
-        .bind(instance_id)
-        .execute(&self.pool)
-        .await
-        .context("quarantine_instance: failed to set quarantine_state")?;
-
-        if quarantine_result.rows_affected() != 1 {
-            return Err(anyhow::anyhow!(
-                "quarantine_instance: process_instances update affected {} rows, expected 1 (likely RLS violation or invalid instance_id)",
-                quarantine_result.rows_affected()
-            ));
-        }
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(tenant_id, &lease_owner, |tx| Box::pin(async move {
+            Self::quarantine_instance_inner(tx, instance_id).await
+        })).await?;
 
         // 2. Append InstanceQuarantined event to the audit log.
         let now = chrono::Utc::now();
@@ -2083,6 +1883,429 @@ impl ProcessStore for PostgresProcessStore {
             detection_point = %detection_point,
             "A19: instance quarantined due to integrity hash mismatch"
         );
+
+        Ok(())
+    }
+}
+
+impl PostgresProcessStore {
+    async fn enqueue_job_inner(tx: &mut TenantTx<'_>, activation: &JobActivation) -> Result<()> {
+        let orch_flags = serde_json::to_value(&activation.orch_flags)?;
+        let session_stack = serde_json::to_value(&activation.session_stack)?;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO job_queue (
+                job_key, tenant_id, process_instance_id, task_type, service_task_id,
+                domain_payload, domain_payload_hash, session_stack, orch_flags, retries_remaining,
+                entry_id, runbook_id
+            ) VALUES ($1, (SELECT tenant_id FROM process_instances WHERE instance_id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (job_key) DO NOTHING
+            "#,
+        )
+        .bind(&activation.job_key)
+        .bind(activation.process_instance_id)
+        .bind(&activation.task_type)
+        .bind(&activation.service_task_id)
+        .bind(&activation.domain_payload)
+        .bind(&activation.domain_payload_hash[..])
+        .bind(&session_stack)
+        .bind(&orch_flags)
+        .bind(activation.retries_remaining as i32)
+        .bind(activation.entry_id)
+        .bind(activation.runbook_id)
+        .execute(&mut *tx.tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            let existing: Option<(String,)> =
+                sqlx::query_as("SELECT job_key FROM job_queue WHERE job_key = $1")
+                    .bind(&activation.job_key)
+                    .fetch_optional(&mut *tx.tx)
+                    .await?;
+
+            if existing.is_none() {
+                return Err(anyhow!(
+                    "enqueue_job affected 0 rows for job {} (instance {}); \
+                     parent instance missing, RLS rejected, or NOT NULL \
+                     constraint violation on tenant_id",
+                    activation.job_key,
+                    activation.process_instance_id
+                ));
+            }
+            tracing::debug!(
+                job_key = %activation.job_key,
+                "enqueue_job: duplicate job_key, idempotent no-op"
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn dequeue_jobs_inner(
+        tx: &mut TenantTx<'_>,
+        task_types: &[String],
+        max: usize,
+        lease_ms: u64,
+    ) -> Result<Vec<JobActivation>> {
+        let rows = sqlx::query(
+            r#"
+            WITH claimed AS (
+                SELECT job_key
+                FROM job_queue
+                WHERE status = 'pending'
+                  AND tenant_id = $3
+                  AND task_type = ANY($1)
+                  AND (not_before IS NULL OR not_before <= now())
+                ORDER BY created_at
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE job_queue
+            SET status = 'claimed',
+                claimed_at = now(),
+                worker_id = $4,
+                claim_token = md5(random()::text || clock_timestamp()::text),
+                claim_expires_at = now() + make_interval(secs => $5::float / 1000.0),
+                attempt_count = attempt_count + 1
+            FROM claimed
+            WHERE job_queue.job_key = claimed.job_key
+            RETURNING job_queue.job_key,
+                      job_queue.tenant_id,
+                      job_queue.process_instance_id,
+                      job_queue.task_type,
+                      job_queue.service_task_id,
+                      job_queue.domain_payload,
+                      job_queue.domain_payload_hash,
+                      job_queue.session_stack,
+                      job_queue.orch_flags,
+                      job_queue.retries_remaining,
+                      job_queue.entry_id,
+                      job_queue.runbook_id,
+                      job_queue.worker_id,
+                      job_queue.claim_token,
+                      job_queue.claim_expires_at,
+                      job_queue.attempt_count,
+                      job_queue.failure_count,
+                      job_queue.not_before
+            "#,
+        )
+        .bind(task_types)
+        .bind(max as i64)
+        .bind(&tx.tenant_id)
+        .bind(&tx.lease_owner)
+        .bind(lease_ms as f64)
+        .fetch_all(&mut *tx.tx)
+        .await?;
+
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            use sqlx::Row;
+            let hash: Vec<u8> = row.get("domain_payload_hash");
+            let session_stack_json: serde_json::Value = row.get("session_stack");
+            let orch_flags_json: serde_json::Value = row.get("orch_flags");
+            let retries: i32 = row.get("retries_remaining");
+            let claim_expires_at: Option<chrono::DateTime<chrono::Utc>> =
+                row.get("claim_expires_at");
+            let not_before: Option<chrono::DateTime<chrono::Utc>> = row.get("not_before");
+            let attempt_count: i32 = row.get("attempt_count");
+            let failure_count: i32 = row.get("failure_count");
+
+            result.push(JobActivation {
+                job_key: row.get("job_key"),
+                tenant_id: row.get("tenant_id"),
+                process_instance_id: row.get("process_instance_id"),
+                task_type: row.get("task_type"),
+                service_task_id: row.get("service_task_id"),
+                domain_payload: row.get("domain_payload"),
+                domain_payload_hash: bytes_to_hash(hash)?,
+                session_stack: serde_json::from_value(session_stack_json)?,
+                orch_flags: serde_json::from_value(orch_flags_json)?,
+                retries_remaining: retries as u32,
+                entry_id: row.get("entry_id"),
+                runbook_id: row.get("runbook_id"),
+                worker_id: row.get("worker_id"),
+                claim_token: row.get("claim_token"),
+                claim_expires_at: claim_expires_at.map(datetime_to_epoch_ms),
+                attempt_count: attempt_count as u32,
+                failure_count: failure_count as u32,
+                not_before: not_before.map(datetime_to_epoch_ms),
+            });
+        }
+        Ok(result)
+    }
+
+    async fn ack_job_inner(tx: &mut TenantTx<'_>, job_key: &str) -> Result<()> {
+        let result = sqlx::query("DELETE FROM job_queue WHERE job_key = $1")
+            .bind(job_key)
+            .execute(&mut *tx.tx)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            tracing::debug!(
+                job_key = %job_key,
+                "ack_job: 0 rows deleted (already acked, expired, or cancelled)"
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn retry_claimed_job_inner(
+        tx: &mut TenantTx<'_>,
+        job_key: &str,
+        claim_token: &str,
+        error_class: &str,
+        error_message: &str,
+        not_before_ms: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE job_queue
+            SET status = 'pending',
+                claimed_at = NULL,
+                worker_id = NULL,
+                claim_token = NULL,
+                claim_expires_at = NULL,
+                not_before = $4,
+                retries_remaining = GREATEST(retries_remaining - 1, 0),
+                failure_count = failure_count + 1,
+                last_failed_at = now(),
+                last_error_class = $5,
+                last_error_message = $6,
+                last_error = $6
+            WHERE job_key = $1
+              AND status = 'claimed'
+              AND worker_id = $2
+              AND claim_token = $3
+              AND claim_expires_at > now()
+            "#,
+        )
+        .bind(job_key)
+        .bind(&tx.lease_owner)
+        .bind(claim_token)
+        .bind(epoch_ms_to_datetime(not_before_ms))
+        .bind(error_class)
+        .bind(error_message)
+        .execute(&mut *tx.tx)
+        .await?;
+
+        tx.assert_rows_affected(&result, 1, "retry_claimed_job")?;
+        Ok(true)
+    }
+
+    async fn dead_letter_claimed_job_inner(
+        tx: &mut TenantTx<'_>,
+        job_key: &str,
+        claim_token: &str,
+        error_class: &str,
+        error_message: &str,
+        incident_id: Uuid,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE job_queue
+            SET status = 'dead_lettered',
+                claimed_at = NULL,
+                worker_id = NULL,
+                claim_token = NULL,
+                claim_expires_at = NULL,
+                failure_count = failure_count + 1,
+                last_failed_at = now(),
+                dead_lettered_at = now(),
+                last_error_class = $4,
+                last_error_message = $5,
+                last_error = $5,
+                incident_id = $6
+            WHERE job_key = $1
+              AND status = 'claimed'
+              AND worker_id = $2
+              AND claim_token = $3
+              AND claim_expires_at > now()
+            "#,
+        )
+        .bind(job_key)
+        .bind(&tx.lease_owner)
+        .bind(claim_token)
+        .bind(error_class)
+        .bind(error_message)
+        .bind(incident_id)
+        .execute(&mut *tx.tx)
+        .await?;
+
+        tx.assert_rows_affected(&result, 1, "dead_letter_claimed_job")?;
+        Ok(true)
+    }
+
+    async fn cancel_jobs_for_instance_inner(
+        tx: &mut TenantTx<'_>,
+        instance_id: Uuid,
+    ) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "DELETE FROM job_queue WHERE process_instance_id = $1 AND status IN ('pending', 'claimed') RETURNING job_key",
+        )
+        .bind(instance_id)
+        .fetch_all(&mut *tx.tx)
+        .await?;
+
+        use sqlx::Row;
+        Ok(rows.iter().map(|r| r.get("job_key")).collect())
+    }
+
+    async fn quarantine_instance_inner(
+        tx: &mut TenantTx<'_>,
+        instance_id: Uuid,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE process_instances \
+             SET quarantine_state = 'integrity_violation' \
+             WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .execute(&mut *tx.tx)
+        .await
+        .context("quarantine_instance: failed to set quarantine_state")?;
+
+        tx.assert_rows_affected(&result, 1, "quarantine_instance")
+    }
+
+    async fn save_incident_inner(tx: &mut TenantTx<'_>, incident: &Incident) -> Result<()> {
+        let error_class = serde_json::to_value(&incident.error_class)?;
+        let created_at = epoch_ms_to_datetime(incident.created_at);
+        let resolved_at = incident.resolved_at.map(epoch_ms_to_datetime);
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO incidents (
+                incident_id, process_instance_id, fiber_id, service_task_id,
+                bytecode_addr, error_class, message, retry_count,
+                created_at, resolved_at, resolution
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(incident.incident_id)
+        .bind(incident.process_instance_id)
+        .bind(incident.fiber_id)
+        .bind(&incident.service_task_id)
+        .bind(incident.bytecode_addr as i32)
+        .bind(&error_class)
+        .bind(&incident.message)
+        .bind(incident.retry_count as i32)
+        .bind(created_at)
+        .bind(resolved_at)
+        .bind(&incident.resolution)
+        .execute(&mut *tx.tx)
+        .await?;
+
+        tx.assert_rows_affected(&result, 1, "save_incident")
+    }
+
+    async fn reclaim_stale_jobs_inner(tx: &mut TenantTx<'_>, timeout_ms: u64) -> Result<Vec<StaleReclaimInfo>> {
+        let rows = sqlx::query(
+            r#"
+            WITH stale AS (
+                SELECT job_key, process_instance_id, worker_id AS previous_worker_id, retries_remaining
+                FROM job_queue
+                WHERE status = 'claimed'
+                  AND claimed_at < now() - make_interval(secs => $1::float / 1000.0)
+                FOR UPDATE SKIP LOCKED
+            ),
+            dead_lettered AS (
+                UPDATE job_queue
+                SET status = 'dead_lettered',
+                    claimed_at = NULL,
+                    worker_id = NULL,
+                    claim_token = NULL,
+                    claim_expires_at = NULL,
+                    dead_lettered_at = now(),
+                    last_failed_at = now(),
+                    last_error = 'stale claimed job exhausted retry budget'
+                FROM stale
+                WHERE job_queue.job_key = stale.job_key
+                  AND stale.retries_remaining <= 1
+                RETURNING job_queue.job_key, job_queue.process_instance_id, stale.previous_worker_id
+            ),
+            reclaimed AS (
+                UPDATE job_queue
+                SET status = 'pending',
+                    claimed_at = NULL,
+                    worker_id = NULL,
+                    claim_token = NULL,
+                    claim_expires_at = NULL,
+                    retries_remaining = job_queue.retries_remaining - 1,
+                    last_failed_at = now(),
+                    last_error = 'stale claimed job reclaimed'
+                FROM stale
+                WHERE job_queue.job_key = stale.job_key
+                  AND stale.retries_remaining > 1
+                RETURNING job_queue.job_key, job_queue.process_instance_id, stale.previous_worker_id
+            )
+            SELECT job_key, process_instance_id, previous_worker_id FROM reclaimed
+            UNION ALL
+            SELECT job_key, process_instance_id, previous_worker_id FROM dead_lettered
+            "#,
+        )
+        .bind(timeout_ms as f64)
+        .fetch_all(&mut *tx.tx)
+        .await?;
+
+        use sqlx::Row;
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            results.push(StaleReclaimInfo {
+                job_key: row.get("job_key"),
+                process_instance_id: row.get("process_instance_id"),
+                previous_worker_id: row.get("previous_worker_id"),
+            });
+        }
+        Ok(results)
+    }
+
+    async fn claim_instance_for_transition_inner(
+        tx: &mut TenantTx<'_>,
+        instance_id: Uuid,
+        lease_ms: u64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE process_instances
+            SET lease_owner = $3,
+                lease_until = now() + make_interval(secs => $4::float / 1000.0),
+                last_tick_at = now()
+            WHERE tenant_id = $1
+              AND instance_id = $2
+              AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
+            "#,
+        )
+        .bind(&tx.tenant_id)
+        .bind(instance_id)
+        .bind(&tx.lease_owner)
+        .bind(lease_ms as f64)
+        .execute(&mut *tx.tx)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn release_instance_transition_inner(
+        tx: &mut TenantTx<'_>,
+        instance_id: Uuid,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE process_instances
+            SET lease_owner = NULL,
+                lease_until = NULL
+            WHERE tenant_id = $1
+              AND instance_id = $2
+              AND lease_owner = $3
+            "#,
+        )
+        .bind(&tx.tenant_id)
+        .bind(instance_id)
+        .bind(&tx.lease_owner)
+        .execute(&mut *tx.tx)
+        .await?;
 
         Ok(())
     }
@@ -2589,6 +2812,7 @@ mod tests {
         let id = Uuid::now_v7();
         store.save_instance(&make_instance(id)).await.unwrap();
 
+
         // Update state
         let new_state = ProcessState::Completed { at: 1700001000000 };
         store
@@ -3064,6 +3288,7 @@ mod tests {
         let iid = Uuid::now_v7();
 
         store.save_instance(&make_instance(iid)).await.unwrap();
+
         let original_hash = store
             .load_instance(iid)
             .await
@@ -3340,5 +3565,31 @@ mod tests {
         ).await;
 
         assert!(consume_res.is_err(), "atomic_consume_buffered_message must fail (return Err) without tenant context");
+    }
+
+    /// E-invariant T2.3: Verify that state-advancing writes succeed without any lease scope set.
+    #[tokio::test]
+    #[ignore]
+    async fn test_t2_3_no_lease_fence_success() {
+        let (_pool, store) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+
+        // 1. Insert an instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance(&inst).await.unwrap();
+
+        // 2. Claim it under owner "worker-current"
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, "worker-current", 30000).await.unwrap();
+        assert!(claimed);
+
+        // 3. Attempt state-advancing write with NO lease scope set (which previously failed due to "default-lease-owner" mismatch)
+        // This simulates the startup recovery scan or the federated bus callback advance.
+        let res = store.update_instance_state(iid, ProcessState::Completed { at: 1700000000000 }).await;
+        assert!(res.is_ok(), "Write without active lease scope must succeed: {:?}", res);
+
+        let loaded = store.load_instance(iid).await.unwrap().unwrap();
+        assert!(matches!(loaded.state, ProcessState::Completed { at: 1700000000000 }));
     }
 }

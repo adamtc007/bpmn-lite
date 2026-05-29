@@ -53,7 +53,7 @@ BEGIN
             current_database()
         );
     EXCEPTION
-        WHEN OTHERS THEN
+        WHEN insufficient_privilege THEN
             RAISE WARNING 'Could not grant CONNECT on database to bpmn_lite_app: %', SQLERRM;
     END;
 END

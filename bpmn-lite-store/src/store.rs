@@ -271,3 +271,11 @@ pub trait ProcessStore: Send + Sync {
         detection_point: &str,
     ) -> Result<()>;
 }
+
+tokio::task_local! {
+    pub static TENANT_ID: String;
+}
+
+pub fn get_tenant_id() -> Option<String> {
+    TENANT_ID.try_with(|t| t.clone()).ok()
+}

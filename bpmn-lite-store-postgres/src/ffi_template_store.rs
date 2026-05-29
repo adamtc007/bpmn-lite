@@ -41,28 +41,45 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
                 .unwrap_or_else(chrono::Utc::now);
         let row_uuid = Uuid::now_v7();
 
-        let inserted = sqlx::query(
-            r#"
-            INSERT INTO ffi_template (
-                template_id, template_uuidv7, owner_type, owner_metadata,
-                input_schema_json, output_schema_json, idempotency_json,
-                tenant_id, published_at, publisher
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (template_id) DO NOTHING
-            "#,
+        let tenant_id = template.tenant_id.clone();
+        let tenant_id_for_query = tenant_id.clone();
+        let lease_owner = "unused";
+        let template_id = template.template_id;
+        let owner_type = template.owner_type.clone();
+        let owner_metadata = template.owner_metadata.clone();
+        let publisher = template.publisher.clone();
+
+        let inserted = crate::store_postgres::execute_tenant_scoped_on_pool(
+            &self.pool,
+            &tenant_id,
+            &lease_owner,
+            |tx| Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO ffi_template (
+                        template_id, template_uuidv7, owner_type, owner_metadata,
+                        input_schema_json, output_schema_json, idempotency_json,
+                        tenant_id, published_at, publisher
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (template_id) DO NOTHING
+                    "#,
+                )
+                .bind(template_id.as_slice())
+                .bind(row_uuid)
+                .bind(&owner_type)
+                .bind(&owner_metadata)
+                .bind(&input_schema_json)
+                .bind(&output_schema_json)
+                .bind(&idempotency_json)
+                .bind(&tenant_id_for_query)
+                .bind(published_at)
+                .bind(&publisher)
+                .execute(&mut *tx.tx)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+            })
         )
-        .bind(template.template_id.as_slice())
-        .bind(row_uuid)
-        .bind(&template.owner_type)
-        .bind(&template.owner_metadata)
-        .bind(&input_schema_json)
-        .bind(&output_schema_json)
-        .bind(&idempotency_json)
-        .bind(&template.tenant_id)
-        .bind(published_at)
-        .bind(&template.publisher)
-        .execute(&self.pool)
         .await?;
 
         if inserted.rows_affected() == 1 {

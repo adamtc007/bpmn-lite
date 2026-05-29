@@ -187,11 +187,7 @@ impl PlanWalker {
         let pending_rows = self.pending_store.list_for_process(instance.instance_id).await?;
         let matching_row = pending_rows.iter().find(|r| r.node_id == node_id);
 
-        let attempt_count = if matching_row.is_some() {
-            retry_count
-        } else {
-            0
-        };
+        let attempt_count = retry_count;
 
         let (callout_id, idempotency_key) = if let Some(ref row) = matching_row {
             (row.callout_id, row.idempotency_key)
@@ -534,5 +530,20 @@ mod tests {
 
         assert_eq!(callout1, callout2, "Derived callout IDs must be identical");
         assert_ne!(key1, callout1, "Different salts must produce different UUIDs");
+    }
+
+    #[test]
+    fn test_t2_4_attempt_count_semantics() {
+        let instance_id = Uuid::now_v7();
+        let node_id = "service-task-1";
+
+        // Crash-replay (same logical attempt) must yield byte-identical keys
+        let attempt1_retry0 = derive_uuid("idempotency_key", instance_id, node_id, 0);
+        let attempt1_retry0_replay = derive_uuid("idempotency_key", instance_id, node_id, 0);
+        assert_eq!(attempt1_retry0, attempt1_retry0_replay, "Crash-replay must yield byte-identical keys");
+
+        // Deliberate retry (different attempt count) must yield a new key
+        let attempt2_retry1 = derive_uuid("idempotency_key", instance_id, node_id, 1);
+        assert_ne!(attempt1_retry0, attempt2_retry1, "Deliberate retry must yield a new key");
     }
 }

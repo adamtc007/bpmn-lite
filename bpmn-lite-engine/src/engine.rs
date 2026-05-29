@@ -227,7 +227,9 @@ impl BpmnLiteEngine {
         Fut: std::future::Future<Output = Result<T>>,
     {
         self.claim_transition_as(instance_id, owner).await?;
-        let result = operation().await;
+        let result = bpmn_lite_store::store::TENANT_ID.scope(self.tenant_id.clone(), async {
+            operation().await
+        }).await;
         let release_result = self.release_transition_as(instance_id, owner).await;
         match (result, release_result) {
             (Ok(value), Ok(())) => Ok(value),
@@ -391,16 +393,19 @@ impl BpmnLiteEngine {
         let fiber_id = Uuid::now_v7();
         let root_fiber = Fiber::new(fiber_id, 0);
 
-        self.store
-            .atomic_start(
-                &instance,
-                &root_fiber,
-                &RuntimeEvent::InstanceStarted {
-                    instance_id,
-                    bytecode_version: params.bytecode_version,
-                },
-            )
-            .await?;
+        let tenant_id = self.tenant_id.clone();
+        let store = self.store.clone();
+        let instance_clone = instance.clone();
+        let root_fiber_clone = root_fiber.clone();
+        let event_clone = RuntimeEvent::InstanceStarted {
+            instance_id,
+            bytecode_version: params.bytecode_version,
+        };
+        bpmn_lite_store::store::TENANT_ID.scope(tenant_id, async move {
+            store
+                .atomic_start(&instance_clone, &root_fiber_clone, &event_clone)
+                .await
+        }).await?;
 
         Ok(instance_id)
     }
