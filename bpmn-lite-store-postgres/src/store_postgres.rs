@@ -94,10 +94,9 @@ where
     F: for<'b, 'c> FnOnce(&'b mut TenantTx<'c>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'b>> + Send,
     T: Send,
 {
-    let tx = pool.begin().await.context("execute_tenant_scoped: begin transaction")?;
+    let mut tx = pool.begin().await.context("execute_tenant_scoped: begin transaction")?;
 
-    // FORK: SET LOCAL app.tenant_id OR predicate enforcement inserted here in T3
-    // LEASE FENCING DEFERRED TO T3 — must be designed with the park→wake→reclaim lease lifecycle (bus-callback + recovery are non-tick writers). See RISK-009.
+    PostgresProcessStore::set_tenant_context(&mut tx, tenant_id).await?;
 
     let mut tenant_tx = TenantTx {
         tx,
@@ -200,12 +199,12 @@ impl PostgresProcessStore {
     }
 
     pub async fn resolve_tenant_id(&self, instance_id: Uuid) -> Result<String> {
-        let row: (String,) = sqlx::query_as("SELECT tenant_id FROM process_instances WHERE instance_id = $1")
+        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_tenant_id($1)")
             .bind(instance_id)
             .fetch_one(&self.pool)
             .await
-            .context("resolve_tenant_id: instance not found")?;
-        Ok(row.0)
+            .context("resolve_tenant_id: failed to call function")?;
+        row.0.ok_or_else(|| anyhow!("resolve_tenant_id: instance not found"))
     }
 }
 
@@ -295,66 +294,73 @@ impl ProcessStore for PostgresProcessStore {
         })).await
     }
     async fn load_instance(&self, id: Uuid) -> Result<Option<ProcessInstance>> {
-        let row = sqlx::query(
-            r#"
-            SELECT instance_id, tenant_id, process_key, bytecode_version, domain_payload,
-                   domain_payload_hash, session_stack, flags, counters, join_expected, state,
-                   correlation_id, entry_id, runbook_id,
-                   (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
-                   integrity_hash,
-                   quarantine_state,
-                   plan_hash,
-                   current_node_id,
-                   placeholder_values
-            FROM process_instances
-            WHERE instance_id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let tenant_id = match self.resolve_tenant_id(id).await {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let row = sqlx::query(
+                r#"
+                SELECT instance_id, tenant_id, process_key, bytecode_version, domain_payload,
+                       domain_payload_hash, session_stack, flags, counters, join_expected, state,
+                       correlation_id, entry_id, runbook_id,
+                       (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+                       integrity_hash,
+                       quarantine_state,
+                       plan_hash,
+                       current_node_id,
+                       placeholder_values
+                FROM process_instances
+                WHERE instance_id = $1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx.tx)
+            .await?;
 
-        match row {
-            None => Ok(None),
-            Some(row) => {
-                use sqlx::Row;
-                let bytecode_version: Vec<u8> = row.get("bytecode_version");
-                let domain_payload_hash: Vec<u8> = row.get("domain_payload_hash");
-                let session_stack_json: serde_json::Value = row.get("session_stack");
-                let flags_json: serde_json::Value = row.get("flags");
-                let counters_json: serde_json::Value = row.get("counters");
-                let join_expected_json: serde_json::Value = row.get("join_expected");
-                let state_json: serde_json::Value = row.get("state");
-                let created_at_ms: i64 = row.get("created_at_ms");
-                let integrity_hash_raw: Option<Vec<u8>> = row.get("integrity_hash");
-                let integrity_hash = integrity_hash_raw.map(bytes_to_hash).transpose()?;
-                let plan_hash_raw: Option<Vec<u8>> = row.get("plan_hash");
-                let plan_hash = plan_hash_raw.map(bytes_to_hash).transpose()?;
+            match row {
+                None => Ok(None),
+                Some(row) => {
+                    use sqlx::Row;
+                    let bytecode_version: Vec<u8> = row.get("bytecode_version");
+                    let domain_payload_hash: Vec<u8> = row.get("domain_payload_hash");
+                    let session_stack_json: serde_json::Value = row.get("session_stack");
+                    let flags_json: serde_json::Value = row.get("flags");
+                    let counters_json: serde_json::Value = row.get("counters");
+                    let join_expected_json: serde_json::Value = row.get("join_expected");
+                    let state_json: serde_json::Value = row.get("state");
+                    let created_at_ms: i64 = row.get("created_at_ms");
+                    let integrity_hash_raw: Option<Vec<u8>> = row.get("integrity_hash");
+                    let integrity_hash = integrity_hash_raw.map(bytes_to_hash).transpose()?;
+                    let plan_hash_raw: Option<Vec<u8>> = row.get("plan_hash");
+                    let plan_hash = plan_hash_raw.map(bytes_to_hash).transpose()?;
 
-                Ok(Some(ProcessInstance {
-                    instance_id: row.get("instance_id"),
-                    tenant_id: row.get("tenant_id"),
-                    process_key: row.get("process_key"),
-                    bytecode_version: bytes_to_hash(bytecode_version)?,
-                    domain_payload: Arc::<str>::from(row.get::<String, _>("domain_payload")),
-                    domain_payload_hash: bytes_to_hash(domain_payload_hash)?,
-                    session_stack: serde_json::from_value(session_stack_json)?,
-                    flags: serde_json::from_value(flags_json)?,
-                    counters: serde_json::from_value(counters_json)?,
-                    join_expected: serde_json::from_value(join_expected_json)?,
-                    state: serde_json::from_value(state_json)?,
-                    correlation_id: row.get("correlation_id"),
-                    entry_id: row.get("entry_id"),
-                    runbook_id: row.get("runbook_id"),
-                    created_at: created_at_ms,
-                    integrity_hash,
-                    quarantine_state: row.get("quarantine_state"),
-                    plan_hash,
-                    current_node_id: row.get("current_node_id"),
-                    placeholder_values: row.get("placeholder_values"),
-                }))
+                    Ok(Some(ProcessInstance {
+                        instance_id: row.get("instance_id"),
+                        tenant_id: row.get("tenant_id"),
+                        process_key: row.get("process_key"),
+                        bytecode_version: bytes_to_hash(bytecode_version)?,
+                        domain_payload: Arc::<str>::from(row.get::<String, _>("domain_payload")),
+                        domain_payload_hash: bytes_to_hash(domain_payload_hash)?,
+                        session_stack: serde_json::from_value(session_stack_json)?,
+                        flags: serde_json::from_value(flags_json)?,
+                        counters: serde_json::from_value(counters_json)?,
+                        join_expected: serde_json::from_value(join_expected_json)?,
+                        state: serde_json::from_value(state_json)?,
+                        correlation_id: row.get("correlation_id"),
+                        entry_id: row.get("entry_id"),
+                        runbook_id: row.get("runbook_id"),
+                        created_at: created_at_ms,
+                        integrity_hash,
+                        quarantine_state: row.get("quarantine_state"),
+                        plan_hash,
+                        current_node_id: row.get("current_node_id"),
+                        placeholder_values: row.get("placeholder_values"),
+                    }))
+                }
             }
-        }
+        })).await
     }
 
     async fn update_instance_state(&self, tenant_id: &str, lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()> {
@@ -676,17 +682,10 @@ impl ProcessStore for PostgresProcessStore {
         })).await
     }
 
-    async fn ack_job(&self, job_key: &str) -> Result<()> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-            .bind(job_key)
-            .fetch_optional(&self.pool)
-            .await?;
-        let tenant_id = match row {
-            Some(r) => r.0,
-            None => return Ok(()),
-        };
+    async fn ack_job(&self, tenant_id: &str, job_key: &str) -> Result<()> {
         let lease_owner = "unused";
         let job_key = job_key.to_string();
+        let tenant_id = tenant_id.to_string();
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
             Self::ack_job_inner(tx, &job_key).await
         })).await
@@ -694,32 +693,41 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn validate_job_claim(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
     ) -> Result<bool> {
-        let row = sqlx::query(
-            r#"
-            SELECT 1
-            FROM job_queue
-            WHERE job_key = $1
-              AND status = 'claimed'
-              AND worker_id = $2
-              AND claim_token = $3
-              AND claim_expires_at > now()
-              AND retries_remaining > 1
-            "#,
-        )
-        .bind(job_key)
-        .bind(worker_id)
-        .bind(claim_token)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.is_some())
+        let lease_owner = "unused";
+        let tenant_id = tenant_id.to_string();
+        let job_key = job_key.to_string();
+        let worker_id = worker_id.to_string();
+        let claim_token = claim_token.to_string();
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let row = sqlx::query(
+                r#"
+                SELECT 1
+                FROM job_queue
+                WHERE job_key = $1
+                  AND status = 'claimed'
+                  AND worker_id = $2
+                  AND claim_token = $3
+                  AND claim_expires_at > now()
+                  AND retries_remaining > 1
+                "#,
+            )
+            .bind(&job_key)
+            .bind(&worker_id)
+            .bind(&claim_token)
+            .fetch_optional(&mut *tx.tx)
+            .await?;
+            Ok(row.is_some())
+        })).await
     }
 
     async fn retry_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -727,14 +735,7 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         not_before_ms: i64,
     ) -> Result<bool> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-            .bind(job_key)
-            .fetch_optional(&self.pool)
-            .await?;
-        let tenant_id = match row {
-            Some(r) => r.0,
-            None => return Ok(false),
-        };
+        let tenant_id = tenant_id.to_string();
         let job_key = job_key.to_string();
         let claim_token = claim_token.to_string();
         let error_class = error_class.to_string();
@@ -746,6 +747,7 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn dead_letter_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -753,14 +755,7 @@ impl ProcessStore for PostgresProcessStore {
         error_message: &str,
         incident_id: Uuid,
     ) -> Result<bool> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT tenant_id FROM job_queue WHERE job_key = $1")
-            .bind(job_key)
-            .fetch_optional(&self.pool)
-            .await?;
-        let tenant_id = match row {
-            Some(r) => r.0,
-            None => return Ok(false),
-        };
+        let tenant_id = tenant_id.to_string();
         let job_key = job_key.to_string();
         let claim_token = claim_token.to_string();
         let error_class = error_class.to_string();
@@ -1391,46 +1386,53 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn load_incidents(&self, instance_id: Uuid) -> Result<Vec<Incident>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT incident_id, process_instance_id, fiber_id, service_task_id,
-                   bytecode_addr, error_class, message, retry_count,
-                   (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
-                   (EXTRACT(EPOCH FROM resolved_at) * 1000)::BIGINT AS resolved_at_ms,
-                   resolution
-            FROM incidents
-            WHERE process_instance_id = $1
-            ORDER BY created_at
-            "#,
-        )
-        .bind(instance_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let tenant_id = match self.resolve_tenant_id(instance_id).await {
+            Ok(t) => t,
+            Err(_) => return Ok(vec![]),
+        };
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                SELECT incident_id, process_instance_id, fiber_id, service_task_id,
+                       bytecode_addr, error_class, message, retry_count,
+                       (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+                       (EXTRACT(EPOCH FROM resolved_at) * 1000)::BIGINT AS resolved_at_ms,
+                       resolution
+                FROM incidents
+                WHERE process_instance_id = $1
+                ORDER BY created_at
+                "#,
+            )
+            .bind(instance_id)
+            .fetch_all(&mut *tx.tx)
+            .await?;
 
-        let mut incidents = Vec::with_capacity(rows.len());
-        for row in rows {
-            use sqlx::Row;
-            let bytecode_addr: i32 = row.get("bytecode_addr");
-            let error_class_json: serde_json::Value = row.get("error_class");
-            let retry_count: i32 = row.get("retry_count");
-            let created_at_ms: i64 = row.get("created_at_ms");
-            let resolved_at_ms: Option<i64> = row.get("resolved_at_ms");
+            let mut incidents = Vec::with_capacity(rows.len());
+            for row in rows {
+                use sqlx::Row;
+                let bytecode_addr: i32 = row.get("bytecode_addr");
+                let error_class_json: serde_json::Value = row.get("error_class");
+                let retry_count: i32 = row.get("retry_count");
+                let created_at_ms: i64 = row.get("created_at_ms");
+                let resolved_at_ms: Option<i64> = row.get("resolved_at_ms");
 
-            incidents.push(Incident {
-                incident_id: row.get("incident_id"),
-                process_instance_id: row.get("process_instance_id"),
-                fiber_id: row.get("fiber_id"),
-                service_task_id: row.get("service_task_id"),
-                bytecode_addr: bytecode_addr as u32,
-                error_class: serde_json::from_value(error_class_json)?,
-                message: row.get("message"),
-                retry_count: retry_count as u32,
-                created_at: created_at_ms,
-                resolved_at: resolved_at_ms,
-                resolution: row.get("resolution"),
-            });
-        }
-        Ok(incidents)
+                incidents.push(Incident {
+                    incident_id: row.get("incident_id"),
+                    process_instance_id: row.get("process_instance_id"),
+                    fiber_id: row.get("fiber_id"),
+                    service_task_id: row.get("service_task_id"),
+                    bytecode_addr: bytecode_addr as u32,
+                    error_class: serde_json::from_value(error_class_json)?,
+                    message: row.get("message"),
+                    retry_count: retry_count as u32,
+                    created_at: created_at_ms,
+                    resolved_at: resolved_at_ms,
+                    resolution: row.get("resolution"),
+                });
+            }
+            Ok(incidents)
+        })).await
     }
 
     // ── Atomic compound operations ──
@@ -1678,22 +1680,26 @@ impl ProcessStore for PostgresProcessStore {
 
     async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> Result<u32> {
         let lease_owner = "unused";
-        let reclaims = self.execute_tenant_scoped("system", &lease_owner, |tx| Box::pin(async move {
-            Self::reclaim_stale_jobs_inner(tx, timeout_ms).await
-        })).await?;
+        let tenants = self.list_tenants().await?;
+        let mut total_count = 0;
+        for tenant_id in tenants {
+            let reclaims = self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
+                Self::reclaim_stale_jobs_inner(tx, timeout_ms).await
+            })).await?;
 
-        let count = reclaims.len() as u32;
-        for item in reclaims {
-            self.append_event(
-                item.process_instance_id,
-                &RuntimeEvent::JobReclaimed {
-                    job_key: item.job_key,
-                    previous_worker_id: item.previous_worker_id,
-                },
-            )
-            .await?;
+            total_count += reclaims.len() as u32;
+            for item in reclaims {
+                self.append_event(
+                    item.process_instance_id,
+                    &RuntimeEvent::JobReclaimed {
+                        job_key: item.job_key,
+                        previous_worker_id: item.previous_worker_id,
+                    },
+                )
+                .await?;
+            }
         }
-        Ok(count)
+        Ok(total_count)
     }
 
     async fn prune_dedupe_cache(&self, older_than_ms: u64) -> Result<u32> {
@@ -1717,15 +1723,20 @@ impl ProcessStore for PostgresProcessStore {
     }
 
     async fn list_running_instances(&self, tenant_id: &str) -> Result<Vec<Uuid>> {
-        let rows = sqlx::query(
-            r#"SELECT instance_id FROM process_instances WHERE tenant_id = $1 AND state = '"Running"'::jsonb"#,
-        )
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let tenant_id_owned = tenant_id.to_string();
+        let tenant_id_query = tenant_id.to_string();
+        let lease_owner = "unused";
+        self.execute_tenant_scoped(&tenant_id_owned, &lease_owner, |tx| Box::pin(async move {
+            let rows = sqlx::query(
+                r#"SELECT instance_id FROM process_instances WHERE tenant_id = $1 AND state = '"Running"'::jsonb"#,
+            )
+            .bind(&tenant_id_query)
+            .fetch_all(&mut *tx.tx)
+            .await?;
 
-        use sqlx::Row;
-        Ok(rows.iter().map(|r| r.get("instance_id")).collect())
+            use sqlx::Row;
+            Ok(rows.iter().map(|r| r.get("instance_id")).collect())
+        })).await
     }
 
     async fn claim_running_instances(
@@ -1735,38 +1746,43 @@ impl ProcessStore for PostgresProcessStore {
         limit: usize,
         lease_ms: u64,
     ) -> Result<Vec<Uuid>> {
-        // CROSS-TENANT SCHEDULER CLAIM — intentionally bypasses the tenant-scoped funnel. Under fork-A (RLS enforced) this must be redesigned: per-tenant iteration OR a BYPASSRLS/privileged claim role. See RISK-001 / fork decision.
-        let rows = sqlx::query(
-            r#"
-            WITH candidates AS (
-                SELECT instance_id
-                FROM process_instances
-                WHERE tenant_id = $1
-                  AND state = '"Running"'::jsonb
-                  AND quarantine_state IS NULL
-                  AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $2)
-                ORDER BY updated_at
-                LIMIT $3
-                FOR UPDATE SKIP LOCKED
+        let tenant_id_owned = tenant_id.to_string();
+        let owner_owned = owner.to_string();
+        let tenant_id_query = tenant_id.to_string();
+        let owner_query = owner.to_string();
+        self.execute_tenant_scoped(&tenant_id_owned, &owner_owned, |tx| Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                WITH candidates AS (
+                    SELECT instance_id
+                    FROM process_instances
+                    WHERE tenant_id = $1
+                      AND state = '"Running"'::jsonb
+                      AND quarantine_state IS NULL
+                      AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $2)
+                    ORDER BY updated_at
+                    LIMIT $3
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE process_instances
+                SET lease_owner = $2,
+                    lease_until = now() + make_interval(secs => $4::float / 1000.0),
+                    last_tick_at = now()
+                FROM candidates
+                WHERE process_instances.instance_id = candidates.instance_id
+                RETURNING process_instances.instance_id
+                "#,
             )
-            UPDATE process_instances
-            SET lease_owner = $2,
-                lease_until = now() + make_interval(secs => $4::float / 1000.0),
-                last_tick_at = now()
-            FROM candidates
-            WHERE process_instances.instance_id = candidates.instance_id
-            RETURNING process_instances.instance_id
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(owner)
-        .bind(limit as i64)
-        .bind(lease_ms as f64)
-        .fetch_all(&self.pool)
-        .await?;
+            .bind(&tenant_id_query)
+            .bind(&owner_query)
+            .bind(limit as i64)
+            .bind(lease_ms as f64)
+            .fetch_all(&mut *tx.tx)
+            .await?;
 
-        use sqlx::Row;
-        Ok(rows.iter().map(|r| r.get("instance_id")).collect())
+            use sqlx::Row;
+            Ok(rows.iter().map(|r| r.get("instance_id")).collect())
+        })).await
     }
 
     async fn claim_instance_for_transition(
@@ -2728,13 +2744,45 @@ mod tests {
             .await
             .expect("run migrations");
 
-        dsl_bus_storage::migrate(&pool)
+        let db_name: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let grant_sql = format!("GRANT CONNECT, TEMPORARY, CREATE ON DATABASE \"{}\" TO bpmn_lite_app", db_name);
+        sqlx::query(&grant_sql).execute(&pool).await.unwrap();
+        sqlx::query("GRANT USAGE ON SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
+        sqlx::query("GRANT ALL ON ALL TABLES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
+        sqlx::query("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO bpmn_lite_app").execute(&pool).await.unwrap();
+
+        sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (900001, 900002)")
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("CREATE SCHEMA dsl_bus AUTHORIZATION bpmn_lite_app")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("GRANT USAGE, CREATE ON SCHEMA dsl_bus TO bpmn_lite_app")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        use std::str::FromStr;
+        let mut options = sqlx::postgres::PgConnectOptions::from_str(&url).expect("parse db url");
+        options = options.username("bpmn_lite_app").password("bpmn_lite_app_dev_password");
+        let app_pool = PgPool::connect_with(options).await.expect("connect as bpmn_lite_app");
+
+        dsl_bus_storage::migrate(&app_pool)
             .await
             .expect("run bus migrations");
 
         // Truncate all tables
         sqlx::query("TRUNCATE dsl_bus.outbox CASCADE")
-            .execute(&pool)
+            .execute(&app_pool)
             .await
             .unwrap();
 
@@ -2779,7 +2827,7 @@ mod tests {
             .await
             .unwrap();
 
-        let store = PostgresProcessStore::new(pool.clone());
+        let store = PostgresProcessStore::new(app_pool);
         (pool, store)
     }
 
@@ -3017,7 +3065,7 @@ mod tests {
         assert_eq!(batch1.len(), 2);
 
         // Ack one
-        store.ack_job(&batch1[0].job_key).await.unwrap();
+        store.ack_job("default", &batch1[0].job_key).await.unwrap();
 
         // Dequeue remaining
         let batch2 = store
@@ -3626,7 +3674,7 @@ mod tests {
         let (_pool, store) = setup().await;
         // No setup needed — job_key simply doesn't exist.
         store
-            .ack_job("a18-nonexistent-job-key")
+            .ack_job("default", "a18-nonexistent-job-key")
             .await
             .expect("ack_job of nonexistent key must be Ok (soft signal)");
     }
@@ -3878,7 +3926,7 @@ mod tests {
         assert!(result.is_err(), "FK constraint must reject unknown pool_id");
     }
 
-    /// E-invariant T1.1: Verify RLS mutations return an error when tenant context is unset.
+    /// E-invariant T1.1: Verify RLS mutations fail without tenant context or with wrong tenant context.
     #[tokio::test]
     #[ignore]
     async fn test_t1_1_rls_mutations_fail_without_tenant_context() {
@@ -3908,12 +3956,147 @@ mod tests {
             .expect("Failed to connect as bpmn_lite_app");
         let app_store = PostgresProcessStore::new(app_pool.clone());
 
-        // 3. Test Site B: quarantine_instance without setting tenant context
-        // Should return Err because process_instances UPDATE affects 0 rows due to RLS.
-        let quar_res = app_store.quarantine_instance(iid, tenant_id, "default", "test_t1_1").await;
-        assert!(quar_res.is_err(), "quarantine_instance must fail without tenant context");
+        // Seed data in the other 4 tables as admin (superuser) under tenant-t1-1
+        sqlx::query(
+            "INSERT INTO job_queue (job_key, tenant_id, process_instance_id, task_type, service_task_id, domain_payload, domain_payload_hash) VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        )
+        .bind("job-t1-1")
+        .bind(tenant_id)
+        .bind(iid)
+        .bind("task")
+        .bind("service")
+        .bind("payload")
+        .bind(b"hash-12345678-hash-12345678-hash") // 32 bytes
+        .execute(&admin_pool)
+        .await
+        .unwrap();
 
-        // 4. Test Site A: atomic_consume_buffered_message
+        sqlx::query(
+            "INSERT INTO ffi_template (template_id, template_uuidv7, owner_type, owner_metadata, input_schema_json, output_schema_json, idempotency_json, tenant_id, publisher) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+        )
+        .bind(b"template-t1-1-32bytes-exactly---")
+        .bind(Uuid::now_v7())
+        .bind("owner")
+        .bind(b"metadata")
+        .bind(serde_json::json!([]))
+        .bind(serde_json::json!([]))
+        .bind(serde_json::json!("Idempotent"))
+        .bind(tenant_id)
+        .bind("publisher")
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO ffi_invocation_record (invocation_id, caller_process_instance_id, caller_task_id, caller_pc, template_id, owner_type, tenant_id, invoked_at, input_payload, outcome_kind) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9)"
+        )
+        .bind(Uuid::now_v7())
+        .bind(iid)
+        .bind("task")
+        .bind(0)
+        .bind(b"template-t1-1-32bytes-exactly---")
+        .bind("owner")
+        .bind(tenant_id)
+        .bind(b"input")
+        .bind("pending")
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO incidents (incident_id, tenant_id, process_instance_id, fiber_id, service_task_id, bytecode_addr, error_class, message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+        )
+        .bind(Uuid::now_v7())
+        .bind(tenant_id)
+        .bind(iid)
+        .bind(Uuid::now_v7())
+        .bind("task")
+        .bind(0)
+        .bind(serde_json::json!("MemoryLimit"))
+        .bind("out of memory")
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+        // 3. Verify fail-closed without context (direct queries return zero rows for all 5 RLS tables)
+        let row_pi: Option<(Uuid,)> = sqlx::query_as("SELECT instance_id FROM process_instances WHERE instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&app_pool)
+            .await
+            .unwrap();
+        assert!(row_pi.is_none(), "process_instances query without tenant context must return zero rows");
+
+        let row_jq: Option<(String,)> = sqlx::query_as("SELECT job_key FROM job_queue WHERE job_key = 'job-t1-1'")
+            .fetch_optional(&app_pool)
+            .await
+            .unwrap();
+        assert!(row_jq.is_none(), "job_queue query without tenant context must return zero rows");
+
+        let row_tmpl: Option<(Vec<u8>,)> = sqlx::query_as("SELECT template_id FROM ffi_template WHERE template_id = $1")
+            .bind(b"template-t1-1-32bytes-exactly---")
+            .fetch_optional(&app_pool)
+            .await
+            .unwrap();
+        assert!(row_tmpl.is_none(), "ffi_template query without tenant context must return zero rows");
+
+        let row_invoc: Option<(Uuid,)> = sqlx::query_as("SELECT invocation_id FROM ffi_invocation_record WHERE caller_process_instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&app_pool)
+            .await
+            .unwrap();
+        assert!(row_invoc.is_none(), "ffi_invocation_record query without tenant context must return zero rows");
+
+        let row_inc: Option<(Uuid,)> = sqlx::query_as("SELECT incident_id FROM incidents WHERE process_instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&app_pool)
+            .await
+            .unwrap();
+        assert!(row_inc.is_none(), "incidents query without tenant context must return zero rows");
+
+        // Verify UPDATE fails closed without context
+        let update_res = sqlx::query("UPDATE process_instances SET state = '\"Completed\"'::jsonb WHERE instance_id = $1")
+            .bind(iid)
+            .execute(&app_pool)
+            .await
+            .unwrap();
+        assert_eq!(update_res.rows_affected(), 0, "Update without tenant context must affect zero rows");
+
+        // 4. Verify cross-tenant blocked / wrong tenant context (queries return zero rows)
+        let mut tx = app_pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL app.tenant_id = 'evil-tenant'").execute(&mut *tx).await.unwrap();
+
+        let row_pi: Option<(Uuid,)> = sqlx::query_as("SELECT instance_id FROM process_instances WHERE instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&mut *tx).await.unwrap();
+        assert!(row_pi.is_none(), "process_instances query with wrong tenant context must return zero rows");
+
+        let row_jq: Option<(String,)> = sqlx::query_as("SELECT job_key FROM job_queue WHERE job_key = 'job-t1-1'")
+            .fetch_optional(&mut *tx).await.unwrap();
+        assert!(row_jq.is_none(), "job_queue query with wrong tenant context must return zero rows");
+
+        let row_tmpl: Option<(Vec<u8>,)> = sqlx::query_as("SELECT template_id FROM ffi_template WHERE template_id = $1")
+            .bind(b"template-t1-1-32bytes-exactly---")
+            .fetch_optional(&mut *tx).await.unwrap();
+        assert!(row_tmpl.is_none(), "ffi_template query with wrong tenant context must return zero rows");
+
+        let row_invoc: Option<(Uuid,)> = sqlx::query_as("SELECT invocation_id FROM ffi_invocation_record WHERE caller_process_instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&mut *tx).await.unwrap();
+        assert!(row_invoc.is_none(), "ffi_invocation_record query with wrong tenant context must return zero rows");
+
+        let row_inc: Option<(Uuid,)> = sqlx::query_as("SELECT incident_id FROM incidents WHERE process_instance_id = $1")
+            .bind(iid)
+            .fetch_optional(&mut *tx).await.unwrap();
+        assert!(row_inc.is_none(), "incidents query with wrong tenant context must return zero rows");
+
+        tx.rollback().await.unwrap();
+
+        // 5. Test Site B: quarantine_instance with WRONG tenant context
+        // Should return Err because process_instances UPDATE affects 0 rows due to RLS.
+        let quar_res = app_store.quarantine_instance(iid, "evil-tenant", "default", "test_t1_1").await;
+        assert!(quar_res.is_err(), "quarantine_instance must fail with incorrect tenant context");
+
+        // 5. Test Site A: atomic_consume_buffered_message with WRONG tenant context
         // We first need a claimed message in the buffer.
         let msg_id = format!("msg-t1-1-{}", Uuid::now_v7());
         let message_name = "test-message";
@@ -3946,7 +4129,7 @@ mod tests {
 
         let claimed_msg = ClaimedBufferedMessage {
             message: BufferedMessage {
-                tenant_id: tenant_id.to_string(),
+                tenant_id: tenant_id.to_string(), // correct tenant_id so message_buffer update succeeds
                 message_name: message_name.to_string(),
                 correlation_key: correlation_key.to_string(),
                 msg_id: msg_id.to_string(),
@@ -3961,16 +4144,100 @@ mod tests {
         };
 
         let fiber = Fiber::new(Uuid::now_v7(), 0);
+        let mut evil_inst = inst.clone();
+        evil_inst.tenant_id = "evil-tenant".to_string(); // mismatched
 
         let consume_res = app_store.atomic_consume_buffered_message(
-            &inst,
+            &evil_inst,
             &fiber,
             &claimed_msg,
             None,
             &[],
         ).await;
 
-        assert!(consume_res.is_err(), "atomic_consume_buffered_message must fail (return Err) without tenant context");
+        assert!(consume_res.is_err(), "atomic_consume_buffered_message must fail (return Err) with incorrect tenant context");
+    }
+
+    /// E-invariant I2: Verify distinct cross-tenant read/write isolation under bpmn_lite_app role.
+    #[tokio::test]
+    #[ignore]
+    async fn test_t1_1_rls_cross_tenant_isolation() {
+        let (admin_pool, _admin_store) = setup().await;
+        let tenant_a = "tenant-A";
+        let tenant_b = "tenant-B";
+        
+        let iid_a = Uuid::now_v7();
+        let iid_b = Uuid::now_v7();
+
+        // 1. Admin setup: Insert process instances for A and B
+        let mut inst_a = make_instance(iid_a);
+        inst_a.tenant_id = tenant_a.to_string();
+        inst_a.process_key = "process-A".to_string();
+        let admin_store = PostgresProcessStore::new(admin_pool.clone());
+        admin_store.save_instance("unused", &inst_a).await.unwrap();
+
+        let mut inst_b = make_instance(iid_b);
+        inst_b.tenant_id = tenant_b.to_string();
+        inst_b.process_key = "process-B".to_string();
+        admin_store.save_instance("unused", &inst_b).await.unwrap();
+
+
+        // 2. Connect as bpmn_lite_app non-superuser
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
+        let app_url = if url.contains("@") {
+            let parts: Vec<&str> = url.split('@').collect();
+            let host_part = parts[1];
+            format!("postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}", host_part)
+        } else {
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test".to_string()
+        };
+
+        let app_pool = PgPool::connect(&app_url)
+            .await
+            .expect("Failed to connect as bpmn_lite_app");
+
+        // 3. Non-vacuity check: admin/no-context view sees B's rows
+        let admin_count: (i64,) = sqlx::query_as("SELECT count(*) FROM process_instances WHERE instance_id IN ($1, $2)")
+            .bind(iid_a)
+            .bind(iid_b)
+            .fetch_one(&admin_pool)
+            .await
+            .unwrap();
+        assert_eq!(admin_count.0, 2, "Admin connection must see both tenant rows (non-vacuous)");
+
+        // 4. Read isolation: with app.tenant_id = tenant_a, query A only sees A
+        let mut tx = app_pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL app.tenant_id = 'tenant-A'").execute(&mut *tx).await.unwrap();
+
+        let visible_rows: Vec<(Uuid, String)> = sqlx::query_as("SELECT instance_id, tenant_id FROM process_instances WHERE instance_id IN ($1, $2)")
+            .bind(iid_a)
+            .bind(iid_b)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+
+        assert_eq!(visible_rows.len(), 1, "Tenant A context must only see 1 row");
+        assert_eq!(visible_rows[0].0, iid_a, "Visible row must belong to tenant A");
+        assert_eq!(visible_rows[0].1, "tenant-A", "Visible row must have tenant-A ID");
+
+        // 5. Write isolation: with app.tenant_id = tenant_a, update/delete B affects 0 rows
+        let update_res = sqlx::query("UPDATE process_instances SET state = '\"Completed\"'::jsonb WHERE instance_id = $1")
+            .bind(iid_b)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(update_res.rows_affected(), 0, "Update on Tenant B row under Tenant A context must affect 0 rows");
+
+        let delete_res = sqlx::query("DELETE FROM process_instances WHERE instance_id = $1")
+            .bind(iid_b)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(delete_res.rows_affected(), 0, "Delete on Tenant B row under Tenant A context must affect 0 rows");
+
+        tx.rollback().await.unwrap();
     }
 
     /// RISK-009: Lease fencing re-enabled. A worker with the wrong lease owner is rejected.
@@ -4576,17 +4843,17 @@ mod tests {
         async fn dequeue_jobs(&self, task_types: &[String], max: usize, tenant_id: &str, worker_id: &str, lease_ms: u64) -> Result<Vec<JobActivation>> {
             self.inner.dequeue_jobs(task_types, max, tenant_id, worker_id, lease_ms).await
         }
-        async fn ack_job(&self, job_key: &str) -> Result<()> {
-            self.inner.ack_job(job_key).await
+        async fn ack_job(&self, tenant_id: &str, job_key: &str) -> Result<()> {
+            self.inner.ack_job(tenant_id, job_key).await
         }
-        async fn validate_job_claim(&self, job_key: &str, worker_id: &str, claim_token: &str) -> Result<bool> {
-            self.inner.validate_job_claim(job_key, worker_id, claim_token).await
+        async fn validate_job_claim(&self, tenant_id: &str, job_key: &str, worker_id: &str, claim_token: &str) -> Result<bool> {
+            self.inner.validate_job_claim(tenant_id, job_key, worker_id, claim_token).await
         }
-        async fn retry_claimed_job(&self, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, not_before_ms: i64) -> Result<bool> {
-            self.inner.retry_claimed_job(job_key, worker_id, claim_token, error_class, error_message, not_before_ms).await
+        async fn retry_claimed_job(&self, tenant_id: &str, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, not_before_ms: i64) -> Result<bool> {
+            self.inner.retry_claimed_job(tenant_id, job_key, worker_id, claim_token, error_class, error_message, not_before_ms).await
         }
-        async fn dead_letter_claimed_job(&self, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, incident_id: Uuid) -> Result<bool> {
-            self.inner.dead_letter_claimed_job(job_key, worker_id, claim_token, error_class, error_message, incident_id).await
+        async fn dead_letter_claimed_job(&self, tenant_id: &str, job_key: &str, worker_id: &str, claim_token: &str, error_class: &str, error_message: &str, incident_id: Uuid) -> Result<bool> {
+            self.inner.dead_letter_claimed_job(tenant_id, job_key, worker_id, claim_token, error_class, error_message, incident_id).await
         }
         async fn cancel_jobs_for_instance(&self, instance_id: Uuid) -> Result<Vec<String>> {
             self.inner.cancel_jobs_for_instance(instance_id).await

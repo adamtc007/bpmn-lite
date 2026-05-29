@@ -470,24 +470,11 @@ async fn verify_not_superuser(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::er
             .await?;
 
     if is_superuser {
-        let allow = std::env::var("BPMN_LITE_ALLOW_SUPERUSER")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        if allow {
-            tracing::warn!(
-                "Application connected to Postgres as a superuser role. \
-                 BPMN_LITE_ALLOW_SUPERUSER=1 is set — continuing with reduced \
-                 security guarantees. Do not use this in production."
-            );
-        } else {
-            return Err("Application connected to Postgres as a superuser role. \
-                 This BYPASSES row-level security and the immutable-field trigger \
-                 (migration 029). Connect using a non-superuser role (typically \
-                 bpmn_lite_app, created by migration 026). \
-                 Set BPMN_LITE_ALLOW_SUPERUSER=1 to override for local development."
-                .into());
-        }
+        return Err("Application connected to Postgres as a superuser role. \
+             This BYPASSES row-level security and the immutable-field trigger \
+             (migration 029). Connect using a non-superuser role (typically \
+             bpmn_lite_app, created by migration 026)."
+            .into());
     } else {
         tracing::info!(
             "Application connected as non-superuser role; \
@@ -511,3 +498,27 @@ fn parse_bind_addr() -> String {
 
     std::env::var("BPMN_LITE_BIND").unwrap_or_else(|_| "0.0.0.0:50051".to_string())
 }
+
+#[cfg(test)]
+#[cfg(feature = "postgres")]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_verify_not_superuser_rejects_superuser() {
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres@localhost:5432/bpmn_lite_test".to_string());
+        
+        let pool = match sqlx::PgPool::connect(&url).await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        
+        let res = verify_not_superuser(&pool).await;
+        assert!(res.is_err(), "verify_not_superuser must reject superuser role");
+        
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("superuser role"), "Error message should mention superuser role");
+    }
+}
+

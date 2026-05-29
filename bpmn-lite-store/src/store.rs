@@ -59,15 +59,17 @@ pub trait ProcessStore: Send + Sync {
         worker_id: &str,
         lease_ms: u64,
     ) -> Result<Vec<JobActivation>>;
-    async fn ack_job(&self, job_key: &str) -> Result<()>;
+    async fn ack_job(&self, tenant_id: &str, job_key: &str) -> Result<()>;
     async fn validate_job_claim(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
     ) -> Result<bool>;
     async fn retry_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -77,6 +79,7 @@ pub trait ProcessStore: Send + Sync {
     ) -> Result<bool>;
     async fn dead_letter_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,

@@ -2276,7 +2276,7 @@ mod tests {
         assert_eq!(result, Some(3), "Resume at addr 3 (escalation)");
 
         // Ack the job using stored key
-        store.ack_job(&actual_job_key).await.unwrap();
+        store.ack_job(&instance.tenant_id, &actual_job_key).await.unwrap();
 
         let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
         let outcome = vm

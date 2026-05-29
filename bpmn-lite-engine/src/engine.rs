@@ -795,7 +795,7 @@ impl BpmnLiteEngine {
 
                                     // Ack the pending job
                                     if let Some(jk) = &stored_job_key {
-                                        let _ = self.store.ack_job(jk).await;
+                                        let _ = self.store.ack_job(&instance.tenant_id, jk).await;
                                     }
                                 } else {
                                     // ── NON-INTERRUPTING: fork child fiber, main stays in Race ──
@@ -1351,9 +1351,12 @@ impl BpmnLiteEngine {
         if worker_id.is_empty() || claim_token.is_empty() {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
+        let (instance_id, _, _) = parse_job_key(job_key)?;
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(job_key, worker_id, claim_token)
+            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
@@ -1527,14 +1530,16 @@ impl BpmnLiteEngine {
         if worker_id.is_empty() || claim_token.is_empty() {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
+        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(job_key, worker_id, claim_token)
+            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
         }
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
             self.fail_job_inner(
@@ -1572,7 +1577,7 @@ impl BpmnLiteEngine {
                 format!("fail_job(key={}, state={:?})", job_key, instance.state),
             )
             .await?;
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
             return Ok(());
         }
 
@@ -1592,7 +1597,7 @@ impl BpmnLiteEngine {
             // Guard 2: no matching fiber (ghost)
             self.emit_late(instance_id, format!("fail_job(key={}, no fiber)", job_key))
                 .await?;
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
             return Ok(());
         };
 
@@ -1604,6 +1609,7 @@ impl BpmnLiteEngine {
                 if self
                     .store
                     .retry_claimed_job(
+                        &instance.tenant_id,
                         job_key,
                         worker_id,
                         claim_token,
@@ -1641,7 +1647,7 @@ impl BpmnLiteEngine {
                     fiber.pc = route.resume_at;
                     fiber.wait = WaitState::Running;
                     self.store.save_fiber(instance_id, &fiber).await?;
-                    self.store.ack_job(job_key).await?;
+                    self.store.ack_job(&instance.tenant_id, job_key).await?;
                     self.store
                         .append_event(
                             instance_id,
@@ -1702,6 +1708,7 @@ impl BpmnLiteEngine {
             let _ = self
                 .store
                 .dead_letter_claimed_job(
+                    &instance.tenant_id,
                     job_key,
                     worker_id,
                     claim_token,
@@ -1720,7 +1727,7 @@ impl BpmnLiteEngine {
                 )
                 .await?;
         } else {
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
         }
 
         Ok(())

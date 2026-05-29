@@ -292,7 +292,7 @@ impl ProcessStore for MemoryStore {
         Ok(result)
     }
 
-    async fn ack_job(&self, job_key: &str) -> Result<()> {
+    async fn ack_job(&self, _tenant_id: &str, job_key: &str) -> Result<()> {
         let mut w = self.inner.write().await;
         w.inflight_jobs.remove(job_key);
         Ok(())
@@ -300,6 +300,7 @@ impl ProcessStore for MemoryStore {
 
     async fn validate_job_claim(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -320,6 +321,7 @@ impl ProcessStore for MemoryStore {
 
     async fn retry_claimed_job(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -358,6 +360,7 @@ impl ProcessStore for MemoryStore {
 
     async fn dead_letter_claimed_job(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -1335,11 +1338,11 @@ mod tests {
         assert_eq!(batch1[0].worker_id, "test-worker");
         assert!(!batch1[0].claim_token.is_empty());
         assert!(store
-            .validate_job_claim("job-0", "test-worker", &batch1[0].claim_token)
+            .validate_job_claim("default", "job-0", "test-worker", &batch1[0].claim_token)
             .await
             .unwrap());
         assert!(!store
-            .validate_job_claim("job-0", "other-worker", &batch1[0].claim_token)
+            .validate_job_claim("default", "job-0", "other-worker", &batch1[0].claim_token)
             .await
             .unwrap());
         assert!(batch1
@@ -1347,7 +1350,7 @@ mod tests {
             .all(|job| job.session_stack.session_id == session_id));
 
         // Ack one
-        store.ack_job("job-0").await.unwrap();
+        store.ack_job("default", "job-0").await.unwrap();
 
         // Dequeue remaining
         let batch2 = store
@@ -1429,13 +1432,13 @@ mod tests {
         assert_eq!(claimed[0].attempt_count, 1);
         assert!(claimed[0].claim_expires_at.is_some());
         assert!(store
-            .validate_job_claim("lease-job", "worker-a", &claimed[0].claim_token)
+            .validate_job_claim("default", "lease-job", "worker-a", &claimed[0].claim_token)
             .await
             .unwrap());
 
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         assert!(!store
-            .validate_job_claim("lease-job", "worker-a", &claimed[0].claim_token)
+            .validate_job_claim("default", "lease-job", "worker-a", &claimed[0].claim_token)
             .await
             .unwrap());
         assert_eq!(store.reclaim_stale_jobs(0).await.unwrap(), 1);
