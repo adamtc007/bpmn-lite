@@ -20,9 +20,9 @@ pub async fn insert_outbox(
         INSERT INTO dsl_bus.outbox (
             id, target_domain, target_endpoint, payload, idempotency_key,
             execution_id, callout_id, status, attempt_count, next_attempt_at,
-            last_error, created_at, submitted_at
+            last_error, created_at, submitted_at, tenant_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (idempotency_key, target_endpoint) DO NOTHING
         "#,
     )
@@ -39,6 +39,7 @@ pub async fn insert_outbox(
     .bind(&entry.last_error)
     .bind(entry.created_at)
     .bind(entry.submitted_at)
+    .bind(&entry.tenant_id)
     .execute(executor)
     .await?;
 
@@ -66,7 +67,7 @@ pub async fn select_pending_outbox(
         r#"
         SELECT id, target_domain, target_endpoint, payload, idempotency_key,
                execution_id, callout_id, status, attempt_count, next_attempt_at,
-               last_error, created_at, submitted_at
+               last_error, created_at, submitted_at, tenant_id
           FROM dsl_bus.outbox
          WHERE status = 'pending' AND next_attempt_at <= now()
          ORDER BY next_attempt_at
@@ -150,5 +151,6 @@ fn row_to_entry(row: sqlx::postgres::PgRow) -> Result<OutboxEntry> {
         last_error: row.try_get("last_error")?,
         created_at: row.try_get("created_at")?,
         submitted_at: row.try_get("submitted_at")?,
+        tenant_id: row.try_get("tenant_id")?,
     })
 }

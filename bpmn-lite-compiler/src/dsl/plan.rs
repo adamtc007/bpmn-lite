@@ -1,33 +1,5 @@
 //! `WorkflowExecutionPlan` — the linted, DAG-validated output of the
 //! bpmn-dsl compilation pipeline.
-//!
-//! This is the **bpmn-lite workflow DAG** (Commitment B scope =
-//! process-instance, long-lived). It is **not** a Phase 5
-//! [`ExecutablePlan`]: those are the inner per-callout plans the bus
-//! emits at runtime when a service-task or business-rule-task is
-//! dispatched to a receiver domain (ob-poc, dmn-lite, …).
-//!
-//! Lifecycle (v0.6 §3, T0 audit gap C):
-//!
-//! ```text
-//! bpmn-dsl source
-//!     ↓ parse / lint / dag   (workflow-compile-time, this crate)
-//! WorkflowExecutionPlan      ←── this module's type
-//!     ↓ start process instance (bpmn-lite engine)
-//! ProcessInstance
-//!     ↓ fire ServiceTaskExecNode N
-//!     ↓ bus dispatch to target domain with N's static_args + bound placeholders
-//!     ↓ receiver compiles inputs into Phase 5 ExecutablePlan ←── inner plan, NOT this type
-//!     ↓ receiver executes ExecutablePlan, returns result
-//! ProcessInstance advances to next node
-//! ```
-//!
-//! The workflow plan cannot pre-compile inner ExecutablePlans because
-//! placeholder values (`@cbu`, `@cbu-type`) are not known until the
-//! upstream node has executed. Inner-plan compilation is a per-callout,
-//! submit-time concern owned by the bus path (T2B).
-//!
-//! [`ExecutablePlan`]: ../../../../docs/todo/phase-5_5-bpmn-demo-plan-v0_6.md
 
 use std::collections::HashMap;
 
@@ -41,6 +13,10 @@ pub struct WorkflowExecutionPlan {
     pub start_node: String,
     /// Placeholder schema: what gets inferred and threaded between nodes.
     pub placeholder_schema: PlaceholderSchema,
+    #[serde(default)]
+    pub closure_manifest: Option<serde_json::Value>,
+    #[serde(default)]
+    pub regime_version: Option<String>,
 }
 
 impl WorkflowExecutionPlan {
@@ -49,7 +25,7 @@ impl WorkflowExecutionPlan {
         self.nodes
             .values()
             .filter_map(|n| match n {
-                ExecutionNode::EndEvent(e) => Some(e.id.as_str()),
+                ExecutionNode::End(e) => Some(e.id.as_str()),
                 _ => None,
             })
             .collect()
@@ -59,21 +35,23 @@ impl WorkflowExecutionPlan {
 /// One resolved node in the execution plan.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ExecutionNode {
-    StartEvent(StartExecNode),
-    ServiceTask(ServiceTaskExecNode),
-    BusinessRuleTask(BusinessRuleExecNode),
-    ExclusiveGateway(GatewayExecNode),
-    EndEvent(EndExecNode),
+    Start(StartExecNode),
+    Task(TaskExecNode),
+    Split(SplitExecNode),
+    Join(JoinExecNode),
+    Loop(LoopExecNode),
+    End(EndExecNode),
 }
 
 impl ExecutionNode {
     pub fn id(&self) -> &str {
         match self {
-            Self::StartEvent(n) => &n.id,
-            Self::ServiceTask(n) => &n.id,
-            Self::BusinessRuleTask(n) => &n.id,
-            Self::ExclusiveGateway(n) => &n.id,
-            Self::EndEvent(n) => &n.id,
+            Self::Start(n) => &n.id,
+            Self::Task(n) => &n.id,
+            Self::Split(n) => &n.id,
+            Self::Join(n) => &n.id,
+            Self::Loop(n) => &n.id,
+            Self::End(n) => &n.id,
         }
     }
 }
@@ -84,59 +62,77 @@ pub struct StartExecNode {
     pub next: String,
 }
 
-/// Workflow node that dispatches a verb to a receiver domain via the bus.
-///
-/// At workflow-compile-time the node carries:
-/// - the verb FQN (e.g. `ob-poc:cbu.create`)
-/// - static args (literal bindings the DSL author wrote inline)
-/// - placeholder producer / consumer wiring
-///
-/// At runtime, when the process instance reaches this node, the bus path
-/// (T2B) builds an `InvocationRequest` from `verb_fqn` + `static_args` +
-/// bound placeholders. The **receiver** domain compiles that request into
-/// a Phase 5 `ExecutablePlan` and runs it locally. The inner plan is not
-/// constructed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeliveryMode {
+    Blocking,
+    GuaranteedAsync,
+    BestEffort,
+}
+
+/// Unified task node governing a plug (service verb, decision, call-activity)
+/// and its delivery mode.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ServiceTaskExecNode {
+pub struct TaskExecNode {
     pub id: String,
-    /// Resolved verb FQN from catalogue. May be namespaced (`ob-poc:cbu.create`).
-    pub verb_fqn: String,
-    /// Static args (e.g. `product = "CUSTODY_FUND"`).
+    /// The plug name/hash (e.g. `"ob-poc:cbu.create"`, `"dmn-lite:cbu_type_routing"`).
+    pub plug: String,
+    /// Derived/configured delivery mode.
+    pub delivery_mode: DeliveryMode,
+    /// Static args passed to the plug.
     pub static_args: HashMap<String, String>,
     pub next: String,
-    /// Placeholder this node produces (inferred from catalogue).
+    /// Placeholder this node produces.
     pub produces_placeholder: Option<String>,
-    /// Placeholders this node consumes (inferred from catalogue).
+    /// Placeholders this node consumes.
     pub consumes_placeholders: Vec<String>,
 }
 
-/// Workflow node that dispatches a DMN decision to a receiver domain.
-///
-/// Mirrors [`ServiceTaskExecNode`]: workflow-compile-time records identity
-/// and placeholder wiring; the bus path emits the inner ExecutablePlan to
-/// the receiver at submit-time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SplitMode {
+    Exclusive,
+    Inclusive,
+    Parallel,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BusinessRuleExecNode {
+pub struct SplitExecNode {
     pub id: String,
-    /// Resolved decision id. May be namespaced (`dmn-lite:cbu_type_routing`).
-    pub decision_id: String,
-    pub next: String,
+    pub mode: SplitMode,
+    pub routing_socket: Option<String>,
+    pub flows: Vec<SplitExecFlow>,
+    pub join: String,
     pub produces_placeholder: Option<String>,
-    pub consumes_placeholders: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct GatewayExecNode {
-    pub id: String,
-    pub flows: Vec<GatewayExecFlow>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct GatewayExecFlow {
+pub struct SplitExecFlow {
     /// Placeholder name being tested (e.g. `"@cbu-type"`).
-    pub placeholder: String,
+    pub placeholder: Option<String>,
     /// Expected value (e.g. `"fund"`).
-    pub expected_value: String,
+    pub expected_value: Option<String>,
+    pub next: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum JoinMode {
+    Exclusive,
+    Inclusive,
+    Parallel,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct JoinExecNode {
+    pub id: String,
+    pub mode: JoinMode,
+    pub split: String,
+    pub next: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoopExecNode {
+    pub id: String,
+    pub ceiling: u32,
+    pub body: Vec<String>,
     pub next: String,
 }
 

@@ -17,9 +17,9 @@ pub async fn insert_inbox(
         r#"
         INSERT INTO dsl_bus.inbox (
             idempotency_key, source_domain, endpoint, execution_id,
-            received_at, processed_at, status, payload
+            received_at, processed_at, status, payload, tenant_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (idempotency_key) DO NOTHING
         "#,
     )
@@ -31,6 +31,7 @@ pub async fn insert_inbox(
     .bind(entry.processed_at)
     .bind(entry.status.as_str())
     .bind(&entry.payload)
+    .bind(&entry.tenant_id)
     .execute(executor)
     .await?;
 
@@ -49,7 +50,7 @@ pub async fn lookup_inbox(
     let row = sqlx::query(
         r#"
         SELECT idempotency_key, source_domain, endpoint, execution_id,
-               received_at, processed_at, status, payload
+               received_at, processed_at, status, payload, tenant_id
           FROM dsl_bus.inbox
          WHERE idempotency_key = $1
         "#,
@@ -93,5 +94,6 @@ fn row_to_entry(row: sqlx::postgres::PgRow) -> Result<InboxEntry> {
         processed_at: row.try_get("processed_at")?,
         status: InboxStatus::parse(&status)?,
         payload: row.try_get("payload")?,
+        tenant_id: row.try_get("tenant_id")?,
     })
 }

@@ -1,18 +1,14 @@
 //! Plan walker — advances a `WorkflowExecutionPlan`-based process
 //! instance through its nodes, dispatching cross-domain verb
 //! invocations over the federated bus (T3).
-//!
-//! Entry points:
-//! - [`PlanWalker::advance`] — called from the tick loop for every
-//!   Running plan-based instance.
-//! - [`PlanWalker::start_process`] — creates a new plan-based
-//!   process instance ready for the tick loop.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::dsl::plan::{ExecutionNode, GatewayExecNode, WorkflowExecutionPlan};
+use bpmn_lite_compiler::dsl::plan::{
+    ExecutionNode, SplitExecNode, LoopExecNode, TaskExecNode, WorkflowExecutionPlan, DeliveryMode, SplitMode
+};
 use bpmn_lite_store::pending::{PendingInvocation, PendingInvocationStore};
 use bpmn_lite_store::store::{ProcessStore, TickOperation};
 use bpmn_lite_types::types::{ProcessInstance, ProcessState};
@@ -94,14 +90,47 @@ impl PlanWalker {
                 .ok_or_else(|| anyhow!("plan_walker: node '{}' not in plan", current))?;
 
             match node {
-                ExecutionNode::StartEvent(n) => {
+                ExecutionNode::Start(n) => {
                     instance.current_node_id = Some(n.next.clone());
                 }
 
-                ExecutionNode::ExclusiveGateway(gw) => {
+                ExecutionNode::Split(sp) => {
                     let placeholder_vals =
                         deserialize_placeholder_values(instance.placeholder_values.as_ref());
-                    match evaluate_gateway(gw, &placeholder_vals) {
+                    
+                    // Phase 1: If split has a plug, execute decision first and wait for result.
+                    if let Some(ref plug) = sp.routing_socket {
+                        // We check if the plug produces a placeholder and whether it is populated yet.
+                        // For the demo: cbu_type_routing produces @cbu-type.
+                        let produces_placeholder = if plug.contains("cbu_type_routing") {
+                            Some("@cbu-type".to_owned())
+                        } else {
+                            None
+                        };
+
+                        if let Some(ref prod_placeholder) = produces_placeholder {
+                            if !placeholder_vals.contains_key(prod_placeholder) {
+                                // Not yet populated. Submit callout to the bus!
+                                let outcome = self
+                                    .dispatch_callout(
+                                        &mut instance,
+                                        sp.id.clone(),
+                                        plug.clone(),
+                                        HashMap::new(),
+                                        &mut ops,
+                                    )
+                                    .await?;
+                                self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
+                                if let AdvanceOutcome::Submitted { .. } = &outcome {
+                                    self.bus_client.outbox_notifier().notify();
+                                }
+                                return Ok(outcome);
+                            }
+                        }
+                    }
+
+                    // Phase 2: If plug is populated or split has no plug, evaluate branches.
+                    match evaluate_split(sp, &placeholder_vals) {
                         Ok(next) => {
                             instance.current_node_id = Some(next.to_owned());
                         }
@@ -113,19 +142,40 @@ impl PlanWalker {
                             tracing::error!(
                                 instance_id = %instance_id,
                                 reason = %reason,
-                                "plan_walker: gateway miss — instance failed"
+                                "plan_walker: split evaluation miss — instance failed"
                             );
                             return Ok(AdvanceOutcome::NotRunnable);
                         }
                     }
                 }
 
-                ExecutionNode::ServiceTask(task) => {
+                ExecutionNode::Join(jn) => {
+                    instance.current_node_id = Some(jn.next.clone());
+                }
+
+                ExecutionNode::Loop(lp) => {
+                    let key = crc32(lp.id.as_bytes());
+                    let current_val = instance.counters.get(&key).copied().unwrap_or(0);
+
+                    if current_val < lp.ceiling {
+                        instance.counters.insert(key, current_val + 1);
+                        if let Some(first_body_id) = lp.body.first() {
+                            instance.current_node_id = Some(first_body_id.clone());
+                        } else {
+                            instance.current_node_id = Some(lp.next.clone());
+                        }
+                    } else {
+                        instance.counters.remove(&key);
+                        instance.current_node_id = Some(lp.next.clone());
+                    }
+                }
+
+                ExecutionNode::Task(task) => {
                     let outcome = self
                         .dispatch_callout(
                             &mut instance,
                             task.id.clone(),
-                            task.verb_fqn.clone(),
+                            task.plug.clone(),
                             task.static_args.clone(),
                             &mut ops,
                         )
@@ -137,24 +187,7 @@ impl PlanWalker {
                     return Ok(outcome);
                 }
 
-                ExecutionNode::BusinessRuleTask(task) => {
-                    let outcome = self
-                        .dispatch_callout(
-                            &mut instance,
-                            task.id.clone(),
-                            task.decision_id.clone(),
-                            HashMap::new(),
-                            &mut ops,
-                        )
-                        .await?;
-                    self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
-                    if let AdvanceOutcome::Submitted { .. } = &outcome {
-                        self.bus_client.outbox_notifier().notify();
-                    }
-                    return Ok(outcome);
-                }
-
-                ExecutionNode::EndEvent(end) => {
+                ExecutionNode::End(end) => {
                     let now = chrono::Utc::now().timestamp_millis();
                     instance.state = ProcessState::Completed { at: now };
                     instance.current_node_id = Some(end.id.clone());
@@ -169,9 +202,7 @@ impl PlanWalker {
         }
     }
 
-    /// Dispatch a single callout (ServiceTask or BusinessRuleTask) to the bus.
-    /// On transport failure retries once with a fresh idempotency_key; if the
-    /// second attempt also fails the instance is marked `Failed`.
+    /// Dispatch a single callout to the bus.
     async fn dispatch_callout(
         &self,
         instance: &mut ProcessInstance,
@@ -182,9 +213,6 @@ impl PlanWalker {
     ) -> Result<AdvanceOutcome> {
         let (target_domain, verb_id) = split_verb_fqn(&fqn)?;
 
-        // Retry cap for transient failures (T3.6). We store the attempt
-        // count in placeholder_values under the reserved "__retry_count"
-        // key so no schema migration is needed.
         let retry_count = {
             let pv = deserialize_placeholder_values(instance.placeholder_values.as_ref());
             pv.get("__retry_count")
@@ -227,7 +255,6 @@ impl PlanWalker {
             timeout_at: None,
         };
 
-        // Insert pending invocation row so the advancer can look it up.
         let pending = PendingInvocation::new(
             callout_id,
             instance.instance_id,
@@ -238,7 +265,6 @@ impl PlanWalker {
         );
         ops.push(TickOperation::InsertPendingInvocation { pending });
 
-        // Write outbox row — sender will dispatch to the peer.
         let payload = req.encode_to_vec();
         let outbox_id = Uuid::now_v7();
         ops.push(TickOperation::InsertOutbox {
@@ -271,7 +297,62 @@ impl PlanWalker {
         plan: &WorkflowExecutionPlan,
         tenant_id: impl Into<String>,
         initial_variables: HashMap<String, serde_json::Value>,
+        expected_preconditions: HashMap<String, String>,
     ) -> Result<Uuid> {
+        let platform_regime = std::env::var("BPMN_LITE_REGIME_VERSION").unwrap_or_else(|_| "1.0".to_string());
+        if let Some(plan_regime) = &plan.regime_version {
+            if plan_regime != &platform_regime {
+                return Err(anyhow!("RegimeMismatch: plan built under regime {}, but platform is running {}", plan_regime, platform_regime));
+            }
+        }
+
+        for (key, expected_val) in &expected_preconditions {
+            let norm_key = key.trim_start_matches('@');
+            let actual_val_str = initial_variables.get(key)
+                .or_else(|| initial_variables.get(norm_key))
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    v => v.to_string().replace('"', ""),
+                })
+                .unwrap_or_default();
+
+            if actual_val_str != *expected_val {
+                return Err(anyhow!("PreconditionConflict: expected {} to be {}, got '{}'", key, expected_val, actual_val_str));
+            }
+        }
+
+        // Run path-family validation first
+        let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(
+            bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new()
+        );
+        let paths = vec![
+            "manifests/bpmn-v1.0.0.yaml",
+            "manifests/dmn-lite-v1.0.0.yaml",
+            "manifests/ob-poc-v1.0.0.yaml",
+        ];
+        for p in paths {
+            let path = std::path::Path::new(p);
+            let m = if path.exists() {
+                dsl_manifest::Manifest::load_from_path(path)
+                    .map_err(|e| anyhow!("Failed to load manifest at {}: {:?}", p, e))?
+            } else {
+                let alt_path = format!("../{}", p);
+                let alt = std::path::Path::new(&alt_path);
+                if alt.exists() {
+                    dsl_manifest::Manifest::load_from_path(alt)
+                        .map_err(|e| anyhow!("Failed to load manifest at {}: {:?}", alt_path, e))?
+                } else {
+                    return Err(anyhow!("Manifest file not found: {} or {}", p, alt_path));
+                }
+            };
+            registry.import(m);
+        }
+
+        let diagnostics = bpmn_lite_compiler::dsl::closure::validate_path_family(plan, &registry);
+        if !diagnostics.is_empty() {
+            return Err(anyhow!("Path-family validation failed: {:?}", diagnostics));
+        }
+
         let plan_json = serde_json::to_string(plan)?;
         let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
         self.store.store_plan(hash, &plan_json).await?;
@@ -313,28 +394,33 @@ impl PlanWalker {
 // ── helpers ─────────────────────────────────────────────────────────
 
 fn split_verb_fqn(fqn: &str) -> Result<(&str, &str)> {
-    fqn.split_once(':').ok_or_else(|| {
-        anyhow!(
-            "verb_fqn missing domain prefix (expected 'domain:verb.id'): {}",
-            fqn
-        )
-    })
+    if let Some((domain, local)) = fqn.split_once(':') {
+        Ok((domain, local))
+    } else {
+        Ok(("bpmn", fqn))
+    }
 }
 
-fn evaluate_gateway<'a>(
-    gw: &'a GatewayExecNode,
+fn evaluate_split<'a>(
+    sp: &'a SplitExecNode,
     placeholder_values: &HashMap<String, serde_json::Value>,
 ) -> Result<&'a str> {
-    for flow in &gw.flows {
-        if let Some(val) = placeholder_values.get(&flow.placeholder) {
-            if val.as_str() == Some(&flow.expected_value) {
-                return Ok(&flow.next);
+    for flow in &sp.flows {
+        if let Some(ref placeholder) = flow.placeholder {
+            if let Some(val) = placeholder_values.get(placeholder) {
+                if let Some(ref expected_val) = flow.expected_value {
+                    if val.as_str() == Some(expected_val) {
+                        return Ok(&flow.next);
+                    }
+                }
             }
+        } else {
+            return Ok(&flow.next);
         }
     }
     Err(anyhow!(
-        "no gateway flow matched for gateway '{}'",
-        gw.id
+        "no split flow matched for split '{}'",
+        sp.id
     ))
 }
 
@@ -356,41 +442,52 @@ fn build_inputs(
     for (k, v) in placeholder_values {
         let string_val = match v {
             serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
+            other => other.to_string().replace('"', ""),
         };
         inputs.push(string_binding(k.clone(), string_val));
     }
     inputs
 }
 
-fn string_binding(name: String, value: String) -> ResolvedBinding {
+fn string_binding(name: String, val: String) -> ResolvedBinding {
     ResolvedBinding {
         name,
         value: Some(ProtoTypedValue {
-            value: Some(ProtoValueKind::StringValue(value)),
-            type_name: "string".to_owned(),
+            value: Some(ProtoValueKind::StringValue(val)),
+            type_name: "String".to_string(),
         }),
     }
 }
 
 fn uuid_to_proto(id: Uuid) -> ProtoUuid {
-    ProtoUuid {
-        value: id.as_bytes().to_vec(),
-    }
+    let bytes = id.into_bytes().to_vec();
+    ProtoUuid { value: bytes }
 }
 
-fn derive_uuid(salt: &str, instance_id: Uuid, node_id: &str, attempt_count: u64) -> Uuid {
+fn derive_uuid(salt: &str, instance_id: Uuid, node_id: &str, attempt: u64) -> Uuid {
     let mut hasher = blake3::Hasher::new();
     hasher.update(salt.as_bytes());
     hasher.update(instance_id.as_bytes());
     hasher.update(node_id.as_bytes());
-    hasher.update(&attempt_count.to_le_bytes());
-    let hash = hasher.finalize();
+    hasher.update(&attempt.to_le_bytes());
     let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&hash.as_bytes()[0..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1 (RFC 4122)
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
     Uuid::from_bytes(bytes)
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFFFFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
 }
 
 // ── unit tests ───────────────────────────────────────────────────────
@@ -402,19 +499,19 @@ mod tests {
     use bpmn_lite_store::pending::MemoryPendingInvocationStore;
     use bpmn_lite_store::store_memory::MemoryStore;
 
-    /// Minimal plan: StartEvent → EndEvent.
+    /// Minimal plan: Start → End.
     fn simple_plan(workflow_id: &str) -> WorkflowExecutionPlan {
         let mut nodes = HashMap::new();
         nodes.insert(
             "start".to_owned(),
-            ExecutionNode::StartEvent(StartExecNode {
+            ExecutionNode::Start(StartExecNode {
                 id: "start".to_owned(),
                 next: "end".to_owned(),
             }),
         );
         nodes.insert(
             "end".to_owned(),
-            ExecutionNode::EndEvent(EndExecNode {
+            ExecutionNode::End(EndExecNode {
                 id: "end".to_owned(),
                 status: "Operational".to_owned(),
             }),
@@ -424,6 +521,8 @@ mod tests {
             nodes,
             start_node: "start".to_owned(),
             placeholder_schema: PlaceholderSchema::default(),
+            closure_manifest: None,
+            regime_version: None,
         }
     }
 
@@ -460,7 +559,7 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf");
         let id = walker
-            .start_process("default", &plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new(), HashMap::new())
             .await
             .unwrap();
 
@@ -479,7 +578,7 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf2");
         let id = walker
-            .start_process("default", &plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new(), HashMap::new())
             .await
             .unwrap();
 
@@ -497,11 +596,10 @@ mod tests {
         let (_pending, walker) = memory_walker_no_bus(store.clone()).await;
         let plan = simple_plan("test-wf3");
         let id = walker
-            .start_process("default", &plan, "t1", HashMap::new())
+            .start_process("default", &plan, "t1", HashMap::new(), HashMap::new())
             .await
             .unwrap();
 
-        // Clear plan_hash so advance treats it as a bytecode instance.
         let mut inst = store.load_instance(id).await.unwrap().unwrap();
         inst.plan_hash = None;
         store.save_instance("default", &inst).await.unwrap();
@@ -533,12 +631,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let node_id = "service-task-1";
 
-        // Crash-replay (same logical attempt) must yield byte-identical keys
         let attempt1_retry0 = derive_uuid("idempotency_key", instance_id, node_id, 0);
         let attempt1_retry0_replay = derive_uuid("idempotency_key", instance_id, node_id, 0);
         assert_eq!(attempt1_retry0, attempt1_retry0_replay, "Crash-replay must yield byte-identical keys");
 
-        // Deliberate retry (different attempt count) must yield a new key
         let attempt2_retry1 = derive_uuid("idempotency_key", instance_id, node_id, 1);
         assert_ne!(attempt1_retry0, attempt2_retry1, "Deliberate retry must yield a new key");
     }

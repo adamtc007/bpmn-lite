@@ -63,6 +63,7 @@ pub(crate) struct BusRuntimeConfig {
     pub(crate) client: Arc<BusClient>,
     /// T3.4 — engine's ProcessStore for loading/saving plan-based instances.
     pub(crate) store: Arc<dyn ProcessStore>,
+    pub(crate) engine: Arc<bpmn_lite_engine::BpmnLiteEngine>,
 }
 
 pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime> {
@@ -77,9 +78,13 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
     };
 
     let server = BusServer::builder()
-        .pool(config.pool)
+        .pool(config.pool.clone())
         .local_domain("bpmn-lite")
-        .invocation_dispatcher(RejectInvocationDispatcher)
+        .invocation_dispatcher(BpmnLiteBusHandler::new_with_engine(
+            advancer.clone(),
+            config.engine.clone(),
+            config.pool.clone(),
+        ))
         .result_dispatcher(BpmnLiteBusHandler::new(advancer))
         .outbox_notifier(notifier)
         .bind(config.bind_addr)
@@ -109,6 +114,7 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
 ///    c. Bind placeholder values from result bindings.
 /// 4. Set state = Running (tick loop will call PlanWalker.advance() on next cycle).
 /// 5. For terminal outcomes (VerbFailed etc.) set state = Failed.
+#[derive(Clone)]
 struct StoreBackedAdvancer {
     pending: Arc<PostgresPendingInvocationStore>,
     store: Arc<dyn ProcessStore>,
@@ -268,23 +274,22 @@ impl ProcessAdvancer for StoreBackedAdvancer {
     }
 }
 
-/// Advance `current_node_id` to the completed node's successor and
-/// populate `placeholder_values` from the result bindings.
 fn advance_node_and_bind(
     instance: &mut bpmn_lite_types::ProcessInstance,
     node: &ExecutionNode,
     input: &ProcessAdvanceInput,
 ) {
-    let (produces, next) = match node {
-        ExecutionNode::ServiceTask(t) => (t.produces_placeholder.as_deref(), t.next.as_str()),
-        ExecutionNode::BusinessRuleTask(t) => {
-            (t.produces_placeholder.as_deref(), t.next.as_str())
+    let produces = match node {
+        ExecutionNode::Task(t) => {
+            instance.current_node_id = Some(t.next.clone());
+            t.produces_placeholder.as_deref()
+        }
+        ExecutionNode::Split(sp) => {
+            // Do NOT advance current_node_id here; the engine tick will evaluate the populated placeholder and advance.
+            sp.produces_placeholder.as_deref()
         }
         _ => return,
     };
-
-    // Advance to next node so the tick walker doesn't re-dispatch.
-    instance.current_node_id = Some(next.to_owned());
 
     // Bind placeholder value from result bindings.
     if let Some(placeholder_name) = produces {

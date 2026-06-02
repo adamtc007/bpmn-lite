@@ -2,16 +2,6 @@
 //!
 //! Three-phase: **parse** → **lint** → **dag**.
 //!
-//! ```text
-//! bpmn-dsl source (s-expression text)
-//!     ↓ parse()
-//! WorkflowSource (AST)
-//!     ↓ lint(registry)
-//! WorkflowExecutionPlan (semantic DAG)
-//!     ↓ validate_dag()
-//! WorkflowExecutionPlan (validated — ready for executor)
-//! ```
-//!
 //! Entry point: [`compile`] runs all three phases and returns the validated
 //! plan or a [`CompileError`] describing what went wrong.
 
@@ -21,10 +11,12 @@ pub mod lexer;
 pub mod linter;
 pub mod manifest_registry;
 pub mod plan;
+pub mod pack_build;
+pub mod closure;
+pub mod rpst;
 
 pub use ast::{
-    ConditionAst, EndEventAst, ExclusiveGatewayAst, FlowAst, NodeAst, ServiceTaskAst,
-    BusinessRuleTaskAst, StartEventAst, WorkflowSource,
+    ConditionAst, EndAst, StartAst, TaskAst, SplitAst, JoinAst, LoopAst, SplitFlowAst, SplitModeAst, JoinModeAst, NodeAst, WorkflowSource,
 };
 pub use dag::{validate_dag, DagError};
 pub use linter::{
@@ -32,9 +24,10 @@ pub use linter::{
 };
 pub use manifest_registry::ManifestPlaceholderRegistry;
 pub use plan::{
-    BusinessRuleExecNode, EndExecNode, ExecutionNode, GatewayExecFlow, GatewayExecNode,
-    PlaceholderSchema, PlaceholderSlot, ServiceTaskExecNode, StartExecNode, WorkflowExecutionPlan,
+    StartExecNode, TaskExecNode, SplitExecNode, JoinExecNode, LoopExecNode, EndExecNode, DeliveryMode, SplitMode, JoinMode, SplitExecFlow,
+    ExecutionNode, PlaceholderSchema, PlaceholderSlot, WorkflowExecutionPlan,
 };
+pub use closure::{validate_path_family, Diagnostic};
 
 use lexer::lex;
 use parser::Parser;
@@ -128,7 +121,7 @@ mod tests {
         let plan = compile(DEMO_SRC, &registry()).expect("compile failed");
         assert_eq!(plan.workflow_id, "custody-cbu-onboarding");
         assert_eq!(plan.start_node, "start");
-        assert_eq!(plan.nodes.len(), 9); // start + create + type-decision + gateway + 3×add + add-im + end
+        assert_eq!(plan.nodes.len(), 10); // start + create + type-decision + gateway + 3×add + add-im + end + split-join
     }
 
     #[test]
@@ -144,11 +137,11 @@ mod tests {
     fn demo_model_gateway_has_three_flows() {
         let plan = compile(DEMO_SRC, &registry()).expect("compile failed");
         let gw = match plan.nodes.get("type-gateway").unwrap() {
-            ExecutionNode::ExclusiveGateway(gw) => gw,
-            _ => panic!("expected gateway"),
+            ExecutionNode::Split(gw) => gw,
+            _ => panic!("expected split"),
         };
         assert_eq!(gw.flows.len(), 3);
-        let values: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_str()).collect();
+        let values: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_ref().unwrap().as_str()).collect();
         assert!(values.contains(&"fund"));
         assert!(values.contains(&"corporate"));
         assert!(values.contains(&"trust"));
@@ -158,10 +151,10 @@ mod tests {
     fn product_args_preserved_on_service_tasks() {
         let plan = compile(DEMO_SRC, &registry()).expect("compile failed");
         let node = match plan.nodes.get("add-fund").unwrap() {
-            ExecutionNode::ServiceTask(t) => t,
-            _ => panic!("expected service task"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected task"),
         };
-        assert_eq!(node.verb_fqn, "cbu.add-product");
+        assert_eq!(node.plug, "cbu.add-product");
         assert_eq!(node.static_args.get("product").map(|s| s.as_str()), Some("CUSTODY_FUND"));
     }
 
@@ -170,10 +163,10 @@ mod tests {
         let plan = compile(DEMO_SRC, &registry()).expect("compile failed");
         for id in &["add-fund", "add-corp", "add-trust"] {
             let next = match plan.nodes.get(*id).unwrap() {
-                ExecutionNode::ServiceTask(t) => &t.next,
+                ExecutionNode::Task(t) => &t.next,
                 _ => panic!(),
             };
-            assert_eq!(next, "add-im", "expected {id} → add-im");
+            assert_eq!(next, "type-gateway-join", "expected {id} → type-gateway-join");
         }
     }
 
@@ -203,14 +196,6 @@ mod tests {
     }
 }
 
-// ── v0.6 T1: namespaced verb / decision resolution via imported manifests ─────
-//
-// These tests exercise the §10 demo model rewritten with namespaced verb
-// references (`ob-poc:cbu.create`, `dmn-lite:cbu_type_routing`) against a
-// `ManifestPlaceholderRegistry` that has imported real `dsl_manifest::Manifest`
-// instances. The `:inputs (...)` syntax shown verbatim in §10 is a planned
-// syntactic upgrade — these tests use the current `:args (:key "value")`
-// syntax which is semantically equivalent for the demo paths.
 #[cfg(test)]
 mod namespaced_tests {
     use super::*;
@@ -252,10 +237,6 @@ decisions:
       enum_values: ["fund", "corporate", "trust"]
 "#;
 
-    // §10 demo model rewritten with namespaced verbs. Placeholder bindings come
-    // from the inner `StubPlaceholderRegistry::with_demo_bindings()` (keyed by
-    // unqualified ids), which `ManifestPlaceholderRegistry` reaches via local-id
-    // delegation after stripping the domain prefix.
     const NAMESPACED_DEMO_SRC: &str = r#"(workflow custody-cbu-onboarding
   (start-event :id start :next create-cbu)
   (service-task :id create-cbu :verb ob-poc:cbu.create :next type-decision)
@@ -283,22 +264,22 @@ decisions:
         let plan = compile(NAMESPACED_DEMO_SRC, &namespaced_registry()).expect("compile failed");
         assert_eq!(plan.workflow_id, "custody-cbu-onboarding");
         assert_eq!(plan.start_node, "start");
-        assert_eq!(plan.nodes.len(), 9);
+        assert_eq!(plan.nodes.len(), 10);
     }
 
     #[test]
     fn namespaced_demo_preserves_namespaced_verb_fqn() {
         let plan = compile(NAMESPACED_DEMO_SRC, &namespaced_registry()).expect("compile failed");
         let create = match plan.nodes.get("create-cbu").unwrap() {
-            ExecutionNode::ServiceTask(t) => t,
-            _ => panic!("expected service-task"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected task"),
         };
-        assert_eq!(create.verb_fqn, "ob-poc:cbu.create");
+        assert_eq!(create.plug, "ob-poc:cbu.create");
         let decision = match plan.nodes.get("type-decision").unwrap() {
-            ExecutionNode::BusinessRuleTask(t) => t,
-            _ => panic!("expected business-rule-task"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected task"),
         };
-        assert_eq!(decision.decision_id, "dmn-lite:cbu_type_routing");
+        assert_eq!(decision.plug, "dmn-lite:cbu_type_routing");
     }
 
     #[test]
@@ -315,7 +296,6 @@ decisions:
 
     #[test]
     fn unknown_domain_prefix_produces_structured_lint_error() {
-        // 'mystery:' is not an imported manifest.
         let src = r#"(workflow t
           (start-event :id s :next x)
           (service-task :id x :verb mystery:cbu.create :next e)
@@ -323,7 +303,7 @@ decisions:
         match compile(src, &namespaced_registry()) {
             Err(CompileError::Lint(errs)) => {
                 let msg = errs.first().expect("at least one error").message.as_str();
-                assert!(msg.contains("unknown domain"), "got: {msg}");
+                assert!(msg.contains("references unknown domain"), "got: {msg}");
                 assert!(msg.contains("mystery"), "got: {msg}");
             }
             other => panic!("expected Lint error, got {other:?}"),

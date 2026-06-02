@@ -36,33 +36,18 @@ impl PostgresPendingInvocationStore {
     }
 
     async fn resolve_instance_tenant(&self, instance_id: Uuid) -> anyhow::Result<String> {
-        let tenants = self.list_tenants().await?;
-        for tenant_id in tenants {
-            let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
-                .bind(&tenant_id)
-                .execute(&mut *tx)
-                .await
-            {
-                continue;
-            }
-            let exists_res: Result<bool, sqlx::Error> = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM process_instances WHERE instance_id = $1)")
-                .bind(instance_id)
-                .fetch_one(&mut *tx)
-                .await;
-            let _ = tx.commit().await;
-            if let Ok(true) = exists_res {
-                return Ok(tenant_id);
-            }
-        }
-        Ok("default".to_string())
+        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_instance_tenant($1)")
+            .bind(instance_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0.unwrap_or_else(|| "default".to_string()))
     }
 
     async fn resolve_callout_tenant(&self, callout_id: Uuid) -> anyhow::Result<(String, Uuid)> {
         let tenants = self.list_tenants().await?;
         for tenant_id in tenants {
             let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
                 .bind(&tenant_id)
                 .execute(&mut *tx)
                 .await
@@ -89,7 +74,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
     async fn insert(&self, record: PendingInvocation) -> anyhow::Result<InsertOutcome> {
         let tenant_id = self.resolve_instance_tenant(record.process_instance_id).await?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(&tenant_id)
             .execute(&mut *tx)
             .await?;
@@ -138,7 +123,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
     ) -> anyhow::Result<()> {
         let (tenant_id, _) = self.resolve_callout_tenant(callout_id).await?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(&tenant_id)
             .execute(&mut *tx)
             .await?;
@@ -172,7 +157,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         let tenants = self.list_tenants().await?;
         for tenant_id in tenants {
             let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
                 .bind(&tenant_id)
                 .execute(&mut *tx)
                 .await
@@ -205,7 +190,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         let tenants = self.list_tenants().await?;
         for tenant_id in tenants {
             let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
                 .bind(&tenant_id)
                 .execute(&mut *tx)
                 .await
@@ -238,7 +223,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         let tenants = self.list_tenants().await?;
         for tenant_id in tenants {
             let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
                 .bind(&tenant_id)
                 .execute(&mut *tx)
                 .await
@@ -270,7 +255,7 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
     ) -> anyhow::Result<Vec<PendingInvocation>> {
         let tenant_id = self.resolve_instance_tenant(process_instance_id).await?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(&tenant_id)
             .execute(&mut *tx)
             .await?;
@@ -314,7 +299,8 @@ mod tests {
 
     const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
 
-    pub(crate) async fn setup_t2b8_pool() -> PgPool {
+    pub(crate) async fn setup_t2b8_pool() -> (PgPool, tokio::sync::MutexGuard<'static, ()>) {
+        let guard = crate::test_lock::get_mutex().lock().await;
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
@@ -339,12 +325,13 @@ mod tests {
         } else {
             "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test".to_string()
         };
-        PgPool::connect(&app_url).await.expect("Failed to connect as bpmn_lite_app")
+        let app_pool = PgPool::connect(&app_url).await.expect("Failed to connect as bpmn_lite_app");
+        (app_pool, guard)
     }
 
-    async fn setup() -> PostgresPendingInvocationStore {
-        let pool = setup_t2b8_pool().await;
-        PostgresPendingInvocationStore::new(pool)
+    async fn setup() -> (PostgresPendingInvocationStore, tokio::sync::MutexGuard<'static, ()>) {
+        let (pool, guard) = setup_t2b8_pool().await;
+        (PostgresPendingInvocationStore::new(pool), guard)
     }
 
     fn record(callout: Uuid, process: Uuid, idem: Uuid) -> PendingInvocation {
@@ -353,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_then_lookup_round_trips() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let cid = Uuid::now_v7();
         let pid = Uuid::now_v7();
         let idem = Uuid::now_v7();
@@ -370,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_callout_id_is_a_no_op_insert() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let cid = Uuid::now_v7();
         store
             .insert(record(cid, Uuid::now_v7(), Uuid::now_v7()))
@@ -385,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_idempotency_key_violates_unique_constraint() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let idem = Uuid::now_v7();
         store
             .insert(record(Uuid::now_v7(), Uuid::now_v7(), idem))
@@ -400,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_ack_then_take_completes_the_lifecycle() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let cid = Uuid::now_v7();
         let pid = Uuid::now_v7();
         store
@@ -425,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_ack_fails_on_unknown_callout_id() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let err = store
             .record_ack(Uuid::now_v7(), Uuid::now_v7(), Utc::now())
             .await;
@@ -434,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_for_process_returns_only_matching_rows_in_submission_order() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let pid_a = Uuid::now_v7();
         let pid_b = Uuid::now_v7();
         for _ in 0..3 {

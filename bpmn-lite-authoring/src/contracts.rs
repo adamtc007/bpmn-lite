@@ -66,6 +66,34 @@ impl ContractRegistry {
         Self::default()
     }
 
+    pub fn from_manifest(m: &dsl_manifest::Manifest) -> Self {
+        let mut registry = ContractRegistry::default();
+        for verb in &m.verbs {
+            let mut reads_flags = HashSet::new();
+            let mut writes_flags = HashSet::new();
+
+            for input in &verb.signature.inputs {
+                if input.type_name.to_lowercase() == "bool" || input.type_name.to_lowercase() == "boolean" {
+                    reads_flags.insert(input.name.clone());
+                }
+            }
+            if let Some(ref output) = verb.signature.output {
+                if let Some(ref produces) = output.produces {
+                    writes_flags.insert(produces.clone());
+                }
+            }
+
+            registry.register(VerbContract {
+                task_type: verb.id.clone(),
+                reads_flags,
+                writes_flags,
+                may_raise_errors: HashSet::from(["*".to_string()]),
+                produces_correlation: vec![],
+            });
+        }
+        registry
+    }
+
     /// Register a contract for a task type. Replaces any existing contract.
     pub fn register(&mut self, contract: VerbContract) {
         self.contracts.insert(contract.task_type.clone(), contract);

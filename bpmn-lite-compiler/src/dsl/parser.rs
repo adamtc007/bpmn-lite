@@ -147,11 +147,19 @@ impl Parser {
         self.advance();
 
         let node = match kind_sym.as_str() {
-            "start-event" => self.parse_start_event().map(NodeAst::StartEvent),
-            "service-task" => self.parse_service_task().map(NodeAst::ServiceTask),
-            "business-rule-task" => self.parse_business_rule_task().map(NodeAst::BusinessRuleTask),
-            "exclusive-gateway" => self.parse_exclusive_gateway().map(NodeAst::ExclusiveGateway),
-            "end-event" => self.parse_end_event().map(NodeAst::EndEvent),
+            "start-event" | "start" => self.parse_start().map(NodeAst::Start),
+            "end-event" | "end" => self.parse_end().map(NodeAst::End),
+            "service-task" => self.parse_service_task_old().map(NodeAst::Task),
+            "business-rule-task" => self.parse_business_rule_task_old().map(NodeAst::Task),
+            "task" => self.parse_task().map(NodeAst::Task),
+            "exclusive-gateway" => self.parse_exclusive_gateway_old().map(NodeAst::Split),
+            "split-xor" => self.parse_split(SplitModeAst::Xor).map(NodeAst::Split),
+            "split-or" => self.parse_split(SplitModeAst::Or).map(NodeAst::Split),
+            "split-and" => self.parse_split(SplitModeAst::And).map(NodeAst::Split),
+            "join-xor" => self.parse_join(JoinModeAst::Xor).map(NodeAst::Join),
+            "join-or" => self.parse_join(JoinModeAst::Or).map(NodeAst::Join),
+            "join-and" => self.parse_join(JoinModeAst::And).map(NodeAst::Join),
+            "loop" => self.parse_loop().map(NodeAst::Loop),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
                 None
@@ -164,28 +172,81 @@ impl Parser {
 
     // ── Node parsers ──────────────────────────────────────────────────────────
 
-    fn parse_start_event(&mut self) -> Option<StartEventAst> {
+    fn parse_start(&mut self) -> Option<StartAst> {
         let id = self.parse_kw_symbol("id")?;
         let next = self.parse_kw_symbol("next")?;
-        Some(StartEventAst { id, next })
+        Some(StartAst { id, next })
     }
 
-    fn parse_service_task(&mut self) -> Option<ServiceTaskAst> {
+    fn parse_end(&mut self) -> Option<EndAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let status = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "status") {
+            self.advance();
+            self.expect_str_lit("end-event status").unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Some(EndAst { id, status })
+    }
+
+    fn parse_service_task_old(&mut self) -> Option<TaskAst> {
         let id = self.parse_kw_symbol("id")?;
         let verb = self.parse_kw_symbol("verb")?;
-        // Optional :args
         let args = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "args") {
-            self.advance(); // consume :args
+            self.advance();
             self.parse_args_list()
         } else {
             Vec::new()
         };
         let next = self.parse_kw_symbol("next")?;
-        Some(ServiceTaskAst { id, verb, args, next })
+        Some(TaskAst {
+            id,
+            plug: verb,
+            args,
+            next,
+            delivery_mode: None,
+        })
+    }
+
+    fn parse_business_rule_task_old(&mut self) -> Option<TaskAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let decision = self.parse_kw_symbol("decision")?;
+        let next = self.parse_kw_symbol("next")?;
+        Some(TaskAst {
+            id,
+            plug: decision,
+            args: Vec::new(),
+            next,
+            delivery_mode: None,
+        })
+    }
+
+    fn parse_task(&mut self) -> Option<TaskAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let plug = self.parse_kw_symbol("plug")?;
+        let args = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "args") {
+            self.advance();
+            self.parse_args_list()
+        } else {
+            Vec::new()
+        };
+        let delivery_mode = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "delivery-mode") {
+            self.advance();
+            self.expect_str_lit("delivery-mode")
+        } else {
+            None
+        };
+        let next = self.parse_kw_symbol("next")?;
+        Some(TaskAst {
+            id,
+            plug,
+            args,
+            next,
+            delivery_mode,
+        })
     }
 
     fn parse_args_list(&mut self) -> Vec<(String, String)> {
-        // (:key "value" ...)
         if self.expect_lparen(":args list").is_none() {
             return Vec::new();
         }
@@ -206,28 +267,51 @@ impl Parser {
         pairs
     }
 
-    fn parse_business_rule_task(&mut self) -> Option<BusinessRuleTaskAst> {
-        let id = self.parse_kw_symbol("id")?;
-        let decision = self.parse_kw_symbol("decision")?;
-        let next = self.parse_kw_symbol("next")?;
-        Some(BusinessRuleTaskAst { id, decision, next })
-    }
-
-    fn parse_exclusive_gateway(&mut self) -> Option<ExclusiveGatewayAst> {
+    fn parse_exclusive_gateway_old(&mut self) -> Option<SplitAst> {
         let id = self.parse_kw_symbol("id")?;
         let mut flows = Vec::new();
         while matches!(self.peek().kind, TokenKind::LParen) {
-            if let Some(flow) = self.parse_flow() {
+            if let Some(flow) = self.parse_split_flow(true) {
                 flows.push(flow);
             }
         }
         if flows.is_empty() {
             self.error("exclusive-gateway must have at least one flow".into());
         }
-        Some(ExclusiveGatewayAst { id, flows })
+        let join = format!("{}-join", id);
+        Some(SplitAst {
+            id,
+            mode: SplitModeAst::Xor,
+            plug: None,
+            flows,
+            join,
+        })
     }
 
-    fn parse_flow(&mut self) -> Option<FlowAst> {
+    fn parse_split(&mut self, mode: SplitModeAst) -> Option<SplitAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let plug = if mode != SplitModeAst::And {
+            Some(self.parse_kw_symbol("plug")?)
+        } else {
+            None
+        };
+        let join = self.parse_kw_symbol("join")?;
+        let mut flows = Vec::new();
+        while matches!(self.peek().kind, TokenKind::LParen) {
+            if let Some(flow) = self.parse_split_flow(mode != SplitModeAst::And) {
+                flows.push(flow);
+            }
+        }
+        Some(SplitAst {
+            id,
+            mode,
+            plug,
+            flows,
+            join,
+        })
+    }
+
+    fn parse_split_flow(&mut self, require_condition: bool) -> Option<SplitFlowAst> {
         self.expect_lparen("flow")?;
         if !matches!(&self.peek().kind, TokenKind::Symbol(s) if s == "flow") {
             self.error(format!("expected 'flow', found {}", self.peek().kind.description()));
@@ -235,15 +319,18 @@ impl Parser {
         }
         self.advance();
 
-        self.expect_keyword("condition")?;
-        let condition = self.parse_condition()?;
+        let condition = if require_condition {
+            self.expect_keyword("condition")?;
+            Some(self.parse_condition()?)
+        } else {
+            None
+        };
         let next = self.parse_kw_symbol("next")?;
         self.expect_rparen("flow");
-        Some(FlowAst { condition, next })
+        Some(SplitFlowAst { condition, next })
     }
 
     fn parse_condition(&mut self) -> Option<ConditionAst> {
-        // `(= @placeholder "value")`
         self.expect_lparen("condition")?;
         if !matches!(&self.peek().kind, TokenKind::Symbol(s) if s == "=") {
             self.error(format!("expected '=' in condition, found {}", self.peek().kind.description()));
@@ -265,18 +352,50 @@ impl Parser {
         Some(ConditionAst::Eq { placeholder: format!("@{placeholder}"), value })
     }
 
-    fn parse_end_event(&mut self) -> Option<EndEventAst> {
+    fn parse_join(&mut self, mode: JoinModeAst) -> Option<JoinAst> {
         let id = self.parse_kw_symbol("id")?;
-        let status = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "status") {
-            self.advance();
-            self.expect_str_lit("end-event status").unwrap_or_default()
-        } else {
-            String::new()
-        };
-        Some(EndEventAst { id, status })
+        let split = self.parse_kw_symbol("split")?;
+        let next = self.parse_kw_symbol("next")?;
+        Some(JoinAst {
+            id,
+            mode,
+            split,
+            next,
+        })
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    fn parse_loop(&mut self) -> Option<LoopAst> {
+        let id = self.parse_kw_symbol("id")?;
+        self.expect_keyword("ceiling")?;
+        let ceiling = if let TokenKind::Symbol(s) = &self.peek().kind {
+            let val = s.parse::<u32>().ok().unwrap_or(0);
+            self.advance();
+            val
+        } else {
+            self.error("expected integer ceiling".into());
+            0
+        };
+        self.expect_keyword("body")?;
+        self.expect_lparen("loop body")?;
+        let mut body = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::RParen | TokenKind::Eof) {
+            if let Some(node) = self.parse_node() {
+                body.push(node);
+            } else {
+                while !matches!(self.peek().kind, TokenKind::LParen | TokenKind::RParen | TokenKind::Eof) {
+                    self.advance();
+                }
+            }
+        }
+        self.expect_rparen("loop body");
+        let next = self.parse_kw_symbol("next")?;
+        Some(LoopAst {
+            id,
+            ceiling,
+            body,
+            next,
+        })
+    }
 
     fn parse_kw_symbol(&mut self, keyword: &str) -> Option<String> {
         self.expect_keyword(keyword)?;
@@ -304,21 +423,21 @@ mod tests {
 
     #[test]
     fn parse_start_event() {
-        let src = "(workflow test (start-event :id start :next next-node))";
+        let src = "(workflow test (start :id start :next next-node))";
         let ast = parse(src).expect("parse failed");
         assert_eq!(ast.name, "test");
-        assert!(matches!(ast.nodes[0], NodeAst::StartEvent(_)));
+        assert!(matches!(ast.nodes[0], NodeAst::Start(_)));
     }
 
     #[test]
     fn parse_service_task_no_args() {
         let src = "(workflow test (service-task :id create-cbu :verb cbu.create :next next-node))";
         let ast = parse(src).expect("parse failed");
-        if let NodeAst::ServiceTask(t) = &ast.nodes[0] {
-            assert_eq!(t.verb, "cbu.create");
+        if let NodeAst::Task(t) = &ast.nodes[0] {
+            assert_eq!(t.plug, "cbu.create");
             assert!(t.args.is_empty());
         } else {
-            panic!("expected service task");
+            panic!("expected task");
         }
     }
 
@@ -326,11 +445,11 @@ mod tests {
     fn parse_service_task_with_args() {
         let src = r#"(workflow test (service-task :id add-fund :verb cbu.add-product :args (:product "CUSTODY_FUND") :next add-im))"#;
         let ast = parse(src).expect("parse failed");
-        if let NodeAst::ServiceTask(t) = &ast.nodes[0] {
-            assert_eq!(t.verb, "cbu.add-product");
+        if let NodeAst::Task(t) = &ast.nodes[0] {
+            assert_eq!(t.plug, "cbu.add-product");
             assert_eq!(t.args, vec![("product".into(), "CUSTODY_FUND".into())]);
         } else {
-            panic!("expected service task");
+            panic!("expected task");
         }
     }
 
@@ -341,13 +460,13 @@ mod tests {
             (flow :condition (= @cbu-type "fund") :next add-fund)
             (flow :condition (= @cbu-type "corporate") :next add-corp)))"#;
         let ast = parse(src).expect("parse failed");
-        if let NodeAst::ExclusiveGateway(gw) = &ast.nodes[0] {
+        if let NodeAst::Split(gw) = &ast.nodes[0] {
             assert_eq!(gw.flows.len(), 2);
-            let ConditionAst::Eq { placeholder, value } = &gw.flows[0].condition;
+            let ConditionAst::Eq { placeholder, value } = gw.flows[0].condition.as_ref().unwrap();
             assert_eq!(placeholder, "@cbu-type");
             assert_eq!(value, "fund");
         } else {
-            panic!("expected gateway");
+            panic!("expected split");
         }
     }
 

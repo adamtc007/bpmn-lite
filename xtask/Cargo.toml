@@ -9,6 +9,9 @@ database = []
 
 [dependencies]
 anyhow = { workspace = true }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+serde_yaml = "0.9"
+serde = { workspace = true }
 
 [lints]
 workspace = true

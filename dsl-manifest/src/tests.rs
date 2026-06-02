@@ -8,7 +8,7 @@ domain: "ob-poc"
 catalogue_version: "v1.0.0"
 generated_at: "2026-05-20T10:00:00Z"
 generated_from_snapshot: "sha256:abc123"
-min_consumer_manifest_version: "1.0"
+imported_pins: []
 breaking_changes_since: []
 
 verbs:
@@ -288,7 +288,7 @@ fn parse_error_for_malformed_yaml() {
 // ── T2A.3 — round-trip without loss across every v0.6 §7 field ───────
 //
 // Build a manifest that exercises *every* optional field in §7
-// (`generated_from_snapshot`, `min_consumer_manifest_version`,
+// (`generated_from_snapshot`, `imported_pins`,
 // `breaking_changes_since`, the optional VerbEntry knobs, all type
 // kinds), serialise to YAML, parse the YAML back, and assert
 // field-by-field equivalence. Guards against accidental
@@ -300,7 +300,9 @@ domain: "ob-poc"
 catalogue_version: "v1.0.0"
 generated_at: "2026-05-20T10:00:00Z"
 generated_from_snapshot: "sha256:abc123"
-min_consumer_manifest_version: "1.0"
+imported_pins:
+  - domain: "dmn-lite"
+    content_hash: "hash123"
 breaking_changes_since:
   - "v0.9.0"
   - "v0.8.0"
@@ -375,8 +377,8 @@ fn round_trip_preserves_every_top_level_field() {
     assert_eq!(m2.generated_at, m.generated_at);
     assert_eq!(m2.generated_from_snapshot, m.generated_from_snapshot);
     assert_eq!(
-        m2.min_consumer_manifest_version,
-        m.min_consumer_manifest_version
+        m2.imported_pins,
+        m.imported_pins
     );
     assert_eq!(m2.breaking_changes_since, m.breaking_changes_since);
 }

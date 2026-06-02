@@ -119,19 +119,31 @@ pub(crate) async fn run(mut cfg: SenderConfig) {
 /// wake-up; this loop ensures the wake-up drains all the rows they
 /// committed, not just the first batch.
 async fn drain_until_empty(cfg: &SenderConfig) -> Result<(), sqlx::Error> {
-    loop {
-        let claimed = drain_once(cfg).await?;
-        cfg.stats
-            .rows_seen
-            .fetch_add(claimed as u64, Ordering::Relaxed);
-        if claimed == 0 {
-            return Ok(());
+    let tenants: Vec<String> = sqlx::query_scalar("SELECT tenant_id FROM dsl_bus.list_pending_outbox_tenants()")
+        .fetch_all(&cfg.pool)
+        .await?;
+
+    for tenant_id in tenants {
+        loop {
+            let claimed = drain_once_for_tenant(cfg, &tenant_id).await?;
+            cfg.stats
+                .rows_seen
+                .fetch_add(claimed as u64, Ordering::Relaxed);
+            if claimed == 0 {
+                break;
+            }
         }
     }
+    Ok(())
 }
 
-async fn drain_once(cfg: &SenderConfig) -> Result<usize, sqlx::Error> {
+async fn drain_once_for_tenant(cfg: &SenderConfig, tenant_id: &str) -> Result<usize, sqlx::Error> {
     let mut tx = cfg.pool.begin().await?;
+    sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
     let entries = select_pending_outbox(&mut tx, cfg.batch_size)
         .await
         .map_err(|e| match e {

@@ -135,6 +135,7 @@ async fn test_start_with_session_stack_copies_value() {
             session_stack: session_stack.clone(),
             entry_id: Uuid::new_v4(),
             runbook_id: Uuid::new_v4(),
+            expected_preconditions: None,
         })
         .await
         .unwrap();
@@ -194,6 +195,7 @@ async fn test_job_activation_preserves_runbook_lineage() {
             session_stack: SessionStackState::default(),
             entry_id,
             runbook_id,
+            expected_preconditions: None,
         })
         .await
         .unwrap();

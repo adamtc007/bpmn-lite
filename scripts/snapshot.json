@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "## Latest page snapshot\nuid=1_0 RootWebArea \"ob-poc-ui-react\" url=\"http://localhost:5173/chat\"\n  uid=1_1 button \"Show sessions\"\n  uid=1_2 button \"New session\"\n  uid=1_3 button \"Attach file (coming soon)\" disableable disabled\n  uid=1_4 textbox \"Select or create a session first\" disableable disabled multiline\n  uid=1_5 button \"Send message (Enter)\" disableable disabled\n  uid=1_6 StaticText \"Press Enter to send, Shift+Enter for new line\"\n  uid=1_7 StaticText \"CONSTELLATION\"\n  uid=1_8 StaticText \"Load or select a CBU from session scope to inspect the operating constellation.\"\n  uid=1_9 heading \"Start a Conversation\" level=\"2\"\n  uid=1_10 StaticText \"Select a session from the sidebar or create a new one.\"\n"
+    }
+  ]
+}

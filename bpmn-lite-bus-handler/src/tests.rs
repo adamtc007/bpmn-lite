@@ -49,7 +49,7 @@ async fn dispatch_records_input_via_concrete_arc() {
     let advancer = Arc::new(RecordingAdvancer::default());
     let handler = BpmnLiteBusHandler::from_arc(advancer.clone());
     let exec_id = Uuid::now_v7();
-    handler.dispatch(ctx(exec_id), outcome_with_bindings()).await.unwrap();
+    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome_with_bindings()).await.unwrap();
     let calls = advancer.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].execution_id, exec_id);
@@ -70,8 +70,7 @@ async fn unknown_execution_advancer_error_maps_to_internal() {
         }
     }
     let handler = BpmnLiteBusHandler::new(U);
-    let err = handler
-        .dispatch(ctx(Uuid::now_v7()), outcome_with_bindings())
+    let err = ResultDispatcher::dispatch(&handler, ctx(Uuid::now_v7()), outcome_with_bindings())
         .await
         .unwrap_err();
     match err {
@@ -90,8 +89,7 @@ async fn malformed_advancer_error_maps_to_malformed() {
         }
     }
     let handler = BpmnLiteBusHandler::new(M);
-    let err = handler
-        .dispatch(ctx(Uuid::now_v7()), outcome_with_bindings())
+    let err = ResultDispatcher::dispatch(&handler, ctx(Uuid::now_v7()), outcome_with_bindings())
         .await
         .unwrap_err();
     assert!(matches!(err, BusServerError::Malformed(_)));
@@ -100,19 +98,21 @@ async fn malformed_advancer_error_maps_to_malformed() {
 #[tokio::test]
 async fn reject_invocation_dispatcher_responds_with_unknown_verb() {
     let h = RejectInvocationDispatcher;
-    let err = h
-        .dispatch(
-            InvocationContext {
-                idempotency_key: Uuid::now_v7(),
-                source_domain: "ob-poc".into(),
-                catalogue_version: "v1.0.0".into(),
-                local_verb_id: "cbu.create".into(),
-                result_callback_endpoint: String::new(),
-            },
-            vec![],
-        )
-        .await
-        .unwrap_err();
+    let err = InvocationDispatcher::dispatch(
+        &h,
+        InvocationContext {
+            idempotency_key: Uuid::now_v7(),
+            source_domain: "ob-poc".into(),
+            catalogue_version: "v1.0.0".into(),
+            local_verb_id: "cbu.create".into(),
+            result_callback_endpoint: String::new(),
+            authority: None,
+            tenant_id: "default".into(),
+        },
+        vec![],
+    )
+    .await
+    .unwrap_err();
     match err {
         BusServerError::UnknownVerb(msg) => assert!(msg.contains("bpmn-lite does not accept")),
         other => panic!("expected UnknownVerb, got {other:?}"),
@@ -130,7 +130,7 @@ async fn outcome_kind_unspecified_when_proto_value_unknown() {
         detail: String::new(),
         bindings: vec![],
     };
-    handler.dispatch(ctx(exec_id), outcome).await.unwrap();
+    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome).await.unwrap();
     let calls = advancer.calls.lock().unwrap();
     assert_eq!(
         calls[0].outcome_kind,

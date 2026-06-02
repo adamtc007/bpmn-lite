@@ -52,6 +52,7 @@ pub struct StartParams {
     pub session_stack: SessionStackState,
     pub entry_id: Uuid,
     pub runbook_id: Uuid,
+    pub expected_preconditions: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Result of compiling BPMN XML.
@@ -76,6 +77,8 @@ pub struct ProcessInspection {
     pub state: ProcessState,
     pub fibers: Vec<FiberInspection>,
     pub incidents: Vec<Incident>,
+    pub current_node_id: Option<String>,
+    pub placeholder_values: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +181,23 @@ impl BpmnLiteEngine {
             pending_store: self.pending_store.clone(),
         }
     }
+
+    pub fn store(&self) -> Arc<dyn ProcessStore> {
+        self.store.clone()
+    }
+
+    pub fn pending_store(&self) -> Option<Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>> {
+        self.pending_store.clone()
+    }
+
+    pub fn bus_client(&self) -> Option<Arc<dsl_bus_client::BusClient>> {
+        self.bus_client.clone()
+    }
+
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
 
     fn ensure_loaded_instance_belongs_to_tenant(
         &self,
@@ -352,6 +372,7 @@ impl BpmnLiteEngine {
             session_stack: SessionStackState::default(),
             entry_id: Uuid::nil(),
             runbook_id: Uuid::nil(),
+            expected_preconditions: None,
         })
         .await
     }
@@ -363,6 +384,32 @@ impl BpmnLiteEngine {
             .load_program(params.bytecode_version)
             .await?
             .ok_or_else(|| anyhow!("No program found for bytecode version"))?;
+
+        if let Some(ref preconditions) = params.expected_preconditions {
+            if !params.domain_payload.is_empty() {
+                let json_val: serde_json::Value = serde_json::from_str(&params.domain_payload)?;
+                if let Some(obj) = json_val.as_object() {
+                    for (key, expected_val) in preconditions {
+                        let norm_key = key.trim_start_matches('@');
+                        let actual_val_str = obj.get(key)
+                            .or_else(|| obj.get(norm_key))
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                v => v.to_string().replace('"', ""),
+                            })
+                            .unwrap_or_default();
+
+                        if actual_val_str != *expected_val {
+                            return Err(anyhow!("PreconditionConflict: expected {} to be {}, got '{}'", key, expected_val, actual_val_str));
+                        }
+                    }
+                } else {
+                    return Err(anyhow!("PreconditionConflict: domain payload is not a JSON object"));
+                }
+            } else if !preconditions.is_empty() {
+                return Err(anyhow!("PreconditionConflict: domain payload is empty but preconditions were specified"));
+            }
+        }
 
         let instance_id = Uuid::now_v7();
         let instance = ProcessInstance {
@@ -2101,6 +2148,19 @@ impl BpmnLiteEngine {
 
         let incidents = self.store.load_incidents(instance_id).await?;
 
+        let program = self.store.load_program(instance.bytecode_version).await?;
+        let current_node_id = if let Some(prog) = &program {
+            if let Some(first_fiber) = fibers.first() {
+                prog.debug_map.get(&first_fiber.pc).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let placeholder_values = serde_json::from_str::<serde_json::Value>(&instance.domain_payload).ok();
+
         Ok(ProcessInspection {
             instance_id,
             tenant_id: instance.tenant_id,
@@ -2110,6 +2170,8 @@ impl BpmnLiteEngine {
             state: instance.state,
             fibers: fiber_inspections,
             incidents,
+            current_node_id,
+            placeholder_values,
         })
     }
 

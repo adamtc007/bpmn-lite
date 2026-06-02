@@ -48,7 +48,7 @@ pub struct ExporterConfig {
     pub catalogue_version: String,
     pub generated_at: String,
     pub manifest_version: String,
-    pub min_consumer_manifest_version: Option<String>,
+    pub imported_pins: Vec<dsl_manifest::ExternalReferencePin>,
 }
 
 impl ExporterConfig {
@@ -58,7 +58,7 @@ impl ExporterConfig {
             catalogue_version: catalogue_version.into(),
             generated_at: iso8601_now(),
             manifest_version: "1.0".into(),
-            min_consumer_manifest_version: Some("1.0".into()),
+            imported_pins: Vec::new(),
         }
     }
 }
@@ -336,8 +336,14 @@ fn build_yaml(
     let _ = writeln!(s, "domain: {:?}", config.domain);
     let _ = writeln!(s, "catalogue_version: {:?}", config.catalogue_version);
     let _ = writeln!(s, "generated_at: {:?}", config.generated_at);
-    if let Some(min) = &config.min_consumer_manifest_version {
-        let _ = writeln!(s, "min_consumer_manifest_version: {min:?}");
+    if !config.imported_pins.is_empty() {
+        let _ = writeln!(s, "imported_pins:");
+        for pin in &config.imported_pins {
+            let _ = writeln!(s, "  - domain: {:?}", pin.domain);
+            let _ = writeln!(s, "    content_hash: {:?}", pin.content_hash);
+        }
+    } else {
+        let _ = writeln!(s, "imported_pins: []");
     }
     let _ = writeln!(s, "breaking_changes_since: []");
     s.push('\n');

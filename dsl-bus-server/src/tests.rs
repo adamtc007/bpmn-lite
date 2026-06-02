@@ -127,7 +127,12 @@ fn sample_request(idempotency_key: Uuid, verb_id: &str) -> InvocationRequest {
                 type_name: "String".into(),
             }),
         }],
-        authority: None,
+        authority: Some(dsl_bus_protocol::v1::AuthorityContext {
+            service_identity: "test_service".into(),
+            user_identity: "default:test_user".into(),
+            roles: vec![],
+            signed_token: vec![],
+        }),
         source_domain: "bpmn-lite".into(),
         catalogue_version: "v1.0.0".into(),
         snapshot_pin: None,

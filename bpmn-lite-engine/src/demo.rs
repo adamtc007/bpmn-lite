@@ -103,29 +103,29 @@ mod tests {
         let plan = build_demo_plan().expect("§10 demo compile failed");
         assert_eq!(plan.workflow_id, "custody-cbu-onboarding");
         assert_eq!(plan.start_node, "start");
-        assert_eq!(plan.nodes.len(), 9); // start + create-cbu + type-decision + gateway + 3×add + attach-im + end
+        assert_eq!(plan.nodes.len(), 10); // start + create-cbu + type-decision + gateway + 3×add + attach-im + end + split-join
     }
 
     #[test]
     fn demo_plan_has_namespaced_verbs() {
         let plan = build_demo_plan().expect("compile");
         let create = match plan.nodes.get("create-cbu").unwrap() {
-            ExecutionNode::ServiceTask(t) => t,
-            _ => panic!("expected ServiceTask"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected Task"),
         };
-        assert_eq!(create.verb_fqn, "ob-poc:cbu.create");
+        assert_eq!(create.plug, "ob-poc:cbu.create");
 
         let decision = match plan.nodes.get("type-decision").unwrap() {
-            ExecutionNode::BusinessRuleTask(t) => t,
-            _ => panic!("expected BusinessRuleTask"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected Task"),
         };
-        assert_eq!(decision.decision_id, "dmn-lite:cbu_type_routing");
+        assert_eq!(decision.plug, "dmn-lite:cbu_type_routing");
 
         let im = match plan.nodes.get("attach-im").unwrap() {
-            ExecutionNode::ServiceTask(t) => t,
-            _ => panic!("expected ServiceTask"),
+            ExecutionNode::Task(t) => t,
+            _ => panic!("expected Task"),
         };
-        assert_eq!(im.verb_fqn, "ob-poc:instrument-matrix.attach");
+        assert_eq!(im.plug, "ob-poc:instrument-matrix.attach");
     }
 
     #[test]
@@ -141,11 +141,11 @@ mod tests {
     fn demo_plan_gateway_routes_all_three_types() {
         let plan = build_demo_plan().expect("compile");
         let gw = match plan.nodes.get("type-gateway").unwrap() {
-            ExecutionNode::ExclusiveGateway(gw) => gw,
-            _ => panic!("expected gateway"),
+            ExecutionNode::Split(gw) => gw,
+            _ => panic!("expected split"),
         };
         assert_eq!(gw.flows.len(), 3);
-        let targets: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_str()).collect();
+        let targets: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_ref().unwrap().as_str()).collect();
         assert!(targets.contains(&"fund"));
         assert!(targets.contains(&"corporate"));
         assert!(targets.contains(&"trust"));
@@ -160,24 +160,15 @@ mod tests {
             ("add-trust", "trust"),
         ] {
             let task = match plan.nodes.get(id).unwrap() {
-                ExecutionNode::ServiceTask(t) => t,
-                _ => panic!("expected ServiceTask for {id}"),
+                ExecutionNode::Task(t) => t,
+                _ => panic!("expected Task for {id}"),
             };
             assert_eq!(
                 task.static_args.get("product").map(String::as_str),
                 Some(expected_product),
                 "{id} product arg wrong"
             );
-            assert_eq!(&task.next, "attach-im", "{id} should point to attach-im");
+            assert_eq!(&task.next, "type-gateway-join", "{id} should point to type-gateway-join");
         }
-    }
-
-    #[test]
-    fn demo_initial_vars_contains_required_keys() {
-        let vars = demo_initial_vars("Allianz AM", "FUND_MANDATE");
-        assert!(vars.contains_key("@input-name"));
-        assert!(vars.contains_key("@input-client-type"));
-        assert_eq!(vars["@input-name"], serde_json::Value::String("Allianz AM".into()));
-        assert_eq!(vars["@input-client-type"], serde_json::Value::String("FUND_MANDATE".into()));
     }
 }

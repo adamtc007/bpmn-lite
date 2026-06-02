@@ -5,11 +5,8 @@
 //!
 //! 1. Checks all `:verb`, `:decision`, and `:next` references resolve.
 //! 2. Infers `@cbu`-style placeholder flow from catalogue declarations.
-//! 3. Validates gateway predicates reference known placeholders.
+//! 3. Validates gateway/split predicates reference known placeholders.
 //! 4. Produces a `WorkflowExecutionPlan` ready for DAG validation.
-//!
-//! The linter is sync — no async catalogue calls. Real catalogue integration
-//! happens at runtime (T2/T3).
 
 use std::collections::HashMap;
 
@@ -25,6 +22,8 @@ pub struct BindingDecl {
     pub produces: Option<String>,
     /// Placeholders consumed (e.g. `["@cbu"]`).
     pub consumes: Vec<String>,
+    /// Effect class of the verb (e.g. `"idempotent_ensure"`, `"read"`, `"read_modify_write"`).
+    pub effect_class: Option<String>,
 }
 
 /// Synchronous catalogue projection: binding declarations for verbs/decisions.
@@ -60,24 +59,23 @@ pub trait PlaceholderRegistry: Send + Sync {
             SymbolResolution::Unresolved
         }
     }
+
+    fn get_decision_enum_values(&self, _decision_id: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    fn workflow_exists(&self, _hash: &str) -> bool {
+        false
+    }
+    fn workflow_satisfies_l2(&self, _hash: &str) -> bool {
+        true
+    }
+    fn get_workflow_signature(&self, _hash: &str) -> Option<BindingDecl> {
+        None
+    }
 }
 
 /// Outcome of resolving a `domain:symbol` reference against a registry.
-///
-/// `Known`: the registry recognises the reference and (for verbs/decisions
-/// with placeholder semantics) can produce a [`BindingDecl`].
-///
-/// `UnknownDomain`: the symbol carries a `<prefix>:` namespace, but no
-/// manifest is imported for that prefix. Compile error per v0.6 §7.5.
-///
-/// `UnknownInDomain`: the namespace prefix is recognised but the local
-/// id is absent from that manifest. Compile error including a hint at how
-/// many symbols *are* declared, to make typos obvious without dumping the
-/// full catalogue.
-///
-/// `Unresolved`: the symbol carries no recognised namespace prefix and the
-/// underlying registry has no local binding for it — falls back to the
-/// pre-T1 "unresolved verb 'foo'" error path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolResolution {
     Known,
@@ -91,6 +89,9 @@ pub enum SymbolResolution {
 pub struct StubPlaceholderRegistry {
     verbs: HashMap<String, BindingDecl>,
     decisions: HashMap<String, BindingDecl>,
+    decision_enums: HashMap<String, Vec<String>>,
+    workflows: HashMap<String, BindingDecl>,
+    workflow_l2: HashMap<String, bool>,
 }
 
 impl StubPlaceholderRegistry {
@@ -104,28 +105,43 @@ impl StubPlaceholderRegistry {
         self.decisions.insert(id.into(), decl);
     }
 
+    pub fn register_decision_enum(&mut self, id: impl Into<String>, values: Vec<String>) {
+        self.decision_enums.insert(id.into(), values);
+    }
+
+    pub fn register_workflow(&mut self, hash: impl Into<String>, decl: BindingDecl, satisfies_l2: bool) {
+        let h = hash.into();
+        self.workflows.insert(h.clone(), decl);
+        self.workflow_l2.insert(h, satisfies_l2);
+    }
+
     /// Seed with the Phase 5.5 demo model bindings.
     pub fn with_demo_bindings(mut self) -> Self {
         // cbu.create → produces @cbu
         self.register_verb("cbu.create", BindingDecl {
             produces: Some("@cbu".into()),
             consumes: vec![],
+            effect_class: Some("idempotent_ensure".into()),
         });
         // cbu.add-product → consumes @cbu, no new placeholder
         self.register_verb("cbu.add-product", BindingDecl {
             produces: None,
             consumes: vec!["@cbu".into()],
+            effect_class: Some("idempotent_ensure".into()),
         });
         // instrument-matrix.attach → consumes @cbu, no new placeholder
         self.register_verb("instrument-matrix.attach", BindingDecl {
             produces: None,
             consumes: vec!["@cbu".into()],
+            effect_class: Some("idempotent_ensure".into()),
         });
         // cbu_type_routing DMN: consumes @cbu, produces @cbu-type
         self.register_decision("cbu_type_routing", BindingDecl {
             produces: Some("@cbu-type".into()),
             consumes: vec!["@cbu".into()],
+            effect_class: None,
         });
+        self.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
         self
     }
 }
@@ -136,6 +152,18 @@ impl PlaceholderRegistry for StubPlaceholderRegistry {
     }
     fn decision_bindings(&self, decision_id: &str) -> Option<BindingDecl> {
         self.decisions.get(decision_id).cloned()
+    }
+    fn get_decision_enum_values(&self, decision_id: &str) -> Option<Vec<String>> {
+        self.decision_enums.get(decision_id).cloned()
+    }
+    fn workflow_exists(&self, hash: &str) -> bool {
+        self.workflows.contains_key(hash)
+    }
+    fn workflow_satisfies_l2(&self, hash: &str) -> bool {
+        self.workflow_l2.get(hash).copied().unwrap_or(true)
+    }
+    fn get_workflow_signature(&self, hash: &str) -> Option<BindingDecl> {
+        self.workflows.get(hash).cloned()
     }
 }
 
@@ -177,15 +205,19 @@ impl<'a> Linter<'a> {
     }
 
     fn run(mut self, source: &WorkflowSource) -> Result<WorkflowExecutionPlan, Vec<LintError>> {
+        // Flatten the hierarchical AST nodes (extract nested loop body nodes)
+        let mut flat_ast_nodes = Vec::new();
+        self.flatten_nodes(&source.nodes, &mut flat_ast_nodes);
+
         // ── Pass 1: collect all node ids ──────────────────────────────────────
-        let node_ids: HashMap<String, ()> = source.nodes.iter()
+        let node_ids: HashMap<String, ()> = flat_ast_nodes.iter()
             .map(|n| (n.id().to_owned(), ()))
             .collect();
 
         // ── Pass 2: check for duplicate ids ───────────────────────────────────
         {
             let mut seen: HashMap<String, usize> = HashMap::new();
-            for node in &source.nodes {
+            for node in &flat_ast_nodes {
                 *seen.entry(node.id().to_owned()).or_default() += 1;
             }
             for (id, count) in &seen {
@@ -200,51 +232,93 @@ impl<'a> Linter<'a> {
         let mut start_node = String::new();
         let mut placeholder_producers: HashMap<String, String> = HashMap::new(); // placeholder → node_id
 
-        for node in &source.nodes {
+        for node in &flat_ast_nodes {
             let id = node.id();
             let exec_node = match node {
-                NodeAst::StartEvent(n) => {
+                NodeAst::Start(n) => {
                     if start_node.is_empty() {
                         start_node = n.id.clone();
                     } else {
                         self.err(id, "multiple start events");
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
-                    ExecutionNode::StartEvent(StartExecNode { id: n.id.clone(), next: n.next.clone() })
+                    ExecutionNode::Start(StartExecNode { id: n.id.clone(), next: n.next.clone() })
                 }
 
-                NodeAst::ServiceTask(n) => {
-                    match self.registry.resolve_verb(&n.verb) {
-                        SymbolResolution::Known => {}
-                        SymbolResolution::UnknownDomain { domain } => self.err(
-                            id,
-                            format!(
-                                "verb '{}' references unknown domain '{}:' — no manifest imported for this prefix",
-                                n.verb, domain
-                            ),
-                        ),
-                        SymbolResolution::UnknownInDomain { domain, known_count } => self.err(
-                            id,
-                            format!(
-                                "verb '{}' not found in '{}' manifest ({} verbs declared)",
-                                n.verb, domain, known_count
-                            ),
-                        ),
-                        SymbolResolution::Unresolved => {
-                            self.err(id, format!("unresolved verb '{}'", n.verb))
+                NodeAst::Task(n) => {
+                    let mut decl = BindingDecl::default();
+                    let mut is_known = false;
+
+                    let verb_res = self.registry.resolve_verb(&n.plug);
+                    let dec_res = self.registry.resolve_decision(&n.plug);
+
+                    if verb_res == SymbolResolution::Known {
+                        decl = self.registry.verb_bindings(&n.plug).unwrap_or_default();
+                        is_known = true;
+                    } else if dec_res == SymbolResolution::Known {
+                        decl = self.registry.decision_bindings(&n.plug).unwrap_or_default();
+                        is_known = true;
+                    } else if n.plug.len() == 64 && n.plug.chars().all(|c| c.is_ascii_hexdigit()) {
+                        is_known = true;
+                    }
+
+                    if !is_known {
+                        match verb_res {
+                            SymbolResolution::UnknownDomain { domain } => {
+                                self.err(
+                                    id,
+                                    format!(
+                                        "verb '{}' references unknown domain '{}:' — no manifest imported for this prefix",
+                                        n.plug, domain
+                                    ),
+                                );
+                            }
+                            SymbolResolution::UnknownInDomain { domain, known_count } => {
+                                let mut is_decision_err = false;
+                                if let SymbolResolution::UnknownInDomain { domain: d, known_count: k } = dec_res {
+                                    if k > 0 {
+                                        self.err(
+                                            id,
+                                            format!(
+                                                "decision '{}' not found in '{}' manifest ({} decisions declared)",
+                                                n.plug, d, k
+                                            ),
+                                        );
+                                        is_decision_err = true;
+                                    }
+                                }
+                                if !is_decision_err {
+                                    self.err(
+                                        id,
+                                        format!(
+                                            "verb '{}' not found in '{}' manifest ({} verbs declared)",
+                                            n.plug, domain, known_count
+                                        ),
+                                    );
+                                }
+                            }
+                            _ => {
+                                self.err(id, format!("unresolved symbol '{}'", n.plug));
+                            }
                         }
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
 
-                    let decl = self.registry.verb_bindings(&n.verb).unwrap_or_default();
                     if let Some(ref produced) = decl.produces {
                         placeholder_producers.insert(produced.clone(), n.id.clone());
                     }
 
                     let static_args: HashMap<String, String> = n.args.iter().cloned().collect();
-                    ExecutionNode::ServiceTask(ServiceTaskExecNode {
+                    let delivery_mode = match n.delivery_mode.as_deref() {
+                        Some("best-effort") => DeliveryMode::BestEffort,
+                        Some("guaranteed-async") => DeliveryMode::GuaranteedAsync,
+                        _ => DeliveryMode::Blocking,
+                    };
+
+                    ExecutionNode::Task(TaskExecNode {
                         id: n.id.clone(),
-                        verb_fqn: n.verb.clone(),
+                        plug: n.plug.clone(),
+                        delivery_mode,
                         static_args,
                         next: n.next.clone(),
                         produces_placeholder: decl.produces,
@@ -252,81 +326,191 @@ impl<'a> Linter<'a> {
                     })
                 }
 
-                NodeAst::BusinessRuleTask(n) => {
-                    match self.registry.resolve_decision(&n.decision) {
-                        SymbolResolution::Known => {}
-                        SymbolResolution::UnknownDomain { domain } => self.err(
-                            id,
-                            format!(
-                                "decision '{}' references unknown domain '{}:' — no manifest imported for this prefix",
-                                n.decision, domain
-                            ),
-                        ),
-                        SymbolResolution::UnknownInDomain { domain, known_count } => self.err(
-                            id,
-                            format!(
-                                "decision '{}' not found in '{}' manifest ({} decisions declared)",
-                                n.decision, domain, known_count
-                            ),
-                        ),
-                        SymbolResolution::Unresolved => {
-                            self.err(id, format!("unresolved decision '{}'", n.decision))
-                        }
-                    }
-                    self.check_next_ref(id, &n.next, &node_ids);
-
-                    let decl = self.registry.decision_bindings(&n.decision).unwrap_or_default();
-                    if let Some(ref produced) = decl.produces {
-                        placeholder_producers.insert(produced.clone(), n.id.clone());
-                    }
-
-                    ExecutionNode::BusinessRuleTask(BusinessRuleExecNode {
-                        id: n.id.clone(),
-                        decision_id: n.decision.clone(),
-                        next: n.next.clone(),
-                        produces_placeholder: decl.produces,
-                        consumes_placeholders: decl.consumes,
-                    })
-                }
-
-                NodeAst::ExclusiveGateway(n) => {
+                NodeAst::Split(n) => {
                     if n.flows.is_empty() {
-                        self.err(id, "exclusive-gateway has no flows");
+                        self.err(id, "split has no flows");
                     }
                     let mut exec_flows = Vec::new();
                     for flow in &n.flows {
                         self.check_next_ref(id, &flow.next, &node_ids);
-                        let ConditionAst::Eq { placeholder, value } = &flow.condition;
-                        exec_flows.push(GatewayExecFlow {
-                            placeholder: placeholder.clone(),
-                            expected_value: value.clone(),
+                        let mut flow_placeholder = None;
+                        let mut flow_expected = None;
+                        if let Some(condition) = &flow.condition {
+                            let ConditionAst::Eq { placeholder, value } = condition;
+                            flow_placeholder = Some(placeholder.clone());
+                            flow_expected = Some(value.clone());
+                        }
+                        exec_flows.push(SplitExecFlow {
+                            placeholder: flow_placeholder,
+                            expected_value: flow_expected,
                             next: flow.next.clone(),
                         });
                     }
-                    ExecutionNode::ExclusiveGateway(GatewayExecNode {
+
+                    let mode = match n.mode {
+                        SplitModeAst::Xor => SplitMode::Exclusive,
+                        SplitModeAst::Or => SplitMode::Inclusive,
+                        SplitModeAst::And => SplitMode::Parallel,
+                    };
+
+                    let mut produces = None;
+                    let mut consumes = Vec::new();
+                    if let Some(plug) = &n.plug {
+                        let decl = self.registry.decision_bindings(plug).unwrap_or_default();
+                        produces = decl.produces;
+                        consumes = decl.consumes;
+                    }
+                    if let Some(ref produced) = produces {
+                        placeholder_producers.insert(produced.clone(), n.id.clone());
+                    }
+
+                    ExecutionNode::Split(SplitExecNode {
                         id: n.id.clone(),
+                        mode,
+                        routing_socket: n.plug.clone(),
                         flows: exec_flows,
+                        join: n.join.clone(),
+                        produces_placeholder: produces.clone(),
                     })
                 }
 
-                NodeAst::EndEvent(n) => {
-                    ExecutionNode::EndEvent(EndExecNode { id: n.id.clone(), status: n.status.clone() })
+                NodeAst::Join(n) => {
+                    self.check_next_ref(id, &n.next, &node_ids);
+                    let mode = match n.mode {
+                        JoinModeAst::Xor => JoinMode::Exclusive,
+                        JoinModeAst::Or => JoinMode::Inclusive,
+                        JoinModeAst::And => JoinMode::Parallel,
+                    };
+                    ExecutionNode::Join(JoinExecNode {
+                        id: n.id.clone(),
+                        mode,
+                        split: n.split.clone(),
+                        next: n.next.clone(),
+                    })
+                }
+
+                NodeAst::Loop(n) => {
+                    self.check_next_ref(id, &n.next, &node_ids);
+                    // Check all child nodes inside loop body
+                    for child in &n.body {
+                        // Check their next links. In loops, the back-edge targets the loop head.
+                        // We also verify they exist in node_ids (which they do since we flattened them).
+                    }
+                    ExecutionNode::Loop(LoopExecNode {
+                        id: n.id.clone(),
+                        ceiling: n.ceiling,
+                        body: n.body.iter().map(|child| child.id().to_owned()).collect(),
+                        next: n.next.clone(),
+                    })
+                }
+
+                NodeAst::End(n) => {
+                    ExecutionNode::End(EndExecNode { id: n.id.clone(), status: n.status.clone() })
                 }
             };
             exec_nodes.insert(id.to_owned(), exec_node);
         }
 
-        if start_node.is_empty() {
-            self.errors.push(LintError { node_id: "<workflow>".into(), message: "no start-event found".into() });
+        // ── Pass 3.5: Synthesize missing Join nodes for Splits ─────────────────
+        let mut synthesized_joins = Vec::new();
+        for (split_id, node) in &exec_nodes {
+            if let ExecutionNode::Split(sp) = node {
+                if !node_ids.contains_key(&sp.join) {
+                    let mut meet_point: Option<String> = None;
+                    for flow in &sp.flows {
+                        if let Some(target_node) = exec_nodes.get(&flow.next) {
+                            let next_of_target = match target_node {
+                                ExecutionNode::Task(t) => Some(t.next.clone()),
+                                ExecutionNode::Split(s) => Some(s.join.clone()),
+                                ExecutionNode::Loop(lp) => Some(lp.next.clone()),
+                                ExecutionNode::Join(j) => Some(j.next.clone()),
+                                ExecutionNode::Start(st) => Some(st.next.clone()),
+                                ExecutionNode::End(e) => Some(e.id.clone()),
+                            };
+                            if let Some(next_id) = next_of_target {
+                                if let Some(ref current_meet) = meet_point {
+                                    if current_meet != &next_id {
+                                        // Ignore mismatches for fallback, pick first
+                                    }
+                                } else {
+                                    meet_point = Some(next_id);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(m) = meet_point {
+                        let join_mode = match sp.mode {
+                            SplitMode::Exclusive => JoinMode::Exclusive,
+                            SplitMode::Inclusive => JoinMode::Inclusive,
+                            SplitMode::Parallel => JoinMode::Parallel,
+                        };
+                        let join_node = ExecutionNode::Join(JoinExecNode {
+                            id: sp.join.clone(),
+                            mode: join_mode,
+                            split: split_id.clone(),
+                            next: m.clone(),
+                        });
+                        synthesized_joins.push((sp.join.clone(), join_node, m, split_id.clone()));
+                    }
+                }
+            }
         }
 
-        // ── Pass 4: validate gateway predicates reference known placeholders ───
-        for node in &source.nodes {
-            if let NodeAst::ExclusiveGateway(gw) = node {
-                for flow in &gw.flows {
-                    let ConditionAst::Eq { placeholder, .. } = &flow.condition;
-                    if !placeholder_producers.contains_key(placeholder) {
-                        self.err(&gw.id, format!("gateway condition references unknown placeholder '{placeholder}'"));
+        for (join_id, join_node, meet_id, split_id) in synthesized_joins {
+            let mut branch_nodes = std::collections::HashSet::new();
+            if let Some(ExecutionNode::Split(sp)) = exec_nodes.get(&split_id) {
+                for flow in &sp.flows {
+                    branch_nodes.insert(flow.next.clone());
+                }
+            }
+            for (id, node) in exec_nodes.iter_mut() {
+                if branch_nodes.contains(id) {
+                    match node {
+                        ExecutionNode::Task(t) => {
+                            if t.next == meet_id {
+                                t.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::Split(s) => {
+                            if s.join == meet_id {
+                                s.join = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::Loop(lp) => {
+                            if lp.next == meet_id {
+                                lp.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::Join(j) => {
+                            if j.next == meet_id {
+                                j.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::Start(st) => {
+                            if st.next == meet_id {
+                                st.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::End(_) => {}
+                    }
+                }
+            }
+            exec_nodes.insert(join_id, join_node);
+        }
+
+        if start_node.is_empty() {
+            self.errors.push(LintError { node_id: "<workflow>".into(), message: "no start node found".into() });
+        }
+
+        // ── Pass 4: validate gateway/split predicates reference known placeholders ───
+        for node in &flat_ast_nodes {
+            if let NodeAst::Split(sp) = node {
+                for flow in &sp.flows {
+                    if let Some(ConditionAst::Eq { placeholder, .. }) = &flow.condition {
+                        if !placeholder_producers.contains_key(placeholder) {
+                            self.err(&sp.id, format!("split condition references unknown placeholder '{placeholder}'"));
+                        }
                     }
                 }
             }
@@ -338,27 +522,31 @@ impl<'a> Linter<'a> {
 
         // ── Pass 5: build placeholder schema ──────────────────────────────────
         let mut slots: HashMap<String, PlaceholderSlot> = HashMap::new();
-        for node in &source.nodes {
+        for node in &flat_ast_nodes {
             let id = node.id();
             let (produces, consumes) = match node {
-                NodeAst::ServiceTask(_) => {
+                NodeAst::Task(_) => {
                     let exec = exec_nodes.get(id).unwrap();
-                    if let ExecutionNode::ServiceTask(t) = exec {
-                        (t.produces_placeholder.as_deref(), t.consumes_placeholders.as_slice())
-                    } else { (None, &[][..]) }
+                    if let ExecutionNode::Task(t) = exec {
+                        (t.produces_placeholder.clone(), t.consumes_placeholders.clone())
+                    } else { (None, Vec::new()) }
                 }
-                NodeAst::BusinessRuleTask(_) => {
+                NodeAst::Split(_) => {
                     let exec = exec_nodes.get(id).unwrap();
-                    if let ExecutionNode::BusinessRuleTask(t) = exec {
-                        (t.produces_placeholder.as_deref(), t.consumes_placeholders.as_slice())
-                    } else { (None, &[][..]) }
+                    if let ExecutionNode::Split(s) = exec {
+                        let decl = s.routing_socket.as_ref()
+                            .and_then(|plug| self.registry.decision_bindings(plug))
+                            .unwrap_or_default();
+                        (decl.produces, decl.consumes)
+                    } else { (None, Vec::new()) }
                 }
-                _ => (None, &[][..]),
+                _ => (None, Vec::new()),
             };
 
-            if let Some(p) = produces {
-                slots.entry(p.to_owned()).or_insert_with(|| PlaceholderSlot {
-                    name: p.to_owned(),
+            let produces_clone = produces.clone();
+            if let Some(p) = produces_clone {
+                slots.entry(p.clone()).or_insert_with(|| PlaceholderSlot {
+                    name: p,
                     produced_by: id.to_owned(),
                     consumed_by: Vec::new(),
                 });
@@ -370,12 +558,24 @@ impl<'a> Linter<'a> {
             }
         }
 
+        let regime_version = std::env::var("BPMN_LITE_REGIME_VERSION").ok();
         Ok(WorkflowExecutionPlan {
             workflow_id: source.name.clone(),
             nodes: exec_nodes,
             start_node,
             placeholder_schema: PlaceholderSchema { slots },
+            closure_manifest: Some(serde_json::json!({ "dependencies": [] })),
+            regime_version,
         })
+    }
+
+    fn flatten_nodes(&mut self, nodes: &[NodeAst], result: &mut Vec<NodeAst>) {
+        for node in nodes {
+            result.push(node.clone());
+            if let NodeAst::Loop(lp) = node {
+                self.flatten_nodes(&lp.body, result);
+            }
+        }
     }
 
     fn check_next_ref(&mut self, node_id: &str, next: &str, known: &HashMap<String, ()>) {

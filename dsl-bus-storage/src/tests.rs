@@ -60,6 +60,7 @@ fn sample_outbox(idempotency_key: Uuid) -> OutboxEntry {
         BusEndpoint::Invocation,
         b"protobuf-bytes-here".to_vec(),
         idempotency_key,
+        "default".to_string(),
     );
     entry.next_attempt_at = chrono::Utc::now() - chrono::Duration::hours(1);
     entry
@@ -72,6 +73,7 @@ fn sample_inbox(idempotency_key: Uuid) -> InboxEntry {
         BusEndpoint::Invocation,
         Some(Uuid::now_v7()),
         Some(b"raw-request-protobuf".to_vec()),
+        "default".to_string(),
     )
 }
 
@@ -273,7 +275,7 @@ async fn fetch_row_by_id(pool: &PgPool, id: Uuid) -> OutboxEntry {
         r#"
         SELECT id, target_domain, target_endpoint, payload, idempotency_key,
                execution_id, callout_id, status, attempt_count, next_attempt_at,
-               last_error, created_at, submitted_at
+               last_error, created_at, submitted_at, tenant_id
           FROM outbox
          WHERE id = $1
         "#,
@@ -299,6 +301,7 @@ async fn fetch_row_by_id(pool: &PgPool, id: Uuid) -> OutboxEntry {
             last_error: row.get("last_error"),
             created_at: row.get("created_at"),
             submitted_at: row.get("submitted_at"),
+            tenant_id: row.get("tenant_id"),
         }
     })
     .unwrap()

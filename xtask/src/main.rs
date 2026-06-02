@@ -36,6 +36,12 @@ fn main() -> Result<()> {
         "docker-ha-subscription-fanout" => run_docker_ha_profile("subscription", &args[1..]),
         "docker-up" => docker_up_command(&args[1..]),
         "docker-down" => docker_down_command(&args[1..]),
+        "pack-build" => {
+            if args.len() < 2 {
+                bail!("missing domain argument. Usage: cargo xtask pack-build <domain>");
+            }
+            pack_build_command(&args[1])
+        }
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -259,7 +265,7 @@ fn docker_grpc_smoke_command(extra_args: &[String]) -> Result<()> {
 
 fn build_grpc_target_image(workspace_root: &Path) -> Result<()> {
     let dockerfile = r#"FROM rust:1.95-bookworm AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY . .
 RUN cargo build --release -p bpmn-lite-server --bin grpc_test_target && strip target/release/grpc_test_target
@@ -402,7 +408,7 @@ fn docker_heterogeneous_smoke_command(extra_args: &[String]) -> Result<()> {
 fn build_http_target_image(workspace_root: &Path) -> Result<()> {
     // Write a minimal Dockerfile for the http_test_target binary.
     let dockerfile_content = r#"FROM rust:1.95-bookworm AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY . .
 RUN cargo build --release -p bpmn-lite-server --bin http_test_target && strip target/release/http_test_target
@@ -1204,4 +1210,52 @@ struct DockerDeployment {
     network_name: String,
     #[allow(dead_code)]
     volume_name: String,
+}
+
+fn pack_build_command(domain: &str) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let manifests_dir = workspace_root.join("manifests");
+    let dag_path = manifests_dir.join(format!("{}.dag.yaml", domain));
+    if !dag_path.exists() {
+        bail!("DAG file not found for domain '{}' at {}", domain, dag_path.display());
+    }
+
+    println!("Loading DAG for domain '{}' from {}...", domain, dag_path.display());
+    let dag_content = std::fs::read_to_string(&dag_path)
+        .with_context(|| format!("read DAG at {}", dag_path.display()))?;
+    
+    let dag: bpmn_lite_compiler::dsl::pack_build::WorkflowPackDAG = serde_yaml::from_str(&dag_content)
+        .context("parse DAG yaml")?;
+
+    println!("Generating manifest for domain '{}'...", domain);
+    let mut manifest = bpmn_lite_compiler::dsl::pack_build::generate_manifest(&dag)
+        .map_err(|e| anyhow!("generate_manifest error: {}", e))?;
+
+    // Derive the version with G5 (lex, dag, sorted pins)
+    let version = bpmn_lite_compiler::dsl::pack_build::derive_version(&manifest, &dag);
+    println!("Derived pack version: {}", version);
+
+    // Update manifest's catalogue_version
+    manifest.catalogue_version = version.clone();
+
+    println!("Running G1-G6 validation gates...");
+    bpmn_lite_compiler::dsl::pack_build::validate_pack(&dag, &manifest)
+        .map_err(|errs| anyhow!("Validation failed: {:?}", errs))?;
+
+    // Write manifest to disk at <domain>-v<dag.version>.yaml
+    let manifest_yaml = manifest.to_yaml().map_err(|e| anyhow!("serialize manifest error: {}", e))?;
+    let manifest_path = manifests_dir.join(format!("{}-{}.yaml", domain, dag.version));
+    std::fs::write(&manifest_path, &manifest_yaml)
+        .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
+    println!("Wrote manifest to {}", manifest_path.display());
+
+    // Generate and write closure to <domain>-v<dag.version>.closure.yaml
+    let closure = bpmn_lite_compiler::dsl::pack_build::generate_closure(&manifest, &dag);
+    let closure_yaml = serde_yaml::to_string(&closure).context("serialize closure manifest")?;
+    let closure_path = manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
+    std::fs::write(&closure_path, &closure_yaml)
+        .with_context(|| format!("write closure to {}", closure_path.display()))?;
+    println!("Wrote closure manifest to {}", closure_path.display());
+
+    Ok(())
 }

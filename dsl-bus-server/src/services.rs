@@ -44,6 +44,8 @@ pub struct InvocationContext {
     pub catalogue_version: String,
     pub local_verb_id: String,
     pub result_callback_endpoint: String,
+    pub authority: Option<dsl_bus_protocol::v1::AuthorityContext>,
+    pub tenant_id: String,
 }
 
 /// Successful dispatch result. `execution_id` is the receiver-domain
@@ -103,7 +105,33 @@ impl InvocationService for InvocationServiceImpl {
         &self,
         req: Request<InvocationRequest>,
     ) -> Result<Response<SubmissionAck>, Status> {
+        let metadata_tenant = req
+            .metadata()
+            .get("x-tenant-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let req = req.into_inner();
+
+        // R4: Authenticate tenant from AuthorityContext user_identity
+        let derived_tenant = if let Some(ref auth) = req.authority {
+            if auth.user_identity.contains(':') {
+                auth.user_identity.split(':').next().unwrap().to_string()
+            } else {
+                auth.user_identity.clone()
+            }
+        } else {
+            return reject(SubmissionStatus::RejectedAuthority, "Missing authority context");
+        };
+
+        // Assert metadata x-tenant-id matches derived_tenant if present
+        if let Some(ref header_tenant) = metadata_tenant {
+            if header_tenant != &derived_tenant {
+                return reject(SubmissionStatus::RejectedAuthority, "Tenant spoofing detected");
+            }
+        }
+
+        let tenant_id = derived_tenant;
 
         let key = match from_proto_opt(&req.idempotency_key) {
             Ok(Some(k)) => k,
@@ -115,8 +143,22 @@ impl InvocationService for InvocationServiceImpl {
             }
         };
 
+        // Atomically record receipt + enqueue the result delivery.
+        let mut tx = match self.pool.begin().await {
+            Ok(t) => t,
+            Err(err) => return internal_status(err),
+        };
+
+        if let Err(err) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+        {
+            return internal_status(err);
+        }
+
         // Idempotent receive — replay the cached execution_id.
-        match lookup_inbox(&self.pool, key).await {
+        match lookup_inbox(&mut *tx, key).await {
             Ok(Some(existing)) => {
                 return Ok(Response::new(SubmissionAck {
                     execution_id: existing.execution_id.map(to_proto),
@@ -135,6 +177,8 @@ impl InvocationService for InvocationServiceImpl {
             catalogue_version: req.catalogue_version.clone(),
             local_verb_id: local_verb_id.to_owned(),
             result_callback_endpoint: req.result_callback_endpoint.clone(),
+            authority: req.authority.clone(),
+            tenant_id: tenant_id.clone(),
         };
 
         // `req.encode_to_vec()` is needed later for the inbox payload, so
@@ -157,18 +201,13 @@ impl InvocationService for InvocationServiceImpl {
             Err(other) => return internal_status(other),
         };
 
-        // Atomically record receipt + enqueue the result delivery.
-        let mut tx = match self.pool.begin().await {
-            Ok(t) => t,
-            Err(err) => return internal_status(err),
-        };
-
         let inbox_entry = InboxEntry::new_received(
             key,
             req.source_domain.clone(),
             BusEndpoint::Invocation,
             Some(outcome.execution_id),
             Some(req.encode_to_vec()),
+            tenant_id.clone(),
         );
         if let Err(err) = insert_inbox(&mut *tx, &inbox_entry).await {
             return internal_status(err);
@@ -186,6 +225,7 @@ impl InvocationService for InvocationServiceImpl {
             BusEndpoint::Result,
             result_payload.encode_to_vec(),
             key,
+            tenant_id.clone(),
         );
         if let Err(err) = insert_outbox(&mut *tx, &result_entry).await {
             return internal_status(err);
@@ -240,6 +280,13 @@ impl ResultService for ResultServiceImpl {
         &self,
         req: Request<InvocationResult>,
     ) -> Result<Response<ResultAck>, Status> {
+        let tenant_id = req
+            .metadata()
+            .get("x-tenant-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("default")
+            .to_string();
+
         let req = req.into_inner();
 
         let key = match from_proto_opt(&req.idempotency_key) {
@@ -258,7 +305,20 @@ impl ResultService for ResultServiceImpl {
             }
         };
 
-        match lookup_inbox(&self.pool, key).await {
+        let mut tx = match self.pool.begin().await {
+            Ok(t) => t,
+            Err(err) => return internal_status(err),
+        };
+
+        if let Err(err) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+        {
+            return internal_status(err);
+        }
+
+        match lookup_inbox(&mut *tx, key).await {
             Ok(Some(_)) => {
                 return Ok(Response::new(ResultAck {
                     status: ReceiptStatus::DuplicateIgnored as i32,
@@ -303,8 +363,13 @@ impl ResultService for ResultServiceImpl {
             BusEndpoint::Result,
             Some(execution_id),
             Some(req.encode_to_vec()),
+            tenant_id,
         );
-        if let Err(err) = insert_inbox(&self.pool, &inbox_entry).await {
+        if let Err(err) = insert_inbox(&mut *tx, &inbox_entry).await {
+            return internal_status(err);
+        }
+
+        if let Err(err) = tx.commit().await {
             return internal_status(err);
         }
 

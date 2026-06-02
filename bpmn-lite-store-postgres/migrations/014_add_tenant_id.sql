@@ -1,8 +1,8 @@
 ALTER TABLE process_instances
-ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL;
 
 ALTER TABLE job_queue
-ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_instances_tenant_running
 ON process_instances (tenant_id, updated_at);

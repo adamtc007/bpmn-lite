@@ -131,7 +131,7 @@ impl PostgresProcessStore {
         execute_tenant_scoped_on_pool(&self.pool, tenant_id, lease_owner, f).await
     }
 
-    /// A18 — Execute `f` inside a transaction with `app.tenant_id` set via
+    /// A18 — Execute `f` inside a transaction with `app.current_tenant` set via
     /// SET LOCAL. Every gRPC handler that mutates tenant-scoped data must
     /// use this wrapper so that RLS policies (migration 025) see the correct
     /// tenant on every query within the transaction.
@@ -177,20 +177,20 @@ impl PostgresProcessStore {
 
     /// A16 — Set the tenant context for the current transaction.
     ///
-    /// Call `SET LOCAL app.tenant_id = <tenant>` at the start of each
+    /// Call `SET LOCAL app.current_tenant = <tenant>` at the start of each
     /// transaction so that Row-Level Security policies can filter rows.
     /// `SET LOCAL` scopes the setting to the current transaction only;
     /// it is reset automatically when the transaction commits or rolls back.
     ///
     /// Usage: call this immediately after beginning a transaction, before
     /// any data query. Without this, RLS policies using
-    /// `current_setting('app.tenant_id', true)` will return NULL and
+    /// `current_setting('app.current_tenant', true)` will return NULL and
     /// no rows will be visible.
     pub async fn set_tenant_context(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         tenant_id: &str,
     ) -> Result<()> {
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
             .bind(tenant_id)
             .execute(tx.as_mut())
             .await
@@ -1022,7 +1022,8 @@ impl ProcessStore for PostgresProcessStore {
         correlation_key: &str,
         claim_ms: u64,
     ) -> Result<Option<ClaimedBufferedMessage>> {
-        let claim_until = chrono::Utc::now() + chrono::Duration::milliseconds(claim_ms as i64);
+        let claim_until_ms = (chrono::Utc::now() + chrono::Duration::milliseconds(claim_ms as i64)).timestamp_millis();
+        let claim_until = epoch_ms_to_datetime(claim_until_ms);
         let claim_token = Uuid::now_v7().to_string();
         let mut tx = self.pool.begin().await?;
         Self::set_tenant_context(&mut tx, tenant_id).await?;
@@ -2445,9 +2446,9 @@ impl PostgresProcessStore {
                     INSERT INTO dsl_bus.outbox (
                         id, target_domain, target_endpoint, payload, idempotency_key,
                         execution_id, callout_id, status, attempt_count, next_attempt_at,
-                        last_error, created_at, submitted_at
+                        last_error, created_at, submitted_at, tenant_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     ON CONFLICT (idempotency_key, target_endpoint) DO NOTHING
                     "#,
                 )
@@ -2464,6 +2465,7 @@ impl PostgresProcessStore {
                 .bind(None::<String>)
                 .bind(chrono::Utc::now())
                 .bind(None::<chrono::DateTime<chrono::Utc>>)
+                .bind(&tx.tenant_id)
                 .execute(&mut *tx.tx)
                 .await?;
             }
@@ -2777,8 +2779,8 @@ impl PostgresProcessStore {
             INSERT INTO incidents (
                 incident_id, process_instance_id, fiber_id, service_task_id,
                 bytecode_addr, error_class, message, retry_count,
-                created_at, resolved_at, resolution
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                created_at, resolved_at, resolution, tenant_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             "#,
         )
         .bind(incident.incident_id)
@@ -2792,6 +2794,7 @@ impl PostgresProcessStore {
         .bind(created_at)
         .bind(resolved_at)
         .bind(&incident.resolution)
+        .bind(&tx.tenant_id)
         .execute(&mut *tx.tx)
         .await?;
 
@@ -2926,7 +2929,8 @@ mod tests {
 
     const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
 
-    async fn setup() -> (PgPool, PostgresProcessStore) {
+    async fn setup() -> (PgPool, PostgresProcessStore, tokio::sync::MutexGuard<'static, ()>) {
+        let guard = crate::test_lock::get_mutex().lock().await;
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
@@ -3031,7 +3035,7 @@ mod tests {
             .unwrap();
 
         let store = PostgresProcessStore::new(app_pool);
-        (pool, store)
+        (pool, store, guard)
     }
 
     fn test_hash(data: &str) -> [u8; 32] {
@@ -3069,7 +3073,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_instance_round_trip() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let id = Uuid::now_v7();
         let inst = make_instance(id);
 
@@ -3097,7 +3101,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_instance_session_stack_copy_round_trip() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let id = Uuid::now_v7();
         let original_scope_id = Uuid::new_v4();
         let mutated_scope_id = Uuid::new_v4();
@@ -3144,7 +3148,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_fiber_round_trip() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let fid = Uuid::now_v7();
 
@@ -3183,7 +3187,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_join_barrier() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3200,7 +3204,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_dedupe() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let completion = JobCompletion {
             job_key: "job-abc".to_string(),
             domain_payload: r#"{"done":true}"#.to_string(),
@@ -3223,7 +3227,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_job_queue() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let task_type = "create_case".to_string();
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
@@ -3288,7 +3292,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_event_log() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3312,7 +3316,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_payload_history() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3356,7 +3360,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_program_store() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
 
         let program = CompiledProgram {
             bytecode_version: test_hash("test-program"),
@@ -3390,7 +3394,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_dead_letter() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let name = 1u32;
         let corr_key = Value::Str(42);
         let payload = b"test-payload";
@@ -3427,7 +3431,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_incidents() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3458,7 +3462,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_instance_updates() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let id = Uuid::now_v7();
         store.save_instance("test-owner", &make_instance(id)).await.unwrap();
 
@@ -3498,7 +3502,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_teardown() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3527,7 +3531,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_concurrent_dequeue() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let store = Arc::new(store);
         let task_type = "concurrent_task".to_string();
         let iid = Uuid::now_v7();
@@ -3602,7 +3606,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_full_engine_smoke() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let store = Arc::new(store);
         let engine = BpmnLiteEngine::new(store.clone());
 
@@ -3681,7 +3685,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_cancel_jobs_for_instance() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let task_type = "cancel_test".to_string();
 
         let iid_a = Uuid::now_v7();
@@ -3768,7 +3772,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a18_enqueue_job_missing_parent_errors() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let fake_parent = Uuid::now_v7();
 
         let activation = JobActivation {
@@ -3805,7 +3809,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a18_enqueue_job_duplicate_is_idempotent() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         store.save_instance("default", &make_instance(iid)).await.unwrap();
 
@@ -3842,7 +3846,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a18_save_incident_missing_parent_errors() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let fake_parent = Uuid::now_v7();
 
         let incident = Incident {
@@ -3874,7 +3878,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a18_ack_job_already_acked_is_ok() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         // No setup needed — job_key simply doesn't exist.
         store
             .ack_job("default", "a18-nonexistent-job-key")
@@ -3888,7 +3892,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a18_happy_path_writes_succeed() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let fid = Uuid::now_v7();
 
@@ -3914,7 +3918,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a19_hash_stored_on_save_and_loaded() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
 
         store.save_instance("default", &make_instance(iid)).await.unwrap();
@@ -3937,7 +3941,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a19_hash_not_overwritten_on_update() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
 
         store.save_instance("test-owner", &make_instance(iid)).await.unwrap();
@@ -3971,7 +3975,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a19_tamper_tenant_id_detected() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
 
         store.save_instance("default", &make_instance(iid)).await.unwrap();
@@ -3999,7 +4003,7 @@ mod tests {
     #[ignore]
     async fn test_a19_quarantine_marks_row_and_logs_event() {
         use sqlx::Row;
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
 
         store.save_instance("default", &make_instance(iid)).await.unwrap();
@@ -4040,7 +4044,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_a19_quarantined_instance_skipped_by_scheduler() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
 
         store.save_instance("default", &make_instance(iid)).await.unwrap();
@@ -4068,7 +4072,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_l0_default_pool_exists() {
-        let (pool, _store) = setup().await;
+        let (pool, _store, _lock) = setup().await;
         let row: (String,) =
             sqlx::query_as("SELECT pool_id FROM tenant_pools WHERE pool_id = 'default'")
                 .fetch_one(&pool)
@@ -4081,7 +4085,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_l0_ensure_tenant_sets_pool_id() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         store.ensure_tenant("l0_test_tenant").await.unwrap();
         let row: (String,) =
             sqlx::query_as("SELECT pool_id FROM tenants WHERE tenant_id = 'l0_test_tenant'")
@@ -4095,7 +4099,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_l0_list_tenants_in_pool() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         store.ensure_tenant("l0_pool_tenant_a").await.unwrap();
         store.ensure_tenant("l0_pool_tenant_b").await.unwrap();
 
@@ -4120,7 +4124,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_l0_fk_rejects_unknown_pool() {
-        let (pool, _store) = setup().await;
+        let (pool, _store, _lock) = setup().await;
         let result = sqlx::query(
             "INSERT INTO tenants (tenant_id, pool_id) VALUES ('fk_test_tenant', 'nonexistent_pool')",
         )
@@ -4133,7 +4137,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_t1_1_rls_mutations_fail_without_tenant_context() {
-        let (admin_pool, admin_store) = setup().await;
+        let (admin_pool, admin_store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "tenant-t1-1";
 
@@ -4266,7 +4270,7 @@ mod tests {
 
         // 4. Verify cross-tenant blocked / wrong tenant context (queries return zero rows)
         let mut tx = app_pool.begin().await.unwrap();
-        sqlx::query("SET LOCAL app.tenant_id = 'evil-tenant'").execute(&mut *tx).await.unwrap();
+        sqlx::query("SET LOCAL app.current_tenant = 'evil-tenant'").execute(&mut *tx).await.unwrap();
 
         let row_pi: Option<(Uuid,)> = sqlx::query_as("SELECT instance_id FROM process_instances WHERE instance_id = $1")
             .bind(iid)
@@ -4365,7 +4369,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_t1_1_rls_cross_tenant_isolation() {
-        let (admin_pool, _admin_store) = setup().await;
+        let (admin_pool, _admin_store, _lock) = setup().await;
         let tenant_a = "tenant-A";
         let tenant_b = "tenant-B";
         
@@ -4458,9 +4462,9 @@ mod tests {
             .unwrap();
         assert_eq!(admin_count.0, 2, "Admin connection must see both tenant rows (non-vacuous)");
 
-        // 4. Read isolation: with app.tenant_id = tenant_a, query A only sees A
+        // 4. Read isolation: with app.current_tenant = tenant_a, query A only sees A
         let mut tx = app_pool.begin().await.unwrap();
-        sqlx::query("SET LOCAL app.tenant_id = 'tenant-A'").execute(&mut *tx).await.unwrap();
+        sqlx::query("SET LOCAL app.current_tenant = 'tenant-A'").execute(&mut *tx).await.unwrap();
 
         let visible_rows: Vec<(Uuid, String)> = sqlx::query_as("SELECT instance_id, tenant_id FROM process_instances WHERE instance_id IN ($1, $2)")
             .bind(iid_a)
@@ -4495,7 +4499,7 @@ mod tests {
             .unwrap();
         assert!(visible_msgs.is_empty(), "Tenant A context must not see Tenant B message buffer rows");
 
-        // 5. Write isolation: with app.tenant_id = tenant_a, update/delete B affects 0 rows
+        // 5. Write isolation: with app.current_tenant = tenant_a, update/delete B affects 0 rows
         let update_res = sqlx::query("UPDATE process_instances SET state = '\"Completed\"'::jsonb WHERE instance_id = $1")
             .bind(iid_b)
             .execute(&mut *tx)
@@ -4569,7 +4573,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_risk_009_lease_fence_rejection() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4606,7 +4610,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_regression_healed_by_claim() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4640,7 +4644,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_park_releases_lease() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4675,7 +4679,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_commit_tick_atomicity() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4779,7 +4783,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_risk_003_emit_atomicity() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4884,7 +4888,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_risk_004_duplicate_result_idempotency() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4945,7 +4949,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_risk_004_negative_other_failures_propagate() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -4999,7 +5003,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_concurrent_claim_and_recovery() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let iid = Uuid::now_v7();
         let tenant_id = "default";
 
@@ -5339,7 +5343,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_integrity_violation_quarantines_and_rolls_back() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let store = Arc::new(store);
         let engine = BpmnLiteEngine::new(store.clone());
 
@@ -5397,7 +5401,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_non_integrity_failure_does_not_quarantine() {
-        let (_pool, store) = setup().await;
+        let (_pool, store, _lock) = setup().await;
         let store = Arc::new(store);
         let iid = Uuid::now_v7();
 
@@ -5431,7 +5435,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_pg_integrity_violation_in_startup_recovery() {
-        let (pool, store) = setup().await;
+        let (pool, store, _lock) = setup().await;
         let store = Arc::new(store);
 
         let iid_corrupt = Uuid::now_v7();

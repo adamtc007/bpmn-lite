@@ -172,13 +172,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => None,
     };
 
-    #[allow(unused_mut)]
-    let mut engine_builder = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
+    let engine_builder = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
     #[cfg(feature = "postgres")]
-    if let Some((ref bc, ref ps)) = early_bus_client {
-        engine_builder = engine_builder.with_bus_client(bc.clone(), ps.clone());
+    let engine_builder = if let Some((ref bc, ref ps)) = early_bus_client {
         tracing::info!("T3: plan walker wired into engine tick loop");
-    }
+        engine_builder.with_bus_client(bc.clone(), ps.clone())
+    } else {
+        engine_builder
+    };
     let engine = Arc::new(engine_builder);
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
@@ -216,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     bind_addr,
                     client: bc,
                     store: store.clone(),
+                    engine: engine.clone(),
                 })
                 .await?,
             )
@@ -330,10 +332,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rest_app = rest::demo_router(demo_state);
         tokio::spawn(async move {
             tracing::info!(bind_addr = %rest_addr, "BPMN-Lite REST demo server starting");
-            let listener = tokio::net::TcpListener::bind(rest_addr).await
-                .expect("REST demo server bind failed");
-            if let Err(e) = axum::serve(listener, rest_app).await {
-                tracing::error!(error = %e, "REST demo server error");
+            match tokio::net::TcpListener::bind(rest_addr).await {
+                Ok(listener) => {
+                    if let Err(e) = axum::serve(listener, rest_app).await {
+                        tracing::error!(error = %e, "REST demo server error");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        bind_addr = %rest_addr,
+                        "BPMN-Lite REST demo server failed to bind (possibly port already in use); skipping"
+                    );
+                }
             }
         });
     } else {

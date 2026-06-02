@@ -1,0 +1,4 @@
+root_pack_hash: 829563b27a076f3ca863ec34a28ac6a0c21afc9781cdcfddb96b1b765ef8d132
+dependencies:
+- domain: dmn-lite
+  content_hash: 06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836

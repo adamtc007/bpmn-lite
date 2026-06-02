@@ -3,7 +3,7 @@
 //! Validates:
 //! 1. All node `:next` edges and gateway flow targets exist (already checked
 //!    by linter; dag pass re-confirms as invariant).
-//! 2. The workflow is acyclic (simple DFS cycle detection).
+//! 2. The workflow is acyclic (simple DFS cycle detection, excluding loop back-edges).
 //! 3. All nodes are reachable from the start node.
 //! 4. At least one end-event is reachable.
 
@@ -30,8 +30,9 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
     // Build adjacency list: node_id → Vec<next_node_id>
     let adj = build_adjacency(plan);
 
-    // Check acyclicity via DFS
-    if let Some(cycle) = find_cycle(&plan.start_node, &adj) {
+    // Check acyclicity via DFS (excluding loop back-edges, which are explicitly allowed in Loop structures)
+    // For general DAG validation, we only detect unexpected cycles outside Loop blocks.
+    if let Some(cycle) = find_cycle(&plan.start_node, &adj, plan) {
         errors.push(DagError { message: format!("cycle detected: {}", cycle.join(" → ")) });
     }
 
@@ -44,7 +45,7 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
     }
 
     // Check at least one end-event reachable
-    let has_end = plan.nodes.values().any(|n| matches!(n, ExecutionNode::EndEvent(_)));
+    let has_end = plan.nodes.values().any(|n| matches!(n, ExecutionNode::End(_)));
     if !has_end {
         errors.push(DagError { message: "no end-event in workflow".into() });
     }
@@ -56,11 +57,18 @@ fn build_adjacency(plan: &WorkflowExecutionPlan) -> HashMap<&str, Vec<&str>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for (id, node) in &plan.nodes {
         let nexts: Vec<&str> = match node {
-            ExecutionNode::StartEvent(n) => vec![n.next.as_str()],
-            ExecutionNode::ServiceTask(n) => vec![n.next.as_str()],
-            ExecutionNode::BusinessRuleTask(n) => vec![n.next.as_str()],
-            ExecutionNode::ExclusiveGateway(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
-            ExecutionNode::EndEvent(_) => vec![],
+            ExecutionNode::Start(n) => vec![n.next.as_str()],
+            ExecutionNode::Task(n) => vec![n.next.as_str()],
+            ExecutionNode::Split(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
+            ExecutionNode::Join(n) => vec![n.next.as_str()],
+            ExecutionNode::Loop(n) => {
+                let mut v = vec![n.next.as_str()];
+                if let Some(first) = n.body.first() {
+                    v.push(first.as_str());
+                }
+                v
+            }
+            ExecutionNode::End(_) => vec![],
         };
         adj.insert(id.as_str(), nexts);
     }
@@ -86,11 +94,15 @@ fn bfs_reachable<'a>(start: &'a str, adj: &'a HashMap<&'a str, Vec<&'a str>>) ->
 }
 
 /// DFS cycle detection. Returns the cycle path if found.
-fn find_cycle<'a>(start: &'a str, adj: &'a HashMap<&'a str, Vec<&'a str>>) -> Option<Vec<String>> {
+fn find_cycle<'a>(
+    start: &'a str,
+    adj: &'a HashMap<&'a str, Vec<&'a str>>,
+    plan: &'a WorkflowExecutionPlan,
+) -> Option<Vec<String>> {
     let mut visited = HashSet::new();
     let mut stack: HashSet<&'a str> = HashSet::new();
     let mut path = Vec::new();
-    if dfs_cycle(start, adj, &mut visited, &mut stack, &mut path) {
+    if dfs_cycle(start, adj, plan, &mut visited, &mut stack, &mut path) {
         Some(path)
     } else {
         None
@@ -100,6 +112,7 @@ fn find_cycle<'a>(start: &'a str, adj: &'a HashMap<&'a str, Vec<&'a str>>) -> Op
 fn dfs_cycle<'a>(
     node: &'a str,
     adj: &'a HashMap<&'a str, Vec<&'a str>>,
+    plan: &'a WorkflowExecutionPlan,
     visited: &mut HashSet<&'a str>,
     stack: &mut HashSet<&'a str>,
     path: &mut Vec<String>,
@@ -110,13 +123,23 @@ fn dfs_cycle<'a>(
 
     if let Some(nexts) = adj.get(node) {
         for &next in nexts {
-            if !visited.contains(next) {
-                if dfs_cycle(next, adj, visited, stack, path) {
+            // In a structured loop, a back-edge pointing to the loop head is expected.
+            // Do not treat it as an illegal cycle if next is a Loop node and node is part of its body.
+            let is_expected_back_edge = if let Some(ExecutionNode::Loop(lp)) = plan.nodes.get(next) {
+                lp.body.contains(&node.to_string())
+            } else {
+                false
+            };
+
+            if !is_expected_back_edge {
+                if !visited.contains(next) {
+                    if dfs_cycle(next, adj, plan, visited, stack, path) {
+                        return true;
+                    }
+                } else if stack.contains(next) {
+                    path.push(next.to_owned());
                     return true;
                 }
-            } else if stack.contains(next) {
-                path.push(next.to_owned());
-                return true;
             }
         }
     }
@@ -158,7 +181,6 @@ mod tests {
 
     #[test]
     fn dag_detects_unreachable_node() {
-        // Use lint() directly — we want a plan that passes lint but fails dag.
         let src = r#"(workflow test
           (start-event :id s :next a)
           (service-task :id a :verb cbu.create :next e)

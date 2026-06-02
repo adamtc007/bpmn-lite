@@ -211,29 +211,30 @@ async fn next_step(
     // Simulate result delivery for callout nodes, then drive forward through
     // any immediately following gateways/end events without touching the bus.
     match demo.plan.nodes.get(&node_id) {
-        Some(ExecutionNode::ServiceTask(t)) => {
-            let placeholder = t.produces_placeholder.as_deref().map(|name| {
-                let val = if node_id == "create-cbu" {
-                    serde_json::Value::String(Uuid::now_v7().to_string())
-                } else {
-                    serde_json::Value::String(format!("{node_id}-done"))
+        Some(ExecutionNode::Task(t)) => {
+            if t.plug.starts_with("dmn-lite:") {
+                let cbu_type_val = match cbu_type.as_str() {
+                    "fund" => "fund",
+                    "corporate" => "corporate",
+                    "trust" => "trust",
+                    _ => "fund",
                 };
-                (name, val)
-            });
-            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
-        }
-        Some(ExecutionNode::BusinessRuleTask(t)) => {
-            let cbu_type_val = match cbu_type.as_str() {
-                "fund" => "fund",
-                "corporate" => "corporate",
-                "trust" => "trust",
-                _ => "fund",
-            };
-            let placeholder = t
-                .produces_placeholder
-                .as_deref()
-                .map(|name| (name, serde_json::Value::String(cbu_type_val.to_owned())));
-            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+                let placeholder = t
+                    .produces_placeholder
+                    .as_deref()
+                    .map(|name| (name, serde_json::Value::String(cbu_type_val.to_owned())));
+                apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+            } else {
+                let placeholder = t.produces_placeholder.as_deref().map(|name| {
+                    let val = if node_id == "create-cbu" {
+                        serde_json::Value::String(Uuid::now_v7().to_string())
+                    } else {
+                        serde_json::Value::String(format!("{node_id}-done"))
+                    };
+                    (name, val)
+                });
+                apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+            }
         }
         _ => {}
     }
@@ -345,9 +346,9 @@ async fn create_instance(
     Ok(instance_id)
 }
 
-/// Walk forward through non-callout nodes (StartEvent, ExclusiveGateway,
-/// EndEvent) without touching the bus. Stops at the first ServiceTask or
-/// BusinessRuleTask so the user can click "Next Step" there.
+/// Walk forward through non-callout nodes (Start, Split,
+/// End) without touching the bus. Stops at the first Task
+/// so the user can click "Next Step" there.
 async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uuid) {
     loop {
         let Ok(Some(mut inst)) = store.load_instance(id).await else { break };
@@ -365,14 +366,17 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
             .unwrap_or_default();
 
         match plan.nodes.get(&node_id) {
-            Some(ExecutionNode::StartEvent(n)) => {
+            Some(ExecutionNode::Start(n)) => {
                 inst.current_node_id = Some(n.next.clone());
                 let _ = store.save_instance("default", &inst).await;
             }
-            Some(ExecutionNode::ExclusiveGateway(gw)) => {
+            Some(ExecutionNode::Split(gw)) => {
                 let chosen = gw.flows.iter().find(|f| {
-                    pv.get(&f.placeholder).and_then(|v| v.as_str())
-                        == Some(f.expected_value.as_str())
+                    if let (Some(ph), Some(exp)) = (&f.placeholder, &f.expected_value) {
+                        pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
+                    } else {
+                        false
+                    }
                 });
                 if let Some(flow) = chosen {
                     inst.current_node_id = Some(flow.next.clone());
@@ -381,7 +385,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                     break;
                 }
             }
-            Some(ExecutionNode::EndEvent(end)) => {
+            Some(ExecutionNode::End(end)) => {
                 inst.state = ProcessState::Completed {
                     at: chrono::Utc::now().timestamp_millis(),
                 };
@@ -389,7 +393,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                 let _ = store.save_instance("default", &inst).await;
                 break;
             }
-            // ServiceTask / BusinessRuleTask — stop here, user drives next step.
+            // Task / Join / Loop — stop here, user drives next step.
             _ => break,
         }
     }
@@ -412,46 +416,61 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
         .filter_map(|id| {
             let node = plan.nodes.get(*id)?;
             Some(match node {
-                ExecutionNode::StartEvent(_) => NodeInfo {
+                ExecutionNode::Start(_) => NodeInfo {
                     id: (*id).to_owned(),
                     label: "Start".into(),
                     fqn: None,
                     target_domain: None,
                     kind: "start".into(),
                 },
-                ExecutionNode::ServiceTask(t) => {
-                    let (domain, verb_id) = split_fqn(&t.verb_fqn);
-                    NodeInfo {
-                        id: (*id).to_owned(),
-                        label: format!("↗ Calling {domain}: {verb_id}"),
-                        fqn: Some(t.verb_fqn.clone()),
-                        target_domain: Some(domain.to_owned()),
-                        kind: "service_task".into(),
+                ExecutionNode::Task(t) => {
+                    if t.plug.starts_with("dmn-lite:") {
+                        let (domain, dec_id) = split_fqn(&t.plug);
+                        NodeInfo {
+                            id: (*id).to_owned(),
+                            label: format!("↗ Evaluating {domain}: {dec_id}"),
+                            fqn: Some(t.plug.clone()),
+                            target_domain: Some(domain.to_owned()),
+                            kind: "business_rule_task".into(),
+                        }
+                    } else {
+                        let (domain, verb_id) = split_fqn(&t.plug);
+                        NodeInfo {
+                            id: (*id).to_owned(),
+                            label: format!("↗ Calling {domain}: {verb_id}"),
+                            fqn: Some(t.plug.clone()),
+                            target_domain: Some(domain.to_owned()),
+                            kind: "service_task".into(),
+                        }
                     }
                 }
-                ExecutionNode::BusinessRuleTask(t) => {
-                    let (domain, dec_id) = split_fqn(&t.decision_id);
-                    NodeInfo {
-                        id: (*id).to_owned(),
-                        label: format!("↗ Evaluating {domain}: {dec_id}"),
-                        fqn: Some(t.decision_id.clone()),
-                        target_domain: Some(domain.to_owned()),
-                        kind: "business_rule_task".into(),
-                    }
-                }
-                ExecutionNode::ExclusiveGateway(_) => NodeInfo {
+                ExecutionNode::Split(_) => NodeInfo {
                     id: (*id).to_owned(),
                     label: "◇ CBU Type Gateway".into(),
                     fqn: None,
                     target_domain: None,
                     kind: "gateway".into(),
                 },
-                ExecutionNode::EndEvent(_) => NodeInfo {
+                ExecutionNode::End(_) => NodeInfo {
                     id: (*id).to_owned(),
                     label: "✓ End: CBU Operational".into(),
                     fqn: None,
                     target_domain: None,
                     kind: "end".into(),
+                },
+                ExecutionNode::Join(_) => NodeInfo {
+                    id: (*id).to_owned(),
+                    label: "Join".into(),
+                    fqn: None,
+                    target_domain: None,
+                    kind: "join".into(),
+                },
+                ExecutionNode::Loop(_) => NodeInfo {
+                    id: (*id).to_owned(),
+                    label: "Loop".into(),
+                    fqn: None,
+                    target_domain: None,
+                    kind: "loop".into(),
                 },
             })
         })
