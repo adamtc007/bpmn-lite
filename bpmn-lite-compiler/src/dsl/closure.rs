@@ -974,4 +974,113 @@ mod tests {
             "unexpected error message: {:?}", diags
         );
     }
+
+    #[test]
+    fn test_substitution_variance_or_output_shrink() {
+        // Swapping an OR decider to a shrunken output domain (removing "trust" combination and its label)
+        // must trigger a diagnostic failure for the now-orphaned/dead branch (trust).
+        let mut reg = registry_with_enums();
+        reg.register_decision("cbu_or_routing", BindingDecl {
+            produces: Some("@cbu-type".into()),
+            consumes: vec!["@cbu".into()],
+            effect_class: None,
+        });
+        // Originally had "fund,corporate" and "trust". Now only "fund,corporate" (trust is removed).
+        reg.register_decision_enum("cbu_or_routing", vec!["fund,corporate".into()]);
+        reg.register_decision_type_info("cbu_or_routing", "CbuOrType".to_string(), "named_subset".to_string());
+
+        let src = r#"(workflow test-or-shrink
+          (start-event :id start :next create-cbu)
+          (service-task :id create-cbu :verb cbu.create :next type-decision)
+          (business-rule-task :id type-decision :decision cbu_or_routing :next type-gateway)
+          (split-or :id type-gateway :plug cbu_or_routing :join type-gateway-join
+            (flow :condition (= @cbu-type "fund")      :next type-gateway-join)
+            (flow :condition (= @cbu-type "corporate") :next type-gateway-join)
+            (flow :condition (= @cbu-type "trust")     :next type-gateway-join))
+          (join-or :id type-gateway-join :split type-gateway :next end)
+          (end-event :id end :status "Operational"))"#;
+
+        let plan = compile(src, &reg).expect("compile");
+        let diags = validate_path_family(&plan, &reg);
+        
+        assert!(!diags.is_empty(), "expected OR output-shrink failure, got none");
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("contains branch for value 'trust' which is not in the output domain of decision 'cbu_or_routing'")),
+            "unexpected error message: {:?}", diags
+        );
+    }
+
+    #[test]
+    fn test_substitution_variance_inputs_grow() {
+        // Swapping a decider to one that requires an input placeholder not generated upstream
+        // (inputs grow) must fail L4 data-closure check.
+        let mut reg = registry_with_enums();
+        // Register cbu_type_routing to require `@new-required-input`
+        reg.register_decision("cbu_type_routing", BindingDecl {
+            produces: Some("@cbu-type".into()),
+            consumes: vec!["@cbu".into(), "@new-required-input".into()],
+            effect_class: None,
+        });
+        reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
+        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+
+        let src = r#"(workflow custody-cbu-onboarding
+          (start-event :id start :next create-cbu)
+          (service-task :id create-cbu :verb cbu.create :next type-decision)
+          (business-rule-task :id type-decision :decision cbu_type_routing :next type-gateway)
+          (exclusive-gateway :id type-gateway
+            (flow :condition (= @cbu-type "fund")      :next add-fund)
+            (flow :condition (= @cbu-type "corporate") :next add-corp)
+            (flow :condition (= @cbu-type "trust")     :next add-trust))
+          (service-task :id add-fund  :verb cbu.add-product :args (:product "CUSTODY_FUND")  :next end)
+          (service-task :id add-corp  :verb cbu.add-product :args (:product "CUSTODY_CORP")  :next end)
+          (service-task :id add-trust :verb cbu.add-product :args (:product "CUSTODY_TRUST") :next end)
+          (end-event :id end :status "Operational"))"#;
+
+        let plan = compile(src, &reg).expect("compile");
+        let diags = validate_path_family(&plan, &reg);
+        
+        assert!(!diags.is_empty(), "expected inputs-grow failure, got none");
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-decision" && d.message.contains("consumes placeholder '@new-required-input' which is not produced upstream")),
+            "unexpected error message: {:?}", diags
+        );
+    }
+
+    #[test]
+    fn test_substitution_variance_output_grow() {
+        // Swapping a decider to one that has a larger output domain (output grows)
+        // must fail L5 gateway exhaustiveness.
+        let mut reg = registry_with_enums();
+        // Register cbu_type_routing to produce a new value "government"
+        reg.register_decision("cbu_type_routing", BindingDecl {
+            produces: Some("@cbu-type".into()),
+            consumes: vec!["@cbu".into()],
+            effect_class: None,
+        });
+        reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into(), "government".into()]);
+        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+
+        let src = r#"(workflow custody-cbu-onboarding
+          (start-event :id start :next create-cbu)
+          (service-task :id create-cbu :verb cbu.create :next type-decision)
+          (business-rule-task :id type-decision :decision cbu_type_routing :next type-gateway)
+          (exclusive-gateway :id type-gateway
+            (flow :condition (= @cbu-type "fund")      :next add-fund)
+            (flow :condition (= @cbu-type "corporate") :next add-corp)
+            (flow :condition (= @cbu-type "trust")     :next add-trust))
+          (service-task :id add-fund  :verb cbu.add-product :args (:product "CUSTODY_FUND")  :next end)
+          (service-task :id add-corp  :verb cbu.add-product :args (:product "CUSTODY_CORP")  :next end)
+          (service-task :id add-trust :verb cbu.add-product :args (:product "CUSTODY_TRUST") :next end)
+          (end-event :id end :status "Operational"))"#;
+
+        let plan = compile(src, &reg).expect("compile");
+        let diags = validate_path_family(&plan, &reg);
+        
+        assert!(!diags.is_empty(), "expected output-grow failure, got none");
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("is not exhaustive: missing branch for value 'government'")),
+            "unexpected error message: {:?}", diags
+        );
+    }
 }

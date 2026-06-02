@@ -356,4 +356,34 @@ mod tests {
         let err_msg = res_red.unwrap_err().to_string();
         assert!(err_msg.contains("verification failed") || err_msg.contains("Crossing split-join boundaries"), "Got message: {}", err_msg);
     }
+
+    #[test]
+    fn test_zeebe_import_manifest_files() {
+        let mut dir = std::path::PathBuf::from("manifests");
+        if !dir.exists() {
+            dir = std::path::PathBuf::from("../manifests");
+        }
+        let valid_path = dir.join("zeebe-valid-sese.xml");
+        let invalid_path = dir.join("zeebe-crossing-boundaries.xml");
+
+        // Validate that both files exist
+        assert!(valid_path.exists(), "valid XML file missing");
+        assert!(invalid_path.exists(), "invalid XML file missing");
+
+        let xml_valid = std::fs::read_to_string(&valid_path).expect("read valid XML");
+        let xml_invalid = std::fs::read_to_string(&invalid_path).expect("read invalid XML");
+
+        // 1. Valid SESE file passes SESE verification
+        let res_valid = import_zeebe_bpmn(&xml_valid, "zeebe_valid");
+        assert!(res_valid.is_ok(), "Expected valid Zeebe SESE file to compile, got {:?}", res_valid);
+
+        // 2. Invalid crossing boundaries file fails with SESE error
+        let res_invalid = import_zeebe_bpmn(&xml_invalid, "zeebe_invalid");
+        assert!(res_invalid.is_err(), "Expected non-SESE Zeebe file to fail import");
+        let err = res_invalid.unwrap_err().to_string();
+        assert!(
+            err.contains("Crossing split-join boundaries"),
+            "Expected crossing boundaries error, got: {}", err
+        );
+    }
 }
