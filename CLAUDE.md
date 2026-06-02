@@ -27,6 +27,11 @@ Each is decided, with its reason. If you think one is wrong, surface it to me wi
 - **No trap doors.** No `DEFAULT` on isolation columns, no swallowed `Result` on a validation-input load, no `#[allow]` to pass a gate, no substring-keyword "checks." Enforce the mechanism, not a word.
 - **No push.** Work on a branch; never push to `main`; present receipts for review.
 - **Surface forks; don't decide them.** The decisions above are settled. A new fork → present it with a recommendation and stop. Never invent an answer to an open design question.
+- **Planning for Gemini 3.5 Flash:** When acting as the Planner or Reviewer:
+  - DO NOT produce localized "grep/sed", partial string matching, or micro-patch plans.
+  - DO write proscriptive, full-function or full-module structural replacement blueprints.
+  - Explicitly define "Invariants & Absolute Boundaries" that Flash must reproduce verbatim (e.g., "Do not alter the AST node structure for X; rewrite the entire matching block for Y from signature to closing bracket").
+  - Treat Flash as a full-block generator. Provide the complete code skeleton of the target function to be refactored, rather than conceptual instructions on how to find it.
 - **Two modes, switched by me.** *Design/review*: read, reason, challenge, update the programme doc — no edits. *Implement*: execute the agreed plan against receipts, no design changes. Don't edit in design mode; don't redesign in implement mode.
 - **Externalize as you go.** When a decision is made, write it into the programme doc before continuing — this window will compact mid-session; the doc won't.
 
@@ -34,4 +39,4 @@ Each is decided, with its reason. If you think one is wrong, surface it to me wi
 Everything typed (the routing socket, L7, the delivery guarantees) hangs on **G4 resolving real pinned packs** — confirming the referenced verb exists in the pinned pack, not merely that a domain name appears. If G4 closes as a name-check, every downstream guarantee is hollow. Be unreasonable about that one.
 
 ## Style
-Terse, dense. Rip-and-replace over surgical patches. E-invariant gates with explicit phase boundaries, progress %, and `→ IMMEDIATELY proceed` directives so you don't stall after phase 1. Cement-locked tests: once a behaviour is proven, its test is permanent.
+Terse, dense. Rip-and-replace over surgical patches (write full-function replacement blocks). E-invariant gates with explicit phase boundaries, progress %, and `→ IMMEDIATELY proceed` directives so you don't stall after phase 1. Cement-locked tests: once a behaviour is proven, its test is permanent.
