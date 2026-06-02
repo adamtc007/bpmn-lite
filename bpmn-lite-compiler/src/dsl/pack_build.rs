@@ -633,4 +633,52 @@ mod tests {
         let hash2 = compute_canonical_hash(&lex, &dag);
         assert_eq!(hash1, hash2);
     }
+
+    #[test]
+    fn test_g4_resolution_and_validation() {
+        // Test B2 validation receipts:
+        // 1. Fake-hash rejection (Fixture A)
+        let mut dag_fake_hash = valid_bpmn_dag();
+        dag_fake_hash.external_references.push(ExternalReferencePin {
+            domain: "dmn-lite".to_string(),
+            content_hash: "fake_non_hex_hash_less_than_64_chars".to_string(),
+        });
+        let lex_fake_hash = generate_manifest(&dag_fake_hash).unwrap();
+        let result_fake = validate_pack(&dag_fake_hash, &lex_fake_hash);
+        assert!(result_fake.is_err());
+        let errs_fake = result_fake.err().unwrap();
+        assert!(errs_fake.iter().any(|e| e.contains("G4 violation: content_hash")));
+
+        // 2. Real hash shape but absent verb in external pack (Fixture B)
+        let mut dag_absent_verb = valid_bpmn_dag();
+        // Add a reference to a non-existent verb in dmn-lite
+        dag_absent_verb.nodes.push(PackNode::Reference {
+            name: "ref-non-existent".to_string(),
+            target_node: "dmn-lite:non-existent-verb".to_string(),
+        });
+        dag_absent_verb.external_references.push(ExternalReferencePin {
+            domain: "dmn-lite".to_string(),
+            content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836".to_string(),
+        });
+        let lex_absent = generate_manifest(&dag_absent_verb).unwrap();
+        let result_absent = validate_pack(&dag_absent_verb, &lex_absent);
+        assert!(result_absent.is_err());
+        let errs_absent = result_absent.err().unwrap();
+        assert!(errs_absent.iter().any(|e| e.contains("G4 violation: target 'non-existent-verb' not found")));
+
+        // 3. Resolvable pin and present verb/decision (Fixture C)
+        let mut dag_valid_ref = valid_bpmn_dag();
+        // Add a reference to a valid decision (cbu_type_routing) in dmn-lite
+        dag_valid_ref.nodes.push(PackNode::Reference {
+            name: "ref-valid".to_string(),
+            target_node: "dmn-lite:cbu_type_routing".to_string(),
+        });
+        dag_valid_ref.external_references.push(ExternalReferencePin {
+            domain: "dmn-lite".to_string(),
+            content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836".to_string(),
+        });
+        let lex_valid = generate_manifest(&dag_valid_ref).unwrap();
+        let result_valid = validate_pack(&dag_valid_ref, &lex_valid);
+        assert!(result_valid.is_ok(), "Expected valid cross-pack reference to pass: {:?}", result_valid.err());
+    }
 }

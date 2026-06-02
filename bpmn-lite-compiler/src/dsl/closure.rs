@@ -405,6 +405,37 @@ pub fn validate_path_family(
                             .filter_map(|f| f.expected_value.clone())
                             .collect();
 
+                        // Build set of allowed labels from decider's output domain
+                        let mut allowed_labels = HashSet::new();
+                        for val in &enum_values {
+                            if sp.mode == SplitMode::Exclusive {
+                                allowed_labels.insert(val.clone());
+                            } else if sp.mode == SplitMode::Inclusive {
+                                if val != "empty" && val != "∅" && !val.is_empty() {
+                                    let parts: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
+                                    for part in parts {
+                                        if !part.is_empty() {
+                                            allowed_labels.insert(part.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Ensure branches ⊆ output (catches output domain shrink / dead branches)
+                        for val in &split_branches {
+                            if !allowed_labels.contains(val) {
+                                diagnostics.push(Diagnostic {
+                                    node_id: id.clone(),
+                                    message: format!(
+                                        "Split '{}' contains branch for value '{}' which is not in the output domain of decision '{}' (dead branch)",
+                                        id, val, socket
+                                    ),
+                                    missing_placeholder: None,
+                                });
+                            }
+                        }
+
                         for val in &enum_values {
                             if sp.mode == SplitMode::Exclusive {
                                 if !split_branches.contains(val) {
@@ -904,5 +935,43 @@ mod tests {
         let diags = validate_path_family(&plan, &reg);
         assert!(diags.iter().any(|d| d.node_id == "consumer" && d.missing_placeholder.as_deref() == Some("@cbu-part1")), "expected missing @cbu-part1 error");
         assert!(diags.iter().any(|d| d.node_id == "consumer" && d.missing_placeholder.as_deref() == Some("@cbu-part2")), "expected missing @cbu-part2 error");
+    }
+
+    #[test]
+    fn test_substitution_variance_output_shrink() {
+        // Swapping a decider to a shrunken output domain (e.g. from ["fund", "corporate", "trust"] to ["fund", "corporate"])
+        // must trigger a diagnostic failure for the now-orphaned/dead branch (trust).
+        let mut reg = registry_with_enums();
+        // type-gateway split expects fund, corporate, and trust from cbu_type_routing.
+        // We register cbu_type_routing with only fund and corporate (shrinking output).
+        reg.register_decision("cbu_type_routing", BindingDecl {
+            produces: Some("@cbu-type".into()),
+            consumes: vec!["@cbu".into()],
+            effect_class: None,
+        });
+        reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into()]);
+        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+
+        let src = r#"(workflow custody-cbu-onboarding
+          (start-event :id start :next create-cbu)
+          (service-task :id create-cbu :verb cbu.create :next type-decision)
+          (business-rule-task :id type-decision :decision cbu_type_routing :next type-gateway)
+          (exclusive-gateway :id type-gateway
+            (flow :condition (= @cbu-type "fund")      :next add-fund)
+            (flow :condition (= @cbu-type "corporate") :next add-corp)
+            (flow :condition (= @cbu-type "trust")     :next add-trust))
+          (service-task :id add-fund  :verb cbu.add-product :args (:product "CUSTODY_FUND")  :next end)
+          (service-task :id add-corp  :verb cbu.add-product :args (:product "CUSTODY_CORP")  :next end)
+          (service-task :id add-trust :verb cbu.add-product :args (:product "CUSTODY_TRUST") :next end)
+          (end-event :id end :status "Operational"))"#;
+
+        let plan = compile(src, &reg).expect("compile");
+        let diags = validate_path_family(&plan, &reg);
+        
+        assert!(!diags.is_empty(), "expected output-shrink failure, got none");
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("contains branch for value 'trust' which is not in the output domain of decision 'cbu_type_routing'")),
+            "unexpected error message: {:?}", diags
+        );
     }
 }
