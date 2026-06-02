@@ -98,3 +98,116 @@ fn dfs_walk(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use crate::dsl::plan::{
+        WorkflowExecutionPlan, ExecutionNode, StartExecNode, SplitExecNode,
+        JoinExecNode, EndExecNode, SplitMode, JoinMode, SplitExecFlow, PlaceholderSchema
+    };
+
+    #[test]
+    fn test_invalid_sese() {
+        let mut nodes = HashMap::new();
+        nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
+            id: "start".to_string(),
+            next: "s1".to_string(),
+        }));
+        nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
+            id: "s1".to_string(),
+            mode: SplitMode::Exclusive,
+            routing_socket: None,
+            flows: vec![
+                SplitExecFlow { placeholder: None, expected_value: None, next: "s2".to_string() },
+                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
+            ],
+            join: "j1".to_string(),
+            produces_placeholder: None,
+        }));
+        nodes.insert("s2".to_string(), ExecutionNode::Split(SplitExecNode {
+            id: "s2".to_string(),
+            mode: SplitMode::Exclusive,
+            routing_socket: None,
+            flows: vec![
+                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
+                SplitExecFlow { placeholder: None, expected_value: None, next: "j2".to_string() },
+            ],
+            join: "j2".to_string(),
+            produces_placeholder: None,
+        }));
+        nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
+            id: "j1".to_string(),
+            mode: JoinMode::Exclusive,
+            split: "s1".to_string(),
+            next: "j2".to_string(),
+        }));
+        nodes.insert("j2".to_string(), ExecutionNode::Join(JoinExecNode {
+            id: "j2".to_string(),
+            mode: JoinMode::Exclusive,
+            split: "s2".to_string(),
+            next: "end".to_string(),
+        }));
+        nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
+            id: "end".to_string(),
+            status: "Completed".to_string(),
+        }));
+
+        let plan = WorkflowExecutionPlan {
+            workflow_id: "crossing-splits".to_string(),
+            nodes,
+            start_node: "start".to_string(),
+            placeholder_schema: PlaceholderSchema::default(),
+            closure_manifest: None,
+            regime_version: None,
+        };
+
+        let res = verify_sese_nesting(&plan);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("Crossing split-join boundaries") || err.contains("Unclosed Split"));
+    }
+
+    #[test]
+    fn test_valid_sese() {
+        let mut nodes = HashMap::new();
+        nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
+            id: "start".to_string(),
+            next: "s1".to_string(),
+        }));
+        nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
+            id: "s1".to_string(),
+            mode: SplitMode::Exclusive,
+            routing_socket: None,
+            flows: vec![
+                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
+                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
+            ],
+            join: "j1".to_string(),
+            produces_placeholder: None,
+        }));
+        nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
+            id: "j1".to_string(),
+            mode: JoinMode::Exclusive,
+            split: "s1".to_string(),
+            next: "end".to_string(),
+        }));
+        nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
+            id: "end".to_string(),
+            status: "Completed".to_string(),
+        }));
+
+        let plan = WorkflowExecutionPlan {
+            workflow_id: "valid-sese".to_string(),
+            nodes,
+            start_node: "start".to_string(),
+            placeholder_schema: PlaceholderSchema::default(),
+            closure_manifest: None,
+            regime_version: None,
+        };
+
+        let res = verify_sese_nesting(&plan);
+        assert!(res.is_ok(), "Expected valid SESE: {:?}", res);
+    }
+}

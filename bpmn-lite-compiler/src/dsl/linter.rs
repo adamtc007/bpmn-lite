@@ -64,6 +64,10 @@ pub trait PlaceholderRegistry: Send + Sync {
         None
     }
 
+    fn get_decision_output_type_info(&self, _decision_id: &str) -> Option<(String, String)> {
+        None
+    }
+
     fn workflow_exists(&self, _hash: &str) -> bool {
         false
     }
@@ -72,6 +76,9 @@ pub trait PlaceholderRegistry: Send + Sync {
     }
     fn get_workflow_signature(&self, _hash: &str) -> Option<BindingDecl> {
         None
+    }
+    fn get_workflow_child_calls(&self, _hash: &str) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -92,6 +99,8 @@ pub struct StubPlaceholderRegistry {
     decision_enums: HashMap<String, Vec<String>>,
     workflows: HashMap<String, BindingDecl>,
     workflow_l2: HashMap<String, bool>,
+    decision_type_kinds: HashMap<String, (String, String)>,
+    workflow_child_calls: HashMap<String, Vec<String>>,
 }
 
 impl StubPlaceholderRegistry {
@@ -109,10 +118,18 @@ impl StubPlaceholderRegistry {
         self.decision_enums.insert(id.into(), values);
     }
 
+    pub fn register_decision_type_info(&mut self, id: impl Into<String>, type_name: String, kind: String) {
+        self.decision_type_kinds.insert(id.into(), (type_name, kind));
+    }
+
     pub fn register_workflow(&mut self, hash: impl Into<String>, decl: BindingDecl, satisfies_l2: bool) {
         let h = hash.into();
         self.workflows.insert(h.clone(), decl);
         self.workflow_l2.insert(h, satisfies_l2);
+    }
+
+    pub fn register_workflow_child_calls(&mut self, hash: impl Into<String>, calls: Vec<String>) {
+        self.workflow_child_calls.insert(hash.into(), calls);
     }
 
     /// Seed with the Phase 5.5 demo model bindings.
@@ -142,6 +159,7 @@ impl StubPlaceholderRegistry {
             effect_class: None,
         });
         self.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
+        self.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
         self
     }
 }
@@ -156,6 +174,9 @@ impl PlaceholderRegistry for StubPlaceholderRegistry {
     fn get_decision_enum_values(&self, decision_id: &str) -> Option<Vec<String>> {
         self.decision_enums.get(decision_id).cloned()
     }
+    fn get_decision_output_type_info(&self, decision_id: &str) -> Option<(String, String)> {
+        self.decision_type_kinds.get(decision_id).cloned()
+    }
     fn workflow_exists(&self, hash: &str) -> bool {
         self.workflows.contains_key(hash)
     }
@@ -164,6 +185,9 @@ impl PlaceholderRegistry for StubPlaceholderRegistry {
     }
     fn get_workflow_signature(&self, hash: &str) -> Option<BindingDecl> {
         self.workflows.get(hash).cloned()
+    }
+    fn get_workflow_child_calls(&self, hash: &str) -> Vec<String> {
+        self.workflow_child_calls.get(hash).cloned().unwrap_or_default()
     }
 }
 
@@ -260,6 +284,9 @@ impl<'a> Linter<'a> {
                         is_known = true;
                     } else if n.plug.len() == 64 && n.plug.chars().all(|c| c.is_ascii_hexdigit()) {
                         is_known = true;
+                        if let Some(sig) = self.registry.get_workflow_signature(&n.plug) {
+                            decl = sig;
+                        }
                     }
 
                     if !is_known {
@@ -559,14 +586,57 @@ impl<'a> Linter<'a> {
         }
 
         let regime_version = std::env::var("BPMN_LITE_REGIME_VERSION").ok();
-        Ok(WorkflowExecutionPlan {
+        let mut plan = WorkflowExecutionPlan {
             workflow_id: source.name.clone(),
             nodes: exec_nodes,
             start_node,
             placeholder_schema: PlaceholderSchema { slots },
             closure_manifest: Some(serde_json::json!({ "dependencies": [] })),
             regime_version,
-        })
+        };
+
+        // Derive task delivery modes based on dataflow (P6 / L8)
+        let registry = self.registry;
+        let ast_delivery_modes: HashMap<String, Option<String>> = flat_ast_nodes.iter()
+            .filter_map(|node| {
+                if let NodeAst::Task(t) = node {
+                    Some((t.id.clone(), t.delivery_mode.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (id, node) in &mut plan.nodes {
+            if let ExecutionNode::Task(t) = node {
+                let has_explicit = ast_delivery_modes.get(id).and_then(|opt| opt.as_ref()).is_some();
+                if !has_explicit {
+                    let mut output_consumed = false;
+                    if let Some(ref prod) = t.produces_placeholder {
+                        if let Some(slot) = plan.placeholder_schema.slots.get(prod) {
+                            if !slot.consumed_by.is_empty() {
+                                output_consumed = true;
+                            }
+                        }
+                    }
+
+                    let decl = registry.verb_bindings(&t.plug)
+                        .or_else(|| registry.get_workflow_signature(&t.plug))
+                        .unwrap_or_default();
+                    let is_must_complete = matches!(decl.effect_class.as_deref(), Some("read_modify_write") | Some("write_obligation"));
+
+                    if output_consumed {
+                        t.delivery_mode = DeliveryMode::Blocking;
+                    } else if is_must_complete {
+                        t.delivery_mode = DeliveryMode::GuaranteedAsync;
+                    } else {
+                        t.delivery_mode = DeliveryMode::BestEffort;
+                    }
+                }
+            }
+        }
+
+        Ok(plan)
     }
 
     fn flatten_nodes(&mut self, nodes: &[NodeAst], result: &mut Vec<NodeAst>) {
