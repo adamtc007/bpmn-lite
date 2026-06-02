@@ -287,9 +287,37 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 let plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&plan_body)
                     .map_err(|e| BusServerError::Malformed(format!("Failed to parse plan_body: {}", e)))?;
 
-                let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(
-                    bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new()
-                );
+                let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
+                let child_plans = bpmn_lite_engine::plan_walker::preload_workflow_dependencies(&plan, engine_ref.store().as_ref()).await
+                    .map_err(|e| BusServerError::Internal(format!("Failed to preload dependencies: {}", e)))?;
+
+                let mut stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
+                for (hash, child_plan) in child_plans {
+                    let mut consumes = Vec::new();
+                    for slot in child_plan.placeholder_schema.slots.values() {
+                        if slot.produced_by == "start" || slot.produced_by.is_empty() {
+                            consumes.push(slot.name.clone());
+                        }
+                    }
+                    stub_reg.register_workflow(hash.clone(), bpmn_lite_compiler::dsl::linter::BindingDecl {
+                        produces: None,
+                        consumes,
+                        effect_class: Some("idempotent_ensure".into()),
+                    }, true);
+
+                    let mut child_calls = Vec::new();
+                    for node in child_plan.nodes.values() {
+                        if let bpmn_lite_compiler::dsl::plan::ExecutionNode::Task(t) = node {
+                            let is_hex_hash = t.plug.len() == 64 && t.plug.chars().all(|c| c.is_ascii_hexdigit());
+                            if is_hex_hash {
+                                child_calls.push(t.plug.clone());
+                            }
+                        }
+                    }
+                    stub_reg.register_workflow_child_calls(hash, child_calls);
+                }
+
+                let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(stub_reg);
                 let paths = vec![
                     "manifests/bpmn-v1.0.0.yaml",
                     "manifests/dmn-lite-v1.0.0.yaml",
@@ -319,7 +347,6 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 }
 
                 let hash = *blake3::hash(plan_body.as_bytes()).as_bytes();
-                let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
                 engine_ref.store().store_plan(hash, &plan_body).await
                     .map_err(|e| BusServerError::Internal(e.to_string()))?;
 
@@ -465,11 +492,9 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     .map_err(|e| BusServerError::Internal(e.to_string()))?;
 
                 let mut schema_vars = std::collections::HashMap::new();
-                if let Some(json_val) = &inspection.placeholder_values {
-                    if let Some(map) = json_val.as_object() {
-                        for (k, v) in map {
-                            schema_vars.insert(k.clone(), v.to_string());
-                        }
+                if let Some(map) = inspection.placeholder_values.as_ref().and_then(|v| v.as_object()) {
+                    for (k, v) in map {
+                        schema_vars.insert(k.clone(), v.to_string());
                     }
                 }
 

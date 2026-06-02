@@ -3,6 +3,7 @@
 //! SQL strings live here as private items; the public surface is the
 //! `PostgresPendingInvocationStore` struct + its trait impl.
 
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use bpmn_lite_store::pending::{InsertOutcome, PendingInvocation, PendingInvocationStore};
 use chrono::{DateTime, Utc};

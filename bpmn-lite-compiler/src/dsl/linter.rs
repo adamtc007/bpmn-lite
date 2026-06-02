@@ -381,11 +381,9 @@ impl<'a> Linter<'a> {
                     };
 
                     let mut produces = None;
-                    let mut consumes = Vec::new();
                     if let Some(plug) = &n.plug {
                         let decl = self.registry.decision_bindings(plug).unwrap_or_default();
                         produces = decl.produces;
-                        consumes = decl.consumes;
                     }
                     if let Some(ref produced) = produces {
                         placeholder_producers.insert(produced.clone(), n.id.clone());
@@ -418,11 +416,7 @@ impl<'a> Linter<'a> {
 
                 NodeAst::Loop(n) => {
                     self.check_next_ref(id, &n.next, &node_ids);
-                    // Check all child nodes inside loop body
-                    for child in &n.body {
-                        // Check their next links. In loops, the back-edge targets the loop head.
-                        // We also verify they exist in node_ids (which they do since we flattened them).
-                    }
+
                     ExecutionNode::Loop(LoopExecNode {
                         id: n.id.clone(),
                         ceiling: n.ceiling,

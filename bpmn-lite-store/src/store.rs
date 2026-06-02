@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use anyhow::Result;
 use async_trait::async_trait;
 use bpmn_lite_types::events::RuntimeEvent;

@@ -2,12 +2,12 @@
 //! instance through its nodes, dispatching cross-domain verb
 //! invocations over the federated bus (T3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::dsl::plan::{
-    ExecutionNode, SplitExecNode, LoopExecNode, TaskExecNode, WorkflowExecutionPlan, DeliveryMode, SplitMode
+    ExecutionNode, SplitExecNode, WorkflowExecutionPlan
 };
 use bpmn_lite_store::pending::{PendingInvocation, PendingInvocationStore};
 use bpmn_lite_store::store::{ProcessStore, TickOperation};
@@ -64,11 +64,10 @@ impl PlanWalker {
             .await?
             .ok_or_else(|| anyhow!("plan_walker: instance {} not found", instance_id))?;
 
-        if !matches!(instance.state, ProcessState::Running) || instance.plan_hash.is_none() {
-            return Ok(AdvanceOutcome::NotRunnable);
-        }
-
-        let plan_hash = instance.plan_hash.unwrap();
+        let plan_hash = match instance.plan_hash {
+            Some(h) => h,
+            None => return Ok(AdvanceOutcome::NotRunnable),
+        };
         let plan_json = self
             .store
             .load_plan(plan_hash)
@@ -77,6 +76,38 @@ impl PlanWalker {
         let plan: WorkflowExecutionPlan = serde_json::from_str(&plan_json)?;
 
         let mut ops = Vec::new();
+
+        if let ProcessState::WaitingOnInvocation { execution_id: child_id, ref node_id } = instance.state {
+            if let Some(child_instance) = self.store.load_instance(child_id).await? {
+                match child_instance.state {
+                    ProcessState::Completed { .. } => {
+                        if let Some(ref child_vals) = child_instance.placeholder_values {
+                            instance.placeholder_values = Some(child_vals.clone());
+                        }
+                        if let Some(ExecutionNode::Task(t)) = plan.nodes.get(node_id) {
+                            instance.current_node_id = Some(t.next.clone());
+                        }
+                        instance.state = ProcessState::Running;
+                        ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                    }
+                    ProcessState::Failed { incident_id } => {
+                        instance.state = ProcessState::Failed { incident_id };
+                        ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                        self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
+                        return Ok(AdvanceOutcome::NotRunnable);
+                    }
+                    _ => {
+                        return Ok(AdvanceOutcome::NotRunnable);
+                    }
+                }
+            } else {
+                return Err(anyhow!("plan_walker: waiting on non-existent child instance {}", child_id));
+            }
+        }
+
+        if !matches!(instance.state, ProcessState::Running) {
+            return Ok(AdvanceOutcome::NotRunnable);
+        }
 
         loop {
             let current = instance
@@ -135,8 +166,9 @@ impl PlanWalker {
                             instance.current_node_id = Some(next.to_owned());
                         }
                         Err(reason) => {
+                            let incident_id = Uuid::now_v7();
                             instance.state =
-                                ProcessState::Failed { incident_id: Uuid::now_v7() };
+                                ProcessState::Failed { incident_id };
                             ops.push(TickOperation::SaveInstance { instance: instance.clone() });
                             self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
                             tracing::error!(
@@ -171,6 +203,55 @@ impl PlanWalker {
                 }
 
                 ExecutionNode::Task(task) => {
+                    let mut is_child = false;
+                    let mut child_plan_opt = None;
+
+                    if is_child_workflow_hash(&task.plug) {
+                        if let Some(child_hash) = decode_hash(&task.plug) {
+                            if let Ok(Some(child_plan_json)) = self.store.load_plan(child_hash).await {
+                                if let Ok(child_plan) = serde_json::from_str::<WorkflowExecutionPlan>(&child_plan_json) {
+                                    child_plan_opt = Some(child_plan);
+                                    is_child = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if is_child {
+                        let child_plan = child_plan_opt.unwrap();
+                        let parent_placeholders = deserialize_placeholder_values(instance.placeholder_values.as_ref());
+                        let mut child_vars = HashMap::new();
+                        for (k, v) in parent_placeholders {
+                            child_vars.insert(k.clone(), v.clone());
+                        }
+
+                        let child_id = self.start_process(
+                            owner,
+                            &child_plan,
+                            &instance.tenant_id,
+                            child_vars,
+                            HashMap::new(),
+                        ).await?;
+
+                        if let Some(mut child_inst) = self.store.load_instance(child_id).await? {
+                            child_inst.correlation_id = format!("{}:{}", instance.instance_id, task.id);
+                            self.store.save_instance(owner, &child_inst).await?;
+                        }
+
+                        instance.state = ProcessState::WaitingOnInvocation {
+                            execution_id: child_id,
+                            node_id: task.id.clone(),
+                        };
+                        ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                        self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
+
+                        return Ok(AdvanceOutcome::Submitted {
+                            callout_id: child_id,
+                            node_id: task.id.clone(),
+                            verb_fqn: task.plug.clone(),
+                        });
+                    }
+
                     let outcome = self
                         .dispatch_callout(
                             &mut instance,
@@ -192,6 +273,7 @@ impl PlanWalker {
                     instance.state = ProcessState::Completed { at: now };
                     instance.current_node_id = Some(end.id.clone());
                     ops.push(TickOperation::SaveInstance { instance: instance.clone() });
+                    
                     self.store.commit_tick(instance_id, &instance.tenant_id, owner, &ops).await?;
                     return Ok(AdvanceOutcome::Completed {
                         node_id: end.id.clone(),
@@ -221,7 +303,8 @@ impl PlanWalker {
         };
         const MAX_RETRIES: u64 = 3;
         if retry_count >= MAX_RETRIES {
-            instance.state = ProcessState::Failed { incident_id: Uuid::now_v7() };
+            let incident_id = Uuid::now_v7();
+            instance.state = ProcessState::Failed { incident_id };
             ops.push(TickOperation::SaveInstance { instance: instance.clone() });
             return Ok(AdvanceOutcome::NotRunnable);
         }
@@ -231,7 +314,7 @@ impl PlanWalker {
 
         let attempt_count = retry_count;
 
-        let (callout_id, idempotency_key) = if let Some(ref row) = matching_row {
+        let (callout_id, idempotency_key) = if let Some(row) = matching_row {
             (row.callout_id, row.idempotency_key)
         } else {
             let callout_id = derive_uuid("callout_id", instance.instance_id, &node_id, attempt_count);
@@ -321,10 +404,38 @@ impl PlanWalker {
             }
         }
 
-        // Run path-family validation first
-        let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(
-            bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new()
-        );
+        // 1. Asynchronously preload nested workflow dependencies
+        let child_plans = preload_workflow_dependencies(plan, self.store.as_ref()).await?;
+
+        // 2. Populate the in-memory linter registry with child signatures and paths
+        let mut stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
+        for (hash, child_plan) in child_plans {
+            // Extract signature
+            let mut consumes = Vec::new();
+            for slot in child_plan.placeholder_schema.slots.values() {
+                if slot.produced_by == "start" || slot.produced_by.is_empty() {
+                    consumes.push(slot.name.clone());
+                }
+            }
+            stub_reg.register_workflow(hash.clone(), bpmn_lite_compiler::dsl::linter::BindingDecl {
+                produces: None,
+                consumes,
+                effect_class: Some("idempotent_ensure".into()),
+            }, true);
+
+            // Extract child calls
+            let mut child_calls = Vec::new();
+            for node in child_plan.nodes.values() {
+                if let ExecutionNode::Task(t) = node {
+                    if is_child_workflow_hash(&t.plug) {
+                        child_calls.push(t.plug.clone());
+                    }
+                }
+            }
+            stub_reg.register_workflow_child_calls(hash, child_calls);
+        }
+
+        let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(stub_reg);
         let paths = vec![
             "manifests/bpmn-v1.0.0.yaml",
             "manifests/dmn-lite-v1.0.0.yaml",
@@ -389,6 +500,71 @@ impl PlanWalker {
         self.store.save_instance(lease_owner, &instance).await?;
         Ok(instance_id)
     }
+}
+
+pub async fn preload_workflow_dependencies(
+    root_plan: &WorkflowExecutionPlan,
+    store: &dyn ProcessStore,
+) -> Result<HashMap<String, WorkflowExecutionPlan>> {
+    let mut preloaded = HashMap::new();
+    let mut visiting = HashSet::new();
+    let mut queue = Vec::new();
+
+    // Enqueue initial child calls from the root plan
+    for node in root_plan.nodes.values() {
+        if let ExecutionNode::Task(t) = node {
+            if is_child_workflow_hash(&t.plug) {
+                queue.push(t.plug.clone());
+            }
+        }
+    }
+
+    while let Some(hash_str) = queue.pop() {
+        if preloaded.contains_key(&hash_str) {
+            continue;
+        }
+        if !visiting.insert(hash_str.clone()) {
+            return Err(anyhow!("Cyclic workflow dependency detected: {}", hash_str));
+        }
+
+        let hash_bytes = decode_hash(&hash_str)
+            .ok_or_else(|| anyhow!("Invalid child workflow hash: {}", hash_str))?;
+
+        if let Some(plan_json) = store.load_plan(hash_bytes).await? {
+            let child_plan: WorkflowExecutionPlan = serde_json::from_str(&plan_json)?;
+            
+            // Scan the child plan for further nested child calls
+            for node in child_plan.nodes.values() {
+                if let ExecutionNode::Task(t) = node {
+                    if is_child_workflow_hash(&t.plug) {
+                        queue.push(t.plug.clone());
+                    }
+                }
+            }
+            preloaded.insert(hash_str.clone(), child_plan);
+        } else {
+            return Err(anyhow!("Child plan not found for hash: {}", hash_str));
+        }
+        
+        visiting.remove(&hash_str);
+    }
+
+    Ok(preloaded)
+}
+
+fn decode_hash(hash: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(hash).ok()?;
+    if bytes.len() == 32 {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Some(arr)
+    } else {
+        None
+    }
+}
+
+fn is_child_workflow_hash(plug: &str) -> bool {
+    plug.len() == 64 && plug.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

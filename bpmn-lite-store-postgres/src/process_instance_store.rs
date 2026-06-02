@@ -1,5 +1,6 @@
 //! PostgreSQL implementation of `BpmnProcessInstanceStore` (v0.6 §8.4).
 
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use bpmn_lite_store::process_instance::{
     BpmnProcessInstance, BpmnProcessInstanceStore, ProcessStatus,

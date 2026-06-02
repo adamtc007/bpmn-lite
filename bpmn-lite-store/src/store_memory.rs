@@ -1046,7 +1046,7 @@ impl ProcessStore for MemoryStore {
                         .push(incident.clone());
                 }
                 TickOperation::SaveInstance { instance } => {
-                    w.instances.insert(instance_id, instance.clone());
+                    w.instances.insert(instance.instance_id, instance.clone());
                     w.payload_history.insert(
                         (instance.instance_id, instance.domain_payload_hash),
                         instance.domain_payload.to_string(),

@@ -1,4 +1,3 @@
-use super::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use bpmn_lite_compiler::dsl::plan::{
@@ -7,10 +6,9 @@ use bpmn_lite_compiler::dsl::plan::{
 use bpmn_lite_store::store::ProcessStore;
 use bpmn_lite_store::pending::PendingInvocationStore;
 use crate::plan_walker::{PlanWalker, AdvanceOutcome};
-use bpmn_lite_store::pending::{MemoryPendingInvocationStore, PendingInvocation};
+use bpmn_lite_store::pending::MemoryPendingInvocationStore;
 use bpmn_lite_store::store_memory::MemoryStore;
-use bpmn_lite_types::types::{ProcessInstance, ProcessState};
-use dsl_bus_protocol::v1::{ResolvedBinding, TypedValue, typed_value::Value};
+use bpmn_lite_types::types::ProcessState;
 use uuid::Uuid;
 
 async fn make_walker(
@@ -143,7 +141,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
 async fn simulate_result_delivery(
     store: &Arc<MemoryStore>,
     instance_id: Uuid,
-    node_id: &str,
+    _node_id: &str,
     target_next_node_id: &str,
     produces_placeholder: Option<&str>,
     placeholder_val: Option<&str>,
@@ -241,7 +239,7 @@ async fn test_dmn_lite_round_trip_corporate_path() {
     let plan = dmn_lite_round_trip_plan();
     let instance_id = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
 
-    let outcome = walker.advance(instance_id, "default").await.unwrap();
+    let _outcome = walker.advance(instance_id, "default").await.unwrap();
     simulate_result_delivery(
         &store,
         instance_id,
@@ -313,4 +311,123 @@ async fn test_regime_mismatch() {
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
     assert!(err_msg.contains("RegimeMismatch"), "got: {}", err_msg);
+}
+
+#[tokio::test]
+async fn test_call_activity_in_process_execution() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+    let pending = Arc::new(bpmn_lite_store::pending::MemoryPendingInvocationStore::new());
+    let walker = make_walker(store.clone(), pending).await;
+
+    // 1. Build and store the child plan
+    let mut child_nodes = HashMap::new();
+    child_nodes.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "end".to_owned(),
+        }),
+    );
+    child_nodes.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "ChildDone".to_owned(),
+        }),
+    );
+    let child_plan = WorkflowExecutionPlan {
+        workflow_id: "child-wf".to_owned(),
+        nodes: child_nodes,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+    };
+    let child_plan_json = serde_json::to_string(&child_plan).unwrap();
+    let child_hash_bytes = blake3::hash(child_plan_json.as_bytes());
+    let child_hash = *child_hash_bytes.as_bytes();
+    let child_hash_hex = hex::encode(child_hash);
+    store.store_plan(child_hash, &child_plan_json).await.unwrap();
+
+    // 2. Build and store the parent plan invoking child by hash hex
+    let mut parent_nodes = HashMap::new();
+    parent_nodes.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-child".to_owned(),
+        }),
+    );
+    parent_nodes.insert(
+        "call-child".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-child".to_owned(),
+            plug: child_hash_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+        }),
+    );
+    parent_nodes.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "ParentDone".to_owned(),
+        }),
+    );
+    let parent_plan = WorkflowExecutionPlan {
+        workflow_id: "parent-wf".to_owned(),
+        nodes: parent_nodes,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+    };
+
+    // 3. Start parent process
+    let parent_id = walker.start_process("default", &parent_plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
+    
+    // 4. Advance parent - should spawn child and transition parent to WaitingOnInvocation
+    let outcome = walker.advance(parent_id, "default").await.unwrap();
+    let child_id = match outcome {
+        AdvanceOutcome::Submitted { callout_id, node_id, verb_fqn } => {
+            assert_eq!(node_id, "call-child");
+            assert_eq!(verb_fqn, child_hash_hex);
+            callout_id
+        }
+        _ => panic!("Expected Submitted outcome"),
+    };
+
+    // Verify parent is WaitingOnInvocation and child is Running
+    let parent_inst = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert_eq!(parent_inst.state, ProcessState::WaitingOnInvocation {
+        execution_id: child_id,
+        node_id: "call-child".to_string(),
+    });
+
+    let child_inst = store.load_instance(child_id).await.unwrap().unwrap();
+    assert_eq!(child_inst.state, ProcessState::Running);
+    assert_eq!(child_inst.correlation_id, format!("{}:call-child", parent_id));
+
+    // 5. Advance child - completes child
+    let child_outcome = walker.advance(child_id, "default").await.unwrap();
+    assert!(matches!(child_outcome, AdvanceOutcome::Completed { .. }));
+
+    let child_inst_post = store.load_instance(child_id).await.unwrap().unwrap();
+    assert!(matches!(child_inst_post.state, ProcessState::Completed { .. }));
+
+    // Verify parent is still WaitingOnInvocation before we advance it
+    let parent_inst_mid = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert!(matches!(parent_inst_mid.state, ProcessState::WaitingOnInvocation { .. }));
+
+    // 6. Resumer / Scheduler wakes up parent. Calling advance on parent 
+    // will now evaluate the child's completion state, transition parent to Running,
+    // and complete the parent process.
+    let final_outcome = walker.advance(parent_id, "default").await.unwrap();
+    assert!(matches!(final_outcome, AdvanceOutcome::Completed { .. }));
+
+    let parent_inst_final = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert!(matches!(parent_inst_final.state, ProcessState::Completed { .. }));
 }

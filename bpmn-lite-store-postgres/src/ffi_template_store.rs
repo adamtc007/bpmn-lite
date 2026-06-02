@@ -6,6 +6,7 @@
 //! SQL layer via `ON CONFLICT DO NOTHING` on the BYTEA primary key,
 //! followed by a content equality check.
 
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use ffi_catalogue::FfiTemplateStore;
 use ffi_types::{FfiTemplate, FieldSchema, Idempotency};

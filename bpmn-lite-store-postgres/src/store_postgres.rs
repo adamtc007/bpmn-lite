@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bpmn_lite_store::store::{ProcessStore, TickOperation};

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use super::plan::{WorkflowExecutionPlan, ExecutionNode, DeliveryMode, JoinMode, SplitMode};
-use super::linter::{PlaceholderRegistry, BindingDecl};
+use super::linter::PlaceholderRegistry;
 use super::rpst::verify_sese_nesting;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -164,7 +164,7 @@ pub fn validate_path_family(
 
     // Back-edge check: if node's successor points back to a Loop head,
     // verify that the Loop head is an enclosing loop of this node.
-    for (id, node) in &plan.nodes {
+    for id in plan.nodes.keys() {
         let successors = adj.get(id).cloned().unwrap_or_default();
         for succ in successors {
             if let Some(ExecutionNode::Loop(_)) = plan.nodes.get(succ) {
@@ -410,13 +410,11 @@ pub fn validate_path_family(
                         for val in &enum_values {
                             if sp.mode == SplitMode::Exclusive {
                                 allowed_labels.insert(val.clone());
-                            } else if sp.mode == SplitMode::Inclusive {
-                                if val != "empty" && val != "∅" && !val.is_empty() {
-                                    let parts: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
-                                    for part in parts {
-                                        if !part.is_empty() {
-                                            allowed_labels.insert(part.to_string());
-                                        }
+                            } else if sp.mode == SplitMode::Inclusive && val != "empty" && val != "∅" && !val.is_empty() {
+                                let parts: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
+                                for part in parts {
+                                    if !part.is_empty() {
+                                        allowed_labels.insert(part.to_string());
                                     }
                                 }
                             }

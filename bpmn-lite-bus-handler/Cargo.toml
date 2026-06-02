@@ -27,6 +27,8 @@ thiserror = { workspace = true }
 bpmn-lite-engine = { path = "../bpmn-lite-engine" }
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+tokio = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 blake3 = { workspace = true }

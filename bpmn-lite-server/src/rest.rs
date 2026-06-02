@@ -210,33 +210,30 @@ async fn next_step(
 
     // Simulate result delivery for callout nodes, then drive forward through
     // any immediately following gateways/end events without touching the bus.
-    match demo.plan.nodes.get(&node_id) {
-        Some(ExecutionNode::Task(t)) => {
-            if t.plug.starts_with("dmn-lite:") {
-                let cbu_type_val = match cbu_type.as_str() {
-                    "fund" => "fund",
-                    "corporate" => "corporate",
-                    "trust" => "trust",
-                    _ => "fund",
+    if let Some(ExecutionNode::Task(t)) = demo.plan.nodes.get(&node_id) {
+        if t.plug.starts_with("dmn-lite:") {
+            let cbu_type_val = match cbu_type.as_str() {
+                "fund" => "fund",
+                "corporate" => "corporate",
+                "trust" => "trust",
+                _ => "fund",
+            };
+            let placeholder = t
+                .produces_placeholder
+                .as_deref()
+                .map(|name| (name, serde_json::Value::String(cbu_type_val.to_owned())));
+            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+        } else {
+            let placeholder = t.produces_placeholder.as_deref().map(|name| {
+                let val = if node_id == "create-cbu" {
+                    serde_json::Value::String(Uuid::now_v7().to_string())
+                } else {
+                    serde_json::Value::String(format!("{node_id}-done"))
                 };
-                let placeholder = t
-                    .produces_placeholder
-                    .as_deref()
-                    .map(|name| (name, serde_json::Value::String(cbu_type_val.to_owned())));
-                apply_step(&demo.store, id, t.next.clone(), placeholder).await;
-            } else {
-                let placeholder = t.produces_placeholder.as_deref().map(|name| {
-                    let val = if node_id == "create-cbu" {
-                        serde_json::Value::String(Uuid::now_v7().to_string())
-                    } else {
-                        serde_json::Value::String(format!("{node_id}-done"))
-                    };
-                    (name, val)
-                });
-                apply_step(&demo.store, id, t.next.clone(), placeholder).await;
-            }
+                (name, val)
+            });
+            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
         }
-        _ => {}
     }
 
     // Drive forward through gateways and end events without the bus.

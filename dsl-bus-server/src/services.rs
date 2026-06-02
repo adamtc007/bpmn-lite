@@ -125,10 +125,8 @@ impl InvocationService for InvocationServiceImpl {
         };
 
         // Assert metadata x-tenant-id matches derived_tenant if present
-        if let Some(ref header_tenant) = metadata_tenant {
-            if header_tenant != &derived_tenant {
-                return reject(SubmissionStatus::RejectedAuthority, "Tenant spoofing detected");
-            }
+        if metadata_tenant.as_ref().is_some_and(|header_tenant| header_tenant != &derived_tenant) {
+            return reject(SubmissionStatus::RejectedAuthority, "Tenant spoofing detected");
         }
 
         let tenant_id = derived_tenant;
