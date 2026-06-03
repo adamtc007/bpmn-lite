@@ -505,6 +505,12 @@ async fn verify_not_superuser(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::er
             .await?;
 
     if is_superuser {
+        if std::env::var("BPMN_LITE_ALLOW_SUPERUSER").unwrap_or_default() == "1" {
+            tracing::warn!(
+                "Connected as superuser. RLS BYPASSED. Proceeding because BPMN_LITE_ALLOW_SUPERUSER=1"
+            );
+            return Ok(());
+        }
         return Err("Application connected to Postgres as a superuser role. \
              This BYPASSES row-level security and the immutable-field trigger \
              (migration 029). Connect using a non-superuser role (typically \
