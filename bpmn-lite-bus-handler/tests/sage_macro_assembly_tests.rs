@@ -274,3 +274,182 @@ async fn test_sage_transitive_validation_propagation() {
     assert!(!saved_plan.mathematically_proved);
     assert!(saved_plan.unsafe_breeches.contains(&"TRANSITIVE_UNPROVED_CALL".to_string()));
 }
+
+#[tokio::test]
+async fn test_postgres_store_and_retrieve_via_bus_handler() {
+    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgresql://postgres@localhost:5435/bpmn_lite".to_string());
+
+    let pool = match sqlx::PgPool::connect(&url).await {
+        Ok(p) => p,
+        Err(e) => {
+            println!("Skipping test_postgres_store_and_retrieve_via_bus_handler because PG connection failed: {}", e);
+            return;
+        }
+    };
+
+    // 1. Run migrations to ensure DB schema is populated
+    let migrator = sqlx::migrate!("../bpmn-lite-store-postgres/migrations");
+    migrator.run(&pool).await.expect("run migrations");
+
+    // 2. Initialize PostgresProcessStore & PostgresPendingInvocationStore
+    let postgres_store = Arc::new(bpmn_lite_store_postgres::PostgresProcessStore::new(pool.clone()));
+    let postgres_pending_store = Arc::new(bpmn_lite_store_postgres::PostgresPendingInvocationStore::new(pool.clone()));
+
+    // 3. Initialize BusClient
+    let bus_client = Arc::new(
+        dsl_bus_client::BusClient::builder()
+            .pool(pool.clone())
+            .local_domain("bpmn-lite")
+            .build()
+            .await
+            .unwrap()
+    );
+
+    // 4. Initialize BpmnLiteEngine and BpmnLiteBusHandler
+    let engine = Arc::new(
+        bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(postgres_store.clone(), "default")
+            .with_bus_client(bus_client, postgres_pending_store)
+    );
+    let handler = BpmnLiteBusHandler::new_with_engine(DummyAdvancer, engine.clone(), pool.clone());
+
+    // 5. Compile a test S-expression macro
+    let raw_sexpr = r#"(workflow onboarding-postgres-test
+      (start-event :id start :next task1)
+      (service-task :id task1 :verb cbu.create :next end)
+      (end-event :id end :status "completed"))"#;
+
+    let registry = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new().with_demo_bindings();
+    let plan = bpmn_lite_compiler::dsl::compile(raw_sexpr, &registry).expect("Compile failed");
+    let plan_body = serde_json::to_string(&plan).unwrap();
+    let original_hash = *blake3::hash(plan_body.as_bytes()).as_bytes();
+    let plan_hash_hex = hex::encode(original_hash);
+
+    // 6. Define template via InvocationDispatcher
+    let auth = dsl_bus_protocol::v1::AuthorityContext {
+        service_identity: "ob-poc".into(),
+        user_identity: "analyst@example.com".into(),
+        roles: vec!["bpmn.template.write".into()],
+        signed_token: vec![],
+    };
+
+    let ctx = InvocationContext {
+        idempotency_key: Uuid::now_v7(),
+        source_domain: "ob-poc".into(),
+        catalogue_version: "v1.0.0".into(),
+        local_verb_id: "define-template".into(),
+        result_callback_endpoint: String::new(),
+        authority: Some(auth),
+        tenant_id: "default".into(),
+    };
+
+    let inputs = vec![
+        ResolvedBinding {
+            name: "template_key".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue("onboarding-postgres-test".into())),
+                type_name: "String".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "plan_body".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue(plan_body.clone())),
+                type_name: "String".into(),
+            }),
+        },
+    ];
+
+    let outcome = handler.dispatch(ctx, inputs).await.expect("Define template failed");
+    assert_eq!(outcome.outcome.detail, "Template registered");
+
+    // 7. Verify plan was stored and is retrievable
+    let saved = postgres_store.load_plan(original_hash).await.expect("load plan").expect("plan should be stored");
+    let saved_val: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let original_val: serde_json::Value = serde_json::from_str(&plan_body).unwrap();
+    assert_eq!(saved_val, original_val);
+
+    // 8. Spawn instance via InvocationDispatcher
+    let auth_spawn = dsl_bus_protocol::v1::AuthorityContext {
+        service_identity: "ob-poc".into(),
+        user_identity: "analyst@example.com".into(),
+        roles: vec!["bpmn.instance.write".into()],
+        signed_token: vec![],
+    };
+
+    let ctx_spawn = InvocationContext {
+        idempotency_key: Uuid::now_v7(),
+        source_domain: "ob-poc".into(),
+        catalogue_version: "v1.0.0".into(),
+        local_verb_id: "spawn-instance".into(),
+        result_callback_endpoint: String::new(),
+        authority: Some(auth_spawn),
+        tenant_id: "default".into(),
+    };
+
+    let instance_idempotency_key = Uuid::now_v7();
+    let inputs_spawn = vec![
+        ResolvedBinding {
+            name: "template_key".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue(plan_hash_hex)),
+                type_name: "String".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "idempotency_key".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                    dsl_bus_protocol::v1::Uuid {
+                        value: instance_idempotency_key.into_bytes().to_vec(),
+                    }
+                )),
+                type_name: "Uuid".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "entry_id".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                    dsl_bus_protocol::v1::Uuid {
+                        value: Uuid::now_v7().into_bytes().to_vec(),
+                    }
+                )),
+                type_name: "Uuid".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "runbook_id".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                    dsl_bus_protocol::v1::Uuid {
+                        value: Uuid::now_v7().into_bytes().to_vec(),
+                    }
+                )),
+                type_name: "Uuid".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "expected_preconditions".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue("{}".to_string())),
+                type_name: "String".into(),
+            }),
+        },
+    ];
+
+    let outcome_spawn = handler.dispatch(ctx_spawn, inputs_spawn).await.expect("Spawn instance failed");
+    let spawned_iid = outcome_spawn.execution_id;
+    assert!(!spawned_iid.is_nil());
+
+    // 9. Query database directly to verify the instance exists in pg
+    let iid_stored: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM bpmn_process_instance WHERE id = $1"
+    )
+    .bind(spawned_iid)
+    .fetch_optional(&pool)
+    .await
+    .expect("query instance");
+    assert_eq!(iid_stored, Some(spawned_iid));
+}

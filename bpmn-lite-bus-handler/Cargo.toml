@@ -38,6 +38,8 @@ dsl-manifest = { path = "../dsl-manifest" }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres" }
+dsl-bus-client = { path = "../dsl-bus-client" }
 anyhow = { workspace = true }
 
 [lints]

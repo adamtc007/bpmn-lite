@@ -186,6 +186,17 @@ impl BpmnLiteBusHandler {
             ).await.map_err(|e| BusServerError::Malformed(e.to_string()))?;
 
             sqlx::query(
+                "INSERT INTO bpmn_process_instance (id, workflow_id, current_node, status, tenant_id) VALUES ($1, $2, $3, 'Running', $4)"
+            )
+            .bind(iid)
+            .bind(&plan.workflow_id)
+            .bind(&plan.start_node)
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
+            sqlx::query(
                 "INSERT INTO bpmn_spawn_idempotency (idempotency_key, instance_id, tenant_id) VALUES ($1, $2, $3)"
             )
             .bind(idempotency_key)
