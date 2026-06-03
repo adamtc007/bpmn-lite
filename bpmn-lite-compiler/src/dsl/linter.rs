@@ -8,7 +8,7 @@
 //! 3. Validates gateway/split predicates reference known placeholders.
 //! 4. Produces a `WorkflowExecutionPlan` ready for DAG validation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 
 use super::ast::*;
 use super::plan::*;
@@ -252,7 +252,7 @@ impl<'a> Linter<'a> {
         }
 
         // ── Pass 3: validate refs + resolve catalogue, build exec nodes ───────
-        let mut exec_nodes: HashMap<String, ExecutionNode> = HashMap::new();
+        let mut exec_nodes: BTreeMap<String, ExecutionNode> = BTreeMap::new();
         let mut start_node = String::new();
         let mut placeholder_producers: HashMap<String, String> = HashMap::new(); // placeholder → node_id
 
@@ -587,7 +587,12 @@ impl<'a> Linter<'a> {
             placeholder_schema: PlaceholderSchema { slots },
             closure_manifest: Some(serde_json::json!({ "dependencies": [] })),
             regime_version,
+            mathematically_proved: true,
+            unsafe_breeches: vec![],
+            compiled_bytecode: None,
         };
+
+        plan.analyze_safety();
 
         // Derive task delivery modes based on dataflow (P6 / L8)
         let registry = self.registry;

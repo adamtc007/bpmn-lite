@@ -102,7 +102,7 @@ fn dfs_walk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use crate::dsl::plan::{
         WorkflowExecutionPlan, ExecutionNode, StartExecNode, SplitExecNode,
         JoinExecNode, EndExecNode, SplitMode, JoinMode, SplitExecFlow, PlaceholderSchema
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_invalid_sese() {
-        let mut nodes = HashMap::new();
+        let mut nodes = BTreeMap::new();
         nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
             id: "start".to_string(),
             next: "s1".to_string(),
@@ -161,6 +161,9 @@ mod tests {
             placeholder_schema: PlaceholderSchema::default(),
             closure_manifest: None,
             regime_version: None,
+            mathematically_proved: true,
+            unsafe_breeches: vec![],
+            compiled_bytecode: None,
         };
 
         let res = verify_sese_nesting(&plan);
@@ -171,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_valid_sese() {
-        let mut nodes = HashMap::new();
+        let mut nodes = BTreeMap::new();
         nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
             id: "start".to_string(),
             next: "s1".to_string(),
@@ -205,6 +208,9 @@ mod tests {
             placeholder_schema: PlaceholderSchema::default(),
             closure_manifest: None,
             regime_version: None,
+            mathematically_proved: true,
+            unsafe_breeches: vec![],
+            compiled_bytecode: None,
         };
 
         let res = verify_sese_nesting(&plan);

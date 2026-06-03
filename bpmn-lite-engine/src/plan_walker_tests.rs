@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::sync::Arc;
 use bpmn_lite_compiler::dsl::plan::{
     ExecutionNode, WorkflowExecutionPlan, EndExecNode, PlaceholderSchema, StartExecNode, TaskExecNode, SplitExecNode, SplitExecFlow, DeliveryMode, SplitMode
@@ -29,7 +29,7 @@ async fn make_walker(
 
 /// Start→Task(ob-poc:cbu.create)→End plan.
 fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     nodes.insert(
         "start".to_owned(),
         ExecutionNode::Start(StartExecNode {
@@ -67,12 +67,15 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
         placeholder_schema: PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     }
 }
 
 /// Start→Task(dmn-lite:cbu_type_routing)→Gateway→…→End plan.
 fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     nodes.insert(
         "start".to_owned(),
         ExecutionNode::Start(StartExecNode {
@@ -135,6 +138,9 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
         placeholder_schema: PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     }
 }
 
@@ -320,7 +326,7 @@ async fn test_call_activity_in_process_execution() {
     let walker = make_walker(store.clone(), pending).await;
 
     // 1. Build and store the child plan
-    let mut child_nodes = HashMap::new();
+    let mut child_nodes = BTreeMap::new();
     child_nodes.insert(
         "start".to_owned(),
         ExecutionNode::Start(StartExecNode {
@@ -342,6 +348,9 @@ async fn test_call_activity_in_process_execution() {
         placeholder_schema: PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     };
     let child_plan_json = serde_json::to_string(&child_plan).unwrap();
     let child_hash_bytes = blake3::hash(child_plan_json.as_bytes());
@@ -350,7 +359,7 @@ async fn test_call_activity_in_process_execution() {
     store.store_plan(child_hash, &child_plan_json).await.unwrap();
 
     // 2. Build and store the parent plan invoking child by hash hex
-    let mut parent_nodes = HashMap::new();
+    let mut parent_nodes = BTreeMap::new();
     parent_nodes.insert(
         "start".to_owned(),
         ExecutionNode::Start(StartExecNode {
@@ -384,6 +393,9 @@ async fn test_call_activity_in_process_execution() {
         placeholder_schema: PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     };
 
     // 3. Start parent process
@@ -430,4 +442,114 @@ async fn test_call_activity_in_process_execution() {
 
     let parent_inst_final = store.load_instance(parent_id).await.unwrap().unwrap();
     assert!(matches!(parent_inst_final.state, ProcessState::Completed { .. }));
+}
+
+#[tokio::test]
+async fn test_dependency_cycle_detection() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+
+    // 1. We construct parent plan A and child plan B.
+    // Plan A will call Plan B's hash hex.
+    // Plan B will call Plan A's hash hex.
+
+    let hash_a_hex = "a".repeat(64);
+    let hash_b_hex = "b".repeat(64);
+
+    let mut nodes_a = BTreeMap::new();
+    nodes_a.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-b".to_owned(),
+        }),
+    );
+    nodes_a.insert(
+        "call-b".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-b".to_owned(),
+            plug: hash_b_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+        }),
+    );
+    nodes_a.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "Completed".to_owned(),
+        }),
+    );
+
+    let plan_a = WorkflowExecutionPlan {
+        workflow_id: "plan-a".to_owned(),
+        nodes: nodes_a,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
+
+    let mut nodes_b = BTreeMap::new();
+    nodes_b.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-a".to_owned(),
+        }),
+    );
+    nodes_b.insert(
+        "call-a".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-a".to_owned(),
+            plug: hash_a_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+        }),
+    );
+    nodes_b.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "Completed".to_owned(),
+        }),
+    );
+
+    let plan_b = WorkflowExecutionPlan {
+        workflow_id: "plan-b".to_owned(),
+        nodes: nodes_b,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
+
+    let hash_a_bytes = hex::decode(&hash_a_hex).unwrap();
+    let hash_b_bytes = hex::decode(&hash_b_hex).unwrap();
+    let mut arr_a = [0u8; 32];
+    arr_a.copy_from_slice(&hash_a_bytes);
+    let mut arr_b = [0u8; 32];
+    arr_b.copy_from_slice(&hash_b_bytes);
+
+    let plan_a_json = serde_json::to_string(&plan_a).unwrap();
+    let plan_b_json = serde_json::to_string(&plan_b).unwrap();
+
+    store.store_plan(arr_a, &plan_a_json).await.unwrap();
+    store.store_plan(arr_b, &plan_b_json).await.unwrap();
+
+    let res = crate::plan_walker::preload_workflow_dependencies(&plan_a, store.as_ref()).await;
+    assert!(res.is_err());
+    let err_msg = res.err().unwrap().to_string();
+    assert!(err_msg.contains("Cyclic workflow dependency detected"), "got: {}", err_msg);
 }

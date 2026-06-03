@@ -1,14 +1,14 @@
 //! `WorkflowExecutionPlan` — the linted, DAG-validated output of the
 //! bpmn-dsl compilation pipeline.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 
 /// A compiled, validated workflow ready for execution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowExecutionPlan {
     pub workflow_id: String,
     /// Nodes in the workflow, keyed by node id.
-    pub nodes: HashMap<String, ExecutionNode>,
+    pub nodes: BTreeMap<String, ExecutionNode>,
     /// Id of the start node (entry point).
     pub start_node: String,
     /// Placeholder schema: what gets inferred and threaded between nodes.
@@ -17,6 +17,16 @@ pub struct WorkflowExecutionPlan {
     pub closure_manifest: Option<serde_json::Value>,
     #[serde(default)]
     pub regime_version: Option<String>,
+    #[serde(default = "default_true")]
+    pub mathematically_proved: bool,
+    #[serde(default)]
+    pub unsafe_breeches: Vec<String>,
+    #[serde(default)]
+    pub compiled_bytecode: Option<Vec<u8>>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl WorkflowExecutionPlan {
@@ -29,6 +39,70 @@ impl WorkflowExecutionPlan {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Check the plan's components for safety and populate proof indicators.
+    pub fn analyze_safety(&mut self) {
+        let mut breaches = Vec::new();
+
+        // 1. Check for SESE topology violations using our rpst utility
+        if crate::dsl::rpst::verify_sese_nesting(self).is_err() {
+            breaches.push("BPMN_NON_SESE_TOPOLOGY".to_string());
+        }
+
+        // 2. Check each node
+        for node in self.nodes.values() {
+            match node {
+                ExecutionNode::Task(t) => {
+                    if t.plug == "bpmn:unsafe-placeholder" {
+                        if let Some(kind) = t.static_args.get("original_kind") {
+                            if kind.contains("BoundaryTimer") || kind.contains("BoundaryError") || kind.contains("Boundary") {
+                                breaches.push("BPMN_BOUNDARY_EVENT_BYPASS".to_string());
+                            } else {
+                                breaches.push("BPMN_UNSUPPORTED_NODE_BYPASS".to_string());
+                            }
+                        } else {
+                            breaches.push("BPMN_UNSUPPORTED_NODE_BYPASS".to_string());
+                        }
+                    } else if t.plug.contains("boundary-timer") || t.plug.contains("boundary-error") || t.plug.contains("boundary") {
+                        breaches.push("BPMN_BOUNDARY_EVENT_BYPASS".to_string());
+                    }
+                }
+                ExecutionNode::Split(s) => {
+                    for flow in &s.flows {
+                        if let Some(ref placeholder) = flow.placeholder {
+                            if placeholder == "@feel_eval_warning" {
+                                breaches.push("FEEL_EVALUATION_WARNING".to_string());
+                            }
+                        }
+                        if let Some(ref val) = flow.expected_value {
+                            if val == "unparsed_expression" {
+                                breaches.push("FEEL_EVALUATION_WARNING".to_string());
+                            }
+                        }
+                    }
+                    if !self.nodes.contains_key(&s.join) {
+                        breaches.push("BPMN_NON_SESE_TOPOLOGY".to_string());
+                    }
+                }
+                ExecutionNode::Join(j) if !self.nodes.contains_key(&j.split) => {
+                    breaches.push("BPMN_NON_SESE_TOPOLOGY".to_string());
+                }
+                _ => {}
+            }
+        }
+
+        // Deduplicate breaches
+        breaches.sort();
+        breaches.dedup();
+
+        if !breaches.is_empty() {
+            self.mathematically_proved = false;
+            self.unsafe_breeches = breaches;
+        } else {
+            self.mathematically_proved = true;
+            self.unsafe_breeches = Vec::new();
+        }
     }
 }
 

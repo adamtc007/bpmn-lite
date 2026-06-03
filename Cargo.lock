@@ -305,8 +305,10 @@ dependencies = [
 name = "bpmn-lite-bus-handler"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "blake3",
+ "bpmn-lite-authoring",
  "bpmn-lite-compiler",
  "bpmn-lite-engine",
  "bpmn-lite-store",

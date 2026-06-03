@@ -37,6 +37,8 @@ dsl-manifest = { path = "../dsl-manifest" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+anyhow = { workspace = true }
 
 [lints]
 workspace = true

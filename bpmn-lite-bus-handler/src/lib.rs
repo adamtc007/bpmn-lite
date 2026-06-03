@@ -284,15 +284,44 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 let plan_body = get_string_binding(&inputs, "plan_body")?;
 
                 // Relocate validation to define-template
-                let plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&plan_body)
+                let mut plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&plan_body)
                     .map_err(|e| BusServerError::Malformed(format!("Failed to parse plan_body: {}", e)))?;
+
+                let client_proved = plan.mathematically_proved;
+                plan.analyze_safety();
+                if !client_proved {
+                    plan.mathematically_proved = false;
+                }
 
                 let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
                 let child_plans = bpmn_lite_engine::plan_walker::preload_workflow_dependencies(&plan, engine_ref.store().as_ref()).await
                     .map_err(|e| BusServerError::Internal(format!("Failed to preload dependencies: {}", e)))?;
 
+                let mut has_unproved_child = false;
+                for child_plan in child_plans.values() {
+                    if !child_plan.mathematically_proved {
+                        has_unproved_child = true;
+                        break;
+                    }
+                }
+
+                if has_unproved_child {
+                    if plan.mathematically_proved {
+                        return Err(BusServerError::Malformed(
+                            "Transitive validation failed: Proven parent workflow template calls unproven child sub-workflow".into()
+                        ));
+                    } else {
+                        if !plan.unsafe_breeches.contains(&"TRANSITIVE_UNPROVED_CALL".to_string()) {
+                            plan.unsafe_breeches.push("TRANSITIVE_UNPROVED_CALL".to_string());
+                        }
+                    }
+                }
+
+                let plan_body = serde_json::to_string(&plan)
+                    .map_err(|e| BusServerError::Internal(format!("Failed to serialize plan: {}", e)))?;
+
                 let mut stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
-                for (hash, child_plan) in child_plans {
+                for (hash, child_plan) in &child_plans {
                     let mut consumes = Vec::new();
                     for slot in child_plan.placeholder_schema.slots.values() {
                         if slot.produced_by == "start" || slot.produced_by.is_empty() {

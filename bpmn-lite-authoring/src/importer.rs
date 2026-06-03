@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use petgraph::graph::NodeIndex;
 use bpmn_lite_compiler::ir::{IRGraph, IRNode, GatewayDirection};
 use bpmn_lite_compiler::dsl::plan::{
@@ -10,7 +10,7 @@ use bpmn_lite_compiler::dsl::rpst::verify_sese_nesting;
 
 /// Import a Zeebe BPMN 2.0 XML string and convert it into a SESE-structured `WorkflowExecutionPlan`.
 /// Returns an error if the topology is non-SESE.
-pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecutionPlan> {
+pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Result<WorkflowExecutionPlan> {
     // 1. Parse BPMN XML into IRGraph
     let ir = bpmn_lite_compiler::parser::parse_bpmn(xml)?;
 
@@ -35,13 +35,15 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                 split_join_pairs.insert(idx, join_idx);
                 join_split_pairs.insert(join_idx, idx);
             } else {
-                return Err(anyhow!("Non-SESE: Split node '{}' does not have a corresponding merge/join node", node.id()));
+                if !permissive {
+                    return Err(anyhow!("Non-SESE: Split node '{}' does not have a corresponding merge/join node", node.id()));
+                }
             }
         }
     }
 
     // 3. Build WorkflowExecutionPlan nodes
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     let mut start_node_id = None;
 
     for idx in ir.node_indices() {
@@ -93,11 +95,47 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                     consumes_placeholders: vec![],
                 })
             }
+            IRNode::TimerWait { id, spec } => {
+                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                    .next()
+                    .ok_or_else(|| anyhow!("TimerWait node '{}' has no outgoing edges", id))?;
+                let duration_str = match spec {
+                    bpmn_lite_compiler::ir::TimerSpec::Duration { ms } => format!("PT{}M", ms / 60000),
+                    _ => "PT15M".to_string(),
+                };
+                let mut static_args = HashMap::new();
+                static_args.insert("duration".to_string(), duration_str);
+                ExecutionNode::Task(TaskExecNode {
+                    id: id.clone(),
+                    plug: "bpmn:timer-wait".to_string(),
+                    delivery_mode: DeliveryMode::Blocking,
+                    static_args,
+                    next: ir[next_idx].id().to_string(),
+                    produces_placeholder: None,
+                    consumes_placeholders: vec![],
+                })
+            }
+            IRNode::MessageWait { id, name, .. } => {
+                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                    .next()
+                    .ok_or_else(|| anyhow!("MessageWait node '{}' has no outgoing edges", id))?;
+                let mut static_args = HashMap::new();
+                static_args.insert("message_name".to_string(), name.clone());
+                ExecutionNode::Task(TaskExecNode {
+                    id: id.clone(),
+                    plug: "bpmn:message-wait".to_string(),
+                    delivery_mode: DeliveryMode::Blocking,
+                    static_args,
+                    next: ir[next_idx].id().to_string(),
+                    produces_placeholder: None,
+                    consumes_placeholders: vec![],
+                })
+            }
             IRNode::GatewayXor { id, .. } => {
                 if split_join_pairs.contains_key(&idx) {
                     let join_idx = split_join_pairs[&idx];
                     let join_id = ir[join_idx].id().to_string();
-                    let flows = build_split_flows(&ir, idx)?;
+                    let flows = build_split_flows(&ir, idx, permissive)?;
                     ExecutionNode::Split(SplitExecNode {
                         id: id.clone(),
                         mode: SplitMode::Exclusive,
@@ -119,7 +157,21 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                         next: ir[next_idx].id().to_string(),
                     })
                 } else {
-                    return Err(anyhow!("Unpaired/Unbalanced XOR Gateway '{}'", id));
+                    if permissive {
+                        // In permissive mode, let's bypass unpaired XOR gateway
+                        let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                            .next()
+                            .map(|n| ir[n].id().to_string())
+                            .unwrap_or_else(|| "end".to_string());
+                        ExecutionNode::Join(JoinExecNode {
+                            id: id.clone(),
+                            mode: JoinMode::Exclusive,
+                            split: id.clone(),
+                            next: next_idx,
+                        })
+                    } else {
+                        return Err(anyhow!("Unpaired/Unbalanced XOR Gateway '{}'", id));
+                    }
                 }
             }
             IRNode::GatewayAnd { id, direction, .. } => {
@@ -128,7 +180,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                         let join_idx = split_join_pairs.get(&idx)
                             .ok_or_else(|| anyhow!("Diverging Parallel Gateway '{}' has no paired Join", id))?;
                         let join_id = ir[*join_idx].id().to_string();
-                        let flows = build_split_flows(&ir, idx)?;
+                        let flows = build_split_flows(&ir, idx, permissive)?;
                         ExecutionNode::Split(SplitExecNode {
                             id: id.clone(),
                             mode: SplitMode::Parallel,
@@ -160,7 +212,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                         let join_idx = split_join_pairs.get(&idx)
                             .ok_or_else(|| anyhow!("Diverging Inclusive Gateway '{}' has no paired Join", id))?;
                         let join_id = ir[*join_idx].id().to_string();
-                        let flows = build_split_flows(&ir, idx)?;
+                        let flows = build_split_flows(&ir, idx, permissive)?;
                         ExecutionNode::Split(SplitExecNode {
                             id: id.clone(),
                             mode: SplitMode::Inclusive,
@@ -186,6 +238,12 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
                     }
                 }
             }
+            IRNode::BoundaryTimer { id, .. } => {
+                return Err(anyhow!("BoundaryTimer node '{}' is not supported in SESE compilation mode", id));
+            }
+            IRNode::BoundaryError { id, .. } => {
+                return Err(anyhow!("BoundaryError node '{}' is not supported in SESE compilation mode", id));
+            }
             other => {
                 return Err(anyhow!("BPMN node type '{:?}' not supported by SESE importer", other));
             }
@@ -196,27 +254,46 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str) -> Result<WorkflowExecuti
 
     let start_node = start_node_id.ok_or_else(|| anyhow!("BPMN XML lacks Start node"))?;
 
-    let plan = WorkflowExecutionPlan {
+    let mut plan = WorkflowExecutionPlan {
         workflow_id: workflow_id.to_string(),
         nodes,
         start_node,
         placeholder_schema: PlaceholderSchema { slots: HashMap::new() },
         closure_manifest: None,
         regime_version: std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     };
 
     // 4. Verify SESE structure (DFS stack walk)
-    if let Err(err) = verify_sese_nesting(&plan) {
-        return Err(anyhow!("Non-SESE topology verification failed: {}", err));
+    if let Err(e) = verify_sese_nesting(&plan) {
+        if !permissive {
+            return Err(anyhow!("Non-SESE topology verification failed: {}", e));
+        }
     }
 
+    plan.analyze_safety();
     Ok(plan)
 }
 
-fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex) -> Result<Vec<SplitExecFlow>> {
+fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex, permissive: bool) -> Result<Vec<SplitExecFlow>> {
     use petgraph::visit::EdgeRef;
     let mut flows = Vec::new();
-    for edge in ir.edges_directed(split_idx, petgraph::Direction::Outgoing) {
+    
+    let mut outgoing_edges: Vec<_> = ir.edges_directed(split_idx, petgraph::Direction::Outgoing).collect();
+    outgoing_edges.sort_by_key(|e| ir[e.target()].id());
+    
+    let mut conditional_count = 0;
+    for edge in &outgoing_edges {
+        if edge.weight().condition.is_some() {
+            conditional_count += 1;
+        }
+    }
+    
+    let mut default_flow_assigned = false;
+    
+    for edge in outgoing_edges {
         let target = edge.target();
         let target_id = ir[target].id().to_string();
         let edge_weight = edge.weight();
@@ -225,9 +302,27 @@ fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex) -> Result<Vec<SplitExec
                 bpmn_lite_compiler::ir::ConditionLiteral::Bool(b) => b.to_string(),
                 bpmn_lite_compiler::ir::ConditionLiteral::I64(i) => i.to_string(),
             };
-            (Some(format!("@{}", cond.flag_name)), Some(val_str))
+            (Some(format!("@{}", cond.flag_name.replace("_", "-"))), Some(val_str))
         } else {
-            (None, None)
+            if conditional_count == 0 {
+                (None, None)
+            } else if !default_flow_assigned {
+                default_flow_assigned = true;
+                (None, None)
+            } else {
+                if permissive {
+                    (
+                        Some("@feel_eval_warning".to_string()),
+                        Some("unparsed_expression".to_string()),
+                    )
+                } else {
+                    return Err(anyhow!(
+                        "Missing condition on XOR split gateway flow from '{}' to '{}'",
+                        ir[split_idx].id(),
+                        target_id
+                    ));
+                }
+            }
         };
         flows.push(SplitExecFlow {
             placeholder,
@@ -261,7 +356,15 @@ fn find_corresponding_join(graph: &IRGraph, split_idx: NodeIndex) -> Option<Node
     while let Some(curr) = queue.pop_front() {
         if curr != split_idx && intersection.contains(&curr) {
             let node = &graph[curr];
-            if matches!(node, IRNode::GatewayXor { .. } | IRNode::GatewayAnd { direction: GatewayDirection::Converging, .. } | IRNode::GatewayInclusive { direction: GatewayDirection::Converging, .. }) {
+            let is_join = match node {
+                IRNode::GatewayXor { .. } => {
+                    graph.neighbors_directed(curr, petgraph::Direction::Incoming).count() > 1
+                }
+                IRNode::GatewayAnd { direction: GatewayDirection::Converging, .. } => true,
+                IRNode::GatewayInclusive { direction: GatewayDirection::Converging, .. } => true,
+                _ => false,
+            };
+            if is_join {
                 return Some(curr);
             }
         }
@@ -298,7 +401,9 @@ mod tests {
         <bpmn:endEvent id="end" />
 
         <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="split" />
-        <bpmn:sequenceFlow id="f2" sourceRef="split" targetRef="task1" />
+        <bpmn:sequenceFlow id="f2" sourceRef="split" targetRef="task1">
+          <bpmn:conditionExpression>= approved == true</bpmn:conditionExpression>
+        </bpmn:sequenceFlow>
         <bpmn:sequenceFlow id="f3" sourceRef="split" targetRef="task2" />
         <bpmn:sequenceFlow id="f4" sourceRef="task1" targetRef="join" />
         <bpmn:sequenceFlow id="f5" sourceRef="task2" targetRef="join" />
@@ -328,9 +433,13 @@ mod tests {
         <bpmn:endEvent id="end" />
 
         <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="split1" />
-        <bpmn:sequenceFlow id="f2" sourceRef="split1" targetRef="split2" />
+        <bpmn:sequenceFlow id="f2" sourceRef="split1" targetRef="split2">
+          <bpmn:conditionExpression>= approved == true</bpmn:conditionExpression>
+        </bpmn:sequenceFlow>
         <bpmn:sequenceFlow id="f3" sourceRef="split1" targetRef="task1" />
-        <bpmn:sequenceFlow id="f4" sourceRef="split2" targetRef="task2" />
+        <bpmn:sequenceFlow id="f4" sourceRef="split2" targetRef="task2">
+          <bpmn:conditionExpression>= approved == true</bpmn:conditionExpression>
+        </bpmn:sequenceFlow>
         <bpmn:sequenceFlow id="f5" sourceRef="split2" targetRef="join1" />
         <bpmn:sequenceFlow id="f6" sourceRef="task1" targetRef="join1" />
         <bpmn:sequenceFlow id="f7" sourceRef="task2" targetRef="join2" />
@@ -342,7 +451,7 @@ mod tests {
     #[test]
     fn test_zeebe_import_rejections() {
         // 1. Green fixture (valid SESE) compiles successfully to an execution plan
-        let res_green = import_zeebe_bpmn(VALID_SESE_XML, "green_wf");
+        let res_green = import_zeebe_bpmn(VALID_SESE_XML, "green_wf", false);
         assert!(res_green.is_ok(), "Expected valid SESE to compile, got {:?}", res_green);
         let plan = res_green.unwrap();
         assert_eq!(plan.workflow_id, "green_wf");
@@ -351,10 +460,20 @@ mod tests {
         assert!(plan.nodes.contains_key("join"));
 
         // 2. Red fixture (invalid non-SESE with crossing boundaries) is rejected with error
-        let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf");
+        let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf", false);
         assert!(res_red.is_err(), "Expected invalid crossing gateways to be rejected");
         let err_msg = res_red.unwrap_err().to_string();
         assert!(err_msg.contains("verification failed") || err_msg.contains("Crossing split-join boundaries"), "Got message: {}", err_msg);
+    }
+
+    #[test]
+    fn test_zeebe_permissive_import() {
+        let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf_permissive", true);
+
+        assert!(res_red.is_ok(), "Expected invalid crossing gateways to be accepted in permissive mode");
+        let plan = res_red.unwrap();
+        assert!(!plan.mathematically_proved);
+        assert!(plan.unsafe_breeches.contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
     }
 
     #[test]
@@ -374,11 +493,11 @@ mod tests {
         let xml_invalid = std::fs::read_to_string(&invalid_path).expect("read invalid XML");
 
         // 1. Valid SESE file passes SESE verification
-        let res_valid = import_zeebe_bpmn(&xml_valid, "zeebe_valid");
+        let res_valid = import_zeebe_bpmn(&xml_valid, "zeebe_valid", false);
         assert!(res_valid.is_ok(), "Expected valid Zeebe SESE file to compile, got {:?}", res_valid);
 
         // 2. Invalid crossing boundaries file fails with SESE error
-        let res_invalid = import_zeebe_bpmn(&xml_invalid, "zeebe_invalid");
+        let res_invalid = import_zeebe_bpmn(&xml_invalid, "zeebe_invalid", false);
         assert!(res_invalid.is_err(), "Expected non-SESE Zeebe file to fail import");
         let err = res_invalid.unwrap_err().to_string();
         assert!(

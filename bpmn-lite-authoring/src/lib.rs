@@ -35,6 +35,7 @@ pub mod registry;
 #[cfg(feature = "postgres")]
 pub mod store_postgres_templates;
 pub mod importer;
+pub mod sexpr;
 pub mod validate;
 pub mod yaml;
 

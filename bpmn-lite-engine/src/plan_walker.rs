@@ -508,48 +508,48 @@ pub async fn preload_workflow_dependencies(
 ) -> Result<HashMap<String, WorkflowExecutionPlan>> {
     let mut preloaded = HashMap::new();
     let mut visiting = HashSet::new();
-    let mut queue = Vec::new();
 
-    // Enqueue initial child calls from the root plan
-    for node in root_plan.nodes.values() {
-        if let ExecutionNode::Task(t) = node {
-            if is_child_workflow_hash(&t.plug) {
-                queue.push(t.plug.clone());
-            }
-        }
-    }
-
-    while let Some(hash_str) = queue.pop() {
-        if preloaded.contains_key(&hash_str) {
-            continue;
-        }
-        if !visiting.insert(hash_str.clone()) {
-            return Err(anyhow!("Cyclic workflow dependency detected: {}", hash_str));
-        }
-
-        let hash_bytes = decode_hash(&hash_str)
-            .ok_or_else(|| anyhow!("Invalid child workflow hash: {}", hash_str))?;
-
-        if let Some(plan_json) = store.load_plan(hash_bytes).await? {
-            let child_plan: WorkflowExecutionPlan = serde_json::from_str(&plan_json)?;
-            
-            // Scan the child plan for further nested child calls
-            for node in child_plan.nodes.values() {
-                if let ExecutionNode::Task(t) = node {
-                    if is_child_workflow_hash(&t.plug) {
-                        queue.push(t.plug.clone());
-                    }
-                }
-            }
-            preloaded.insert(hash_str.clone(), child_plan);
-        } else {
-            return Err(anyhow!("Child plan not found for hash: {}", hash_str));
-        }
-        
-        visiting.remove(&hash_str);
-    }
+    resolve_deps(root_plan, store, &mut visiting, &mut preloaded).await?;
 
     Ok(preloaded)
+}
+
+fn resolve_deps<'a>(
+    plan: &'a WorkflowExecutionPlan,
+    store: &'a dyn ProcessStore,
+    visiting: &'a mut HashSet<String>,
+    preloaded: &'a mut HashMap<String, WorkflowExecutionPlan>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        for node in plan.nodes.values() {
+            if let ExecutionNode::Task(t) = node {
+                if is_child_workflow_hash(&t.plug) {
+                    let child_hash = t.plug.clone();
+                    if preloaded.contains_key(&child_hash) {
+                        continue;
+                    }
+                    if !visiting.insert(child_hash.clone()) {
+                        return Err(anyhow!("Cyclic workflow dependency detected: {}", child_hash));
+                    }
+
+                    let hash_bytes = decode_hash(&child_hash)
+                        .ok_or_else(|| anyhow!("Invalid child workflow hash: {}", child_hash))?;
+
+                    if let Some(plan_json) = store.load_plan(hash_bytes).await? {
+                        let child_plan: WorkflowExecutionPlan = serde_json::from_str(&plan_json)?;
+                        // Recurse
+                        resolve_deps(&child_plan, store, visiting, preloaded).await?;
+                        preloaded.insert(child_hash.clone(), child_plan);
+                    } else {
+                        return Err(anyhow!("Child plan not found for hash: {}", child_hash));
+                    }
+
+                    visiting.remove(&child_hash);
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 fn decode_hash(hash: &str) -> Option<[u8; 32]> {
@@ -671,13 +671,14 @@ fn crc32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use bpmn_lite_compiler::dsl::plan::{EndExecNode, PlaceholderSchema, StartExecNode};
     use bpmn_lite_store::pending::MemoryPendingInvocationStore;
     use bpmn_lite_store::store_memory::MemoryStore;
 
     /// Minimal plan: Start → End.
     fn simple_plan(workflow_id: &str) -> WorkflowExecutionPlan {
-        let mut nodes = HashMap::new();
+        let mut nodes = BTreeMap::new();
         nodes.insert(
             "start".to_owned(),
             ExecutionNode::Start(StartExecNode {
@@ -699,6 +700,9 @@ mod tests {
             placeholder_schema: PlaceholderSchema::default(),
             closure_manifest: None,
             regime_version: None,
+            mathematically_proved: true,
+            unsafe_breeches: vec![],
+            compiled_bytecode: None,
         }
     }
 
