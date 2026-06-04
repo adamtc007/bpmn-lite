@@ -131,13 +131,28 @@ impl CustomMacroConfig {
             let placeholder = format!("%{}%", k);
             instantiated_str = instantiated_str.replace(&placeholder, v);
         }
-        if instantiated_str.contains('%') {
-            if let Some(start) = instantiated_str.find('%') {
-                if let Some(end_offset) = instantiated_str[start + 1..].find('%') {
-                    let placeholder = &instantiated_str[start..start + 1 + end_offset + 1];
-                    return Err(format!("Unreplaced placeholder: {}", placeholder));
+        let bytes = instantiated_str.as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() {
+            if bytes[idx] == b'%' {
+                let mut end = idx + 1;
+                while end < bytes.len() && bytes[end] != b'%' {
+                    end += 1;
+                }
+                if end < bytes.len() {
+                    let name_bytes = &bytes[idx + 1..end];
+                    if !name_bytes.is_empty() && name_bytes.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+                        if let Ok(name) = std::str::from_utf8(name_bytes) {
+                            if !params.contains_key(name) {
+                                return Err(format!("Unreplaced placeholder: %{}%", name));
+                            }
+                        }
+                    }
+                    idx = end + 1;
+                    continue;
                 }
             }
+            idx += 1;
         }
         crate::dsl::parser::parse_node_str(&instantiated_str)
     }

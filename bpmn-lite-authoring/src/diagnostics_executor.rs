@@ -231,10 +231,10 @@ generated_at: "2026-06-04T12:00:00Z"
                 }
             };
 
-            let pred_id = find_predecessor(&workflow.nodes, node_id);
+            let pred_ids = find_all_predecessors(&workflow.nodes, node_id);
             {
                 let mut mutator = AstMutator::new(&mut workflow);
-                if let Some(pred) = pred_id {
+                for pred in pred_ids {
                     mutator.rewire_next(&pred, &removed_next)?;
                 }
                 mutator.remove_node(node_id)
@@ -246,43 +246,36 @@ generated_at: "2026-06-04T12:00:00Z"
     }
 }
 
-fn find_predecessor(nodes: &[NodeAst], target_id: &str) -> Option<String> {
+fn find_all_predecessors(nodes: &[NodeAst], target_id: &str) -> Vec<String> {
+    let mut preds = Vec::new();
+    find_all_predecessors_rec(nodes, target_id, &mut preds);
+    preds
+}
+
+fn find_all_predecessors_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<String>) {
     for node in nodes {
         match node {
             NodeAst::Start(s) => {
-                if s.next == target_id {
-                    return Some(s.id.clone());
-                }
+                if s.next == target_id { acc.push(s.id.clone()); }
             }
             NodeAst::Task(t) => {
-                if t.next == target_id {
-                    return Some(t.id.clone());
-                }
+                if t.next == target_id { acc.push(t.id.clone()); }
             }
             NodeAst::Join(j) => {
-                if j.next == target_id {
-                    return Some(j.id.clone());
-                }
+                if j.next == target_id { acc.push(j.id.clone()); }
             }
             NodeAst::Loop(l) => {
-                if l.next == target_id {
-                    return Some(l.id.clone());
-                }
-                if let Some(p) = find_predecessor(&l.body, target_id) {
-                    return Some(p);
-                }
+                if l.next == target_id { acc.push(l.id.clone()); }
+                find_all_predecessors_rec(&l.body, target_id, acc);
             }
             NodeAst::Split(s) => {
                 for flow in &s.flows {
-                    if flow.next == target_id {
-                        return Some(s.id.clone());
-                    }
+                    if flow.next == target_id { acc.push(s.id.clone()); }
                 }
             }
             NodeAst::End(_) => {}
         }
     }
-    None
 }
 
 #[cfg(test)]

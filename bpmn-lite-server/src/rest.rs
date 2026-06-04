@@ -1235,11 +1235,12 @@ async fn apply_dsl_macro(
 
             let exit_next = target_task.next.clone();
 
-            // Find predecessor pointing to target node to rewire it to the exit_next temporarily
-            let pred_id = find_predecessor_id_in_workflow(&workflow, target_node_id);
-            if let Some(pred) = &pred_id {
+            let pred_ids = find_all_predecessors_id_in_workflow(&workflow, target_node_id);
+            {
                 let mut mutator = AstMutator::new(&mut workflow);
-                let _ = mutator.rewire_next(pred, &exit_next);
+                for pred in &pred_ids {
+                    let _ = mutator.rewire_next(pred, &exit_next);
+                }
             }
 
             let loop_node = NodeAst::Loop(create_bounded_retry_macro(
@@ -1249,7 +1250,7 @@ async fn apply_dsl_macro(
                 &exit_next,
             ));
 
-            let pred_id = find_predecessor_id_in_workflow(&workflow, &exit_next);
+            let pred_ids_exit = find_all_predecessors_id_in_workflow(&workflow, &exit_next);
             let first_id = if workflow.nodes.is_empty() {
                 None
             } else {
@@ -1257,8 +1258,8 @@ async fn apply_dsl_macro(
             };
 
             let mut mutator = AstMutator::new(&mut workflow);
-            if let Some(pred) = pred_id {
-                mutator.insert_after(&pred, loop_node)
+            if !pred_ids_exit.is_empty() {
+                mutator.insert_after(&pred_ids_exit[0], loop_node)
             } else if let Some(first) = first_id {
                 mutator.insert_after(&first, loop_node)
             } else {
@@ -1377,62 +1378,36 @@ async fn apply_dsl_macro(
     }
 }
 
-fn find_predecessor_id_in_workflow(workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource, target_id: &str) -> Option<String> {
-    for node in &workflow.nodes {
-        match node {
-            bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
-                if s.next == target_id { return Some(s.id.clone()); }
-            }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
-                if t.next == target_id { return Some(t.id.clone()); }
-            }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
-                if j.next == target_id { return Some(j.id.clone()); }
-            }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
-                if l.next == target_id { return Some(l.id.clone()); }
-                if let Some(pred) = find_predecessor_id_in_loop_body(&l.body, target_id) {
-                    return Some(pred);
-                }
-            }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
-                for flow in &s.flows {
-                    if flow.next == target_id { return Some(s.id.clone()); }
-                }
-            }
-            bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
-        }
-    }
-    None
+fn find_all_predecessors_id_in_workflow(workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource, target_id: &str) -> Vec<String> {
+    let mut preds = Vec::new();
+    find_all_predecessors_id_rec(&workflow.nodes, target_id, &mut preds);
+    preds
 }
 
-fn find_predecessor_id_in_loop_body(body: &[bpmn_lite_compiler::dsl::ast::NodeAst], target_id: &str) -> Option<String> {
-    for node in body {
+fn find_all_predecessors_id_rec(nodes: &[bpmn_lite_compiler::dsl::ast::NodeAst], target_id: &str, acc: &mut Vec<String>) {
+    for node in nodes {
         match node {
             bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
-                if s.next == target_id { return Some(s.id.clone()); }
+                if s.next == target_id { acc.push(s.id.clone()); }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
-                if t.next == target_id { return Some(t.id.clone()); }
+                if t.next == target_id { acc.push(t.id.clone()); }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
-                if j.next == target_id { return Some(j.id.clone()); }
+                if j.next == target_id { acc.push(j.id.clone()); }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
-                if l.next == target_id { return Some(l.id.clone()); }
-                if let Some(pred) = find_predecessor_id_in_loop_body(&l.body, target_id) {
-                    return Some(pred);
-                }
+                if l.next == target_id { acc.push(l.id.clone()); }
+                find_all_predecessors_id_rec(&l.body, target_id, acc);
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
                 for flow in &s.flows {
-                    if flow.next == target_id { return Some(s.id.clone()); }
+                    if flow.next == target_id { acc.push(s.id.clone()); }
                 }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
         }
     }
-    None
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1458,7 +1433,9 @@ pub(crate) struct DiagnosticsResolveResponse {
 async fn resolve_dsl_diagnostics(
     Json(body): Json<DiagnosticsResolveRequest>,
 ) -> impl IntoResponse {
-    let manifests_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifests");
+    let manifests_path = std::env::var("SAGE_MANIFESTS_DIR")
+        .unwrap_or_else(|_| format!("{}/../manifests", env!("CARGO_MANIFEST_DIR")));
+    let manifests_dir = std::path::PathBuf::from(manifests_path);
     match bpmn_lite_authoring::diagnostics_executor::execute_autofix(&body.source_code, &body.action, &manifests_dir) {
         Ok(new_dsl) => {
             let registry = get_preview_registry();
@@ -1544,8 +1521,8 @@ async fn sage_utterance_gate(
             "macro_type": "BoundedRetry",
             "parameters": params
         })))
-    } else if text.contains("import") || text.contains("unknown verb") {
-        let verb = if text.contains("import ") {
+    } else if text.starts_with("import ") || text.contains("unknown verb") {
+        let verb = if text.starts_with("import ") {
             body.utterance.trim()[7..].to_string()
         } else {
             "ob-poc:cbu.create".to_string()

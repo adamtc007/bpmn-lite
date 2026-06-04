@@ -193,7 +193,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
             NodeAst::End(_) => {} 
-            NodeAst::Split(_) => {} 
+            NodeAst::Split(_) => return Err("Cannot insert a Split node directly via insert_after; use specialized refactoring macros".into()),
         }
 
         // 3. Rewire predecessor to point to the new node
