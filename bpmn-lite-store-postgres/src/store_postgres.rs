@@ -1639,6 +1639,7 @@ impl ProcessStore for PostgresProcessStore {
             let state = serde_json::to_value(&instance.state)?;
             let session_stack = serde_json::to_value(&instance.session_stack)?;
             let created_at = epoch_ms_to_datetime(instance.created_at);
+            let integrity_hash = compute_instance_integrity_hash(&instance);
 
             sqlx::query(
                 r#"
@@ -1646,9 +1647,9 @@ impl ProcessStore for PostgresProcessStore {
                     instance_id, tenant_id, process_key, bytecode_version, domain_payload,
                     domain_payload_hash, session_stack, flags, counters, join_expected, state,
                     correlation_id, entry_id, runbook_id, created_at,
-                    plan_hash, current_node_id, placeholder_values
+                    plan_hash, current_node_id, placeholder_values, integrity_hash
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                          $16, $17, $18)
+                          $16, $17, $18, $19)
                 "#,
             )
             .bind(instance.instance_id)
@@ -1669,6 +1670,7 @@ impl ProcessStore for PostgresProcessStore {
             .bind(instance.plan_hash.as_ref().map(|h| h.as_slice()))
             .bind(instance.current_node_id.as_deref())
             .bind(instance.placeholder_values.as_ref())
+            .bind(&integrity_hash[..])
             .execute(&mut *tx.tx)
             .await?;
 

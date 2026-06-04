@@ -684,6 +684,7 @@ mod tests {
             ExecutionNode::Start(StartExecNode {
                 id: "start".to_owned(),
                 next: "end".to_owned(),
+                span: None,
             }),
         );
         nodes.insert(
@@ -691,6 +692,7 @@ mod tests {
             ExecutionNode::End(EndExecNode {
                 id: "end".to_owned(),
                 status: "Operational".to_owned(),
+                span: None,
             }),
         );
         WorkflowExecutionPlan {

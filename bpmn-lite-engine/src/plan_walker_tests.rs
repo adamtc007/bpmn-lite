@@ -35,6 +35,7 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "create-cbu".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
@@ -51,6 +52,7 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
             next: "end".to_owned(),
             produces_placeholder: Some("@cbu".to_owned()),
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes.insert(
@@ -58,6 +60,7 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
         ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "Operational".to_owned(),
+            span: None,
         }),
     );
     WorkflowExecutionPlan {
@@ -81,6 +84,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "route".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
@@ -93,6 +97,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
             next: "gateway".to_owned(),
             produces_placeholder: Some("@cbu-type".to_owned()),
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes.insert(
@@ -115,6 +120,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
             ],
             join: "end".to_owned(),
             produces_placeholder: None,
+            span: None,
         }),
     );
     nodes.insert(
@@ -122,6 +128,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
         ExecutionNode::End(EndExecNode {
             id: "end-fund".to_owned(),
             status: "FundOnboarded".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
@@ -129,6 +136,7 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
         ExecutionNode::End(EndExecNode {
             id: "end-corporate".to_owned(),
             status: "CorporateOnboarded".to_owned(),
+            span: None,
         }),
     );
     WorkflowExecutionPlan {
@@ -332,6 +340,7 @@ async fn test_call_activity_in_process_execution() {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "end".to_owned(),
+            span: None,
         }),
     );
     child_nodes.insert(
@@ -339,6 +348,7 @@ async fn test_call_activity_in_process_execution() {
         ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "ChildDone".to_owned(),
+            span: None,
         }),
     );
     let child_plan = WorkflowExecutionPlan {
@@ -365,6 +375,7 @@ async fn test_call_activity_in_process_execution() {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "call-child".to_owned(),
+            span: None,
         }),
     );
     parent_nodes.insert(
@@ -377,6 +388,7 @@ async fn test_call_activity_in_process_execution() {
             next: "end".to_owned(),
             produces_placeholder: None,
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     parent_nodes.insert(
@@ -384,6 +396,7 @@ async fn test_call_activity_in_process_execution() {
         ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "ParentDone".to_owned(),
+            span: None,
         }),
     );
     let parent_plan = WorkflowExecutionPlan {
@@ -461,6 +474,7 @@ async fn test_dependency_cycle_detection() {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "call-b".to_owned(),
+            span: None,
         }),
     );
     nodes_a.insert(
@@ -473,6 +487,7 @@ async fn test_dependency_cycle_detection() {
             next: "end".to_owned(),
             produces_placeholder: None,
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes_a.insert(
@@ -480,6 +495,7 @@ async fn test_dependency_cycle_detection() {
         ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "Completed".to_owned(),
+            span: None,
         }),
     );
 
@@ -501,6 +517,7 @@ async fn test_dependency_cycle_detection() {
         ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "call-a".to_owned(),
+            span: None,
         }),
     );
     nodes_b.insert(
@@ -513,6 +530,7 @@ async fn test_dependency_cycle_detection() {
             next: "end".to_owned(),
             produces_placeholder: None,
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes_b.insert(
@@ -520,6 +538,7 @@ async fn test_dependency_cycle_detection() {
         ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "Completed".to_owned(),
+            span: None,
         }),
     );
 

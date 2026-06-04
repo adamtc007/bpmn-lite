@@ -47,6 +47,15 @@ impl Parser {
         t
     }
 
+    fn get_span_end(&self) -> usize {
+        let pk = self.peek();
+        if matches!(pk.kind, TokenKind::Eof) {
+            pk.offset
+        } else {
+            pk.offset + 1
+        }
+    }
+
     fn expect_lparen(&mut self, context: &str) -> Option<usize> {
         if matches!(self.peek().kind, TokenKind::LParen) {
             let offset = self.peek().offset;
@@ -135,6 +144,7 @@ impl Parser {
     }
 
     fn parse_node(&mut self) -> Option<NodeAst> {
+        let start_offset = self.peek().offset;
         self.expect_lparen("node")?;
 
         let kind_sym = match &self.peek().kind {
@@ -147,19 +157,19 @@ impl Parser {
         self.advance();
 
         let node = match kind_sym.as_str() {
-            "start-event" | "start" => self.parse_start().map(NodeAst::Start),
-            "end-event" | "end" => self.parse_end().map(NodeAst::End),
-            "service-task" => self.parse_service_task_old().map(NodeAst::Task),
-            "business-rule-task" => self.parse_business_rule_task_old().map(NodeAst::Task),
-            "task" => self.parse_task().map(NodeAst::Task),
-            "exclusive-gateway" => self.parse_exclusive_gateway_old().map(NodeAst::Split),
-            "split-xor" => self.parse_split(SplitModeAst::Xor).map(NodeAst::Split),
-            "split-or" => self.parse_split(SplitModeAst::Or).map(NodeAst::Split),
-            "split-and" => self.parse_split(SplitModeAst::And).map(NodeAst::Split),
-            "join-xor" => self.parse_join(JoinModeAst::Xor).map(NodeAst::Join),
-            "join-or" => self.parse_join(JoinModeAst::Or).map(NodeAst::Join),
-            "join-and" => self.parse_join(JoinModeAst::And).map(NodeAst::Join),
-            "loop" => self.parse_loop().map(NodeAst::Loop),
+            "start-event" | "start" => self.parse_start(start_offset).map(NodeAst::Start),
+            "end-event" | "end" => self.parse_end(start_offset).map(NodeAst::End),
+            "service-task" => self.parse_service_task_old(start_offset).map(NodeAst::Task),
+            "business-rule-task" => self.parse_business_rule_task_old(start_offset).map(NodeAst::Task),
+            "task" => self.parse_task(start_offset).map(NodeAst::Task),
+            "exclusive-gateway" => self.parse_exclusive_gateway_old(start_offset).map(NodeAst::Split),
+            "split-xor" => self.parse_split(start_offset, SplitModeAst::Xor).map(NodeAst::Split),
+            "split-or" => self.parse_split(start_offset, SplitModeAst::Or).map(NodeAst::Split),
+            "split-and" => self.parse_split(start_offset, SplitModeAst::And).map(NodeAst::Split),
+            "join-xor" => self.parse_join(start_offset, JoinModeAst::Xor).map(NodeAst::Join),
+            "join-or" => self.parse_join(start_offset, JoinModeAst::Or).map(NodeAst::Join),
+            "join-and" => self.parse_join(start_offset, JoinModeAst::And).map(NodeAst::Join),
+            "loop" => self.parse_loop(start_offset).map(NodeAst::Loop),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
                 None
@@ -172,13 +182,15 @@ impl Parser {
 
     // ── Node parsers ──────────────────────────────────────────────────────────
 
-    fn parse_start(&mut self) -> Option<StartAst> {
+    fn parse_start(&mut self, start_offset: usize) -> Option<StartAst> {
         let id = self.parse_kw_symbol("id")?;
         let next = self.parse_kw_symbol("next")?;
-        Some(StartAst { id, next })
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(StartAst { id, next, span })
     }
 
-    fn parse_end(&mut self) -> Option<EndAst> {
+    fn parse_end(&mut self, start_offset: usize) -> Option<EndAst> {
         let id = self.parse_kw_symbol("id")?;
         let status = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "status") {
             self.advance();
@@ -186,10 +198,12 @@ impl Parser {
         } else {
             String::new()
         };
-        Some(EndAst { id, status })
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(EndAst { id, status, span })
     }
 
-    fn parse_service_task_old(&mut self) -> Option<TaskAst> {
+    fn parse_service_task_old(&mut self, start_offset: usize) -> Option<TaskAst> {
         let id = self.parse_kw_symbol("id")?;
         let verb = self.parse_kw_symbol("verb")?;
         let args = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "args") {
@@ -199,29 +213,35 @@ impl Parser {
             Vec::new()
         };
         let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(TaskAst {
             id,
             plug: verb,
             args,
             next,
             delivery_mode: None,
+            span,
         })
     }
 
-    fn parse_business_rule_task_old(&mut self) -> Option<TaskAst> {
+    fn parse_business_rule_task_old(&mut self, start_offset: usize) -> Option<TaskAst> {
         let id = self.parse_kw_symbol("id")?;
         let decision = self.parse_kw_symbol("decision")?;
         let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(TaskAst {
             id,
             plug: decision,
             args: Vec::new(),
             next,
             delivery_mode: None,
+            span,
         })
     }
 
-    fn parse_task(&mut self) -> Option<TaskAst> {
+    fn parse_task(&mut self, start_offset: usize) -> Option<TaskAst> {
         let id = self.parse_kw_symbol("id")?;
         let plug = self.parse_kw_symbol("plug")?;
         let args = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "args") {
@@ -237,12 +257,15 @@ impl Parser {
             None
         };
         let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(TaskAst {
             id,
             plug,
             args,
             next,
             delivery_mode,
+            span,
         })
     }
 
@@ -267,7 +290,7 @@ impl Parser {
         pairs
     }
 
-    fn parse_exclusive_gateway_old(&mut self) -> Option<SplitAst> {
+    fn parse_exclusive_gateway_old(&mut self, start_offset: usize) -> Option<SplitAst> {
         let id = self.parse_kw_symbol("id")?;
         let mut flows = Vec::new();
         while matches!(self.peek().kind, TokenKind::LParen) {
@@ -279,16 +302,19 @@ impl Parser {
             self.error("exclusive-gateway must have at least one flow".into());
         }
         let join = format!("{}-join", id);
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(SplitAst {
             id,
             mode: SplitModeAst::Xor,
             plug: None,
             flows,
             join,
+            span,
         })
     }
 
-    fn parse_split(&mut self, mode: SplitModeAst) -> Option<SplitAst> {
+    fn parse_split(&mut self, start_offset: usize, mode: SplitModeAst) -> Option<SplitAst> {
         let id = self.parse_kw_symbol("id")?;
         let plug = if mode != SplitModeAst::And {
             Some(self.parse_kw_symbol("plug")?)
@@ -302,12 +328,15 @@ impl Parser {
                 flows.push(flow);
             }
         }
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(SplitAst {
             id,
             mode,
             plug,
             flows,
             join,
+            span,
         })
     }
 
@@ -352,19 +381,22 @@ impl Parser {
         Some(ConditionAst::Eq { placeholder: format!("@{placeholder}"), value })
     }
 
-    fn parse_join(&mut self, mode: JoinModeAst) -> Option<JoinAst> {
+    fn parse_join(&mut self, start_offset: usize, mode: JoinModeAst) -> Option<JoinAst> {
         let id = self.parse_kw_symbol("id")?;
         let split = self.parse_kw_symbol("split")?;
         let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(JoinAst {
             id,
             mode,
             split,
             next,
+            span,
         })
     }
 
-    fn parse_loop(&mut self) -> Option<LoopAst> {
+    fn parse_loop(&mut self, start_offset: usize) -> Option<LoopAst> {
         let id = self.parse_kw_symbol("id")?;
         self.expect_keyword("ceiling")?;
         let ceiling = if let TokenKind::Symbol(s) = &self.peek().kind {
@@ -389,11 +421,14 @@ impl Parser {
         }
         self.expect_rparen("loop body");
         let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
         Some(LoopAst {
             id,
             ceiling,
             body,
             next,
+            span,
         })
     }
 

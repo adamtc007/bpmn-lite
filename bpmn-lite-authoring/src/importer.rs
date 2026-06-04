@@ -59,12 +59,14 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 ExecutionNode::Start(StartExecNode {
                     id: id.clone(),
                     next: ir[next_idx].id().to_string(),
+                    span: None,
                 })
             }
             IRNode::End { id, .. } => {
                 ExecutionNode::End(EndExecNode {
                     id: id.clone(),
                     status: "completed".to_string(),
+                    span: None,
                 })
             }
             IRNode::ServiceTask { id, task_type, .. } => {
@@ -79,6 +81,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    span: None,
                 })
             }
             IRNode::HumanWait { id, task_kind, .. } => {
@@ -93,6 +96,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    span: None,
                 })
             }
             IRNode::TimerWait { id, spec } => {
@@ -113,6 +117,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    span: None,
                 })
             }
             IRNode::MessageWait { id, name, .. } => {
@@ -129,6 +134,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    span: None,
                 })
             }
             IRNode::GatewayXor { id, .. } => {
@@ -143,6 +149,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                         flows,
                         join: join_id,
                         produces_placeholder: None,
+                        span: None,
                     })
                 } else if join_split_pairs.contains_key(&idx) {
                     let split_idx = join_split_pairs[&idx];
@@ -155,6 +162,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                         mode: JoinMode::Exclusive,
                         split: split_id,
                         next: ir[next_idx].id().to_string(),
+                        span: None,
                     })
                 } else {
                     if permissive {
@@ -168,6 +176,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                             mode: JoinMode::Exclusive,
                             split: id.clone(),
                             next: next_idx,
+                            span: None,
                         })
                     } else {
                         return Err(anyhow!("Unpaired/Unbalanced XOR Gateway '{}'", id));
@@ -188,6 +197,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                             flows,
                             join: join_id,
                             produces_placeholder: None,
+                            span: None,
                         })
                     }
                     GatewayDirection::Converging => {
@@ -202,6 +212,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                             mode: JoinMode::Parallel,
                             split: split_id,
                             next: ir[next_idx].id().to_string(),
+                            span: None,
                         })
                     }
                 }
@@ -220,6 +231,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                             flows,
                             join: join_id,
                             produces_placeholder: None,
+                            span: None,
                         })
                     }
                     GatewayDirection::Converging => {
@@ -234,6 +246,7 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                             mode: JoinMode::Inclusive,
                             split: split_id,
                             next: ir[next_idx].id().to_string(),
+                            span: None,
                         })
                     }
                 }

@@ -134,6 +134,8 @@ impl ExecutionNode {
 pub struct StartExecNode {
     pub id: String,
     pub next: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -159,6 +161,8 @@ pub struct TaskExecNode {
     pub produces_placeholder: Option<String>,
     /// Placeholders this node consumes.
     pub consumes_placeholders: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -176,6 +180,8 @@ pub struct SplitExecNode {
     pub flows: Vec<SplitExecFlow>,
     pub join: String,
     pub produces_placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -200,6 +206,8 @@ pub struct JoinExecNode {
     pub mode: JoinMode,
     pub split: String,
     pub next: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -208,12 +216,16 @@ pub struct LoopExecNode {
     pub ceiling: u32,
     pub body: Vec<String>,
     pub next: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EndExecNode {
     pub id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
 /// Inferred binding flow across the workflow.

@@ -32,18 +32,31 @@ impl NodeAst {
             Self::Loop(n) => &n.id,
         }
     }
+
+    pub fn span(&self) -> bpmn_lite_types::SourceSpan {
+        match self {
+            Self::Start(n) => n.span,
+            Self::End(n) => n.span,
+            Self::Task(n) => n.span,
+            Self::Split(n) => n.span,
+            Self::Join(n) => n.span,
+            Self::Loop(n) => n.span,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct StartAst {
     pub id: String,
     pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
 pub struct EndAst {
     pub id: String,
     pub status: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +66,7 @@ pub struct TaskAst {
     pub args: Vec<(String, String)>,
     pub next: String,
     pub delivery_mode: Option<String>,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +83,7 @@ pub struct SplitAst {
     pub plug: Option<String>,
     pub flows: Vec<SplitFlowAst>,
     pub join: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +110,7 @@ pub struct JoinAst {
     pub mode: JoinModeAst,
     pub split: String,
     pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
@@ -103,4 +119,5 @@ pub struct LoopAst {
     pub ceiling: u32,
     pub body: Vec<NodeAst>,
     pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }

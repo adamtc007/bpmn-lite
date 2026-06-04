@@ -135,10 +135,10 @@ async fn test_sage_transitive_validation_propagation() {
     // 1. Construct and store an unproved child plan
     let mut child_nodes = std::collections::HashMap::new();
     child_nodes.insert("start".to_string(), bpmn_lite_compiler::dsl::plan::ExecutionNode::Start(
-        bpmn_lite_compiler::dsl::plan::StartExecNode { id: "start".to_string(), next: "end".to_string() }
+        bpmn_lite_compiler::dsl::plan::StartExecNode { id: "start".to_string(), next: "end".to_string(), span: None }
     ));
     child_nodes.insert("end".to_string(), bpmn_lite_compiler::dsl::plan::ExecutionNode::End(
-        bpmn_lite_compiler::dsl::plan::EndExecNode { id: "end".to_string(), status: "completed".to_string() }
+        bpmn_lite_compiler::dsl::plan::EndExecNode { id: "end".to_string(), status: "completed".to_string(), span: None }
     ));
     let child_plan = bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan {
         workflow_id: "unproved-child".to_string(),
@@ -159,7 +159,7 @@ async fn test_sage_transitive_validation_propagation() {
     // 2. Build a parent plan calling the unproved child
     let mut parent_nodes = std::collections::HashMap::new();
     parent_nodes.insert("start".to_string(), bpmn_lite_compiler::dsl::plan::ExecutionNode::Start(
-        bpmn_lite_compiler::dsl::plan::StartExecNode { id: "start".to_string(), next: "call-child".to_string() }
+        bpmn_lite_compiler::dsl::plan::StartExecNode { id: "start".to_string(), next: "call-child".to_string(), span: None }
     ));
     parent_nodes.insert("call-child".to_string(), bpmn_lite_compiler::dsl::plan::ExecutionNode::Task(
         bpmn_lite_compiler::dsl::plan::TaskExecNode {
@@ -170,10 +170,11 @@ async fn test_sage_transitive_validation_propagation() {
             next: "end".to_string(),
             produces_placeholder: None,
             consumes_placeholders: vec![],
+            span: None,
         }
     ));
     parent_nodes.insert("end".to_string(), bpmn_lite_compiler::dsl::plan::ExecutionNode::End(
-        bpmn_lite_compiler::dsl::plan::EndExecNode { id: "end".to_string(), status: "completed".to_string() }
+        bpmn_lite_compiler::dsl::plan::EndExecNode { id: "end".to_string(), status: "completed".to_string(), span: None }
     ));
 
     // A. Parent is strictly proved (mathematically_proved = true)

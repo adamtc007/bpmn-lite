@@ -24,6 +24,21 @@ pub type FlagKey = u32;
 /// Epoch milliseconds (UTC).
 pub type Timestamp = i64;
 
+/// Byte-offset span into the original source text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SourceSpan {
+    /// Inclusive start byte offset.
+    pub start: u32,
+    /// Exclusive end byte offset.
+    pub end: u32,
+}
+
+impl SourceSpan {
+    pub fn new(start: u32, end: u32) -> Self {
+        Self { start, end }
+    }
+}
+
 // ─── Value ────────────────────────────────────────────────────
 
 /// A compact value on the orch stack or in flags. Never domain payload.

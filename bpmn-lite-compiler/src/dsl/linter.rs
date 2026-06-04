@@ -266,7 +266,7 @@ impl<'a> Linter<'a> {
                         self.err(id, "multiple start events");
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
-                    ExecutionNode::Start(StartExecNode { id: n.id.clone(), next: n.next.clone() })
+                    ExecutionNode::Start(StartExecNode { id: n.id.clone(), next: n.next.clone(), span: Some(n.span) })
                 }
 
                 NodeAst::Task(n) => {
@@ -350,6 +350,7 @@ impl<'a> Linter<'a> {
                         next: n.next.clone(),
                         produces_placeholder: decl.produces,
                         consumes_placeholders: decl.consumes,
+                        span: Some(n.span),
                     })
                 }
 
@@ -396,6 +397,7 @@ impl<'a> Linter<'a> {
                         flows: exec_flows,
                         join: n.join.clone(),
                         produces_placeholder: produces.clone(),
+                        span: Some(n.span),
                     })
                 }
 
@@ -411,6 +413,7 @@ impl<'a> Linter<'a> {
                         mode,
                         split: n.split.clone(),
                         next: n.next.clone(),
+                        span: Some(n.span),
                     })
                 }
 
@@ -422,11 +425,16 @@ impl<'a> Linter<'a> {
                         ceiling: n.ceiling,
                         body: n.body.iter().map(|child| child.id().to_owned()).collect(),
                         next: n.next.clone(),
+                        span: Some(n.span),
                     })
                 }
 
                 NodeAst::End(n) => {
-                    ExecutionNode::End(EndExecNode { id: n.id.clone(), status: n.status.clone() })
+                    ExecutionNode::End(EndExecNode {
+                        id: n.id.clone(),
+                        status: n.status.clone(),
+                        span: Some(n.span),
+                    })
                 }
             };
             exec_nodes.insert(id.to_owned(), exec_node);
@@ -471,6 +479,7 @@ impl<'a> Linter<'a> {
                             mode: join_mode,
                             split: split_id.clone(),
                             next: m.clone(),
+                            span: None,
                         });
                         synthesized_joins.push((sp.join.clone(), join_node, m, split_id.clone()));
                     }

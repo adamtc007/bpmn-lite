@@ -114,6 +114,7 @@ mod tests {
         nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
             id: "start".to_string(),
             next: "s1".to_string(),
+            span: None,
         }));
         nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
             id: "s1".to_string(),
@@ -125,6 +126,7 @@ mod tests {
             ],
             join: "j1".to_string(),
             produces_placeholder: None,
+            span: None,
         }));
         nodes.insert("s2".to_string(), ExecutionNode::Split(SplitExecNode {
             id: "s2".to_string(),
@@ -136,22 +138,26 @@ mod tests {
             ],
             join: "j2".to_string(),
             produces_placeholder: None,
+            span: None,
         }));
         nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
             id: "j1".to_string(),
             mode: JoinMode::Exclusive,
             split: "s1".to_string(),
             next: "j2".to_string(),
+            span: None,
         }));
         nodes.insert("j2".to_string(), ExecutionNode::Join(JoinExecNode {
             id: "j2".to_string(),
             mode: JoinMode::Exclusive,
             split: "s2".to_string(),
             next: "end".to_string(),
+            span: None,
         }));
         nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
             id: "end".to_string(),
             status: "Completed".to_string(),
+            span: None,
         }));
 
         let plan = WorkflowExecutionPlan {
@@ -178,6 +184,7 @@ mod tests {
         nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
             id: "start".to_string(),
             next: "s1".to_string(),
+            span: None,
         }));
         nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
             id: "s1".to_string(),
@@ -189,16 +196,19 @@ mod tests {
             ],
             join: "j1".to_string(),
             produces_placeholder: None,
+            span: None,
         }));
         nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
             id: "j1".to_string(),
             mode: JoinMode::Exclusive,
             split: "s1".to_string(),
             next: "end".to_string(),
+            span: None,
         }));
         nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
             id: "end".to_string(),
             status: "Completed".to_string(),
+            span: None,
         }));
 
         let plan = WorkflowExecutionPlan {
