@@ -18,6 +18,9 @@ Each is decided, with its reason. If you think one is wrong, surface it to me wi
 - **Blocking is derived, not chosen.** Fire-and-forget is legal iff the call-out is closure-transparent ∧ not must-complete; a consumed-output fire-and-forget is a reject; must-complete-non-blocking routes through the outbox.
 - **Template ≠ macro.** A template is a Sage-authored *program* (compile-validated, hash-frozen, applied to an entity at spawn). A macro is a developer-authored *vocabulary* word. A template may be referenced by hash (call-activity) but never promoted to Sage's discoverable palette — Sage does not grow its own vocabulary.
 - **The current `dsl.bpmn` vocab is the defect, not the target.** ExclusiveGateway-only, by-name decider coupling, intersection-only merge — that is what's being replaced. Don't anchor on it.
+- **Infrastructure Workspace Scope Bypass via SelectWorkspace:** Direct selection of infrastructure workspaces (like BPMN and SemOS Maintenance) in the universe UI panel bypasses client scope gates, automatically setting the client scope to nil and starting the workspace.
+
+
 
 ## Working contract — how I want you to work
 - **Adversarial, not obedient.** Challenge claims, catch inconsistencies, refuse to proceed on a weak receipt. Default to "is this right?", not "implement the ask." I want a co-designer, not an executor.
