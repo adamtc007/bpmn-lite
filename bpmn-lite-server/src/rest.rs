@@ -849,18 +849,10 @@ async fn compile_bpmn_preview(
                             Some(e.message.trim_start_matches("unresolved symbol '").trim_end_matches("'"))
                         } else if e.message.starts_with("verb '") {
                             let remaining = e.message.trim_start_matches("verb '");
-                            if let Some(idx) = remaining.find('\'') {
-                                Some(&remaining[..idx])
-                            } else {
-                                None
-                            }
+                            remaining.find('\'').map(|idx| &remaining[..idx])
                         } else if e.message.starts_with("decision '") {
                             let remaining = e.message.trim_start_matches("decision '");
-                            if let Some(idx) = remaining.find('\'') {
-                                Some(&remaining[..idx])
-                            } else {
-                                None
-                            }
+                            remaining.find('\'').map(|idx| &remaining[..idx])
                         } else {
                             None
                         };

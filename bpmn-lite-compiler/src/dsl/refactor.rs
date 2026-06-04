@@ -251,11 +251,7 @@ impl<'a> AstMutator<'a> {
                 }
             }
         }
-        if let Some(idx) = found_idx {
-            Some(nodes.remove(idx))
-        } else {
-            None
-        }
+        found_idx.map(|idx| nodes.remove(idx))
     }
 }
 
