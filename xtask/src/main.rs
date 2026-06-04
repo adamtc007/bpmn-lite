@@ -42,6 +42,9 @@ fn main() -> Result<()> {
             }
             pack_build_command(&args[1])
         }
+        "run-pack" => {
+            run_pack_command()
+        }
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -1163,6 +1166,8 @@ fn print_help() {
   cargo run -p xtask -- docker-subscription-fanout [--instance-name NAME] [--server-port PORT] [--db-port PORT] [--keep-running] [harness args...]
   cargo run -p xtask -- docker-ha-stress [--instance-name NAME] [--server-port PORT] [--db-port PORT] [--server-replicas N] [--keep-running] [harness args...]
   cargo run -p xtask -- docker-ha-subscription-fanout [--instance-name NAME] [--server-port PORT] [--db-port PORT] [--server-replicas N] [--keep-running] [harness args...]
+  cargo run -p xtask -- pack-build <domain>
+  cargo run -p xtask -- run-pack
 
 Examples:
   cargo run -p xtask -- smoke --spawn-server
@@ -1257,5 +1262,159 @@ fn pack_build_command(domain: &str) -> Result<()> {
         .with_context(|| format!("write closure to {}", closure_path.display()))?;
     println!("Wrote closure manifest to {}", closure_path.display());
 
+    Ok(())
+}
+
+fn run_pack_command() -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let server_url = "http://127.0.0.1:8080";
+    
+    // Spawn server
+    println!("Starting bpmn-lite-server...");
+    let mut server_child = ChildGuard::new(spawn_server_for_run_pack(
+        &workspace_root,
+        server_url,
+    )?);
+    
+    wait_for_server(server_url, Duration::from_secs(20))?;
+    println!("Server is up on {}", server_url);
+
+    // Read the comprehensive test workflow
+    let dsl_path = workspace_root.join("manifests/comprehensive_test.dsl.lisp");
+    let dsl_content = std::fs::read_to_string(&dsl_path)
+        .with_context(|| format!("Failed to read comprehensive workflow at {:?}", dsl_path))?;
+
+    // Create client
+    let client = reqwest::blocking::Client::new();
+
+    // ── Scenario 1: Fund (triggers Loop branch) ──
+    println!("\n=== Executing Scenario 1: Fund (triggers Loop branch) ===");
+    run_scenario(&client, server_url, &dsl_content, "fund", vec![
+        // create-cbu -> advances to type-decision
+        serde_json::json!({}),
+        // type-decision -> DMN output is "fund" -> advances to type-gateway -> drive_forward walks past gateway to loop run-loop -> loop-step
+        serde_json::json!({ "@cbu-type": "fund" }),
+        // loop-step (Iteration 1) -> loop-step
+        serde_json::json!({}),
+        // loop-step (Iteration 2) -> ends
+        serde_json::json!({}),
+    ])?;
+
+    // ── Scenario 2: Corporate (triggers Parallel branch) ──
+    println!("\n=== Executing Scenario 2: Corporate (triggers Parallel branch) ===");
+    run_scenario(&client, server_url, &dsl_content, "corporate", vec![
+        // create-cbu -> type-decision
+        serde_json::json!({}),
+        // type-decision -> DMN output is "corporate" -> advances to parallel branch split -> task-p1 and task-p2
+        serde_json::json!({ "@cbu-type": "corporate" }),
+        // task-p1 -> parallel-join
+        serde_json::json!({}),
+        // task-p2 -> parallel-join -> join completes -> ends
+        serde_json::json!({}),
+    ])?;
+
+    // ── Scenario 3: Trust (triggers Single branch) ──
+    println!("\n=== Executing Scenario 3: Trust (triggers Single branch) ===");
+    run_scenario(&client, server_url, &dsl_content, "trust", vec![
+        // create-cbu -> type-decision
+        serde_json::json!({}),
+        // type-decision -> DMN output is "trust" -> advances to run-single
+        serde_json::json!({ "@cbu-type": "trust" }),
+        // run-single -> ends
+        serde_json::json!({}),
+    ])?;
+
+    println!("\nAll comprehensive DSL scenarios successfully executed!");
+    server_child.stop();
+    Ok(())
+}
+
+fn spawn_server_for_run_pack(
+    workspace_root: &Path,
+    _server_url: &str,
+) -> Result<Child> {
+    let mut command = Command::new("cargo");
+    command
+        .arg("run")
+        .arg("-p")
+        .arg("bpmn-lite-server")
+        .current_dir(workspace_root)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .env("RUST_LOG", "info")
+        .env("BPMN_LITE_REST_BIND", "127.0.0.1:8080")
+        .env("BPMN_LITE_BIND", "127.0.0.1:50061") // run gRPC on a different port to avoid conflict
+        .env("BPMN_LITE_STORE", "memory")
+        .arg("--bin")
+        .arg("bpmn-lite-server");
+
+    let child = command.spawn().context("Failed to spawn bpmn-lite-server")?;
+    Ok(child)
+}
+
+fn run_scenario(
+    client: &reqwest::blocking::Client,
+    server_url: &str,
+    dsl_content: &str,
+    cbu_type: &str,
+    step_outputs: Vec<serde_json::Value>,
+) -> Result<()> {
+    // Start instance
+    let start_url = format!("{}/bpmn/instances/start", server_url);
+    let start_body = serde_json::json!({
+        "cbu_type": cbu_type,
+        "bpmn_dsl": dsl_content
+    });
+    
+    let res = client.post(&start_url)
+        .json(&start_body)
+        .send()
+        .context("HTTP request failed starting instance")?;
+        
+    if !res.status().is_success() {
+        let status = res.status();
+        let err_text = res.text().unwrap_or_default();
+        bail!("Failed to start instance: HTTP {}. Body: {}", status, err_text);
+    }
+    
+    let res_json: serde_json::Value = res.json().context("Failed to parse start response JSON")?;
+    let instance_id = res_json["instance_id"].as_str().ok_or_else(|| anyhow!("Missing instance_id"))?;
+    println!("Started instance {} for cbu_type '{}'", instance_id, cbu_type);
+
+    // Get detail
+    let detail_url = format!("{}/bpmn/instances/{}", server_url, instance_id);
+    let res = client.get(&detail_url).send()?;
+    let detail: serde_json::Value = res.json()?;
+    println!("Initial state: node = {}, status = {}", detail["current_node"], detail["status"]);
+
+    // Step through the process
+    for (i, outputs) in step_outputs.into_iter().enumerate() {
+        let next_url = format!("{}/bpmn/instances/{}/next-step", server_url, instance_id);
+        let next_body = serde_json::json!({
+            "outputs": outputs
+        });
+        
+        let res = client.post(&next_url).json(&next_body).send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let err_text = res.text().unwrap_or_default();
+            bail!("Step {} failed: HTTP {}. Body: {}", i + 1, status, err_text);
+        }
+        
+        let step_res: serde_json::Value = res.json()?;
+        println!("Step {} response: node = {}, status = {}, message = {}", i + 1, step_res["node"], step_res["status"], step_res["message"]);
+    }
+
+    // Load detail and check final status
+    let res = client.get(&detail_url).send()?;
+    let final_detail: serde_json::Value = res.json()?;
+    println!("Final state: node = {}, status = {}", final_detail["current_node"], final_detail["status"]);
+    
+    let status_str = final_detail["status"].as_str().unwrap_or_default();
+    if !status_str.contains("Completed") {
+        bail!("Workflow did not reach Completed state! Current state: {}", status_str);
+    }
+    
+    println!("Scenario for '{}' completed successfully!", cbu_type);
     Ok(())
 }

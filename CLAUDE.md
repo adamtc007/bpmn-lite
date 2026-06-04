@@ -19,6 +19,8 @@ Each is decided, with its reason. If you think one is wrong, surface it to me wi
 - **Template ≠ macro.** A template is a Sage-authored *program* (compile-validated, hash-frozen, applied to an entity at spawn). A macro is a developer-authored *vocabulary* word. A template may be referenced by hash (call-activity) but never promoted to Sage's discoverable palette — Sage does not grow its own vocabulary.
 - **The current `dsl.bpmn` vocab is the defect, not the target.** ExclusiveGateway-only, by-name decider coupling, intersection-only merge — that is what's being replaced. Don't anchor on it.
 - **Infrastructure Workspace Scope Bypass via SelectWorkspace:** Direct selection of infrastructure workspaces (like BPMN and SemOS Maintenance) in the universe UI panel bypasses client scope gates, automatically setting the client scope to nil and starting the workspace.
+- **BPMN Workspace Viewport Integration:** When the `"bpmn"` workspace becomes active (determined via `latestSessionFeedback?.tos?.workspace === "bpmn"`), the right-hand viewport of the Chat Page conditionally switches from the Observatory constellation canvas to the dedicated BPMN workspace view (`BpmnDemoPage`).
+- **REST Simulation Test Harness:** The `/bpmn/instances` REST endpoint supports custom DSL workflow compilation and execution. The step simulation dynamically processes loop bounds and sequentializes parallel split/join execution paths using in-memory state tracking (`__pending_branches` and `__loop_count_*`) without database dependencies.
 
 
 
