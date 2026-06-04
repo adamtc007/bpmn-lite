@@ -578,7 +578,6 @@ pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
 /// - Required inputs that are not bound
 /// - Output bindings that target a `FlagWrite` with a kind that doesn't fit
 ///   in `bpmn_lite_types::Value` (non-Bool, non-I64)
-
 #[cfg(test)]
 mod tests {
     use super::*;

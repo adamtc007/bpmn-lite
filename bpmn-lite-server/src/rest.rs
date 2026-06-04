@@ -133,6 +133,16 @@ pub(crate) struct CallStackFrameDto {
 #[derive(Deserialize, Serialize)]
 pub(crate) struct StartBody {
     cbu_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bpmn_dsl: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variables: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+pub(crate) struct NextStepBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outputs: Option<HashMap<String, serde_json::Value>>,
 }
 
 // ── Router ──────────────────────────────────────────────────────────────
@@ -191,6 +201,16 @@ async fn get_instance(
                 .into_response()
         }
     };
+    let plan = if let Some(plan_hash) = inst.plan_hash {
+        if let Ok(Some(plan_json)) = demo.store.load_plan(plan_hash).await {
+            serde_json::from_str::<WorkflowExecutionPlan>(&plan_json).ok().map(Arc::new)
+        } else {
+            None
+        }
+    } else {
+        None
+    }.unwrap_or_else(|| demo.plan.clone());
+
     let variables = inst
         .placeholder_values
         .clone()
@@ -202,7 +222,7 @@ async fn get_instance(
         status: format_state(&inst.state),
         variables,
         cbu_type: demo.cbu_type(id),
-        nodes: build_node_infos(&demo.plan),
+        nodes: build_node_infos(&plan),
         sage_records: vec![],
     };
     Json(detail).into_response()
@@ -212,18 +232,43 @@ async fn start_instance(
     State(demo): State<Arc<DemoState>>,
     Json(body): Json<StartBody>,
 ) -> impl IntoResponse {
+    let plan = if let Some(ref dsl) = body.bpmn_dsl {
+        let registry = get_preview_registry();
+        match bpmn_lite_compiler::dsl::compile(dsl, &registry) {
+            Ok(p) => Arc::new(p),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Compilation failed: {}", e),
+                        "diagnostics": vec![format!("{}", e)]
+                    }))
+                ).into_response();
+            }
+        }
+    } else {
+        demo.plan.clone()
+    };
+
     let client_type_input = match body.cbu_type.as_str() {
         "fund" => "FUND_MANDATE",
         "corporate" => "CORPORATE",
         "trust" => "TRUST",
         other => other,
     };
-    let vars = demo_initial_vars("Demo Client", client_type_input);
-    match create_instance(&demo.store, &demo.plan, "demo", vars).await {
+    
+    let mut vars = demo_initial_vars("Demo Client", client_type_input);
+    if let Some(ref custom_vars) = body.variables {
+        for (k, v) in custom_vars {
+            vars.insert(k.clone(), v.clone());
+        }
+    }
+
+    match create_instance(&demo.store, &plan, "demo", vars).await {
         Ok(id) => {
-            demo.set_cbu_type(id, body.cbu_type);
+            demo.set_cbu_type(id, body.cbu_type.clone());
             // Walk past StartEvent to the first callout node.
-            drive_forward(&demo.store, &demo.plan, id).await;
+            drive_forward(&demo.store, &plan, id).await;
             Json(serde_json::json!({ "instance_id": id.to_string() })).into_response()
         }
         Err(e) => (
@@ -237,6 +282,7 @@ async fn start_instance(
 async fn next_step(
     State(demo): State<Arc<DemoState>>,
     Path(id): Path<Uuid>,
+    body: Option<Json<NextStepBody>>,
 ) -> impl IntoResponse {
     let inst = match demo.store.load_instance(id).await {
         Ok(Some(i)) => i,
@@ -246,39 +292,58 @@ async fn next_step(
         }
     };
 
+    let plan = if let Some(plan_hash) = inst.plan_hash {
+        if let Ok(Some(plan_json)) = demo.store.load_plan(plan_hash).await {
+            serde_json::from_str::<WorkflowExecutionPlan>(&plan_json).ok().map(Arc::new)
+        } else {
+            None
+        }
+    } else {
+        None
+    }.unwrap_or_else(|| demo.plan.clone());
+
     let node_id = inst.current_node_id.clone().unwrap_or_default();
     let cbu_type = demo.cbu_type(id);
+    let next_step_body = body.map(|Json(b)| b).unwrap_or_default();
 
     // Simulate result delivery for callout nodes, then drive forward through
     // any immediately following gateways/end events without touching the bus.
-    if let Some(ExecutionNode::Task(t)) = demo.plan.nodes.get(&node_id) {
-        if t.plug.starts_with("dmn-lite:") {
-            let cbu_type_val = match cbu_type.as_str() {
-                "fund" => "fund",
-                "corporate" => "corporate",
-                "trust" => "trust",
-                _ => "fund",
+    if let Some(ExecutionNode::Task(t)) = plan.nodes.get(&node_id) {
+        if let Some(ref placeholder_name) = t.produces_placeholder {
+            let val = if let Some(ref outputs) = next_step_body.outputs {
+                outputs.get(placeholder_name).cloned()
+            } else {
+                None
             };
-            let placeholder = t
-                .produces_placeholder
-                .as_deref()
-                .map(|name| (name, serde_json::Value::String(cbu_type_val.to_owned())));
+            
+            let placeholder = val.map(|v| (placeholder_name.as_str(), v)).or_else(|| {
+                // Default fallback logic
+                if t.plug.starts_with("dmn-lite:") {
+                    let cbu_type_val = match cbu_type.as_str() {
+                        "fund" => "fund",
+                        "corporate" => "corporate",
+                        "trust" => "trust",
+                        _ => "fund",
+                    };
+                    Some((placeholder_name.as_str(), serde_json::Value::String(cbu_type_val.to_owned())))
+                } else {
+                    let default_val = if node_id == "create-cbu" {
+                        serde_json::Value::String(Uuid::now_v7().to_string())
+                    } else {
+                        serde_json::Value::String(format!("{node_id}-done"))
+                    };
+                    Some((placeholder_name.as_str(), default_val))
+                }
+            });
+            
             apply_step(&demo.store, id, t.next.clone(), placeholder).await;
         } else {
-            let placeholder = t.produces_placeholder.as_deref().map(|name| {
-                let val = if node_id == "create-cbu" {
-                    serde_json::Value::String(Uuid::now_v7().to_string())
-                } else {
-                    serde_json::Value::String(format!("{node_id}-done"))
-                };
-                (name, val)
-            });
-            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+            apply_step(&demo.store, id, t.next.clone(), None).await;
         }
     }
 
     // Drive forward through gateways and end events without the bus.
-    drive_forward(&demo.store, &demo.plan, id).await;
+    drive_forward(&demo.store, &plan, id).await;
 
     let updated = demo.store.load_instance(id).await.ok().flatten();
     let (current, status) = updated
@@ -388,6 +453,7 @@ async fn create_instance(
 /// End) without touching the bus. Stops at the first Task
 /// so the user can click "Next Step" there.
 async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uuid) {
+    use bpmn_lite_compiler::dsl::plan::SplitMode;
     loop {
         let Ok(Some(mut inst)) = store.load_instance(id).await else { break };
         if !matches!(inst.state, ProcessState::Running) {
@@ -409,18 +475,115 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                 let _ = store.save_instance("default", &inst).await;
             }
             Some(ExecutionNode::Split(gw)) => {
-                let chosen = gw.flows.iter().find(|f| {
-                    if let (Some(ph), Some(exp)) = (&f.placeholder, &f.expected_value) {
-                        pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
-                    } else {
-                        false
+                match gw.mode {
+                    SplitMode::Exclusive => {
+                        let chosen = gw.flows.iter().find(|f| {
+                            if let (Some(ph), Some(exp)) = (&f.placeholder, &f.expected_value) {
+                                pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
+                            } else {
+                                false
+                            }
+                        });
+                        if let Some(flow) = chosen {
+                            inst.current_node_id = Some(flow.next.clone());
+                            let _ = store.save_instance("default", &inst).await;
+                        } else {
+                            break;
+                        }
                     }
-                });
-                if let Some(flow) = chosen {
-                    inst.current_node_id = Some(flow.next.clone());
+                    SplitMode::Parallel | SplitMode::Inclusive => {
+                        let mut targets = Vec::new();
+                        for flow in &gw.flows {
+                            if gw.mode == SplitMode::Parallel {
+                                targets.push(flow.next.clone());
+                            } else {
+                                let condition_matches = if let (Some(ph), Some(exp)) = (&flow.placeholder, &flow.expected_value) {
+                                    pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
+                                } else {
+                                    true
+                                };
+                                if condition_matches {
+                                    targets.push(flow.next.clone());
+                                }
+                            }
+                        }
+
+                        if targets.is_empty() {
+                            break;
+                        }
+
+                        let first = targets[0].clone();
+                        let rest = &targets[1..];
+                        
+                        let mut updated_pv = pv.clone();
+                        if !rest.is_empty() {
+                            let rest_vals: Vec<serde_json::Value> = rest.iter().map(|s| serde_json::Value::String(s.clone())).collect();
+                            updated_pv.insert("__pending_branches".to_string(), serde_json::Value::Array(rest_vals));
+                        } else {
+                            updated_pv.remove("__pending_branches");
+                        }
+                        
+                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                        inst.current_node_id = Some(first);
+                        let _ = store.save_instance("default", &inst).await;
+                    }
+                }
+            }
+            Some(ExecutionNode::Join(j)) => {
+                let pending = pv.get("__pending_branches")
+                    .and_then(|v| v.as_array());
+                
+                if let Some(branches) = pending {
+                    if !branches.is_empty() {
+                        let next_branch = branches[0].as_str().unwrap_or_default().to_string();
+                        let rest = &branches[1..];
+                        
+                        let mut updated_pv = pv.clone();
+                        if !rest.is_empty() {
+                            updated_pv.insert("__pending_branches".to_string(), serde_json::Value::Array(rest.to_vec()));
+                        } else {
+                            updated_pv.remove("__pending_branches");
+                        }
+                        
+                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                        inst.current_node_id = Some(next_branch);
+                        let _ = store.save_instance("default", &inst).await;
+                    } else {
+                        let mut updated_pv = pv.clone();
+                        updated_pv.remove("__pending_branches");
+                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                        inst.current_node_id = Some(j.next.clone());
+                        let _ = store.save_instance("default", &inst).await;
+                    }
+                } else {
+                    inst.current_node_id = Some(j.next.clone());
+                    let _ = store.save_instance("default", &inst).await;
+                }
+            }
+            Some(ExecutionNode::Loop(l)) => {
+                let counter_key = format!("__loop_count_{}", l.id);
+                let current_count = pv.get(&counter_key)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+
+                if current_count < l.ceiling {
+                    let next_node = if let Some(first_body) = l.body.first() {
+                        first_body.clone()
+                    } else {
+                        l.next.clone()
+                    };
+                    
+                    let mut updated_pv = pv.clone();
+                    updated_pv.insert(counter_key, serde_json::Value::Number((current_count + 1).into()));
+                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.current_node_id = Some(next_node);
                     let _ = store.save_instance("default", &inst).await;
                 } else {
-                    break;
+                    let mut updated_pv = pv.clone();
+                    updated_pv.remove(&counter_key);
+                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.current_node_id = Some(l.next.clone());
+                    let _ = store.save_instance("default", &inst).await;
                 }
             }
             Some(ExecutionNode::End(end)) => {
@@ -431,31 +594,57 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                 let _ = store.save_instance("default", &inst).await;
                 break;
             }
-            // Task / Join / Loop — stop here, user drives next step.
             _ => break,
         }
     }
 }
 
 fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
-    let ordered = [
-        "start",
-        "create-cbu",
-        "type-decision",
-        "type-gateway",
-        "add-fund",
-        "add-corp",
-        "add-trust",
-        "attach-im",
-        "end",
-    ];
+    use bpmn_lite_compiler::dsl::plan::SplitMode;
+    use bpmn_lite_compiler::dsl::plan::JoinMode;
+    let mut ordered = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(plan.start_node.clone());
+    while let Some(curr) = queue.pop_front() {
+        if !visited.insert(curr.clone()) {
+            continue;
+        }
+        ordered.push(curr.clone());
+        if let Some(node) = plan.nodes.get(&curr) {
+            match node {
+                ExecutionNode::Start(n) => { queue.push_back(n.next.clone()); }
+                ExecutionNode::Task(t) => { queue.push_back(t.next.clone()); }
+                ExecutionNode::Split(s) => {
+                    for flow in &s.flows {
+                        queue.push_back(flow.next.clone());
+                    }
+                }
+                ExecutionNode::Join(j) => { queue.push_back(j.next.clone()); }
+                ExecutionNode::Loop(l) => {
+                    for body_node in &l.body {
+                        queue.push_back(body_node.clone());
+                    }
+                    queue.push_back(l.next.clone());
+                }
+                ExecutionNode::End(_) => {}
+            }
+        }
+    }
+    // Just in case we missed any nodes, add them
+    for id in plan.nodes.keys() {
+        if !visited.contains(id) {
+            ordered.push(id.clone());
+        }
+    }
+
     ordered
         .iter()
         .filter_map(|id| {
-            let node = plan.nodes.get(*id)?;
+            let node = plan.nodes.get(id)?;
             Some(match node {
                 ExecutionNode::Start(_) => NodeInfo {
-                    id: (*id).to_owned(),
+                    id: id.clone(),
                     label: "Start".into(),
                     fqn: None,
                     target_domain: None,
@@ -465,7 +654,7 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     if t.plug.starts_with("dmn-lite:") {
                         let (domain, dec_id) = split_fqn(&t.plug);
                         NodeInfo {
-                            id: (*id).to_owned(),
+                            id: id.clone(),
                             label: format!("↗ Evaluating {domain}: {dec_id}"),
                             fqn: Some(t.plug.clone()),
                             target_domain: Some(domain.to_owned()),
@@ -474,7 +663,7 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     } else {
                         let (domain, verb_id) = split_fqn(&t.plug);
                         NodeInfo {
-                            id: (*id).to_owned(),
+                            id: id.clone(),
                             label: format!("↗ Calling {domain}: {verb_id}"),
                             fqn: Some(t.plug.clone()),
                             target_domain: Some(domain.to_owned()),
@@ -482,33 +671,47 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                         }
                     }
                 }
-                ExecutionNode::Split(_) => NodeInfo {
-                    id: (*id).to_owned(),
-                    label: "◇ CBU Type Gateway".into(),
-                    fqn: None,
-                    target_domain: None,
-                    kind: "gateway".into(),
-                },
-                ExecutionNode::End(_) => NodeInfo {
-                    id: (*id).to_owned(),
-                    label: "✓ End: CBU Operational".into(),
-                    fqn: None,
-                    target_domain: None,
-                    kind: "end".into(),
-                },
-                ExecutionNode::Join(_) => NodeInfo {
-                    id: (*id).to_owned(),
-                    label: "Join".into(),
-                    fqn: None,
-                    target_domain: None,
-                    kind: "join".into(),
-                },
-                ExecutionNode::Loop(_) => NodeInfo {
-                    id: (*id).to_owned(),
-                    label: "Loop".into(),
+                ExecutionNode::Split(s) => {
+                    let label = match s.mode {
+                        SplitMode::Exclusive => "◇ Exclusive Gateway (XOR)".to_string(),
+                        SplitMode::Inclusive => "◇ Inclusive Gateway (OR)".to_string(),
+                        SplitMode::Parallel => "◇ Parallel Gateway (AND)".to_string(),
+                    };
+                    NodeInfo {
+                        id: id.clone(),
+                        label,
+                        fqn: None,
+                        target_domain: None,
+                        kind: "gateway".into(),
+                    }
+                }
+                ExecutionNode::Join(j) => {
+                    let label = match j.mode {
+                        JoinMode::Exclusive => "◇ Merge (XOR)".to_string(),
+                        JoinMode::Inclusive => "◇ Join (OR)".to_string(),
+                        JoinMode::Parallel => "◇ Join (AND)".to_string(),
+                    };
+                    NodeInfo {
+                        id: id.clone(),
+                        label,
+                        fqn: None,
+                        target_domain: None,
+                        kind: "join".into(),
+                    }
+                }
+                ExecutionNode::Loop(l) => NodeInfo {
+                    id: id.clone(),
+                    label: format!("Loop (Max {})", l.ceiling),
                     fqn: None,
                     target_domain: None,
                     kind: "loop".into(),
+                },
+                ExecutionNode::End(end) => NodeInfo {
+                    id: id.clone(),
+                    label: format!("✓ End: {}", end.status),
+                    fqn: None,
+                    target_domain: None,
+                    kind: "end".into(),
                 },
             })
         })
@@ -1554,7 +1757,7 @@ mod tests {
         let app = demo_router(state.clone());
 
         // 1. Start a demo instance
-        let start_body = StartBody { cbu_type: "fund".to_owned() };
+        let start_body = StartBody { cbu_type: "fund".to_owned(), bpmn_dsl: None, variables: None };
         let response = app
             .clone()
             .oneshot(
@@ -1833,7 +2036,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(res["escape_intent_detected"].as_bool().unwrap(), true);
+        assert!(res["escape_intent_detected"].as_bool().unwrap());
         assert_eq!(res["suggested_action"].as_str().unwrap(), "exit");
     }
 }
