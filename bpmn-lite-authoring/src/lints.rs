@@ -514,14 +514,14 @@ mod tests {
     #[test]
     fn t_lint_3_l1_warning_known_input() {
         let dto = xor_workflow_with_condition("orch_high_risk");
-        let reg = make_registry_with(vec![VerbContract {
+        let mut reg = make_registry_with(vec![VerbContract {
             task_type: "do_work".to_string(),
             reads_flags: HashSet::new(),
             writes_flags: HashSet::new(), // Does NOT write orch_high_risk
             may_raise_errors: HashSet::new(),
             produces_correlation: vec![],
-        }])
-        .with_known_inputs(["orch_high_risk"]);
+        }]);
+        reg.add_known_input("orch_high_risk");
 
         let diags = lint_contracts(&dto, &reg);
         let l1_warnings: Vec<_> = diags

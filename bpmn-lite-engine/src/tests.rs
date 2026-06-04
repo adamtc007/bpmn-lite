@@ -2997,7 +2997,8 @@ edges:
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Compile from YAML
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
     assert!(cr.task_types.contains(&"do_a".to_string()));
     assert!(cr.task_types.contains(&"do_b".to_string()));
@@ -3267,7 +3268,8 @@ edges:
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"err"}"#;
@@ -3369,7 +3371,8 @@ edges:
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"xor"}"#;

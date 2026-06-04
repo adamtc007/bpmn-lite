@@ -84,14 +84,6 @@ pub fn demo_initial_vars(client_name: &str, client_type: &str) -> HashMap<String
     vars
 }
 
-/// Reset helper — clears plan-based process instances from `store` for a
-/// clean demo run. For `MemoryStore` this is a no-op (construct a fresh
-/// store instead). For Postgres it would truncate the relevant tables — that
-/// is handled separately in the Docker reset script (T7 scope).
-pub fn reset_demo_state_comment() -> &'static str {
-    "For Postgres: truncate bpmn_process_instance, bpmn_pending_invocation, outbox, inbox. \
-     For MemoryStore: create a fresh Arc<MemoryStore>."
-}
 
 #[cfg(test)]
 mod tests {

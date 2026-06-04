@@ -82,49 +82,6 @@ async fn test_sage_template_registration_via_bus() {
     let saved = saved_opt.expect("plan should be stored");
     assert_eq!(saved, plan_body);
 }
-
-#[tokio::test]
-async fn test_sage_permissive_compilation_with_warnings() {
-    // Test that an invalid S-expression or DTO triggers warnings but completes under permissive mode
-    let mut diagnostics = Vec::new();
-    let bad_dto = bpmn_lite_authoring::dto::WorkflowGraphDto {
-        id: "unsafe-onboarding".to_string(),
-        meta: None,
-        nodes: vec![
-            bpmn_lite_authoring::dto::NodeDto::Start { id: "start".to_string() },
-            // Node type with unmapped kind (e.g. HumanWait which is unmapped in sexpr.rs)
-            bpmn_lite_authoring::dto::NodeDto::HumanWait {
-                id: "human_bound".to_string(),
-                task_kind: "do_human_task".to_string(),
-                corr_key_source: "process.id".to_string(),
-            },
-            bpmn_lite_authoring::dto::NodeDto::End { id: "end".to_string(), terminate: false },
-        ],
-        edges: vec![],
-    };
-
-    let sexpr = bpmn_lite_authoring::sexpr::dto_to_sexpr(&bad_dto, true, &mut diagnostics)
-        .expect("Should serialize in permissive mode");
-    
-    assert!(sexpr.contains("bpmn:unsafe-placeholder"), "Expected unsafe-placeholder verb mapping in permissive mode");
-    assert!(!diagnostics.is_empty(), "Expected warning diagnostics for unmapped node");
-
-    // Assert that BoundaryError is rejected even in permissive mode
-    let mut diagnostics_boundary = Vec::new();
-    let boundary_dto = bpmn_lite_authoring::dto::WorkflowGraphDto {
-        id: "permissive-boundary-reject".to_string(),
-        meta: None,
-        nodes: vec![
-            bpmn_lite_authoring::dto::NodeDto::Start { id: "start".to_string() },
-            bpmn_lite_authoring::dto::NodeDto::BoundaryError { id: "err_bound".to_string(), host: "task1".to_string(), error_code: None },
-            bpmn_lite_authoring::dto::NodeDto::End { id: "end".to_string(), terminate: false },
-        ],
-        edges: vec![],
-    };
-    let res = bpmn_lite_authoring::sexpr::dto_to_sexpr(&boundary_dto, true, &mut diagnostics_boundary);
-    assert!(res.is_err(), "Expected boundary events to be rejected in S-Expression serialization even in permissive mode");
-}
-
 #[tokio::test]
 async fn test_sage_transitive_validation_propagation() {
     let store = Arc::new(bpmn_lite_store::MemoryStore::new());

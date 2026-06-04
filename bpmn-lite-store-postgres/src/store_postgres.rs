@@ -3933,10 +3933,10 @@ mod tests {
         );
 
         // Verify the hash is correct (matches recomputation).
-        use bpmn_lite_types::integrity::verify_instance_integrity;
-        assert!(
-            verify_instance_integrity(&loaded).is_ok(),
-            "loaded instance must pass integrity verification"
+        use bpmn_lite_types::integrity::compute_instance_integrity_hash;
+        assert_eq!(
+            loaded.integrity_hash,
+            Some(compute_instance_integrity_hash(&loaded))
         );
     }
 

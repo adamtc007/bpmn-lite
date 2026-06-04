@@ -200,13 +200,3 @@ async fn t4_corporate_path_gateway_routes_correctly_and_completes() {
 async fn t4_trust_path_gateway_routes_correctly_and_completes() {
     run_full_path_demo("TRUST", "trust").await;
 }
-
-/// T4 reset helper stub — documented for T7 Docker reset script.
-#[test]
-fn t4_reset_demo_state_is_documented() {
-    assert_eq!(
-        crate::demo::reset_demo_state_comment(),
-        "For Postgres: truncate bpmn_process_instance, bpmn_pending_invocation, outbox, inbox. \
-         For MemoryStore: create a fresh Arc<MemoryStore>."
-    );
-}

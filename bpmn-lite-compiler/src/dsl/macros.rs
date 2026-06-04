@@ -117,11 +117,6 @@ impl MacroConfigList {
         serde_yaml::from_str(&contents)
             .map_err(|e| format!("Failed to parse macro config YAML: {}", e))
     }
-
-    pub fn load_from_str(yaml_str: &str) -> Result<Self, String> {
-        serde_yaml::from_str(yaml_str)
-            .map_err(|e| format!("Failed to parse macro config YAML: {}", e))
-    }
 }
 
 impl CustomMacroConfig {
@@ -175,7 +170,7 @@ macros:
     description: "Inserts a support alert task"
     template: "(service-task :id %id% :verb support.alert :next %next%)"
 "#;
-        let config = MacroConfigList::load_from_str(yaml).unwrap();
+        let config: MacroConfigList = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.macros.len(), 1);
         let macro_config = &config.macros[0];
         assert_eq!(macro_config.id, "support_alert");
