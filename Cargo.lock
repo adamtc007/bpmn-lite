@@ -418,6 +418,7 @@ dependencies = [
  "axum",
  "blake3",
  "bpmn-lite-analysis",
+ "bpmn-lite-authoring",
  "bpmn-lite-bus-handler",
  "bpmn-lite-compiler",
  "bpmn-lite-engine",

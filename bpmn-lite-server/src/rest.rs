@@ -151,6 +151,9 @@ pub(crate) fn demo_router(state: Arc<DemoState>) -> Router {
         .route("/bpmn/compile/preview", post(compile_bpmn_preview))
         .route("/dmn/compile/preview", post(compile_dmn_preview))
         .route("/dmn/decisions/:id", get(get_dmn_decision))
+        .route("/api/dsl/macro/apply", post(apply_dsl_macro))
+        .route("/api/dsl/diagnostics/resolve", post(resolve_dsl_diagnostics))
+        .route("/api/dsl/sage/utter", post(sage_utterance_gate))
         .with_state(state)
 }
 
@@ -1144,6 +1147,431 @@ fn format_range_bound(bound: &dmn_lite_parser::RangeBound) -> String {
     }
 }
 
+// ── DSL Macro & Diagnostics Handlers ─────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct MacroApplyRequest {
+    source_code: String,
+    macro_type: String,
+    parameters: HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct MacroApplyResponse {
+    source_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nodes: Option<Vec<VisualNodeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edges: Option<Vec<VisualEdgeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    diagnostics: Vec<String>,
+}
+
+fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::macros::MacroConfigList> {
+    let workspace_macros = format!("{}/../macros.yaml", env!("CARGO_MANIFEST_DIR"));
+    if std::path::Path::new(&workspace_macros).exists() {
+        if let Ok(config) = bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&workspace_macros) {
+            return Some(config);
+        }
+    }
+    let server_macros = format!("{}/macros.yaml", env!("CARGO_MANIFEST_DIR"));
+    if std::path::Path::new(&server_macros).exists() {
+        if let Ok(config) = bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&server_macros) {
+            return Some(config);
+        }
+    }
+    None
+}
+
+async fn apply_dsl_macro(
+    Json(body): Json<MacroApplyRequest>,
+) -> impl IntoResponse {
+    use bpmn_lite_compiler::dsl::{
+        parse_workflow_str,
+        refactor::{AstMutator, ToSexpr},
+        macros::{create_bounded_retry_macro, create_xor_split_join, create_parallel_split_join, XorBranchConfig},
+        ast::{NodeAst},
+    };
+
+    let mut workflow = match parse_workflow_str(&body.source_code) {
+        Ok(w) => w,
+        Err(e) => {
+            let resp = MacroApplyResponse {
+                source_code: body.source_code.clone(),
+                workflow_id: None,
+                nodes: None,
+                edges: None,
+                error: Some(format!("Failed to parse source: {}", e)),
+                diagnostics: vec![e],
+            };
+            return (StatusCode::BAD_REQUEST, Json(resp)).into_response();
+        }
+    };
+
+    let result = match body.macro_type.as_str() {
+        "BoundedRetry" => {
+            let target_node_id = match body.parameters.get("target_node_id") {
+                Some(id) => id,
+                None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing parameter target_node_id"}))).into_response(),
+            };
+            let ceiling: u32 = body.parameters.get("ceiling")
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(3);
+            let loop_id = body.parameters.get("custom_id")
+                .cloned()
+                .unwrap_or_else(|| format!("{}-retry-loop", target_node_id));
+
+            // Extract target task to wrap
+            let target_task = {
+                let mut mutator = AstMutator::new(&mut workflow);
+                match mutator.remove_node(target_node_id) {
+                    Some(NodeAst::Task(t)) => t,
+                    _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Task '{}' not found or is not a task node", target_node_id)}))).into_response(),
+                }
+            };
+
+            let exit_next = target_task.next.clone();
+
+            // Find predecessor pointing to target node to rewire it to the exit_next temporarily
+            let pred_id = find_predecessor_id_in_workflow(&workflow, target_node_id);
+            if let Some(pred) = &pred_id {
+                let mut mutator = AstMutator::new(&mut workflow);
+                let _ = mutator.rewire_next(pred, &exit_next);
+            }
+
+            let loop_node = NodeAst::Loop(create_bounded_retry_macro(
+                target_task,
+                ceiling,
+                &loop_id,
+                &exit_next,
+            ));
+
+            let pred_id = find_predecessor_id_in_workflow(&workflow, &exit_next);
+            let first_id = if workflow.nodes.is_empty() {
+                None
+            } else {
+                Some(workflow.nodes[0].id().to_string())
+            };
+
+            let mut mutator = AstMutator::new(&mut workflow);
+            if let Some(pred) = pred_id {
+                mutator.insert_after(&pred, loop_node)
+            } else if let Some(first) = first_id {
+                mutator.insert_after(&first, loop_node)
+            } else {
+                Err("Empty workflow scope".to_string())
+            }
+        }
+        "XorSplit" => {
+            let split_id = body.parameters.get("split_id").map(|s| s.as_str()).unwrap_or("xor-split");
+            let placeholder = body.parameters.get("placeholder").map(|s| s.as_str()).unwrap_or("@decision_val");
+            let join_id = body.parameters.get("join_id").map(|s| s.as_str()).unwrap_or("xor-join");
+            let join_next = body.parameters.get("join_next").map(|s| s.as_str()).unwrap_or("end");
+            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+
+            let branch_val = body.parameters.get("branch_value").map(|s| s.as_str()).unwrap_or("yes");
+            let branch_target = body.parameters.get("branch_target").map(|s| s.as_str()).unwrap_or("end");
+
+            let branches = vec![
+                XorBranchConfig { condition_value: branch_val.to_string(), target_next: branch_target.to_string() },
+                XorBranchConfig { condition_value: "default".to_string(), target_next: join_id.to_string() }
+            ];
+
+            let (split, join) = create_xor_split_join(split_id, placeholder, branches, join_id, join_next);
+            
+            let mut mutator = AstMutator::new(&mut workflow);
+            mutator.insert_after(predecessor_id, NodeAst::Split(split)).and_then(|_| {
+                let mut mutator = AstMutator::new(&mut workflow);
+                mutator.insert_after(split_id, NodeAst::Join(join))
+            })
+        }
+        "ParallelSplit" => {
+            let split_id = body.parameters.get("split_id").map(|s| s.as_str()).unwrap_or("and-split");
+            let join_id = body.parameters.get("join_id").map(|s| s.as_str()).unwrap_or("and-join");
+            let join_next = body.parameters.get("join_next").map(|s| s.as_str()).unwrap_or("end");
+            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+
+            let branch_target = body.parameters.get("branch_target").map(|s| s.as_str()).unwrap_or("end");
+
+            let branch_entries = vec![branch_target.to_string(), join_id.to_string()];
+            let (split, join) = create_parallel_split_join(split_id, branch_entries, join_id, join_next);
+
+            let mut mutator = AstMutator::new(&mut workflow);
+            mutator.insert_after(predecessor_id, NodeAst::Split(split)).and_then(|_| {
+                let mut mutator = AstMutator::new(&mut workflow);
+                mutator.insert_after(split_id, NodeAst::Join(join))
+            })
+        }
+        "Custom" => {
+            let macro_id = match body.parameters.get("macro_id") {
+                Some(id) => id,
+                None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing parameter macro_id for Custom macro"}))).into_response(),
+            };
+            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+
+            let config = get_macros_config().ok_or_else(|| "No macros.yaml config found on disk".to_string());
+            let node = config.and_then(|c| {
+                let macro_cfg = c.macros.into_iter().find(|m| &m.id == macro_id)
+                    .ok_or_else(|| format!("Custom macro '{}' not found in macros.yaml", macro_id))?;
+                macro_cfg.instantiate(&body.parameters)
+            });
+
+            match node {
+                Ok(n) => {
+                    let mut mutator = AstMutator::new(&mut workflow);
+                    mutator.insert_after(predecessor_id, n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        other => Err(format!("Unknown macro type: {}", other)),
+    };
+
+    if let Err(e) = result {
+        let resp = MacroApplyResponse {
+            source_code: body.source_code.clone(),
+            workflow_id: None,
+            nodes: None,
+            edges: None,
+            error: Some(format!("Macro application failed: {}", e)),
+            diagnostics: vec![e],
+        };
+        return (StatusCode::OK, Json(resp)).into_response();
+    }
+
+    let new_dsl = workflow.to_sexpr(0);
+    let registry = get_preview_registry();
+    
+    match bpmn_lite_compiler::dsl::compile(&new_dsl, &registry) {
+        Ok(plan) => {
+            let visual = plan_to_visual_graph(&plan);
+            let resp = MacroApplyResponse {
+                source_code: new_dsl,
+                workflow_id: Some(visual.workflow_id),
+                nodes: Some(visual.nodes),
+                edges: Some(visual.edges),
+                error: None,
+                diagnostics: Vec::new(),
+            };
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(err) => {
+            let diagnostics = match err {
+                bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+            };
+            let resp = MacroApplyResponse {
+                source_code: new_dsl,
+                workflow_id: None,
+                nodes: None,
+                edges: None,
+                error: Some("Compilation failed after macro application".to_string()),
+                diagnostics,
+            };
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+    }
+}
+
+fn find_predecessor_id_in_workflow(workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource, target_id: &str) -> Option<String> {
+    for node in &workflow.nodes {
+        match node {
+            bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
+                if s.next == target_id { return Some(s.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
+                if t.next == target_id { return Some(t.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
+                if j.next == target_id { return Some(j.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
+                if l.next == target_id { return Some(l.id.clone()); }
+                if let Some(pred) = find_predecessor_id_in_loop_body(&l.body, target_id) {
+                    return Some(pred);
+                }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
+                for flow in &s.flows {
+                    if flow.next == target_id { return Some(s.id.clone()); }
+                }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
+        }
+    }
+    None
+}
+
+fn find_predecessor_id_in_loop_body(body: &[bpmn_lite_compiler::dsl::ast::NodeAst], target_id: &str) -> Option<String> {
+    for node in body {
+        match node {
+            bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
+                if s.next == target_id { return Some(s.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
+                if t.next == target_id { return Some(t.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
+                if j.next == target_id { return Some(j.id.clone()); }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
+                if l.next == target_id { return Some(l.id.clone()); }
+                if let Some(pred) = find_predecessor_id_in_loop_body(&l.body, target_id) {
+                    return Some(pred);
+                }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
+                for flow in &s.flows {
+                    if flow.next == target_id { return Some(s.id.clone()); }
+                }
+            }
+            bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
+        }
+    }
+    None
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct DiagnosticsResolveRequest {
+    source_code: String,
+    action: bpmn_lite_authoring::diagnostics_executor::FixAction,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DiagnosticsResolveResponse {
+    source_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nodes: Option<Vec<VisualNodeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edges: Option<Vec<VisualEdgeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    diagnostics: Vec<String>,
+}
+
+async fn resolve_dsl_diagnostics(
+    Json(body): Json<DiagnosticsResolveRequest>,
+) -> impl IntoResponse {
+    let manifests_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifests");
+    match bpmn_lite_authoring::diagnostics_executor::execute_autofix(&body.source_code, &body.action, &manifests_dir) {
+        Ok(new_dsl) => {
+            let registry = get_preview_registry();
+            let new_dsl_str = new_dsl.clone();
+            match bpmn_lite_compiler::dsl::compile(&new_dsl_str, &registry) {
+                Ok(plan) => {
+                    let visual = plan_to_visual_graph(&plan);
+                    let resp = DiagnosticsResolveResponse {
+                        source_code: new_dsl_str,
+                        workflow_id: Some(visual.workflow_id),
+                        nodes: Some(visual.nodes),
+                        edges: Some(visual.edges),
+                        error: None,
+                        diagnostics: Vec::new(),
+                    };
+                    (StatusCode::OK, Json(resp)).into_response()
+                }
+                Err(err) => {
+                    let diagnostics = match err {
+                        bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                        bpmn_lite_compiler::dsl::CompileError::Lint(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+                        bpmn_lite_compiler::dsl::CompileError::Dag(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+                    };
+                    let resp = DiagnosticsResolveResponse {
+                        source_code: new_dsl_str,
+                        workflow_id: None,
+                        nodes: None,
+                        edges: None,
+                        error: Some("Compilation failed after diagnostic resolution".to_string()),
+                        diagnostics,
+                    };
+                    (StatusCode::OK, Json(resp)).into_response()
+                }
+            }
+        }
+        Err(e) => {
+            let resp = DiagnosticsResolveResponse {
+                source_code: body.source_code.clone(),
+                workflow_id: None,
+                nodes: None,
+                edges: None,
+                error: Some(format!("Diagnostic resolution failed: {}", e)),
+                diagnostics: vec![e],
+            };
+            (StatusCode::BAD_REQUEST, Json(resp)).into_response()
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct UtteranceRequest {
+    utterance: String,
+    _current_dsl: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct UtteranceResponse {
+    escape_intent_detected: bool,
+    suggested_action: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_payload: Option<serde_json::Value>,
+}
+
+async fn sage_utterance_gate(
+    Json(body): Json<UtteranceRequest>,
+) -> impl IntoResponse {
+    let text = body.utterance.trim().to_lowercase();
+    
+    let is_escape = text.contains("exit") || text.contains("close editor") || text.contains("go back") || text.contains("quit") 
+                    || text.contains("deploy") || text.contains("push release") || text.contains("staging")
+                    || text.contains("check database") || text.contains("list active manifests");
+                    
+    let (suggested_action, msg, payload) = if text.contains("exit") || text.contains("close editor") || text.contains("go back") || text.contains("quit") {
+        ("exit", "Autosaved current workspace. Exiting designer session.", None)
+    } else if text.contains("deploy") || text.contains("push release") || text.contains("staging") {
+        ("chat", "It looks like you want to perform a deployment or navigate away. Should we save your workflow draft and transition out of the designer session?", None)
+    } else if text.contains("retry loop") || text.contains("wrap") || text.contains("retry") {
+        let mut params = serde_json::Map::new();
+        params.insert("target_node_id".to_string(), serde_json::Value::String("create-cbu".to_string()));
+        params.insert("ceiling".to_string(), serde_json::Value::String("3".to_string()));
+        ("apply_macro", "We can wrap your task in a retry loop. Apply macro?", Some(serde_json::json!({
+            "macro_type": "BoundedRetry",
+            "parameters": params
+        })))
+    } else if text.contains("import") || text.contains("unknown verb") {
+        let verb = if text.contains("import ") {
+            body.utterance.trim()[7..].to_string()
+        } else {
+            "ob-poc:cbu.create".to_string()
+        };
+        let domain = if verb.contains(':') {
+            verb.split(':').collect::<Vec<&str>>()[0].to_string()
+        } else {
+            "ob-poc".to_string()
+        };
+        ("resolve_diagnostic", "Resolving unresolved symbol by adding signature stub to manifest.", Some(serde_json::json!({
+            "type": "AddVerbStub",
+            "domain": domain,
+            "verb": verb
+        })))
+    } else {
+        ("none", "Utterance processed. Continues editing mode.", None)
+    };
+
+    Json(UtteranceResponse {
+        escape_intent_detected: is_escape,
+        suggested_action: suggested_action.to_string(),
+        message: msg.to_string(),
+        action_payload: payload,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1337,6 +1765,107 @@ mod tests {
         assert_eq!(res["decision_name"], "cbu_type_routing");
         assert_eq!(res["hit_policy"], "first");
         assert_eq!(res["inputs"][0]["name"], "cbu-client-type");
+    }
+
+    #[tokio::test]
+    async fn test_dsl_macro_and_diagnostics_endpoints() {
+        let state = DemoState::new();
+        let app = demo_router(state);
+
+        // 1. Test /api/dsl/macro/apply (BoundedRetry)
+        let source = r#"(workflow test
+  (start-event :id start :next my-task)
+  (service-task :id my-task :verb ob-poc:cbu.create :next end)
+  (end-event :id end :status "completed")
+)"#;
+        let mut params = HashMap::new();
+        params.insert("target_node_id".to_string(), "my-task".to_string());
+        params.insert("ceiling".to_string(), "5".to_string());
+        params.insert("custom_id".to_string(), "my-retry-loop".to_string());
+
+        let body = MacroApplyRequest {
+            source_code: source.to_string(),
+            macro_type: "BoundedRetry".to_string(),
+            parameters: params,
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/dsl/macro/apply")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let res: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let modified_dsl = res["source_code"].as_str().unwrap();
+        assert!(modified_dsl.contains("(loop :id my-retry-loop :ceiling 5"));
+
+        // 2. Test /api/dsl/diagnostics/resolve (WireDeadEnd)
+        let unresolved_source = r#"(workflow test
+  (start-event :id start :next my-task)
+  (service-task :id my-task :verb ob-poc:cbu.create :next dead-end)
+  (end-event :id end :status "completed")
+)"#;
+        let fix_action = bpmn_lite_authoring::diagnostics_executor::FixAction::WireDeadEnd {
+            node_id: "my-task".to_string(),
+            target_id: "end".to_string(),
+        };
+        let resolve_body = DiagnosticsResolveRequest {
+            source_code: unresolved_source.to_string(),
+            action: fix_action,
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/dsl/diagnostics/resolve")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&resolve_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let res: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let fixed_dsl = res["source_code"].as_str().unwrap();
+        assert!(fixed_dsl.contains("(service-task :id my-task :verb ob-poc:cbu.create :next end)"));
+
+        // 3. Test /api/dsl/sage/utter (Global Intent Escape & Fallback)
+        let utter_body = UtteranceRequest {
+            utterance: "exit and go back".to_string(),
+            _current_dsl: source.to_string(),
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/dsl/sage/utter")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&utter_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let res: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(res["escape_intent_detected"].as_bool().unwrap(), true);
+        assert_eq!(res["suggested_action"].as_str().unwrap(), "exit");
     }
 }
 

@@ -438,6 +438,32 @@ impl Parser {
     }
 }
 
+pub fn parse_workflow_str(source: &str) -> Result<WorkflowSource, String> {
+    let (tokens, lex_errors) = crate::dsl::lexer::lex(source);
+    if !lex_errors.is_empty() {
+        return Err(format!("Lex errors: {}", lex_errors[0].message));
+    }
+    let mut p = Parser::new(tokens);
+    let ast = p.parse_workflow();
+    if !p.errors.is_empty() {
+        return Err(format!("Parse errors: {}", p.errors[0].message));
+    }
+    ast.ok_or_else(|| "Empty workflow".to_string())
+}
+
+pub fn parse_node_str(source: &str) -> Result<NodeAst, String> {
+    let (tokens, lex_errors) = crate::dsl::lexer::lex(source);
+    if !lex_errors.is_empty() {
+        return Err(format!("Lex errors: {}", lex_errors[0].message));
+    }
+    let mut p = Parser::new(tokens);
+    let ast = p.parse_node();
+    if !p.errors.is_empty() {
+        return Err(format!("Parse errors: {}", p.errors[0].message));
+    }
+    ast.ok_or_else(|| "Empty node".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::lexer::lex;

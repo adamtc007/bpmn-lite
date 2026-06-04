@@ -38,5 +38,6 @@ pub mod importer;
 pub mod sexpr;
 pub mod validate;
 pub mod yaml;
+pub mod diagnostics_executor;
 
 pub use importer::import_zeebe_bpmn;

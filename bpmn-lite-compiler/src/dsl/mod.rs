@@ -14,6 +14,8 @@ pub mod plan;
 pub mod pack_build;
 pub mod closure;
 pub mod rpst;
+pub mod refactor;
+pub mod macros;
 
 pub use ast::{
     ConditionAst, EndAst, StartAst, TaskAst, SplitAst, JoinAst, LoopAst, SplitFlowAst, SplitModeAst, JoinModeAst, NodeAst, WorkflowSource,
@@ -28,6 +30,7 @@ pub use plan::{
     ExecutionNode, PlaceholderSchema, PlaceholderSlot, WorkflowExecutionPlan,
 };
 pub use closure::{validate_path_family, Diagnostic};
+pub use parser::{parse_node_str, parse_workflow_str};
 
 use lexer::lex;
 use parser::Parser;
