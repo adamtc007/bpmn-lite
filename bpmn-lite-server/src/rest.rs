@@ -935,6 +935,9 @@ const OB_POC_MANIFEST_YAML: &str = include_str!(
 const DMN_LITE_MANIFEST_YAML: &str = include_str!(
     concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/dmn-lite-v1.0.0.yaml")
 );
+const BPMN_MANIFEST_YAML: &str = include_str!(
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/bpmn-v1.0.0.yaml")
+);
 
 fn get_preview_registry() -> bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<bpmn_lite_compiler::dsl::StubPlaceholderRegistry> {
     use dsl_manifest::Manifest;
@@ -944,10 +947,13 @@ fn get_preview_registry() -> bpmn_lite_compiler::dsl::ManifestPlaceholderRegistr
         .expect("ob-poc manifest must load");
     let dmn_lite = Manifest::load_from_yaml(DMN_LITE_MANIFEST_YAML)
         .expect("dmn-lite manifest must load");
+    let bpmn = Manifest::load_from_yaml(BPMN_MANIFEST_YAML)
+        .expect("bpmn manifest must load");
 
     let mut registry = ManifestPlaceholderRegistry::new(StubPlaceholderRegistry::new().with_demo_bindings());
     registry.import(ob_poc);
     registry.import(dmn_lite);
+    registry.import(bpmn);
     registry
 }
 
