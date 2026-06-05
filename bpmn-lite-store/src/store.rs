@@ -6,6 +6,14 @@ use bpmn_lite_types::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TemplateSummary {
+    pub name: String,
+    pub latest_version: u32,
+    pub plan_hash: [u8; 32],
+    pub created_at: String,
+}
+
 /// Persistence trait for all BPMN-Lite state.
 ///
 /// 28 async methods organized by concern. The VM and engine operate exclusively
@@ -148,6 +156,29 @@ pub trait ProcessStore: Send + Sync {
     ) -> Result<bool>;
     async fn reclaim_stale_buffered_message_claims(&self) -> Result<u32>;
     async fn prune_expired_messages(&self) -> Result<u32>;
+
+    // ── Template catalog ──
+
+    async fn store_template(
+        &self,
+        name: &str,
+        version: u32,
+        plan_hash: [u8; 32],
+        dsl_body: &str,
+    ) -> Result<()>;
+
+    async fn load_template_version(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Option<(String, [u8; 32])>>;
+
+    async fn load_latest_template_version(
+        &self,
+        name: &str,
+    ) -> Result<Option<(u32, String, [u8; 32])>>;
+
+    async fn list_templates(&self) -> Result<Vec<TemplateSummary>>;
 
     // ── Event log (append-only) ──
 

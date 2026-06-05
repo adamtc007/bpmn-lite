@@ -920,6 +920,120 @@ impl ProcessStore for PostgresProcessStore {
         Ok(row.map(|v| v.to_string()))
     }
 
+    async fn store_template(
+        &self,
+        name: &str,
+        version: u32,
+        plan_hash: [u8; 32],
+        dsl_body: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO workflow_template_catalog (template_name, version, plan_hash, dsl_body)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (template_name, version) DO NOTHING
+            "#,
+        )
+        .bind(name)
+        .bind(version as i32)
+        .bind(&plan_hash[..])
+        .bind(dsl_body)
+        .execute(&self.pool)
+        .await
+        .context("store_template: insert failed")?;
+        Ok(())
+    }
+
+    async fn load_template_version(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Option<(String, [u8; 32])>> {
+        let row = sqlx::query(
+            "SELECT dsl_body, plan_hash FROM workflow_template_catalog WHERE template_name = $1 AND version = $2",
+        )
+        .bind(name)
+        .bind(version as i32)
+        .fetch_optional(&self.pool)
+        .await
+        .context("load_template_version: query failed")?;
+
+        match row {
+            None => Ok(None),
+            Some(row) => {
+                use sqlx::Row;
+                let dsl_body: String = row.get("dsl_body");
+                let hash_bytes: Vec<u8> = row.get("plan_hash");
+                let mut hash = [0u8; 32];
+                if hash_bytes.len() == 32 {
+                    hash.copy_from_slice(&hash_bytes);
+                }
+                Ok(Some((dsl_body, hash)))
+            }
+        }
+    }
+
+    async fn load_latest_template_version(
+        &self,
+        name: &str,
+    ) -> Result<Option<(u32, String, [u8; 32])>> {
+        let row = sqlx::query(
+            "SELECT version, dsl_body, plan_hash FROM workflow_template_catalog WHERE template_name = $1 ORDER BY version DESC LIMIT 1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .context("load_latest_template_version: query failed")?;
+
+        match row {
+            None => Ok(None),
+            Some(row) => {
+                use sqlx::Row;
+                let version: i32 = row.get("version");
+                let dsl_body: String = row.get("dsl_body");
+                let hash_bytes: Vec<u8> = row.get("plan_hash");
+                let mut hash = [0u8; 32];
+                if hash_bytes.len() == 32 {
+                    hash.copy_from_slice(&hash_bytes);
+                }
+                Ok(Some((version as u32, dsl_body, hash)))
+            }
+        }
+    }
+
+    async fn list_templates(&self) -> Result<Vec<bpmn_lite_store::TemplateSummary>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ON (template_name) template_name, version, plan_hash, created_at
+            FROM workflow_template_catalog
+            ORDER BY template_name, version DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list_templates: query failed")?;
+
+        let mut summaries = Vec::new();
+        for row in rows {
+            use sqlx::Row;
+            let name: String = row.get("template_name");
+            let version: i32 = row.get("version");
+            let hash_bytes: Vec<u8> = row.get("plan_hash");
+            let created_at_time: chrono::DateTime<chrono::Utc> = row.get("created_at");
+            let mut hash = [0u8; 32];
+            if hash_bytes.len() == 32 {
+                hash.copy_from_slice(&hash_bytes);
+            }
+            summaries.push(bpmn_lite_store::TemplateSummary {
+                name,
+                latest_version: version as u32,
+                plan_hash: hash,
+                created_at: created_at_time.to_rfc3339(),
+            });
+        }
+        Ok(summaries)
+    }
+
     // ── Dead-letter queue ──
 
     async fn dead_letter_put(
@@ -5201,6 +5315,31 @@ mod tests {
         }
         async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
             self.inner.load_plan(plan_hash).await
+        }
+        async fn store_template(
+            &self,
+            name: &str,
+            version: u32,
+            plan_hash: [u8; 32],
+            dsl_body: &str,
+        ) -> Result<()> {
+            self.inner.store_template(name, version, plan_hash, dsl_body).await
+        }
+        async fn load_template_version(
+            &self,
+            name: &str,
+            version: u32,
+        ) -> Result<Option<(String, [u8; 32])>> {
+            self.inner.load_template_version(name, version).await
+        }
+        async fn load_latest_template_version(
+            &self,
+            name: &str,
+        ) -> Result<Option<(u32, String, [u8; 32])>> {
+            self.inner.load_latest_template_version(name).await
+        }
+        async fn list_templates(&self) -> Result<Vec<bpmn_lite_store::TemplateSummary>> {
+            self.inner.list_templates().await
         }
         async fn dead_letter_put(&self, name: u32, corr_key: &Value, payload: &[u8], ttl_ms: u64) -> Result<()> {
             self.inner.dead_letter_put(name, corr_key, payload, ttl_ms).await

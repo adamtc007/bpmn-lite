@@ -164,6 +164,8 @@ pub(crate) fn demo_router(state: Arc<DemoState>) -> Router {
         .route("/api/dsl/macro/apply", post(apply_dsl_macro))
         .route("/api/dsl/diagnostics/resolve", post(resolve_dsl_diagnostics))
         .route("/api/dsl/sage/utter", post(sage_utterance_gate))
+        .route("/bpmn/templates", get(list_templates_endpoint).post(define_template_endpoint))
+        .route("/bpmn/templates/:name/versions/:version", get(get_template_version_endpoint))
         .with_state(state)
 }
 
@@ -1750,6 +1752,150 @@ async fn sage_utterance_gate(
     })
 }
 
+#[derive(Deserialize, Serialize)]
+pub(crate) struct DefineTemplateBody {
+    name: String,
+    dsl_body: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DefineTemplateResponse {
+    plan_hash: String,
+    version: u32,
+}
+
+async fn define_template_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Json(body): Json<DefineTemplateBody>,
+) -> impl IntoResponse {
+    let registry = get_preview_registry();
+    let plan = match bpmn_lite_compiler::dsl::compile(&body.dsl_body, &registry) {
+        Ok(p) => p,
+        Err(e) => {
+            let (error_msg, diagnostics) = match e {
+                bpmn_lite_compiler::dsl::CompileError::Parse(errs) => {
+                    ("Parsing failed".to_owned(), errs)
+                }
+                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                    let formatted = errs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>();
+                    ("Linting failed".to_owned(), formatted)
+                }
+                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                    let formatted = errs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>();
+                    ("DAG validation failed".to_owned(), formatted)
+                }
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error_msg,
+                    "diagnostics": diagnostics
+                })),
+            ).into_response();
+        }
+    };
+
+    let plan_json = match serde_json::to_string(&plan) {
+        Ok(json) => json,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Serialization failed: {}", e) })),
+            ).into_response();
+        }
+    };
+
+    let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
+
+    if let Err(e) = demo.store.store_plan(hash, &plan_json).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to store plan: {}", e) })),
+        ).into_response();
+    }
+
+    let version = match demo.store.load_latest_template_version(&body.name).await {
+        Ok(Some((v, _, _))) => v + 1,
+        _ => 1,
+    };
+
+    if let Err(e) = demo.store.store_template(&body.name, version, hash, &body.dsl_body).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to store template: {}", e) })),
+        ).into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(DefineTemplateResponse {
+            plan_hash: hex::encode(hash),
+            version,
+        }),
+    ).into_response()
+}
+
+#[derive(Serialize)]
+pub(crate) struct TemplateSummaryDto {
+    name: String,
+    latest_version: u32,
+    plan_hash: String,
+    created_at: String,
+}
+
+async fn list_templates_endpoint(
+    State(demo): State<Arc<DemoState>>,
+) -> impl IntoResponse {
+    match demo.store.list_templates().await {
+        Ok(list) => {
+            let dtos: Vec<TemplateSummaryDto> = list.into_iter().map(|t| TemplateSummaryDto {
+                name: t.name,
+                latest_version: t.latest_version,
+                plan_hash: hex::encode(t.plan_hash),
+                created_at: t.created_at,
+            }).collect();
+            (StatusCode::OK, Json(dtos)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response()
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct TemplateVersionDto {
+    name: String,
+    version: u32,
+    plan_hash: String,
+    dsl_body: String,
+}
+
+async fn get_template_version_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path((name, version)): Path<(String, u32)>,
+) -> impl IntoResponse {
+    match demo.store.load_template_version(&name, version).await {
+        Ok(Some((dsl_body, plan_hash))) => {
+            let dto = TemplateVersionDto {
+                name,
+                version,
+                plan_hash: hex::encode(plan_hash),
+                dsl_body,
+            };
+            (StatusCode::OK, Json(dto)).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Template '{}' version {} not found", name, version) })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2079,6 +2225,129 @@ mod tests {
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(res["escape_intent_detected"].as_bool().unwrap());
         assert_eq!(res["suggested_action"].as_str().unwrap(), "exit");
+    }
+
+    #[tokio::test]
+    async fn test_template_catalog_endpoints() {
+        let state = DemoState::new();
+        let app = demo_router(state);
+
+        // 1. Post version 1 of template "my-template"
+        let dsl_v1 = r#"(workflow my-template
+  (start-event :id start :next end)
+  (end-event :id end :status "v1"))"#;
+        let define_body = DefineTemplateBody {
+            name: "my-template".to_string(),
+            dsl_body: dsl_v1.to_string(),
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/bpmn/templates")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&define_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let res: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(res["version"], 1);
+        let first_hash = res["plan_hash"].as_str().unwrap().to_string();
+        assert_eq!(first_hash.len(), 64);
+
+        // 2. List templates - verify "my-template" exists and has latest_version = 1
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let summaries: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let summaries_arr = summaries.as_array().unwrap();
+        assert!(summaries_arr.iter().any(|t| t["name"] == "my-template" && t["latest_version"] == 1 && t["plan_hash"] == first_hash));
+
+        // 3. Get version 1 of the template
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates/my-template/versions/1")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let version_dto: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(version_dto["name"], "my-template");
+        assert_eq!(version_dto["version"], 1);
+        assert_eq!(version_dto["dsl_body"], dsl_v1);
+        assert_eq!(version_dto["plan_hash"], first_hash);
+
+        // 4. Post version 2 of template "my-template"
+        let dsl_v2 = r#"(workflow my-template
+  (start-event :id start :next end)
+  (end-event :id end :status "v2"))"#;
+        let define_body_v2 = DefineTemplateBody {
+            name: "my-template".to_string(),
+            dsl_body: dsl_v2.to_string(),
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/bpmn/templates")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&define_body_v2).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let res_v2: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(res_v2["version"], 2);
+        let second_hash = res_v2["plan_hash"].as_str().unwrap().to_string();
+        assert_ne!(first_hash, second_hash);
+
+        // 5. List templates again - check latest_version = 2
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let summaries_v2: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let summaries_arr_v2 = summaries_v2.as_array().unwrap();
+        assert!(summaries_arr_v2.iter().any(|t| t["name"] == "my-template" && t["latest_version"] == 2 && t["plan_hash"] == second_hash));
     }
 }
 

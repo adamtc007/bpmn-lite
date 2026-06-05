@@ -24,6 +24,7 @@ struct Inner {
     inflight_jobs: HashMap<String, (JobActivation, Instant)>,
     programs: HashMap<[u8; 32], CompiledProgram>,
     plans: HashMap<[u8; 32], String>,
+    templates: HashMap<(String, u32), (String, [u8; 32], String)>, // (name, version) -> (dsl, plan_hash, created_at)
     dead_letter: HashMap<(u32, String), (Vec<u8>, u64)>,
     events: HashMap<Uuid, Vec<(u64, RuntimeEvent)>>,
     event_seq: HashMap<Uuid, u64>,
@@ -55,6 +56,7 @@ impl MemoryStore {
                 inflight_jobs: HashMap::new(),
                 programs: HashMap::new(),
                 plans: HashMap::new(),
+                templates: HashMap::new(),
                 dead_letter: HashMap::new(),
                 events: HashMap::new(),
                 event_seq: HashMap::new(),
@@ -432,6 +434,74 @@ impl ProcessStore for MemoryStore {
     async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
         let r = self.inner.read().await;
         Ok(r.plans.get(&plan_hash).cloned())
+    }
+
+    // ── Template catalog ──
+
+    async fn store_template(
+        &self,
+        name: &str,
+        version: u32,
+        plan_hash: [u8; 32],
+        dsl_body: &str,
+    ) -> Result<()> {
+        let mut w = self.inner.write().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        w.templates.insert((name.to_owned(), version), (dsl_body.to_owned(), plan_hash, now));
+        Ok(())
+    }
+
+    async fn load_template_version(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Option<(String, [u8; 32])>> {
+        let r = self.inner.read().await;
+        if let Some((dsl, hash, _)) = r.templates.get(&(name.to_owned(), version)) {
+            Ok(Some((dsl.clone(), *hash)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn load_latest_template_version(
+        &self,
+        name: &str,
+    ) -> Result<Option<(u32, String, [u8; 32])>> {
+        let r = self.inner.read().await;
+        let mut latest: Option<(u32, String, [u8; 32])> = None;
+        for ((t_name, version), (dsl, hash, _)) in r.templates.iter() {
+            if t_name == name {
+                if let Some((best_v, _, _)) = &latest {
+                    if version > &best_v {
+                        latest = Some((*version, dsl.clone(), *hash));
+                    }
+                } else {
+                    latest = Some((*version, dsl.clone(), *hash));
+                }
+            }
+        }
+        Ok(latest)
+    }
+
+    async fn list_templates(&self) -> Result<Vec<crate::store::TemplateSummary>> {
+        let r = self.inner.read().await;
+        let mut latest_map: HashMap<String, (u32, [u8; 32], String)> = HashMap::new();
+        for ((name, version), (_, hash, created_at)) in r.templates.iter() {
+            let entry = latest_map.entry(name.clone()).or_insert((*version, *hash, created_at.clone()));
+            if *version > entry.0 {
+                *entry = (*version, *hash, created_at.clone());
+            }
+        }
+        let summaries = latest_map.into_iter().map(|(name, (version, hash, created_at))| {
+            crate::store::TemplateSummary {
+                name,
+                latest_version: version,
+                plan_hash: hash,
+                created_at,
+            }
+        }).collect();
+        Ok(summaries)
     }
 
     // ── Dead-letter queue ──

@@ -292,11 +292,46 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
         match ctx.local_verb_id.as_str() {
             "define-template" => {
                 self.assert_scope(auth, "bpmn.template.write")?;
-                let plan_body = get_string_binding(&inputs, "plan_body")?;
+                let template_key = get_string_binding(&inputs, "template_key")?;
 
-                // Relocate validation to define-template
-                let mut plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&plan_body)
-                    .map_err(|e| BusServerError::Malformed(format!("Failed to parse plan_body: {}", e)))?;
+                // Build manifest registry first because compilation needs it for validation
+                let stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
+                let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(stub_reg);
+                let paths = vec![
+                    "manifests/bpmn-v1.0.0.yaml",
+                    "manifests/dmn-lite-v1.0.0.yaml",
+                    "manifests/ob-poc-v1.0.0.yaml",
+                ];
+                for p in &paths {
+                    let path = std::path::Path::new(p);
+                    let m = if path.exists() {
+                        dsl_manifest::Manifest::load_from_path(path)
+                            .map_err(|e| BusServerError::Internal(format!("Failed to load manifest at {}: {:?}", p, e)))?
+                    } else {
+                        let alt_path = format!("../{}", p);
+                        let alt = std::path::Path::new(&alt_path);
+                        if alt.exists() {
+                            dsl_manifest::Manifest::load_from_path(alt)
+                                .map_err(|e| BusServerError::Internal(format!("Failed to load manifest at {}: {:?}", alt_path, e)))?
+                        } else {
+                            return Err(BusServerError::Internal(format!("Manifest file not found: {} or {}", p, alt_path)));
+                        }
+                    };
+                    registry.import(m);
+                }
+
+                let (_, mut plan, dsl_to_save) = if let Ok(dsl) = get_string_binding(&inputs, "dsl_body") {
+                    let compiled_plan = bpmn_lite_compiler::dsl::compile(&dsl, &registry)
+                        .map_err(|e| BusServerError::Malformed(format!("Compilation failed: {}", e)))?;
+                    let json = serde_json::to_string(&compiled_plan)
+                        .map_err(|e| BusServerError::Internal(format!("Failed to serialize plan: {}", e)))?;
+                    (json, compiled_plan, dsl)
+                } else {
+                    let pb = get_string_binding(&inputs, "plan_body")?;
+                    let p: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&pb)
+                        .map_err(|e| BusServerError::Malformed(format!("Failed to parse plan_body: {}", e)))?;
+                    (pb, p, String::new())
+                };
 
                 let client_proved = plan.mathematically_proved;
                 plan.analyze_safety();
@@ -331,7 +366,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 let plan_body = serde_json::to_string(&plan)
                     .map_err(|e| BusServerError::Internal(format!("Failed to serialize plan: {}", e)))?;
 
-                let mut stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
+                let mut stub_reg2 = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new().with_demo_bindings();
                 for (hash, child_plan) in &child_plans {
                     let mut consumes = Vec::new();
                     for slot in child_plan.placeholder_schema.slots.values() {
@@ -339,7 +374,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                             consumes.push(slot.name.clone());
                         }
                     }
-                    stub_reg.register_workflow(hash.clone(), bpmn_lite_compiler::dsl::linter::BindingDecl {
+                    stub_reg2.register_workflow(hash.clone(), bpmn_lite_compiler::dsl::linter::BindingDecl {
                         produces: None,
                         consumes,
                         effect_class: Some("idempotent_ensure".into()),
@@ -354,16 +389,11 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                             }
                         }
                     }
-                    stub_reg.register_workflow_child_calls(hash, child_calls);
+                    stub_reg2.register_workflow_child_calls(hash, child_calls);
                 }
 
-                let mut registry = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(stub_reg);
-                let paths = vec![
-                    "manifests/bpmn-v1.0.0.yaml",
-                    "manifests/dmn-lite-v1.0.0.yaml",
-                    "manifests/ob-poc-v1.0.0.yaml",
-                ];
-                for p in paths {
+                let mut registry2 = bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(stub_reg2);
+                for p in &paths {
                     let path = std::path::Path::new(p);
                     let m = if path.exists() {
                         dsl_manifest::Manifest::load_from_path(path)
@@ -378,10 +408,10 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                             return Err(BusServerError::Internal(format!("Manifest file not found: {} or {}", p, alt_path)));
                         }
                     };
-                    registry.import(m);
+                    registry2.import(m);
                 }
 
-                let diagnostics = bpmn_lite_compiler::dsl::closure::validate_path_family(&plan, &registry);
+                let diagnostics = bpmn_lite_compiler::dsl::closure::validate_path_family(&plan, &registry2);
                 if !diagnostics.is_empty() {
                     return Err(BusServerError::Malformed(format!("Path-family validation failed: {:?}", diagnostics)));
                 }
@@ -390,12 +420,25 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 engine_ref.store().store_plan(hash, &plan_body).await
                     .map_err(|e| BusServerError::Internal(e.to_string()))?;
 
+                // Get next version for this template catalog
+                let version = match engine_ref.store().load_latest_template_version(&template_key).await {
+                    Ok(Some((v, _, _))) => v + 1,
+                    _ => 1,
+                };
+
+                // Store template version snapshot
+                engine_ref.store().store_template(&template_key, version, hash, &dsl_to_save).await
+                    .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
                 Ok(InvocationOutcome {
                     execution_id: Uuid::now_v7(),
                     outcome: ExecutionOutcome {
                         kind: dsl_bus_protocol::v1::ExecutionOutcomeKind::OutcomeUnspecified as i32,
-                        detail: "Template registered".to_string(),
-                        bindings: vec![],
+                        detail: format!("Template registered as version {}", version),
+                        bindings: vec![
+                            string_binding("plan_hash".to_string(), hex::encode(hash)),
+                            string_binding("version".to_string(), version.to_string()),
+                        ],
                     },
                 })
             }
@@ -423,18 +466,28 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     });
                 }
 
-                let plan_hash = hex::decode(&template_key)
-                    .map_err(|_| BusServerError::Malformed("invalid template_key hex".into()))?;
-                if plan_hash.len() != 32 {
-                    return Err(BusServerError::Malformed("invalid template_key length".into()));
-                }
-                let mut hash_arr = [0u8; 32];
-                hash_arr.copy_from_slice(&plan_hash);
-
                 let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
-                let plan_json = engine_ref.store().load_plan(hash_arr).await
-                    .map_err(|e| BusServerError::Internal(e.to_string()))?
-                    .ok_or_else(|| BusServerError::Malformed(format!("plan not found for hash {}", template_key)))?;
+                let is_hex = template_key.len() == 64 && template_key.chars().all(|c| c.is_ascii_hexdigit());
+
+                let plan_json = if is_hex {
+                    let plan_hash = hex::decode(&template_key)
+                        .map_err(|_| BusServerError::Malformed("invalid template_key hex".into()))?;
+                    if plan_hash.len() != 32 {
+                        return Err(BusServerError::Malformed("invalid template_key length".into()));
+                    }
+                    let mut hash_arr = [0u8; 32];
+                    hash_arr.copy_from_slice(&plan_hash);
+                    engine_ref.store().load_plan(hash_arr).await
+                        .map_err(|e| BusServerError::Internal(e.to_string()))?
+                        .ok_or_else(|| BusServerError::Malformed(format!("plan not found for hash {}", template_key)))?
+                } else {
+                    let (_, _, hash) = engine_ref.store().load_latest_template_version(&template_key).await
+                        .map_err(|e| BusServerError::Internal(e.to_string()))?
+                        .ok_or_else(|| BusServerError::Malformed(format!("template name not found: {}", template_key)))?;
+                    engine_ref.store().load_plan(hash).await
+                        .map_err(|e| BusServerError::Internal(e.to_string()))?
+                        .ok_or_else(|| BusServerError::Malformed(format!("plan not found for hash {}", hex::encode(hash))))?
+                };
 
                 let plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan = serde_json::from_str(&plan_json)
                     .map_err(|e| BusServerError::Malformed(format!("invalid plan JSON: {}", e)))?;
@@ -457,6 +510,54 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                         detail: "Instance spawned".to_string(),
                         bindings: vec![
                             string_binding("instance_id".to_string(), instance_id.to_string()),
+                        ],
+                    },
+                })
+            }
+            "list-templates" => {
+                self.assert_scope(auth, "bpmn.template.read")?;
+                let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
+                let list = engine_ref.store().list_templates().await
+                    .map_err(|e| BusServerError::Internal(e.to_string()))?;
+                let list_json = serde_json::to_string(&list)
+                    .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
+                Ok(InvocationOutcome {
+                    execution_id: Uuid::now_v7(),
+                    outcome: ExecutionOutcome {
+                        kind: dsl_bus_protocol::v1::ExecutionOutcomeKind::OutcomeUnspecified as i32,
+                        detail: "Success".to_string(),
+                        bindings: vec![
+                            string_binding("templates_json".to_string(), list_json),
+                        ],
+                    },
+                })
+            }
+            "get-template-version" => {
+                self.assert_scope(auth, "bpmn.template.read")?;
+                let template_key = get_string_binding(&inputs, "template_key")?;
+                let version_opt = get_int_binding(&inputs, "version").ok();
+
+                let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
+                let (dsl_body, plan_hash) = if let Some(v) = version_opt {
+                    engine_ref.store().load_template_version(&template_key, v as u32).await
+                        .map_err(|e| BusServerError::Internal(e.to_string()))?
+                        .ok_or_else(|| BusServerError::Malformed(format!("Template version not found: {} v{}", template_key, v)))?
+                } else {
+                    let (_, dsl, hash) = engine_ref.store().load_latest_template_version(&template_key).await
+                        .map_err(|e| BusServerError::Internal(e.to_string()))?
+                        .ok_or_else(|| BusServerError::Malformed(format!("Template not found: {}", template_key)))?;
+                    (dsl, hash)
+                };
+
+                Ok(InvocationOutcome {
+                    execution_id: Uuid::now_v7(),
+                    outcome: ExecutionOutcome {
+                        kind: dsl_bus_protocol::v1::ExecutionOutcomeKind::OutcomeUnspecified as i32,
+                        detail: "Success".to_string(),
+                        bindings: vec![
+                            string_binding("dsl_body".to_string(), dsl_body),
+                            string_binding("plan_hash".to_string(), hex::encode(plan_hash)),
                         ],
                     },
                 })
@@ -610,6 +711,17 @@ fn get_uuid_binding(inputs: &[ResolvedBinding], name: &str) -> Result<Uuid, BusS
             }
         }
         _ => Err(BusServerError::Malformed(format!("input '{}' is not a uuid", name))),
+    }
+}
+
+fn get_int_binding(inputs: &[ResolvedBinding], name: &str) -> Result<i64, BusServerError> {
+    let binding = inputs.iter().find(|b| b.name == name)
+        .ok_or_else(|| BusServerError::Malformed(format!("missing input '{}'", name)))?;
+    let val = binding.value.as_ref()
+        .ok_or_else(|| BusServerError::Malformed(format!("input '{}' has no value", name)))?;
+    match val.value.as_ref() {
+        Some(dsl_bus_protocol::v1::typed_value::Value::IntValue(i)) => Ok(*i),
+        _ => Err(BusServerError::Malformed(format!("input '{}' is not an integer", name))),
     }
 }
 
