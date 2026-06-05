@@ -1890,6 +1890,41 @@ mod tests {
         let diagnostics = res["diagnostics"].as_array().unwrap();
         assert!(diagnostics.iter().any(|d| d.as_str().unwrap().contains("Suggestion: Would you like me to import unknown-domain:unknown-verb to fix the unresolved verb error?")));
 
+        // Test BPMN compilation preview with valid bpmn:message-wait and ob-poc verbs
+        let bpmn_wait_src = r#"(workflow custody-cbu-onboarding
+          (start-event :id start :next create-cbu)
+          (service-task :id create-cbu :verb ob-poc:cbu.create :next message-wait)
+          (service-task :id message-wait :verb bpmn:message-wait :next type-decision)
+          (business-rule-task :id type-decision :decision dmn-lite:cbu_type_routing :next type-gateway)
+          (exclusive-gateway :id type-gateway
+            (flow :condition (= @cbu-type "fund")      :next add-fund)
+            (flow :condition (= @cbu-type "corporate") :next add-corp)
+            (flow :condition (= @cbu-type "trust")     :next add-trust))
+          (service-task :id add-fund  :verb ob-poc:cbu.add-product :args (:product "fund")      :next attach-im)
+          (service-task :id add-corp  :verb ob-poc:cbu.add-product :args (:product "corporate") :next attach-im)
+          (service-task :id add-trust :verb ob-poc:cbu.add-product :args (:product "trust")     :next attach-im)
+          (service-task :id attach-im :verb ob-poc:instrument-matrix.attach :next end)
+          (end-event :id end :status "Operational"))"#;
+        let bpmn_wait_body = serde_json::json!({ "bpmn_dsl": bpmn_wait_src });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/bpmn/compile/preview")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_string(&bpmn_wait_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 100000).await.unwrap();
+        let res: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(res["workflow_id"].as_str().unwrap(), "custody-cbu-onboarding");
+        assert!(res["error"].is_null());
+
         // Test DMN compilation preview
         let dmn_src = r#"(define-decision test_dec
   :hit-policy unique
