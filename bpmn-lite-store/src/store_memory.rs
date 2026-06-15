@@ -473,7 +473,7 @@ impl ProcessStore for MemoryStore {
         for ((t_name, version), (dsl, hash, _)) in r.templates.iter() {
             if t_name == name {
                 if let Some((best_v, _, _)) = &latest {
-                    if version > &best_v {
+                    if *version > *best_v {
                         latest = Some((*version, dsl.clone(), *hash));
                     }
                 } else {
