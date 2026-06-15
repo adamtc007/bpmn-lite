@@ -160,6 +160,15 @@ impl StubPlaceholderRegistry {
         });
         self.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
         self.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+
+        // check_eligibility DMN: consumes @cbu, produces @eligible (boolean result)
+        self.register_decision("check_eligibility", BindingDecl {
+            produces: Some("@eligible".into()),
+            consumes: vec!["@cbu".into()],
+            effect_class: None,
+        });
+        self.register_decision_enum("check_eligibility", vec!["true".into(), "false".into()]);
+        self.register_decision_type_info("check_eligibility", "boolean".to_string(), "bool".to_string());
         self
     }
 }
