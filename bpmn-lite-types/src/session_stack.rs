@@ -57,4 +57,5 @@ pub enum SessionWorkspaceKind {
     SemOsMaintenance,
     LifecycleResources,
     BookingPrincipal,
+    Bpmn,
 }

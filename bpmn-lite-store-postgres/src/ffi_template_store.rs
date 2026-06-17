@@ -6,6 +6,7 @@
 //! SQL layer via `ON CONFLICT DO NOTHING` on the BYTEA primary key,
 //! followed by a content equality check.
 
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use ffi_catalogue::FfiTemplateStore;
 use ffi_types::{FfiTemplate, FieldSchema, Idempotency};
@@ -41,28 +42,45 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
                 .unwrap_or_else(chrono::Utc::now);
         let row_uuid = Uuid::now_v7();
 
-        let inserted = sqlx::query(
-            r#"
-            INSERT INTO ffi_template (
-                template_id, template_uuidv7, owner_type, owner_metadata,
-                input_schema_json, output_schema_json, idempotency_json,
-                tenant_id, published_at, publisher
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (template_id) DO NOTHING
-            "#,
+        let tenant_id = template.tenant_id.clone();
+        let tenant_id_for_query = tenant_id.clone();
+        let lease_owner = "unused";
+        let template_id = template.template_id;
+        let owner_type = template.owner_type.clone();
+        let owner_metadata = template.owner_metadata.clone();
+        let publisher = template.publisher.clone();
+
+        let inserted = crate::store_postgres::execute_tenant_scoped_on_pool(
+            &self.pool,
+            &tenant_id,
+            &lease_owner,
+            |tx| Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    INSERT INTO ffi_template (
+                        template_id, template_uuidv7, owner_type, owner_metadata,
+                        input_schema_json, output_schema_json, idempotency_json,
+                        tenant_id, published_at, publisher
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (template_id) DO NOTHING
+                    "#,
+                )
+                .bind(template_id.as_slice())
+                .bind(row_uuid)
+                .bind(&owner_type)
+                .bind(&owner_metadata)
+                .bind(&input_schema_json)
+                .bind(&output_schema_json)
+                .bind(&idempotency_json)
+                .bind(&tenant_id_for_query)
+                .bind(published_at)
+                .bind(&publisher)
+                .execute(&mut *tx.tx)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+            })
         )
-        .bind(template.template_id.as_slice())
-        .bind(row_uuid)
-        .bind(&template.owner_type)
-        .bind(&template.owner_metadata)
-        .bind(&input_schema_json)
-        .bind(&output_schema_json)
-        .bind(&idempotency_json)
-        .bind(&template.tenant_id)
-        .bind(published_at)
-        .bind(&template.publisher)
-        .execute(&self.pool)
         .await?;
 
         if inserted.rows_affected() == 1 {
@@ -86,40 +104,57 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
     }
 
     async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>> {
-        let row = sqlx::query(
-            r#"
-            SELECT template_id, owner_type, owner_metadata,
-                   input_schema_json, output_schema_json, idempotency_json,
-                   tenant_id, published_at, publisher
-            FROM ffi_template
-            WHERE template_id = $1
-            "#,
-        )
-        .bind(template_id.as_slice())
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_template_tenant_id($1)")
+            .bind(template_id.as_slice())
+            .fetch_one(&self.pool)
+            .await?;
+        let tenant_id = match row.0 {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+        let lease_owner = "unused";
+        let template_id_owned = *template_id;
+        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id, &lease_owner, |tx| Box::pin(async move {
+            let row = sqlx::query(
+                r#"
+                SELECT template_id, owner_type, owner_metadata,
+                       input_schema_json, output_schema_json, idempotency_json,
+                       tenant_id, published_at, publisher
+                FROM ffi_template
+                WHERE template_id = $1
+                "#,
+            )
+            .bind(template_id_owned.as_slice())
+            .fetch_optional(&mut *tx.tx)
+            .await?;
 
-        match row {
-            None => Ok(None),
-            Some(r) => Ok(Some(row_to_template(r)?)),
-        }
+            match row {
+                None => Ok(None),
+                Some(r) => Ok(Some(row_to_template(r)?)),
+            }
+        })).await
     }
 
     async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT template_id, owner_type, owner_metadata,
-                   input_schema_json, output_schema_json, idempotency_json,
-                   tenant_id, published_at, publisher
-            FROM ffi_template
-            WHERE tenant_id = $1
-            "#,
-        )
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let tenant_id_str = tenant_id.to_string();
+        let tenant_id_query = tenant_id.to_string();
+        let lease_owner = "unused";
+        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id_str, &lease_owner, |tx| Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                SELECT template_id, owner_type, owner_metadata,
+                       input_schema_json, output_schema_json, idempotency_json,
+                       tenant_id, published_at, publisher
+                FROM ffi_template
+                WHERE tenant_id = $1
+                "#,
+            )
+            .bind(&tenant_id_query)
+            .fetch_all(&mut *tx.tx)
+            .await?;
 
-        rows.into_iter().map(row_to_template).collect()
+            rows.into_iter().map(row_to_template).collect()
+        })).await
     }
 
     async fn list_by_owner(
@@ -127,21 +162,27 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         owner_type: &str,
         tenant_id: &str,
     ) -> anyhow::Result<Vec<FfiTemplate>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT template_id, owner_type, owner_metadata,
-                   input_schema_json, output_schema_json, idempotency_json,
-                   tenant_id, published_at, publisher
-            FROM ffi_template
-            WHERE owner_type = $1 AND tenant_id = $2
-            "#,
-        )
-        .bind(owner_type)
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let owner_type = owner_type.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let tenant_id_query = tenant_id.to_string();
+        let lease_owner = "unused";
+        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id_str, &lease_owner, |tx| Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                SELECT template_id, owner_type, owner_metadata,
+                       input_schema_json, output_schema_json, idempotency_json,
+                       tenant_id, published_at, publisher
+                FROM ffi_template
+                WHERE owner_type = $1 AND tenant_id = $2
+                "#,
+            )
+            .bind(&owner_type)
+            .bind(&tenant_id_query)
+            .fetch_all(&mut *tx.tx)
+            .await?;
 
-        rows.into_iter().map(row_to_template).collect()
+            rows.into_iter().map(row_to_template).collect()
+        })).await
     }
 }
 
@@ -216,13 +257,20 @@ mod tests {
     async fn setup_pool() -> Option<PgPool> {
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL").ok()?;
         let pool = PgPool::connect(&url).await.ok()?;
-        sqlx::migrate!("./migrations").run(&pool).await.ok()?;
+        let migrator = sqlx::migrate!("./migrations");
+        migrator.run(&pool).await.ok()?;
         // Clean ffi_template between tests.
         sqlx::query("DELETE FROM ffi_template")
             .execute(&pool)
             .await
             .ok()?;
-        Some(pool)
+        pool.close().await;
+
+        use std::str::FromStr;
+        let mut options = sqlx::postgres::PgConnectOptions::from_str(&url).ok()?;
+        options = options.username("bpmn_lite_app").password("bpmn_lite_app_dev_password");
+        let app_pool = PgPool::connect_with(options).await.ok()?;
+        Some(app_pool)
     }
 
     #[tokio::test]

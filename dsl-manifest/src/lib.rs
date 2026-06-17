@@ -46,7 +46,7 @@ pub struct Manifest {
     pub generated_from_snapshot: Option<String>,
 
     #[serde(default)]
-    pub min_consumer_manifest_version: Option<String>,
+    pub imported_pins: Vec<ExternalReferencePin>,
     #[serde(default)]
     pub breaking_changes_since: Vec<String>,
 
@@ -292,6 +292,12 @@ pub struct TypeEntry {
     pub uuid_type: Option<String>,
     #[serde(default)]
     pub values: Vec<String>, // for enum kind
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalReferencePin {
+    pub domain: String,
+    pub content_hash: String,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────

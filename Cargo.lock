@@ -291,6 +291,7 @@ dependencies = [
  "bpmn-lite-store",
  "bpmn-lite-types",
  "chrono",
+ "dsl-manifest",
  "petgraph 0.6.5",
  "serde",
  "serde_json",
@@ -304,9 +305,22 @@ dependencies = [
 name = "bpmn-lite-bus-handler"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "blake3",
+ "bpmn-lite-authoring",
+ "bpmn-lite-compiler",
+ "bpmn-lite-engine",
+ "bpmn-lite-store",
+ "bpmn-lite-store-postgres",
+ "bpmn-lite-types",
+ "dsl-bus-client",
  "dsl-bus-protocol",
  "dsl-bus-server",
+ "dsl-manifest",
+ "hex",
+ "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "uuid",
@@ -325,6 +339,7 @@ dependencies = [
  "quick-xml",
  "serde",
  "serde_json",
+ "serde_yaml",
  "uuid",
 ]
 
@@ -351,6 +366,8 @@ dependencies = [
  "ffi-catalogue",
  "ffi-dispatcher",
  "ffi-types",
+ "futures-executor",
+ "hex",
  "prost",
  "serde",
  "serde_json",
@@ -401,6 +418,7 @@ dependencies = [
  "axum",
  "blake3",
  "bpmn-lite-analysis",
+ "bpmn-lite-authoring",
  "bpmn-lite-bus-handler",
  "bpmn-lite-compiler",
  "bpmn-lite-engine",
@@ -419,6 +437,7 @@ dependencies = [
  "dsl-bus-protocol",
  "dsl-bus-server",
  "dsl-bus-storage",
+ "dsl-manifest",
  "ffi-catalogue",
  "ffi-dispatcher",
  "ffi-types",
@@ -432,6 +451,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-health",
+ "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -448,6 +468,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -465,7 +486,9 @@ dependencies = [
  "bpmn-lite-types",
  "bpmn-lite-vm",
  "chrono",
+ "dsl-bus-storage",
  "ffi-catalogue",
+ "ffi-dispatcher",
  "ffi-types",
  "serde",
  "serde_json",
@@ -483,6 +506,7 @@ dependencies = [
  "blake3",
  "serde",
  "serde_json",
+ "thiserror",
  "tracing",
  "uuid",
 ]
@@ -2255,7 +2279,9 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -3801,6 +3827,11 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bpmn-lite-compiler",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

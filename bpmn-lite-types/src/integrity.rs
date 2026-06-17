@@ -50,6 +50,12 @@ pub fn compute_instance_integrity_hash(instance: &ProcessInstance) -> [u8; 32] {
     // Using empty bytes as placeholder. When this field is added, the hash
     // function changes and existing instances must be rehashed.
     hasher.update(b"");
+
+    if let Some(ref h) = instance.plan_hash {
+        hasher.update(b"|");
+        hasher.update(h);
+    }
+
     hasher.finalize().into()
 }
 
@@ -224,3 +230,12 @@ mod tests {
         );
     }
 }
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("IntegrityViolation: instance {instance_id} (tenant {tenant_id}) failed integrity check at {detection_point}")]
+pub struct IntegrityViolation {
+    pub instance_id: uuid::Uuid,
+    pub tenant_id: String,
+    pub detection_point: String,
+}
+

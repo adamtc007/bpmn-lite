@@ -43,6 +43,8 @@ fn ctx(decision: &str) -> InvocationContext {
         catalogue_version: "v1.0.0".into(),
         local_verb_id: decision.into(),
         result_callback_endpoint: "http://bpmn-lite/result".into(),
+        authority: None,
+        tenant_id: "default".into(),
     }
 }
 

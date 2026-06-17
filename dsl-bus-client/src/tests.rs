@@ -155,20 +155,35 @@ impl MockServer {
     }
 }
 
-// ── Test helpers ─────────────────────────────────────────────────────
+static TEST_MUTEX: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
-async fn setup_pool() -> PgPool {
-    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+fn get_mutex() -> &'static tokio::sync::Mutex<()> {
+    TEST_MUTEX.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+async fn setup_pool() -> (PgPool, tokio::sync::MutexGuard<'static, ()>) {
+    let guard = get_mutex().lock().await;
+    let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
+    if url.contains('?') {
+        url.push_str("&options=-csearch_path%3Ddsl_bus");
+    } else {
+        url.push_str("?options=-csearch_path%3Ddsl_bus");
+    }
     let pool = PgPool::connect(&url).await.expect("connect");
-    sqlx::migrate!("../dsl-bus-storage/migrations")
-        .run(&pool)
+
+    // Clean drop/recreation of dsl_bus to isolate migrations in tests
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
+    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+
+    let migrator = sqlx::migrate!("../dsl-bus-storage/migrations");
+    migrator.run(&pool)
         .await
         .expect("migrations");
     sqlx::query("TRUNCATE outbox").execute(&pool).await.unwrap();
     sqlx::query("TRUNCATE inbox").execute(&pool).await.unwrap();
-    pool
+    (pool, guard)
 }
 
 fn proto_uuid(u: Uuid) -> ProtoUuid {
@@ -212,7 +227,7 @@ async fn fetch_outbox_status(pool: &PgPool, id: Uuid) -> (String, i32, Option<St
 #[tokio::test]
 #[ignore]
 async fn submit_invocation_writes_outbox_row() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
         .pool(pool.clone())
         .local_domain("bpmn-lite")
@@ -223,7 +238,7 @@ async fn submit_invocation_writes_outbox_row() {
 
     let key = Uuid::now_v7();
     let (returned_key, outcome) = client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
     assert_eq!(returned_key, key);
@@ -237,7 +252,7 @@ async fn submit_invocation_writes_outbox_row() {
 #[tokio::test]
 #[ignore]
 async fn submit_invocation_is_idempotent_on_repeat_keys() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
         .pool(pool.clone())
         .local_domain("bpmn-lite")
@@ -248,11 +263,11 @@ async fn submit_invocation_is_idempotent_on_repeat_keys() {
 
     let key = Uuid::now_v7();
     let first = client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
     let second = client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
 
@@ -263,7 +278,7 @@ async fn submit_invocation_is_idempotent_on_repeat_keys() {
 #[tokio::test]
 #[ignore]
 async fn submit_invocation_rejects_unknown_peer() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
         .pool(pool.clone())
         .local_domain("bpmn-lite")
@@ -273,7 +288,7 @@ async fn submit_invocation_rejects_unknown_peer() {
 
     let key = Uuid::now_v7();
     let err = client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap_err();
     assert!(matches!(
@@ -289,7 +304,7 @@ async fn sender_dispatches_pending_row_to_mock_server() {
     // notifies internally, so the sender drains within microseconds of
     // the commit; the test polls the row status for up to 5 s as a
     // belt-and-braces upper bound, not because the dispatch is slow.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -303,7 +318,7 @@ async fn sender_dispatches_pending_row_to_mock_server() {
 
     let key = Uuid::now_v7();
     client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
 
@@ -330,7 +345,7 @@ async fn sender_dispatches_pending_row_to_mock_server() {
 #[tokio::test]
 #[ignore]
 async fn sender_retries_on_transport_failure_then_succeeds() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     // Pre-load two failures before the mock accepts.
     server.state.fail_count.store(2, Ordering::SeqCst);
@@ -352,7 +367,7 @@ async fn sender_retries_on_transport_failure_then_succeeds() {
 
     let key = Uuid::now_v7();
     client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
 
@@ -383,7 +398,7 @@ async fn sender_retries_on_transport_failure_then_succeeds() {
 #[tokio::test]
 #[ignore]
 async fn sender_dispatches_result_rows() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -403,7 +418,7 @@ async fn sender_dispatches_result_rows() {
         plan_id: None,
         audit_reference: String::new(),
     };
-    client.send_result("bpmn-lite", result).await.unwrap();
+    client.send_result("bpmn-lite", result, "default".to_string()).await.unwrap();
 
     let handle = client.start_sender();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -450,7 +465,7 @@ async fn notification_drives_drain() {
     // submit_invocation commits then calls notify_one(); the sender
     // must drain within tens of milliseconds — well under the
     // FALLBACK_TIMER_SECS=30 s safety net.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -468,7 +483,7 @@ async fn notification_drives_drain() {
     let start = std::time::Instant::now();
     let key = Uuid::now_v7();
     client
-        .submit_invocation("ob-poc", sample_request(key))
+        .submit_invocation("ob-poc", sample_request(key), "default".to_string())
         .await
         .unwrap();
 
@@ -500,7 +515,7 @@ async fn fallback_timer_drains_missed_signal() {
     // the outbox row directly via dsl-bus-storage, bypassing
     // submit_invocation's notify call. A short fallback (1 s) keeps
     // the test fast; production builds use 30 s.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -518,6 +533,7 @@ async fn fallback_timer_drains_missed_signal() {
         BusEndpoint::Invocation,
         sample_request(key).encode_to_vec(),
         key,
+        "default".to_string(),
     );
     // Note: NO notify call — simulates a lost signal.
     insert_outbox(&pool, &entry).await.unwrap();
@@ -554,7 +570,7 @@ async fn burst_coalescing() {
     // notifications — but `drain_until_empty` loops until the table is
     // drained, so all 20 must end up submitted regardless of how the
     // wake-ups bundled.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -569,7 +585,7 @@ async fn burst_coalescing() {
     for _ in 0..20 {
         let key = Uuid::now_v7();
         client
-            .submit_invocation("ob-poc", sample_request(key))
+            .submit_invocation("ob-poc", sample_request(key), "default".to_string())
             .await
             .unwrap();
         keys.push(key);
@@ -607,7 +623,7 @@ async fn sender_isolation_from_writer_failure() {
     // inserting via dsl-bus-storage directly — same effect as a real
     // crash that lost the in-process signal). A short fallback (1 s)
     // proves the sender catches up regardless.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
     let client = BusClient::builder()
         .pool(pool.clone())
@@ -628,6 +644,7 @@ async fn sender_isolation_from_writer_failure() {
             BusEndpoint::Invocation,
             sample_request(key).encode_to_vec(),
             key,
+            "default".to_string(),
         );
         insert_outbox(&pool, &entry).await.unwrap();
         keys.push(key);

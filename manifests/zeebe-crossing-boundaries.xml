@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+                  id="Definitions_1"
+                  targetNamespace="http://bpmn.io/schema/bpmn"
+                  exporter="Camunda Modeler"
+                  exporterVersion="5.12.0">
+  <bpmn:process id="process_non_sese" name="Non-SESE Overlapping Gateways" isExecutable="true">
+    <bpmn:startEvent id="start" name="Start">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:exclusiveGateway id="split1" name="Split 1">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:exclusiveGateway id="split2" name="Split 2">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="task1" name="Task 1">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task1" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="task2" name="Task 2">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task2" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f7</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="join1" name="Join 1">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>f8</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:exclusiveGateway id="join2" name="Join 2">
+      <bpmn:incoming>f7</bpmn:incoming>
+      <bpmn:incoming>f8</bpmn:incoming>
+      <bpmn:outgoing>f9</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:endEvent id="end" name="End">
+      <bpmn:incoming>f9</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="split1" />
+    <bpmn:sequenceFlow id="f2" sourceRef="split1" targetRef="split2" />
+    <bpmn:sequenceFlow id="f3" sourceRef="split1" targetRef="task1" />
+    <bpmn:sequenceFlow id="f4" sourceRef="split2" targetRef="task2" />
+    <bpmn:sequenceFlow id="f5" sourceRef="split2" targetRef="join1" />
+    <bpmn:sequenceFlow id="f6" sourceRef="task1" targetRef="join1" />
+    <bpmn:sequenceFlow id="f7" sourceRef="task2" targetRef="join2" />
+    <bpmn:sequenceFlow id="f8" sourceRef="join1" targetRef="join2" />
+    <bpmn:sequenceFlow id="f9" sourceRef="join2" targetRef="end" />
+  </bpmn:process>
+</bpmn:definitions>

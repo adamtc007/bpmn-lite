@@ -1,0 +1,170 @@
+manifest_version: '1.0'
+domain: bpmn
+catalogue_version: v1.0.0-d29150dc
+generated_at: 2026-06-02T12:00:00Z
+generated_from_snapshot: null
+imported_pins:
+- domain: dmn-lite
+  content_hash: 06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836
+breaking_changes_since: []
+services:
+- kind: InvocationService
+  available: true
+  capabilities:
+  - Submit
+  - Validate
+verbs:
+- id: define-template
+  signature:
+    inputs:
+    - name: template_key
+      type: String
+      required: true
+    - name: plan_body
+      type: String
+      required: true
+    output:
+      produces: BPMN_TEMPLATE
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.template.write
+  description: null
+- id: spawn-instance
+  signature:
+    inputs:
+    - name: template_key
+      type: BPMN_TEMPLATE
+      required: true
+    - name: idempotency_key
+      type: UUID
+      required: true
+    - name: entry_id
+      type: UUID
+      required: false
+    - name: runbook_id
+      type: UUID
+      required: false
+    output:
+      produces: BPMN_INSTANCE
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+- id: deliver-message
+  signature:
+    inputs:
+    - name: instance_id
+      type: UUID
+      required: true
+    - name: message_name
+      type: String
+      required: true
+    - name: payload
+      type: String
+      required: true
+    output: null
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+- id: correlate-message
+  signature:
+    inputs:
+    - name: message_name
+      type: String
+      required: true
+    - name: correlation_key
+      type: String
+      required: true
+    - name: payload
+      type: String
+      required: true
+    output: null
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+- id: cancel-instance
+  signature:
+    inputs:
+    - name: instance_id
+      type: UUID
+      required: true
+    - name: reason
+      type: String
+      required: true
+    output: null
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+- id: inspect-instance
+  signature:
+    inputs:
+    - name: instance_id
+      type: UUID
+      required: true
+    output:
+      produces: instance_details
+  effect_class: read
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.read
+  description: null
+- id: message-wait
+  signature:
+    inputs:
+    - name: message_name
+      type: String
+      required: true
+    output: null
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+- id: timer-wait
+  signature:
+    inputs:
+    - name: duration
+      type: String
+      required: true
+    output: null
+  effect_class: idempotent_ensure
+  coordination_policy: null
+  transaction_policy: null
+  resource_dependencies: []
+  fsm_applicability: null
+  authority_required: bpmn.instance.write
+  description: null
+decisions: []
+types:
+- name: BPMN_TEMPLATE
+  kind: entity
+  description: null
+  uuid_type: null
+  values: []
+- name: BPMN_INSTANCE
+  kind: entity
+  description: null
+  uuid_type: null
+  values: []

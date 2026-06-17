@@ -13,70 +13,111 @@ pub struct WorkflowSource {
 /// One node in the workflow graph.
 #[derive(Debug, Clone)]
 pub enum NodeAst {
-    StartEvent(StartEventAst),
-    ServiceTask(ServiceTaskAst),
-    BusinessRuleTask(BusinessRuleTaskAst),
-    ExclusiveGateway(ExclusiveGatewayAst),
-    EndEvent(EndEventAst),
+    Start(StartAst),
+    End(EndAst),
+    Task(TaskAst),
+    Split(SplitAst),
+    Join(JoinAst),
+    Loop(LoopAst),
 }
 
 impl NodeAst {
     pub fn id(&self) -> &str {
         match self {
-            Self::StartEvent(n) => &n.id,
-            Self::ServiceTask(n) => &n.id,
-            Self::BusinessRuleTask(n) => &n.id,
-            Self::ExclusiveGateway(n) => &n.id,
-            Self::EndEvent(n) => &n.id,
+            Self::Start(n) => &n.id,
+            Self::End(n) => &n.id,
+            Self::Task(n) => &n.id,
+            Self::Split(n) => &n.id,
+            Self::Join(n) => &n.id,
+            Self::Loop(n) => &n.id,
+        }
+    }
+
+    pub fn span(&self) -> bpmn_lite_types::SourceSpan {
+        match self {
+            Self::Start(n) => n.span,
+            Self::End(n) => n.span,
+            Self::Task(n) => n.span,
+            Self::Split(n) => n.span,
+            Self::Join(n) => n.span,
+            Self::Loop(n) => n.span,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct StartEventAst {
+pub struct StartAst {
     pub id: String,
     pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
-pub struct ServiceTaskAst {
+pub struct EndAst {
     pub id: String,
-    /// Verb FQN from the catalogue (e.g. `"cbu.create"`, `"cbu.add-product"`).
-    pub verb: String,
-    /// Static arg overrides from `:args (:key "value" ...)`.
+    pub status: String,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskAst {
+    pub id: String,
+    pub plug: String,
     pub args: Vec<(String, String)>,
     pub next: String,
+    pub delivery_mode: Option<String>,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitModeAst {
+    Xor,
+    Or,
+    And,
 }
 
 #[derive(Debug, Clone)]
-pub struct BusinessRuleTaskAst {
+pub struct SplitAst {
     pub id: String,
-    pub decision: String,
+    pub mode: SplitModeAst,
+    pub plug: Option<String>,
+    pub flows: Vec<SplitFlowAst>,
+    pub join: String,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub struct SplitFlowAst {
+    pub condition: Option<ConditionAst>,
     pub next: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ExclusiveGatewayAst {
-    pub id: String,
-    pub flows: Vec<FlowAst>,
-}
-
-/// One outgoing sequence flow from an exclusive gateway.
-#[derive(Debug, Clone)]
-pub struct FlowAst {
-    pub condition: ConditionAst,
-    pub next: String,
-}
-
-/// Gateway predicate. T1 supports equality test against a string literal only.
-/// `(= @placeholder "value")` → `Eq { placeholder, value }`.
 #[derive(Debug, Clone)]
 pub enum ConditionAst {
     Eq { placeholder: String, value: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinModeAst {
+    Xor,
+    Or,
+    And,
+}
+
 #[derive(Debug, Clone)]
-pub struct EndEventAst {
+pub struct JoinAst {
     pub id: String,
-    pub status: String,
+    pub mode: JoinModeAst,
+    pub split: String,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopAst {
+    pub id: String,
+    pub ceiling: u32,
+    pub body: Vec<NodeAst>,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }

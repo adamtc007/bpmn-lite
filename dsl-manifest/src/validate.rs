@@ -34,6 +34,11 @@ pub(crate) fn structural_validation(m: &Manifest) -> Result<(), ManifestError> {
     validate_decisions(m)?;
     validate_types(m)?;
 
+    for pin in &m.imported_pins {
+        require_non_empty("imported_pins.domain", &pin.domain)?;
+        require_non_empty("imported_pins.content_hash", &pin.content_hash)?;
+    }
+
     Ok(())
 }
 

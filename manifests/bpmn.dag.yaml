@@ -1,0 +1,102 @@
+domain: "bpmn"
+version: "v1.0.0"
+external_references:
+  - domain: "dmn-lite"
+    content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836"
+nodes:
+  - !State
+    name: "BPMN_TEMPLATE"
+    type_name: "BPMN_TEMPLATE"
+  - !State
+    name: "BPMN_INSTANCE"
+    type_name: "BPMN_INSTANCE"
+  - !VerbLocal
+    id: "define-template"
+    inputs:
+      - name: "template_key"
+        type_name: "String"
+        required: true
+      - name: "plan_body"
+        type_name: "String"
+        required: true
+    output:
+      name: "template"
+      type_name: "BPMN_TEMPLATE"
+      required: true
+    effect_class: "idempotent_ensure"
+    authority_required: "bpmn.template.write"
+  - !VerbLocal
+    id: "spawn-instance"
+    inputs:
+      - name: "template_key"
+        type_name: "BPMN_TEMPLATE"
+        required: true
+      - name: "idempotency_key"
+        type_name: "UUID"
+        required: true
+      - name: "entry_id"
+        type_name: "UUID"
+        required: false
+      - name: "runbook_id"
+        type_name: "UUID"
+        required: false
+    output:
+      name: "instance_id"
+      type_name: "BPMN_INSTANCE"
+      required: true
+    effect_class: "idempotent_ensure"
+    authority_required: "bpmn.instance.write"
+  - !VerbLocal
+    id: "deliver-message"
+    inputs:
+      - name: "instance_id"
+        type_name: "UUID"
+        required: true
+      - name: "message_name"
+        type_name: "String"
+        required: true
+      - name: "payload"
+        type_name: "String"
+        required: true
+    output: null
+    effect_class: "idempotent_ensure"
+    authority_required: "bpmn.instance.write"
+  - !VerbLocal
+    id: "correlate-message"
+    inputs:
+      - name: "message_name"
+        type_name: "String"
+        required: true
+      - name: "correlation_key"
+        type_name: "String"
+        required: true
+      - name: "payload"
+        type_name: "String"
+        required: true
+    output: null
+    effect_class: "idempotent_ensure"
+    authority_required: "bpmn.instance.write"
+  - !VerbLocal
+    id: "cancel-instance"
+    inputs:
+      - name: "instance_id"
+        type_name: "UUID"
+        required: true
+      - name: "reason"
+        type_name: "String"
+        required: true
+    output: null
+    effect_class: "idempotent_ensure"
+    authority_required: "bpmn.instance.write"
+  - !VerbLocal
+    id: "inspect-instance"
+    inputs:
+      - name: "instance_id"
+        type_name: "UUID"
+        required: true
+    output:
+      name: "instance_details"
+      type_name: "instance_details"
+      required: true
+    effect_class: "read"
+    authority_required: "bpmn.instance.read"

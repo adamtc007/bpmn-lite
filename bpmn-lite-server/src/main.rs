@@ -65,6 +65,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let admin_store =
                     bpmn_lite_store_postgres::PostgresProcessStore::new(admin_pool.clone());
                 admin_store.migrate().await?;
+
+                // Run bus migrations under admin role with search_path=dsl_bus
+                let mut bus_admin_url = admin_url.to_string();
+                if bus_admin_url.contains('?') {
+                    bus_admin_url.push_str("&options=-csearch_path%3Ddsl_bus");
+                } else {
+                    bus_admin_url.push_str("?options=-csearch_path%3Ddsl_bus");
+                }
+                let bus_admin_pool = sqlx::PgPool::connect(&bus_admin_url).await?;
+                dsl_bus_storage::migrate(&bus_admin_pool).await?;
+                bus_admin_pool.close().await;
+
                 admin_pool.close().await;
                 tracing::info!("Migrations applied; admin pool closed");
             }
@@ -81,6 +93,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // No admin URL — run migrations through the runtime pool
                 // (legacy / dev path).
                 pg.migrate().await?;
+
+                // Also run bus migrations
+                let mut bus_url = url.clone();
+                if bus_url.contains('?') {
+                    bus_url.push_str("&options=-csearch_path%3Ddsl_bus");
+                } else {
+                    bus_url.push_str("?options=-csearch_path%3Ddsl_bus");
+                }
+                let bus_pool_migrator = sqlx::PgPool::connect(&bus_url).await?;
+                dsl_bus_storage::migrate(&bus_pool_migrator).await?;
+                bus_pool_migrator.close().await;
+
                 tracing::info!("Using PostgresProcessStore (migrations applied via runtime pool)");
             } else {
                 tracing::info!(
@@ -153,14 +177,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => None,
     };
 
-    #[allow(unused_mut)]
-    let mut engine_builder =
-        BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
+    let engine_builder = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
     #[cfg(feature = "postgres")]
-    if let Some((ref bc, ref ps)) = early_bus_client {
-        engine_builder = engine_builder.with_bus_client(bc.clone(), ps.clone());
+    let engine_builder = if let Some((ref bc, ref ps)) = early_bus_client {
         tracing::info!("T3: plan walker wired into engine tick loop");
-    }
+        engine_builder.with_bus_client(bc.clone(), ps.clone())
+    } else {
+        engine_builder
+    };
     let engine = Arc::new(engine_builder);
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
@@ -202,6 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     bind_addr,
                     client: bc,
                     store: store.clone(),
+                    engine: engine.clone(),
                 })
                 .await?,
             )
@@ -314,11 +339,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rest_app = rest::demo_router(demo_state);
         tokio::spawn(async move {
             tracing::info!(bind_addr = %rest_addr, "BPMN-Lite REST demo server starting");
-            let listener = tokio::net::TcpListener::bind(rest_addr)
-                .await
-                .expect("REST demo server bind failed");
-            if let Err(e) = axum::serve(listener, rest_app).await {
-                tracing::error!(error = %e, "REST demo server error");
+            match tokio::net::TcpListener::bind(rest_addr).await {
+                Ok(listener) => {
+                    if let Err(e) = axum::serve(listener, rest_app).await {
+                        tracing::error!(error = %e, "REST demo server error");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        bind_addr = %rest_addr,
+                        "BPMN-Lite REST demo server failed to bind (possibly port already in use); skipping"
+                    );
+                }
             }
         });
     } else {
@@ -479,24 +512,17 @@ async fn verify_not_superuser(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::er
             .await?;
 
     if is_superuser {
-        let allow = std::env::var("BPMN_LITE_ALLOW_SUPERUSER")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        if allow {
+        if std::env::var("BPMN_LITE_ALLOW_SUPERUSER").unwrap_or_default() == "1" {
             tracing::warn!(
-                "Application connected to Postgres as a superuser role. \
-                 BPMN_LITE_ALLOW_SUPERUSER=1 is set — continuing with reduced \
-                 security guarantees. Do not use this in production."
+                "Connected as superuser. RLS BYPASSED. Proceeding because BPMN_LITE_ALLOW_SUPERUSER=1"
             );
-        } else {
-            return Err("Application connected to Postgres as a superuser role. \
-                 This BYPASSES row-level security and the immutable-field trigger \
-                 (migration 029). Connect using a non-superuser role (typically \
-                 bpmn_lite_app, created by migration 026). \
-                 Set BPMN_LITE_ALLOW_SUPERUSER=1 to override for local development."
-                .into());
+            return Ok(());
         }
+        return Err("Application connected to Postgres as a superuser role. \
+             This BYPASSES row-level security and the immutable-field trigger \
+             (migration 029). Connect using a non-superuser role (typically \
+             bpmn_lite_app, created by migration 026)."
+            .into());
     } else {
         tracing::info!(
             "Application connected as non-superuser role; \
@@ -520,3 +546,27 @@ fn parse_bind_addr() -> String {
 
     std::env::var("BPMN_LITE_BIND").unwrap_or_else(|_| "0.0.0.0:50051".to_string())
 }
+
+#[cfg(test)]
+#[cfg(feature = "postgres")]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_verify_not_superuser_rejects_superuser() {
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres@localhost:5432/bpmn_lite_test".to_string());
+        
+        let pool = match sqlx::PgPool::connect(&url).await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        
+        let res = verify_not_superuser(&pool).await;
+        assert!(res.is_err(), "verify_not_superuser must reject superuser role");
+        
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("superuser role"), "Error message should mention superuser role");
+    }
+}
+

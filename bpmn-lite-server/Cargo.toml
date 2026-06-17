@@ -15,6 +15,7 @@ bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
 bpmn-lite-vm = { path = "../bpmn-lite-vm" }
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
 # FFI catalogue + dispatcher
 ffi-types = { path = "../ffi-types" }
 ffi-catalogue = { path = "../ffi-catalogue" }
@@ -27,6 +28,7 @@ dmn-lite-bridge = { path = "../dmn-lite-bridge" }
 bpmn-lite-ffi-http = { path = "../bpmn-lite-ffi-http" }
 bpmn-lite-ffi-grpc = { path = "../bpmn-lite-ffi-grpc" }
 bpmn-lite-analysis = { path = "../bpmn-lite-analysis" }
+dsl-manifest = { path = "../dsl-manifest" }
 # Federated DSL bus (v0.6 §T2B.9). Wired alongside the existing 50051
 # gRPC service so a single process hosts both the BPMN service and the
 # bus result-receiver. Splitting into a separate bin is tech debt logged
@@ -56,6 +58,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.4", features = ["util"] }
 
 [build-dependencies]
 tonic-build = "0.12"

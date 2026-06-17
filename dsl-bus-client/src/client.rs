@@ -196,6 +196,7 @@ impl BusClient {
         &self,
         target_domain: &str,
         mut req: InvocationRequest,
+        tenant_id: String,
     ) -> Result<(Uuid, InsertOutcome), BusClientError> {
         // Confirm the target is registered so we fail fast at submit
         // time rather than from inside the sender loop.
@@ -215,8 +216,17 @@ impl BusClient {
             BusEndpoint::Invocation,
             payload,
             key,
+            tenant_id.clone(),
         );
-        let outcome = insert_outbox(&self.pool, &entry).await?;
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await?;
+        let outcome = insert_outbox(&mut *tx, &entry).await?;
+        tx.commit().await?;
+
         // A2 §2: wake the sender immediately after the outbox write
         // commits. Coalesces with any concurrent writes.
         self.notify.notify_one();
@@ -230,6 +240,7 @@ impl BusClient {
         &self,
         target_domain: &str,
         result: InvocationResult,
+        tenant_id: String,
     ) -> Result<(Uuid, InsertOutcome), BusClientError> {
         self.peers.endpoint(target_domain)?;
 
@@ -243,8 +254,17 @@ impl BusClient {
             BusEndpoint::Result,
             payload,
             key,
+            tenant_id.clone(),
         );
-        let outcome = insert_outbox(&self.pool, &entry).await?;
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await?;
+        let outcome = insert_outbox(&mut *tx, &entry).await?;
+        tx.commit().await?;
+
         self.notify.notify_one();
         Ok((key, outcome))
     }

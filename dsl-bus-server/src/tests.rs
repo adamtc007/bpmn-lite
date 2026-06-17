@@ -30,12 +30,22 @@ const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/dsl_bus_test";
 // ── Test harness ─────────────────────────────────────────────────────
 
 async fn setup_pool() -> PgPool {
-    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+    let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
+    if url.contains('?') {
+        url.push_str("&options=-csearch_path%3Ddsl_bus");
+    } else {
+        url.push_str("?options=-csearch_path%3Ddsl_bus");
+    }
     let pool = PgPool::connect(&url).await.expect("connect");
-    sqlx::migrate!("../dsl-bus-storage/migrations")
-        .run(&pool)
+
+    // Clean drop/recreation of dsl_bus to isolate migrations in tests
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
+    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+
+    let migrator = sqlx::migrate!("../dsl-bus-storage/migrations");
+    migrator.run(&pool)
         .await
         .expect("migrations");
     sqlx::query("TRUNCATE outbox").execute(&pool).await.unwrap();
@@ -115,7 +125,12 @@ fn sample_request(idempotency_key: Uuid, verb_id: &str) -> InvocationRequest {
                 type_name: "String".into(),
             }),
         }],
-        authority: None,
+        authority: Some(dsl_bus_protocol::v1::AuthorityContext {
+            service_identity: "test_service".into(),
+            user_identity: "default:test_user".into(),
+            roles: vec![],
+            signed_token: vec![],
+        }),
         source_domain: "bpmn-lite".into(),
         catalogue_version: "v1.0.0".into(),
         snapshot_pin: None,

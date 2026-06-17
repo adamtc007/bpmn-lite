@@ -53,8 +53,10 @@ impl<R: PlaceholderRegistry> PlaceholderRegistry for ManifestPlaceholderRegistry
         match split_namespaced(fqn) {
             Some((domain, local)) => {
                 let m = self.manifests.get(domain)?;
-                m.lookup_verb(local)?;
-                Some(self.delegate.verb_bindings(local).unwrap_or_default())
+                let v = m.lookup_verb(local)?;
+                let mut decl = self.delegate.verb_bindings(local).unwrap_or_default();
+                decl.effect_class = Some(v.effect_class.clone());
+                Some(decl)
             }
             None => self.delegate.verb_bindings(fqn),
         }
@@ -111,6 +113,45 @@ impl<R: PlaceholderRegistry> PlaceholderRegistry for ManifestPlaceholderRegistry
             },
             None => self.delegate.resolve_decision(fqn),
         }
+    }
+
+    fn get_decision_enum_values(&self, fqn: &str) -> Option<Vec<String>> {
+        match split_namespaced(fqn) {
+            Some((domain, local)) => {
+                let m = self.manifests.get(domain)?;
+                let d = m.lookup_decision(local)?;
+                Some(d.output.enum_values.clone())
+            }
+            None => self.delegate.get_decision_enum_values(fqn),
+        }
+    }
+
+    fn get_decision_output_type_info(&self, fqn: &str) -> Option<(String, String)> {
+        match split_namespaced(fqn) {
+            Some((domain, local)) => {
+                let m = self.manifests.get(domain)?;
+                let d = m.lookup_decision(local)?;
+                // Look up in the manifest's type entries
+                let kind = m.lookup_type(&d.output.type_name)
+                    .map(|t| t.kind.clone())
+                    .unwrap_or_else(|| "enum".to_string());
+                Some((d.output.type_name.clone(), kind))
+            }
+            None => self.delegate.get_decision_output_type_info(fqn),
+        }
+    }
+
+    fn workflow_exists(&self, hash: &str) -> bool {
+        self.delegate.workflow_exists(hash)
+    }
+    fn workflow_satisfies_l2(&self, hash: &str) -> bool {
+        self.delegate.workflow_satisfies_l2(hash)
+    }
+    fn get_workflow_signature(&self, hash: &str) -> Option<BindingDecl> {
+        self.delegate.get_workflow_signature(hash)
+    }
+    fn get_workflow_child_calls(&self, hash: &str) -> Vec<String> {
+        self.delegate.get_workflow_child_calls(hash)
     }
 }
 

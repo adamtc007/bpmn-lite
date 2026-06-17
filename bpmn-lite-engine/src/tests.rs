@@ -1,5 +1,5 @@
 use super::*;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TransactionContext};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
@@ -135,6 +135,7 @@ async fn test_start_with_session_stack_copies_value() {
             session_stack: session_stack.clone(),
             entry_id: Uuid::new_v4(),
             runbook_id: Uuid::new_v4(),
+            expected_preconditions: None,
         })
         .await
         .unwrap();
@@ -195,6 +196,7 @@ async fn test_job_activation_preserves_runbook_lineage() {
             session_stack: SessionStackState::default(),
             entry_id,
             runbook_id,
+            expected_preconditions: None,
         })
         .await
         .unwrap();
@@ -816,7 +818,7 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     let issues = tenant_a.scan_recoverable_inconsistencies().await.unwrap();
     let kinds = issues
@@ -2246,7 +2248,7 @@ async fn t_loop_3_counter_starts_at_zero() {
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance(&instance).await.unwrap();
+    store.save_instance("default", &instance).await.unwrap();
 
     let mut fiber = Fiber::new(Uuid::now_v7(), 0);
     store
@@ -2254,8 +2256,9 @@ async fn t_loop_3_counter_starts_at_zero() {
         .await
         .unwrap();
 
+    let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
     let outcome = vm
-        .run_fiber(&mut fiber, &mut instance, &program, 100)
+        .run_fiber(&mut fiber, &mut instance, &program, 100, &mut tx_ctx)
         .await
         .unwrap();
 
@@ -2433,7 +2436,7 @@ async fn t_ig_1_all_branches_taken() {
     let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
     inst.flags.insert(0, Value::Bool(true)); // high_risk
     inst.flags.insert(1, Value::Bool(true)); // pep_flagged
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 
     // Tick → ForkInclusive evaluates: all 3 taken → 3 fibers spawned
     engine.tick_instance(instance_id).await.unwrap();
@@ -2843,7 +2846,7 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
     let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
     inst.flags.insert(0, Value::Bool(true));
     // flag 1 not set = false
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 
     engine.tick_instance(instance_id).await.unwrap();
 
@@ -2995,7 +2998,8 @@ edges:
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Compile from YAML
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
     assert!(cr.task_types.contains(&"do_a".to_string()));
     assert!(cr.task_types.contains(&"do_b".to_string()));
@@ -3207,7 +3211,7 @@ async fn t_auth_2_inclusive_gateway_yaml() {
         let mut inst = store.load_instance(iid).await.unwrap().unwrap();
         inst.flags.insert(0, Value::Bool(true));
         // flag_b (key 1) not set = defaults to false
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
     }
 
     // Tick — ForkInclusive should spawn 2 fibers (unconditional + flag_a)
@@ -3265,7 +3269,8 @@ edges:
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"err"}"#;
@@ -3367,7 +3372,8 @@ edges:
     let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = bpmn_lite_authoring::publish::compile_program_from_yaml(yaml).unwrap();
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"xor"}"#;

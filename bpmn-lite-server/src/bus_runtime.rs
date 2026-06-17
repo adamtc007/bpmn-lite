@@ -26,7 +26,7 @@ use bpmn_lite_bus_handler::{
 };
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_store::pending::PendingInvocationStore;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TickOperation};
 use bpmn_lite_store_postgres::PostgresPendingInvocationStore;
 use bpmn_lite_types::types::ProcessState;
 use dsl_bus_client::BusClient;
@@ -63,11 +63,11 @@ pub(crate) struct BusRuntimeConfig {
     pub(crate) client: Arc<BusClient>,
     /// T3.4 — engine's ProcessStore for loading/saving plan-based instances.
     pub(crate) store: Arc<dyn ProcessStore>,
+    pub(crate) engine: Arc<bpmn_lite_engine::BpmnLiteEngine>,
 }
 
 pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime> {
-    dsl_bus_storage::migrate(&config.pool).await?;
-
+    // Startup as bpmn_lite_app role assumes database schema is already migrated by admin role.
     let client = config.client;
     let notifier = client.outbox_notifier();
     let sender = client.start_sender();
@@ -78,9 +78,13 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
     };
 
     let server = BusServer::builder()
-        .pool(config.pool)
+        .pool(config.pool.clone())
         .local_domain("bpmn-lite")
-        .invocation_dispatcher(RejectInvocationDispatcher)
+        .invocation_dispatcher(BpmnLiteBusHandler::new_with_engine(
+            advancer.clone(),
+            config.engine.clone(),
+            config.pool.clone(),
+        ))
         .result_dispatcher(BpmnLiteBusHandler::new(advancer))
         .outbox_notifier(notifier)
         .bind(config.bind_addr)
@@ -114,6 +118,7 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
 ///    c. Bind placeholder values from result bindings.
 /// 4. Set state = Running (tick loop will call PlanWalker.advance() on next cycle).
 /// 5. For terminal outcomes (VerbFailed etc.) set state = Failed.
+#[derive(Clone)]
 struct StoreBackedAdvancer {
     pending: Arc<PostgresPendingInvocationStore>,
     store: Arc<dyn ProcessStore>,
@@ -124,25 +129,56 @@ impl ProcessAdvancer for StoreBackedAdvancer {
     async fn advance(&self, input: ProcessAdvanceInput) -> Result<(), ProcessAdvancerError> {
         let row = self
             .pending
-            .take_by_execution_id(input.execution_id)
+            .lookup_by_execution_id(input.execution_id)
             .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("take pending: {e}")))?;
+            .map_err(|e| ProcessAdvancerError::Internal(format!("lookup pending: {e}")))?;
 
         let Some(row) = row else {
-            return Err(ProcessAdvancerError::UnknownExecution(input.execution_id));
+            return Ok(());
         };
 
-        let mut instance = self
-            .store
-            .load_instance(row.process_instance_id)
-            .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("load instance: {e}")))?
-            .ok_or_else(|| {
-                ProcessAdvancerError::Internal(format!(
+        let owner = format!("bus-resumer-{}", Uuid::now_v7());
+
+        let mut instance = match self.store.load_instance(row.process_instance_id).await {
+            Ok(Some(inst)) => inst,
+            Ok(None) => {
+                return Err(ProcessAdvancerError::Internal(format!(
                     "pending row referenced unknown instance {}",
                     row.process_instance_id
-                ))
-            })?;
+                )));
+            }
+            Err(e) => {
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(
+                        process_instance_id = %row.process_instance_id,
+                        error = %e,
+                        "IntegrityViolation during load_instance in bus advance; quarantining instance"
+                    );
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(
+                            process_instance_id = %row.process_instance_id,
+                            error = %q_err,
+                            "Failed to quarantine instance after IntegrityViolation during load_instance"
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(ProcessAdvancerError::Internal(format!("load instance: {e}")));
+            }
+        };
+
+        let claimed = self.store
+            .claim_instance_for_transition(&instance.tenant_id, instance.instance_id, &owner, 30_000)
+            .await
+            .map_err(|e| ProcessAdvancerError::Internal(format!("claim instance: {e}")))?;
+        if !claimed {
+            return Err(ProcessAdvancerError::Internal("failed to claim instance lease for bus resume".to_owned()));
+        }
 
         let is_success = matches!(
             input.outcome_kind,
@@ -166,6 +202,9 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             }
             instance.state = ProcessState::Running;
         } else if let ExecutionOutcomeKind::OutcomeUnspecified = input.outcome_kind {
+            let _ = self.store
+                .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
+                .await;
             return Err(ProcessAdvancerError::Malformed(
                 "ExecutionOutcomeKind::OutcomeUnspecified — peer must populate kind".to_owned(),
             ));
@@ -176,10 +215,52 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             };
         }
 
-        self.store
-            .save_instance(&instance)
-            .await
-            .map_err(|e| ProcessAdvancerError::Internal(format!("save instance: {e}")))?;
+        let ops = vec![
+            TickOperation::TakePendingInvocation { execution_id: input.execution_id },
+            TickOperation::SaveInstance { instance: instance.clone() },
+        ];
+
+        let commit_res = self.store
+            .commit_tick(instance.instance_id, &instance.tenant_id, &owner, &ops)
+            .await;
+
+        let release_res = self.store
+            .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
+            .await;
+
+        match commit_res {
+            Err(e) => {
+                if e.is::<bpmn_lite_store::store::AlreadyConsumedError>() {
+                    return Ok(());
+                }
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(
+                        process_instance_id = %instance.instance_id,
+                        error = %e,
+                        "IntegrityViolation during commit_tick in bus advance; quarantining instance"
+                    );
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(
+                            process_instance_id = %instance.instance_id,
+                            error = %q_err,
+                            "Failed to quarantine instance after IntegrityViolation during commit_tick"
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(ProcessAdvancerError::Internal(format!("commit tick: {e}")));
+            }
+            Ok(()) => {
+                if let Err(e) = release_res {
+                    return Err(ProcessAdvancerError::Internal(format!("release instance: {e}")));
+                }
+            }
+        }
 
         tracing::info!(
             execution_id = %input.execution_id,
@@ -195,21 +276,22 @@ impl ProcessAdvancer for StoreBackedAdvancer {
     }
 }
 
-/// Advance `current_node_id` to the completed node's successor and
-/// populate `placeholder_values` from the result bindings.
 fn advance_node_and_bind(
     instance: &mut bpmn_lite_types::ProcessInstance,
     node: &ExecutionNode,
     input: &ProcessAdvanceInput,
 ) {
-    let (produces, next) = match node {
-        ExecutionNode::ServiceTask(t) => (t.produces_placeholder.as_deref(), t.next.as_str()),
-        ExecutionNode::BusinessRuleTask(t) => (t.produces_placeholder.as_deref(), t.next.as_str()),
+    let produces = match node {
+        ExecutionNode::Task(t) => {
+            instance.current_node_id = Some(t.next.clone());
+            t.produces_placeholder.as_deref()
+        }
+        ExecutionNode::Split(sp) => {
+            // Do NOT advance current_node_id here; the engine tick will evaluate the populated placeholder and advance.
+            sp.produces_placeholder.as_deref()
+        }
         _ => return,
     };
-
-    // Advance to next node so the tick walker doesn't re-dispatch.
-    instance.current_node_id = Some(next.to_owned());
 
     // Bind placeholder value from result bindings.
     if let Some(placeholder_name) = produces {

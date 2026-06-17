@@ -50,13 +50,7 @@ pub fn compile_program_from_dto(dto: &WorkflowGraphDto) -> Result<CompiledProgra
     Ok(program)
 }
 
-/// Phase 2.7 inversion entrypoint: YAML → CompiledProgram.
-///
-/// Parses YAML to DTO, then runs `compile_program_from_dto`.
-pub fn compile_program_from_yaml(yaml_str: &str) -> Result<CompiledProgram> {
-    let dto = yaml::parse_workflow_yaml(yaml_str)?;
-    compile_program_from_dto(&dto)
-}
+
 
 /// Phase 2.7 inversion entrypoint: YAML → publish (atomic).
 ///

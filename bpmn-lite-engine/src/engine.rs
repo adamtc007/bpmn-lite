@@ -1,7 +1,7 @@
 // authoring dep removed in Phase 2.7 — see lib.rs
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{lowering, parser, verifier};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{ProcessStore, TransactionContext, TickOperation};
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::ffi_bindings::{BindingSource, BindingTarget, Literal};
 use bpmn_lite_types::session_stack::SessionStackState;
@@ -52,6 +52,7 @@ pub struct StartParams {
     pub session_stack: SessionStackState,
     pub entry_id: Uuid,
     pub runbook_id: Uuid,
+    pub expected_preconditions: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Result of compiling BPMN XML.
@@ -76,6 +77,8 @@ pub struct ProcessInspection {
     pub state: ProcessState,
     pub fibers: Vec<FiberInspection>,
     pub incidents: Vec<Incident>,
+    pub current_node_id: Option<String>,
+    pub placeholder_values: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +181,23 @@ impl BpmnLiteEngine {
             pending_store: self.pending_store.clone(),
         }
     }
+
+    pub fn store(&self) -> Arc<dyn ProcessStore> {
+        self.store.clone()
+    }
+
+    pub fn pending_store(&self) -> Option<Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>> {
+        self.pending_store.clone()
+    }
+
+    pub fn bus_client(&self) -> Option<Arc<dsl_bus_client::BusClient>> {
+        self.bus_client.clone()
+    }
+
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
 
     fn ensure_loaded_instance_belongs_to_tenant(
         &self,
@@ -352,6 +372,7 @@ impl BpmnLiteEngine {
             session_stack: SessionStackState::default(),
             entry_id: Uuid::nil(),
             runbook_id: Uuid::nil(),
+            expected_preconditions: None,
         })
         .await
     }
@@ -363,6 +384,32 @@ impl BpmnLiteEngine {
             .load_program(params.bytecode_version)
             .await?
             .ok_or_else(|| anyhow!("No program found for bytecode version"))?;
+
+        if let Some(ref preconditions) = params.expected_preconditions {
+            if !params.domain_payload.is_empty() {
+                let json_val: serde_json::Value = serde_json::from_str(&params.domain_payload)?;
+                if let Some(obj) = json_val.as_object() {
+                    for (key, expected_val) in preconditions {
+                        let norm_key = key.trim_start_matches('@');
+                        let actual_val_str = obj.get(key)
+                            .or_else(|| obj.get(norm_key))
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                v => v.to_string().replace('"', ""),
+                            })
+                            .unwrap_or_default();
+
+                        if actual_val_str != *expected_val {
+                            return Err(anyhow!("PreconditionConflict: expected {} to be {}, got '{}'", key, expected_val, actual_val_str));
+                        }
+                    }
+                } else {
+                    return Err(anyhow!("PreconditionConflict: domain payload is not a JSON object"));
+                }
+            } else if !preconditions.is_empty() {
+                return Err(anyhow!("PreconditionConflict: domain payload is empty but preconditions were specified"));
+            }
+        }
 
         let instance_id = Uuid::now_v7();
         let instance = ProcessInstance {
@@ -391,15 +438,17 @@ impl BpmnLiteEngine {
         let fiber_id = Uuid::now_v7();
         let root_fiber = Fiber::new(fiber_id, 0);
 
-        self.store
-            .atomic_start(
-                &instance,
-                &root_fiber,
-                &RuntimeEvent::InstanceStarted {
-                    instance_id,
-                    bytecode_version: params.bytecode_version,
-                },
-            )
+        let tenant_id = self.tenant_id.clone();
+        let store = self.store.clone();
+        let instance_clone = instance.clone();
+        let root_fiber_clone = root_fiber.clone();
+        let event_clone = RuntimeEvent::InstanceStarted {
+            instance_id,
+            bytecode_version: params.bytecode_version,
+        };
+        let owner = self.transition_owner.clone();
+        store
+            .atomic_start(&tenant_id, &owner, &instance_clone, &root_fiber_clone, &event_clone)
             .await?;
 
         Ok(instance_id)
@@ -434,7 +483,19 @@ impl BpmnLiteEngine {
         let mut ticked = 0u32;
         for id in ids {
             if let Err(e) = self.tick_instance_as_owner(id, owner).await {
-                tracing::warn!(instance_id = %id, error = %e, "tick_instance_ids: instance tick failed");
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(instance_id = %id, error = %e, "IntegrityViolation detected in tick_instance_ids_as_owner; quarantining instance");
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(instance_id = %id, error = %q_err, "Failed to quarantine instance after IntegrityViolation");
+                    }
+                } else {
+                    tracing::warn!(instance_id = %id, error = %e, "tick_instance_ids: instance tick failed");
+                }
             }
             ticked += 1;
         }
@@ -445,17 +506,35 @@ impl BpmnLiteEngine {
     /// Jobs are left in the queue — use `activate_jobs()` to dequeue them.
     pub async fn tick_instance(&self, instance_id: Uuid) -> Result<()> {
         let owner = self.transition_owner.clone();
-        self.tick_instance_as_owner(instance_id, &owner).await
+        match self.tick_instance_as_owner(instance_id, &owner).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                    tracing::error!(instance_id = %instance_id, error = %e, "IntegrityViolation detected in tick_instance; quarantining instance");
+                    if let Err(q_err) = self.store.quarantine_instance(
+                        violation.instance_id,
+                        &violation.tenant_id,
+                        &owner,
+                        &violation.detection_point,
+                    ).await {
+                        tracing::error!(instance_id = %instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in tick_instance");
+                    }
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     async fn tick_instance_as_owner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
         self.run_guarded_transition(instance_id, owner, || async {
-            self.tick_instance_inner(instance_id).await
+            self.tick_instance_inner(instance_id, owner).await
         })
         .await
     }
 
-    async fn tick_instance_inner(&self, instance_id: Uuid) -> Result<()> {
+    async fn tick_instance_inner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
         // T3 — plan-based instances bypass the fiber VM entirely.
         // The discriminator is plan_hash: Some = plan path, None = bytecode path.
         // WaitingOnSubmission / WaitingOnInvocation instances are skipped by the
@@ -470,7 +549,7 @@ impl BpmnLiteEngine {
                             pending_store.clone(),
                             bus_client.clone(),
                         );
-                        let _ = walker.advance(instance_id).await?;
+                        let _ = walker.advance(instance_id, owner).await?;
                     }
                     return Ok(());
                 }
@@ -491,22 +570,21 @@ impl BpmnLiteEngine {
 
         let fibers = self.store.load_fibers(instance_id).await?;
 
-        'fiber_loop: for fiber in fibers {
+        let mut tx_ctx = TransactionContext::new(instance_id, instance.tenant_id.clone());
+
+        'fiber_loop: for fiber in &fibers {
             if fiber.wait != WaitState::Running {
                 continue;
             }
 
-            let mut fiber = fiber;
+            let mut fiber = fiber.clone();
             let vm = Vm::new(self.store.clone());
 
             // Inner loop allows re-running the fiber after an in-process FFI call.
             loop {
                 let outcome = vm
-                    .run_fiber(&mut fiber, &mut instance, &program, 1000)
+                    .run_fiber(&mut fiber, &mut instance, &program, 1000, &mut tx_ctx)
                     .await?;
-
-                // Save updated instance (flags + counters)
-                self.store.save_instance(&instance).await?;
 
                 match outcome {
                     TickOutcome::ExecFfi {
@@ -514,6 +592,13 @@ impl BpmnLiteEngine {
                         pc,
                         invocation_id,
                     } => {
+                        // First commit any accumulated operations so the FFI sees them
+                        if !tx_ctx.ops.is_empty() {
+                            self.store
+                                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
+                                .await?;
+                            tx_ctx.ops.clear();
+                        }
                         let incident = self
                             .handle_ffi_dispatch(
                                 &mut instance,
@@ -521,6 +606,7 @@ impl BpmnLiteEngine {
                                 &program,
                                 invocation_id,
                                 pc,
+                                owner,
                             )
                             .await?;
                         if incident {
@@ -536,22 +622,6 @@ impl BpmnLiteEngine {
                         break;
                     }
                     TickOutcome::Ended => {
-                        // Fiber ended — check if all fibers are done
-                        let remaining = self.store.load_fibers(instance_id).await?;
-                        if remaining.is_empty() {
-                            self.store
-                                .update_instance_state(
-                                    instance_id,
-                                    ProcessState::Completed { at: now_ms() },
-                                )
-                                .await?;
-                            self.store
-                                .append_event(
-                                    instance_id,
-                                    &RuntimeEvent::Completed { at: now_ms() },
-                                )
-                                .await?;
-                        }
                         break;
                     }
                     TickOutcome::Terminated => {
@@ -559,48 +629,39 @@ impl BpmnLiteEngine {
                         let terminating_fiber_id = fiber.fiber_id;
 
                         // 1. Emit WaitCancelled for all OTHER fibers with active waits
-                        let all_fibers = self.store.load_fibers(instance_id).await?;
-                        for other in &all_fibers {
+                        for other in &fibers {
                             if other.fiber_id == terminating_fiber_id {
                                 continue;
                             }
                             let wait_desc = describe_wait(&other.wait);
                             if !wait_desc.is_empty() {
-                                self.store
-                                    .append_event(
-                                        instance_id,
-                                        &RuntimeEvent::WaitCancelled {
-                                            fiber_id: other.fiber_id,
-                                            wait_desc,
-                                            reason: "terminate_end_event".to_string(),
-                                        },
-                                    )
-                                    .await?;
+                                tx_ctx.add_op(TickOperation::AppendEvent {
+                                    event: RuntimeEvent::WaitCancelled {
+                                        fiber_id: other.fiber_id,
+                                        wait_desc,
+                                        reason: "terminate_end_event".to_string(),
+                                    },
+                                });
                             }
                         }
 
                         // 2. Purge pending/inflight jobs
-                        self.store.cancel_jobs_for_instance(instance_id).await?;
+                        tx_ctx.add_op(TickOperation::CancelJobsForInstance);
 
                         // 3. Delete ALL fibers (including the terminating one)
-                        self.store.delete_all_fibers(instance_id).await?;
+                        tx_ctx.add_op(TickOperation::DeleteAllFibers);
 
                         // 4. Set state → Terminated
                         let at = now_ms();
-                        self.store
-                            .update_instance_state(instance_id, ProcessState::Terminated { at })
-                            .await?;
+                        instance.state = ProcessState::Terminated { at };
 
                         // 5. Emit Terminated event
-                        self.store
-                            .append_event(
-                                instance_id,
-                                &RuntimeEvent::Terminated {
-                                    at,
-                                    fiber_id: terminating_fiber_id,
-                                },
-                            )
-                            .await?;
+                        tx_ctx.add_op(TickOperation::AppendEvent {
+                            event: RuntimeEvent::Terminated {
+                                at,
+                                fiber_id: terminating_fiber_id,
+                            },
+                        });
 
                         // 6. BREAK — no more fibers to process
                         break 'fiber_loop;
@@ -613,11 +674,51 @@ impl BpmnLiteEngine {
             } // end inner FFI-retry loop
         } // end 'fiber_loop
 
+        // Calculate remaining fibers in-memory using tx_ctx operations
+        let mut final_fibers = fibers.clone();
+        for op in &tx_ctx.ops {
+            match op {
+                TickOperation::DeleteAllFibers => {
+                    final_fibers.clear();
+                }
+                TickOperation::DeleteFiber { fiber_id } => {
+                    final_fibers.retain(|f| f.fiber_id != *fiber_id);
+                }
+                TickOperation::SaveFiber { fiber } => {
+                    if let Some(pos) = final_fibers.iter().position(|f| f.fiber_id == fiber.fiber_id) {
+                        final_fibers[pos] = fiber.clone();
+                    } else {
+                        final_fibers.push(fiber.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If the instance completed (no fibers left), update its state
+        if final_fibers.is_empty() && !matches!(instance.state, ProcessState::Terminated { .. } | ProcessState::Failed { .. } | ProcessState::Completed { .. }) {
+            let at = now_ms();
+            instance.state = ProcessState::Completed { at };
+            tx_ctx.add_op(TickOperation::AppendEvent {
+                event: RuntimeEvent::Completed { at },
+            });
+        }
+
+        // Save updated instance (flags + counters + state)
+        tx_ctx.add_op(TickOperation::SaveInstance { instance: instance.clone() });
+
+        // Commit the tick transaction
+        if !tx_ctx.ops.is_empty() {
+            self.store
+                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
+                .await?;
+        }
+
         // --- Boundary timer promotion pass: Job → Race ---
         let fibers_for_promotion = self.store.load_fibers(instance_id).await?;
         let now_promo = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         for fiber in &fibers_for_promotion {
@@ -687,7 +788,7 @@ impl BpmnLiteEngine {
         let fibers_after = self.store.load_fibers(instance_id).await?;
         let now_race = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         for fiber in fibers_after {
@@ -739,7 +840,7 @@ impl BpmnLiteEngine {
 
                                     // Ack the pending job
                                     if let Some(jk) = &stored_job_key {
-                                        let _ = self.store.ack_job(jk).await;
+                                        let _ = self.store.ack_job(&instance.tenant_id, jk).await;
                                     }
                                 } else {
                                     // ── NON-INTERRUPTING: fork child fiber, main stays in Race ──
@@ -930,6 +1031,7 @@ impl BpmnLiteEngine {
         program: &CompiledProgram,
         invocation_id: Uuid,
         pc: Addr,
+        owner: &str,
     ) -> Result<bool> {
         // No dispatcher → create an incident.
         let Some(dispatcher) = &self.ffi_dispatcher else {
@@ -943,7 +1045,7 @@ impl BpmnLiteEngine {
                 )
                 .await?;
             instance.state = ProcessState::Failed { incident_id };
-            self.store.save_instance(instance).await?;
+            self.store.save_instance(owner, instance).await?;
             return Ok(true); // incident
         };
 
@@ -1010,7 +1112,7 @@ impl BpmnLiteEngine {
                     .create_incident(instance, fiber, pc, ErrorClass::Transient, &msg)
                     .await?;
                 instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(instance).await?;
+                self.store.save_instance(owner, instance).await?;
                 Ok(true)
             }
             Ok(FfiResult::Success {
@@ -1113,7 +1215,7 @@ impl BpmnLiteEngine {
                     .create_incident(instance, fiber, pc, ec, &message)
                     .await?;
                 instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(instance).await?;
+                self.store.save_instance(owner, instance).await?;
                 Ok(true)
             }
         }
@@ -1275,6 +1377,7 @@ impl BpmnLiteEngine {
                 domain_payload,
                 expected_instance_payload_hash,
                 orch_flags,
+                &owner,
             )
             .await
         })
@@ -1293,9 +1396,12 @@ impl BpmnLiteEngine {
         if worker_id.is_empty() || claim_token.is_empty() {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
+        let (instance_id, _, _) = parse_job_key(job_key)?;
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(job_key, worker_id, claim_token)
+            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
@@ -1315,6 +1421,7 @@ impl BpmnLiteEngine {
         domain_payload: &str,
         expected_instance_payload_hash: [u8; 32],
         orch_flags: BTreeMap<String, Value>,
+        owner: &str,
     ) -> Result<()> {
         let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
 
@@ -1342,10 +1449,11 @@ impl BpmnLiteEngine {
         // ── Guard 3: payload hash ──
         let expected = compute_hash(&instance.domain_payload);
         if expected_instance_payload_hash != expected {
-            return Err(anyhow!(
-                "Payload hash mismatch on complete_job: job_key={}",
-                job_key
-            ));
+            return Err(anyhow::anyhow!(bpmn_lite_types::integrity::IntegrityViolation {
+                instance_id,
+                tenant_id: instance.tenant_id.clone(),
+                detection_point: format!("complete_job_inner:payload_hash_mismatch:job_key={}", job_key),
+            }));
         }
 
         let program = self
@@ -1423,7 +1531,7 @@ impl BpmnLiteEngine {
                 Vec::new()
             };
             self.store
-                .atomic_complete(&instance, &completion, &events)
+                .atomic_complete(&instance.tenant_id, owner, &instance, &completion, &events)
                 .await?;
         } else {
             // No fiber matched — ghost signal
@@ -1450,7 +1558,7 @@ impl BpmnLiteEngine {
         let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
-            self.fail_job_inner(job_key, error_class, message, None)
+            self.fail_job_inner(job_key, error_class, message, None, &owner)
                 .await
         })
         .await
@@ -1467,14 +1575,16 @@ impl BpmnLiteEngine {
         if worker_id.is_empty() || claim_token.is_empty() {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
+        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(job_key, worker_id, claim_token)
+            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
         }
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
             self.fail_job_inner(
@@ -1482,6 +1592,7 @@ impl BpmnLiteEngine {
                 error_class,
                 message,
                 Some((worker_id, claim_token)),
+                &owner,
             )
             .await
         })
@@ -1494,6 +1605,7 @@ impl BpmnLiteEngine {
         error_class: ErrorClass,
         message: &str,
         worker_claim: Option<(&str, &str)>,
+        owner: &str,
     ) -> Result<()> {
         let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
 
@@ -1510,7 +1622,7 @@ impl BpmnLiteEngine {
                 format!("fail_job(key={}, state={:?})", job_key, instance.state),
             )
             .await?;
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
             return Ok(());
         }
 
@@ -1530,7 +1642,7 @@ impl BpmnLiteEngine {
             // Guard 2: no matching fiber (ghost)
             self.emit_late(instance_id, format!("fail_job(key={}, no fiber)", job_key))
                 .await?;
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
             return Ok(());
         };
 
@@ -1542,6 +1654,7 @@ impl BpmnLiteEngine {
                 if self
                     .store
                     .retry_claimed_job(
+                        &instance.tenant_id,
                         job_key,
                         worker_id,
                         claim_token,
@@ -1579,7 +1692,7 @@ impl BpmnLiteEngine {
                     fiber.pc = route.resume_at;
                     fiber.wait = WaitState::Running;
                     self.store.save_fiber(instance_id, &fiber).await?;
-                    self.store.ack_job(job_key).await?;
+                    self.store.ack_job(&instance.tenant_id, job_key).await?;
                     self.store
                         .append_event(
                             instance_id,
@@ -1635,11 +1748,12 @@ impl BpmnLiteEngine {
 
         let mut instance = instance;
         instance.state = ProcessState::Failed { incident_id };
-        self.store.save_instance(&instance).await?;
+        self.store.save_instance(owner, &instance).await?;
         if let Some((worker_id, claim_token)) = worker_claim {
             let _ = self
                 .store
                 .dead_letter_claimed_job(
+                    &instance.tenant_id,
                     job_key,
                     worker_id,
                     claim_token,
@@ -1658,7 +1772,7 @@ impl BpmnLiteEngine {
                 )
                 .await?;
         } else {
-            self.store.ack_job(job_key).await?;
+            self.store.ack_job(&instance.tenant_id, job_key).await?;
         }
 
         Ok(())
@@ -1955,12 +2069,16 @@ impl BpmnLiteEngine {
     pub async fn cancel(&self, instance_id: Uuid, reason: &str) -> Result<()> {
         let owner = self.transition_owner.clone();
         self.run_guarded_transition(instance_id, &owner, || async {
-            self.cancel_inner(instance_id, reason).await
+            self.cancel_inner(instance_id, reason, &owner).await
         })
         .await
     }
 
-    async fn cancel_inner(&self, instance_id: Uuid, reason: &str) -> Result<()> {
+    async fn cancel_inner(&self, instance_id: Uuid, reason: &str, owner: &str) -> Result<()> {
+        let instance = self.store.load_instance(instance_id).await?
+            .ok_or_else(|| anyhow!("instance {} not found for cancel", instance_id))?;
+        let tenant_id = &instance.tenant_id;
+
         // 1. Emit WaitCancelled per parked fiber (before deletion)
         let fibers = self.store.load_fibers(instance_id).await?;
         for fiber in &fibers {
@@ -1985,6 +2103,8 @@ impl BpmnLiteEngine {
         // 3. Update state, delete fibers, emit Cancelled
         self.store
             .update_instance_state(
+                tenant_id,
+                owner,
                 instance_id,
                 ProcessState::Cancelled {
                     reason: reason.to_string(),
@@ -2026,6 +2146,19 @@ impl BpmnLiteEngine {
 
         let incidents = self.store.load_incidents(instance_id).await?;
 
+        let program = self.store.load_program(instance.bytecode_version).await?;
+        let current_node_id = if let Some(prog) = &program {
+            if let Some(first_fiber) = fibers.first() {
+                prog.debug_map.get(&first_fiber.pc).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let placeholder_values = serde_json::from_str::<serde_json::Value>(&instance.domain_payload).ok();
+
         Ok(ProcessInspection {
             instance_id,
             tenant_id: instance.tenant_id,
@@ -2035,6 +2168,8 @@ impl BpmnLiteEngine {
             state: instance.state,
             fibers: fiber_inspections,
             incidents,
+            current_node_id,
+            placeholder_values,
         })
     }
 
@@ -2262,11 +2397,20 @@ impl BpmnLiteEngine {
                                 return Ok(());
                             }
 
+                            let owner = format!("startup-recovery-{}", Uuid::now_v7());
+                            let claimed = self.store
+                                .claim_instance_for_transition(&instance.tenant_id, instance_id, &owner, 30_000)
+                                .await?;
+                            if !claimed {
+                                return Err(anyhow!("failed to claim instance lease for startup recovery"));
+                            }
+
                             // Fibers are stored separately from the instance.
                             let mut fibers = self.store.load_fibers(instance_id).await?;
                             let fiber_idx = fibers.iter().position(|f| f.pc == *caller_pc);
                             let Some(idx) = fiber_idx else {
                                 tracing::warn!(%instance_id, "A17: fiber at pc={} not found; skipping", caller_pc);
+                                self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await?;
                                 return Ok(());
                             };
 
@@ -2298,12 +2442,29 @@ impl BpmnLiteEngine {
                             fibers[idx].wait = WaitState::Incident { incident_id };
                             self.store.save_fiber(instance_id, &fibers[idx]).await?;
                             instance.state = ProcessState::Failed { incident_id };
-                            self.store.save_instance(&instance).await?;
+                            
+                            let save_res = self.store.save_instance(&owner, &instance).await;
+                            let release_res = self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await;
+                            save_res?;
+                            release_res?;
                             Ok(())
                         }.await;
 
                         if let Err(e) = result {
-                            tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
+                            if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
+                                tracing::error!(%instance_id, error = %e, "IntegrityViolation detected in startup recovery; quarantining instance");
+                                let q_owner = format!("startup-recovery-quarantine-{}", Uuid::now_v7());
+                                if let Err(q_err) = self.store.quarantine_instance(
+                                    violation.instance_id,
+                                    &violation.tenant_id,
+                                    &q_owner,
+                                    &violation.detection_point,
+                                ).await {
+                                    tracing::error!(%instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in startup recovery");
+                                }
+                            } else {
+                                tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
+                            }
                         }
                     }
                     _ => {

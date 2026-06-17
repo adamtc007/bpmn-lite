@@ -1,4 +1,5 @@
-use crate::store::ProcessStore;
+use crate::store::{ProcessStore, TickOperation};
+use crate::pending::PendingInvocationStore;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bpmn_lite_types::events::RuntimeEvent;
@@ -23,17 +24,20 @@ struct Inner {
     inflight_jobs: HashMap<String, (JobActivation, Instant)>,
     programs: HashMap<[u8; 32], CompiledProgram>,
     plans: HashMap<[u8; 32], String>,
+    templates: HashMap<(String, u32), (String, [u8; 32], String)>, // (name, version) -> (dsl, plan_hash, created_at)
     dead_letter: HashMap<(u32, String), (Vec<u8>, u64)>,
     events: HashMap<Uuid, Vec<(u64, RuntimeEvent)>>,
     event_seq: HashMap<Uuid, u64>,
     payload_history: HashMap<(Uuid, [u8; 32]), String>,
     incidents: HashMap<Uuid, Vec<Incident>>,
     transition_leases: HashMap<Uuid, (String, Instant)>,
+    outbox: HashMap<Uuid, (String, String, Vec<u8>, Uuid, Uuid)>,
 }
 
 /// In-memory implementation of `ProcessStore` for POC/testing.
 pub struct MemoryStore {
     inner: RwLock<Inner>,
+    pub pending_store: crate::pending::MemoryPendingInvocationStore,
 }
 
 impl MemoryStore {
@@ -52,13 +56,16 @@ impl MemoryStore {
                 inflight_jobs: HashMap::new(),
                 programs: HashMap::new(),
                 plans: HashMap::new(),
+                templates: HashMap::new(),
                 dead_letter: HashMap::new(),
                 events: HashMap::new(),
                 event_seq: HashMap::new(),
                 payload_history: HashMap::new(),
                 incidents: HashMap::new(),
                 transition_leases: HashMap::new(),
+                outbox: HashMap::new(),
             }),
+            pending_store: crate::pending::MemoryPendingInvocationStore::new(),
         }
     }
 }
@@ -90,7 +97,7 @@ fn now_ms() -> i64 {
 impl ProcessStore for MemoryStore {
     // ── Instance ──
 
-    async fn save_instance(&self, instance: &ProcessInstance) -> Result<()> {
+    async fn save_instance(&self, _lease_owner: &str, instance: &ProcessInstance) -> Result<()> {
         let mut w = self.inner.write().await;
         w.instances.insert(instance.instance_id, instance.clone());
         Ok(())
@@ -101,7 +108,7 @@ impl ProcessStore for MemoryStore {
         Ok(r.instances.get(&id).cloned())
     }
 
-    async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()> {
+    async fn update_instance_state(&self, _tenant_id: &str, _lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()> {
         let mut w = self.inner.write().await;
         let inst = w
             .instances
@@ -113,6 +120,8 @@ impl ProcessStore for MemoryStore {
 
     async fn update_instance_flags(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         id: Uuid,
         flags: &BTreeMap<FlagKey, Value>,
     ) -> Result<()> {
@@ -127,6 +136,8 @@ impl ProcessStore for MemoryStore {
 
     async fn update_instance_payload(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         id: Uuid,
         payload: &str,
         hash: &[u8; 32],
@@ -283,7 +294,7 @@ impl ProcessStore for MemoryStore {
         Ok(result)
     }
 
-    async fn ack_job(&self, job_key: &str) -> Result<()> {
+    async fn ack_job(&self, _tenant_id: &str, job_key: &str) -> Result<()> {
         let mut w = self.inner.write().await;
         w.inflight_jobs.remove(job_key);
         Ok(())
@@ -291,6 +302,7 @@ impl ProcessStore for MemoryStore {
 
     async fn validate_job_claim(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -311,6 +323,7 @@ impl ProcessStore for MemoryStore {
 
     async fn retry_claimed_job(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -349,6 +362,7 @@ impl ProcessStore for MemoryStore {
 
     async fn dead_letter_claimed_job(
         &self,
+        _tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -422,6 +436,74 @@ impl ProcessStore for MemoryStore {
     async fn load_plan(&self, plan_hash: [u8; 32]) -> Result<Option<String>> {
         let r = self.inner.read().await;
         Ok(r.plans.get(&plan_hash).cloned())
+    }
+
+    // ── Template catalog ──
+
+    async fn store_template(
+        &self,
+        name: &str,
+        version: u32,
+        plan_hash: [u8; 32],
+        dsl_body: &str,
+    ) -> Result<()> {
+        let mut w = self.inner.write().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        w.templates.insert((name.to_owned(), version), (dsl_body.to_owned(), plan_hash, now));
+        Ok(())
+    }
+
+    async fn load_template_version(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Option<(String, [u8; 32])>> {
+        let r = self.inner.read().await;
+        if let Some((dsl, hash, _)) = r.templates.get(&(name.to_owned(), version)) {
+            Ok(Some((dsl.clone(), *hash)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn load_latest_template_version(
+        &self,
+        name: &str,
+    ) -> Result<Option<(u32, String, [u8; 32])>> {
+        let r = self.inner.read().await;
+        let mut latest: Option<(u32, String, [u8; 32])> = None;
+        for ((t_name, version), (dsl, hash, _)) in r.templates.iter() {
+            if t_name == name {
+                if let Some((best_v, _, _)) = &latest {
+                    if *version > *best_v {
+                        latest = Some((*version, dsl.clone(), *hash));
+                    }
+                } else {
+                    latest = Some((*version, dsl.clone(), *hash));
+                }
+            }
+        }
+        Ok(latest)
+    }
+
+    async fn list_templates(&self) -> Result<Vec<crate::store::TemplateSummary>> {
+        let r = self.inner.read().await;
+        let mut latest_map: HashMap<String, (u32, [u8; 32], String)> = HashMap::new();
+        for ((name, version), (_, hash, created_at)) in r.templates.iter() {
+            let entry = latest_map.entry(name.clone()).or_insert((*version, *hash, created_at.clone()));
+            if *version > entry.0 {
+                *entry = (*version, *hash, created_at.clone());
+            }
+        }
+        let summaries = latest_map.into_iter().map(|(name, (version, hash, created_at))| {
+            crate::store::TemplateSummary {
+                name,
+                latest_version: version,
+                plan_hash: hash,
+                created_at,
+            }
+        }).collect();
+        Ok(summaries)
     }
 
     // ── Dead-letter queue ──
@@ -730,6 +812,8 @@ impl ProcessStore for MemoryStore {
 
     async fn atomic_start(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         instance: &ProcessInstance,
         root_fiber: &Fiber,
         event: &RuntimeEvent,
@@ -755,6 +839,8 @@ impl ProcessStore for MemoryStore {
 
     async fn atomic_complete(
         &self,
+        _tenant_id: &str,
+        _lease_owner: &str,
         instance: &ProcessInstance,
         completion: &JobCompletion,
         events: &[RuntimeEvent],
@@ -946,12 +1032,154 @@ impl ProcessStore for MemoryStore {
         &self,
         instance_id: Uuid,
         _tenant_id: &str,
+        _lease_owner: &str,
         _detection_point: &str,
     ) -> Result<()> {
         let mut guard = self.inner.write().await;
         if let Some(inst) = guard.instances.get_mut(&instance_id) {
             inst.quarantine_state = Some("integrity_violation".to_string());
         }
+        Ok(())
+    }
+
+    async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16> {
+        let r = self.inner.read().await;
+        Ok(*r.join_counters.get(&(instance_id, join_id)).unwrap_or(&0))
+    }
+
+    async fn commit_tick(
+        &self,
+        instance_id: Uuid,
+        _tenant_id: &str,
+        _lease_owner: &str,
+        ops: &[TickOperation],
+    ) -> Result<()> {
+        let mut w = self.inner.write().await;
+        // Pre-validate all operations to ensure rollback atomicity
+        for op in ops {
+            if let TickOperation::ConsumeBufferedMessage { message } = op {
+                let key = (
+                    message.message.tenant_id.clone(),
+                    message.message.message_name.clone(),
+                    message.message.correlation_key.clone(),
+                    message.message.msg_id.clone(),
+                );
+                if let Some((claim_token, _)) = w.message_buffer_claims.get(&key) {
+                    if claim_token != &message.claim_token {
+                        return Err(anyhow::anyhow!("message already claimed by another token"));
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("message not claimed"));
+                }
+            }
+        }
+
+        // Apply all operations
+        for op in ops {
+            match op {
+                TickOperation::SaveFiber { fiber } => {
+                    w.fibers.insert((instance_id, fiber.fiber_id), fiber.clone());
+                }
+                TickOperation::DeleteFiber { fiber_id } => {
+                    w.fibers.remove(&(instance_id, *fiber_id));
+                }
+                TickOperation::DeleteAllFibers => {
+                    w.fibers.retain(|(iid, _), _| *iid != instance_id);
+                }
+                TickOperation::JoinArrive { join_id } => {
+                    let count = w.join_counters.entry((instance_id, *join_id)).or_insert(0);
+                    *count += 1;
+                }
+                TickOperation::JoinReset { join_id } => {
+                    w.join_counters.insert((instance_id, *join_id), 0);
+                }
+                TickOperation::EnqueueJob { job } => {
+                    if !w.job_queue.iter().any(|j| j.job_key == job.job_key)
+                        && !w.inflight_jobs.contains_key(&job.job_key)
+                    {
+                        w.job_queue.push_back(job.clone());
+                    }
+                }
+                TickOperation::CancelJobsForInstance => {
+                    w.job_queue.retain(|j| j.process_instance_id != instance_id);
+                    w.inflight_jobs.retain(|_, (j, _)| j.process_instance_id != instance_id);
+                }
+                TickOperation::AppendEvent { event } => {
+                    let seq_entry = w.event_seq.entry(instance_id).or_insert(0);
+                    *seq_entry += 1;
+                    let current_seq = *seq_entry;
+                    let events = w.events.entry(instance_id).or_insert_with(Vec::new);
+                    events.push((current_seq, event.clone()));
+                }
+                TickOperation::SaveIncident { incident } => {
+                    w.incidents
+                        .entry(incident.process_instance_id)
+                        .or_default()
+                        .push(incident.clone());
+                }
+                TickOperation::SaveInstance { instance } => {
+                    w.instances.insert(instance.instance_id, instance.clone());
+                    w.payload_history.insert(
+                        (instance.instance_id, instance.domain_payload_hash),
+                        instance.domain_payload.to_string(),
+                    );
+                }
+                TickOperation::UpdateInstanceState { state } => {
+                    if let Some(inst) = w.instances.get_mut(&instance_id) {
+                        inst.state = state.clone();
+                    }
+                }
+                TickOperation::ReleaseBufferedMessageClaim { message } => {
+                    let key = (
+                        message.message.tenant_id.clone(),
+                        message.message.message_name.clone(),
+                        message.message.correlation_key.clone(),
+                        message.message.msg_id.clone(),
+                    );
+                    if let Some((claim_token, _)) = w.message_buffer_claims.get(&key) {
+                        if claim_token == &message.claim_token {
+                            w.message_buffer_claims.remove(&key);
+                        }
+                    }
+                }
+                TickOperation::ConsumeBufferedMessage { message } => {
+                    let key = (
+                        message.message.tenant_id.clone(),
+                        message.message.message_name.clone(),
+                        message.message.correlation_key.clone(),
+                        message.message.msg_id.clone(),
+                    );
+                    w.message_buffer.remove(&key);
+                    w.message_buffer_claims.remove(&key);
+                    w.message_buffer_consumed.insert(key);
+                }
+                TickOperation::InsertPendingInvocation { pending } => {
+                    self.pending_store.insert(pending.clone()).await?;
+                }
+                TickOperation::InsertOutbox { id, target_domain, target_endpoint, payload, idempotency_key, callout_id } => {
+                    w.outbox.insert(*id, (target_domain.clone(), target_endpoint.clone(), payload.clone(), *idempotency_key, *callout_id));
+                }
+                TickOperation::TakePendingInvocation { execution_id } => {
+                    let taken = self.pending_store.take_by_execution_id(*execution_id).await?;
+                    if taken.is_none() {
+                        return Err(anyhow::anyhow!(crate::store::AlreadyConsumedError));
+                    }
+                }
+            }
+        }
+
+        // Release the lease if the instance is parked/terminal
+        let is_runnable = if let Some(inst) = w.instances.get(&instance_id) {
+            let has_running_fiber = w.fibers.iter().any(|((iid, _), f)| iid == &instance_id && f.wait == WaitState::Running);
+            matches!(inst.state, ProcessState::Running) && has_running_fiber
+        } else {
+            false
+        };
+
+        if !is_runnable {
+            w.transition_leases.remove(&instance_id);
+        }
+
         Ok(())
     }
 }
@@ -999,7 +1227,7 @@ mod tests {
         let id = Uuid::now_v7();
         let inst = make_instance(id);
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
         let loaded = store.load_instance(id).await.unwrap().unwrap();
 
         assert_eq!(loaded.instance_id, id);
@@ -1033,7 +1261,7 @@ mod tests {
             trace_sequence: 7,
         };
 
-        store.save_instance(&inst).await.unwrap();
+        store.save_instance("default", &inst).await.unwrap();
 
         inst.session_stack.session_id = mutated_session_id;
         inst.session_stack.scope = Some(bpmn_lite_types::session_stack::SessionScopeState {
@@ -1134,7 +1362,7 @@ mod tests {
         for i in 0..3 {
             let instance_id = Uuid::now_v7();
             store
-                .save_instance(&make_instance(instance_id))
+                .save_instance("default", &make_instance(instance_id))
                 .await
                 .unwrap();
             store
@@ -1182,11 +1410,11 @@ mod tests {
         assert_eq!(batch1[0].worker_id, "test-worker");
         assert!(!batch1[0].claim_token.is_empty());
         assert!(store
-            .validate_job_claim("job-0", "test-worker", &batch1[0].claim_token)
+            .validate_job_claim("default", "job-0", "test-worker", &batch1[0].claim_token)
             .await
             .unwrap());
         assert!(!store
-            .validate_job_claim("job-0", "other-worker", &batch1[0].claim_token)
+            .validate_job_claim("default", "job-0", "other-worker", &batch1[0].claim_token)
             .await
             .unwrap());
         assert!(batch1
@@ -1194,7 +1422,7 @@ mod tests {
             .all(|job| job.session_stack.session_id == session_id));
 
         // Ack one
-        store.ack_job("job-0").await.unwrap();
+        store.ack_job("default", "job-0").await.unwrap();
 
         // Dequeue remaining
         let batch2 = store
@@ -1218,7 +1446,7 @@ mod tests {
         let task_type = "create_case".to_string();
         let instance_id = Uuid::now_v7();
         store
-            .save_instance(&make_instance(instance_id))
+            .save_instance("default", &make_instance(instance_id))
             .await
             .unwrap();
 
@@ -1276,13 +1504,13 @@ mod tests {
         assert_eq!(claimed[0].attempt_count, 1);
         assert!(claimed[0].claim_expires_at.is_some());
         assert!(store
-            .validate_job_claim("lease-job", "worker-a", &claimed[0].claim_token)
+            .validate_job_claim("default", "lease-job", "worker-a", &claimed[0].claim_token)
             .await
             .unwrap());
 
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         assert!(!store
-            .validate_job_claim("lease-job", "worker-a", &claimed[0].claim_token)
+            .validate_job_claim("default", "lease-job", "worker-a", &claimed[0].claim_token)
             .await
             .unwrap());
         assert_eq!(store.reclaim_stale_jobs(0).await.unwrap(), 1);
@@ -1360,7 +1588,7 @@ mod tests {
             name: 1,
             corr_key: Value::Bool(false),
         };
-        store.save_instance(&instance).await.unwrap();
+        store.save_instance("default", &instance).await.unwrap();
         store.save_fiber(instance_id, &fiber).await.unwrap();
 
         assert_eq!(
@@ -1459,7 +1687,7 @@ mod tests {
         let mutated_session_id = Uuid::new_v4();
 
         store
-            .save_instance(&make_instance(instance_id))
+            .save_instance("default", &make_instance(instance_id))
             .await
             .unwrap();
 
@@ -1584,7 +1812,7 @@ mod tests {
     async fn test_transition_lease_excludes_other_owner_until_release() {
         let store = MemoryStore::new();
         let iid = Uuid::now_v7();
-        store.save_instance(&make_instance(iid)).await.unwrap();
+        store.save_instance("default", &make_instance(iid)).await.unwrap();
 
         assert!(store
             .claim_instance_for_transition("default", iid, "owner-a", 5_000)
@@ -1616,5 +1844,181 @@ mod tests {
             .claim_instance_for_transition("default", iid, "owner-b", 5_000)
             .await
             .unwrap());
+    }
+
+    /// T3.1.E1: Split-brain test (RISK-002) - atomic tick rollback
+    #[tokio::test]
+    async fn test_split_brain_rollback() {
+        let store = MemoryStore::new();
+        let instance_id = Uuid::now_v7();
+        
+        // 1. Setup pre-tick state: parent fiber exists, join barrier exists with 0 arrivals
+        let parent_fiber_id = Uuid::now_v7();
+        let parent_fiber = Fiber::new(parent_fiber_id, 0);
+        
+        let instance = ProcessInstance {
+            instance_id,
+            process_key: "test-proc".to_string(),
+            bytecode_version: [0u8; 32],
+            tenant_id: "default".to_string(),
+            domain_payload: "{}".to_string().into(),
+            domain_payload_hash: [0u8; 32],
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
+            flags: BTreeMap::new(),
+            counters: BTreeMap::new(),
+            join_expected: BTreeMap::new(),
+            state: ProcessState::Running,
+            correlation_id: "corr".to_string(),
+            entry_id: Uuid::new_v4(),
+            runbook_id: Uuid::new_v4(),
+            created_at: 0,
+            integrity_hash: None,
+            quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
+        };
+        
+        store.save_instance("default", &instance).await.unwrap();
+        store.save_fiber(instance_id, &parent_fiber).await.unwrap();
+        
+        // 2. Build tick operations with an injecting failure (wrong token claim)
+        let child1_id = Uuid::now_v7();
+        let child1 = Fiber::new(child1_id, 1);
+        let child2_id = Uuid::now_v7();
+        let child2 = Fiber::new(child2_id, 1);
+        
+        let msg = ClaimedBufferedMessage {
+            message: BufferedMessage {
+                tenant_id: "default".to_string(),
+                message_name: "test-msg".to_string(),
+                correlation_key: "test-key".to_string(),
+                msg_id: "msg-123".to_string(),
+                payload: vec![],
+                payload_hash: None,
+                process_instance_id: None,
+                received_at: 0,
+                expires_at: 300000,
+            },
+            claim_token: "wrong-token".to_string(),
+            claim_until: 9999999999,
+        };
+        
+        let ops = vec![
+            TickOperation::SaveFiber { fiber: child1 },
+            TickOperation::SaveFiber { fiber: child2 },
+            TickOperation::JoinArrive { join_id: 10 },
+            TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
+            TickOperation::ConsumeBufferedMessage { message: msg }, // Fail!
+        ];
+        
+        // 3. Commit tick - expect failure
+        let res = store.commit_tick(instance_id, "default", "default", &ops).await;
+        assert!(res.is_err());
+        
+        // 4. Assert post-rollback state equals pre-tick state
+        let loaded_fibers = store.load_fibers(instance_id).await.unwrap();
+        assert_eq!(loaded_fibers.len(), 1);
+        assert_eq!(loaded_fibers[0].fiber_id, parent_fiber_id);
+        
+        let join_count = store.join_get(instance_id, 10).await.unwrap();
+        assert_eq!(join_count, 0);
+        
+        // 5. Re-run tick without the failing operation
+        let successful_ops = vec![
+            TickOperation::SaveFiber { fiber: Fiber::new(child1_id, 1) },
+            TickOperation::SaveFiber { fiber: Fiber::new(child2_id, 1) },
+            TickOperation::JoinArrive { join_id: 10 },
+            TickOperation::DeleteFiber { fiber_id: parent_fiber_id },
+        ];
+        store.commit_tick(instance_id, "default", "default", &successful_ops).await.unwrap();
+        
+        // 6. Assert correct completed state
+        let loaded_fibers = store.load_fibers(instance_id).await.unwrap();
+        assert_eq!(loaded_fibers.len(), 2);
+        assert!(loaded_fibers.iter().any(|f| f.fiber_id == child1_id));
+        assert!(loaded_fibers.iter().any(|f| f.fiber_id == child2_id));
+        
+        let join_count = store.join_get(instance_id, 10).await.unwrap();
+        assert_eq!(join_count, 1);
+    }
+
+    /// T3.1.E2: Atomicity of events+state test
+    #[tokio::test]
+    async fn test_atomicity_events_and_state() {
+        let store = MemoryStore::new();
+        let instance_id = Uuid::now_v7();
+        
+        let instance = ProcessInstance {
+            instance_id,
+            process_key: "test-proc".to_string(),
+            bytecode_version: [0u8; 32],
+            tenant_id: "default".to_string(),
+            domain_payload: "{}".to_string().into(),
+            domain_payload_hash: [0u8; 32],
+            session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
+            flags: BTreeMap::new(),
+            counters: BTreeMap::new(),
+            join_expected: BTreeMap::new(),
+            state: ProcessState::Running,
+            correlation_id: "corr".to_string(),
+            entry_id: Uuid::new_v4(),
+            runbook_id: Uuid::new_v4(),
+            created_at: 0,
+            integrity_hash: None,
+            quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
+        };
+        store.save_instance("default", &instance).await.unwrap();
+        
+        // Build a transactional update that fails
+        let msg = ClaimedBufferedMessage {
+            message: BufferedMessage {
+                tenant_id: "default".to_string(),
+                message_name: "test-msg".to_string(),
+                correlation_key: "test-key".to_string(),
+                msg_id: "msg-123".to_string(),
+                payload: vec![],
+                payload_hash: None,
+                process_instance_id: None,
+                received_at: 0,
+                expires_at: 300000,
+            },
+            claim_token: "wrong-token".to_string(),
+            claim_until: 9999999999,
+        };
+        
+        let ops = vec![
+            TickOperation::UpdateInstanceState { state: ProcessState::Completed { at: 12345 } },
+            TickOperation::AppendEvent { event: RuntimeEvent::Completed { at: 12345 } },
+            TickOperation::ConsumeBufferedMessage { message: msg }, // Fail!
+        ];
+        
+        let res = store.commit_tick(instance_id, "default", "default", &ops).await;
+        assert!(res.is_err());
+        
+        // Assert neither state updated nor event logged
+        let loaded = store.load_instance(instance_id).await.unwrap().unwrap();
+        assert_eq!(loaded.state, ProcessState::Running);
+        
+        let events = store.read_events(instance_id, 0).await.unwrap();
+        assert_eq!(events.len(), 0);
+        
+        // Commit successfully
+        let successful_ops = vec![
+            TickOperation::UpdateInstanceState { state: ProcessState::Completed { at: 12345 } },
+            TickOperation::AppendEvent { event: RuntimeEvent::Completed { at: 12345 } },
+        ];
+        store.commit_tick(instance_id, "default", "default", &successful_ops).await.unwrap();
+        
+        // Assert both updated
+        let loaded = store.load_instance(instance_id).await.unwrap().unwrap();
+        assert_eq!(loaded.state, ProcessState::Completed { at: 12345 });
+        
+        let events = store.read_events(instance_id, 0).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].1, RuntimeEvent::Completed { at: 12345 }));
     }
 }

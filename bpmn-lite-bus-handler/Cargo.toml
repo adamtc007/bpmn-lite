@@ -24,9 +24,23 @@ dsl-bus-protocol = { path = "../dsl-bus-protocol" }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
+bpmn-lite-engine = { path = "../bpmn-lite-engine" }
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+blake3 = { workspace = true }
+sqlx = { workspace = true }
+dsl-manifest = { path = "../dsl-manifest" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres" }
+dsl-bus-client = { path = "../dsl-bus-client" }
+anyhow = { workspace = true }
 
 [lints]
 workspace = true

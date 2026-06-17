@@ -1,35 +1,44 @@
-manifest_version: "1.0"
-domain: "dmn-lite"
-catalogue_version: "v1.0.0"
-generated_at: "2026-05-20T12:50:36Z"
-min_consumer_manifest_version: "1.0"
+manifest_version: '1.0'
+domain: dmn-lite
+catalogue_version: v1.0.0-e2c1489e
+generated_at: 2026-06-02T12:00:00Z
+generated_from_snapshot: null
+imported_pins: []
 breaking_changes_since: []
-
+services:
+- kind: InvocationService
+  available: true
+  capabilities:
+  - Submit
+  - Validate
 verbs: []
-
 decisions:
-  - id: "cbu_type_routing"
-    inputs:
-      - name: "cbu-client-type"
-        type: "CbuClientType"
-        required: true
-    output:
-      type: "CbuType"
-      enum_values:
-        - "fund"
-        - "corporate"
-        - "trust"
-
+- id: cbu_type_routing
+  inputs:
+  - name: cbu-client-type
+    type: CbuClientType
+    required: true
+  output:
+    type: CbuType
+    enum_values:
+    - fund
+    - corporate
+    - trust
+  description: null
 types:
-  - name: "CbuClientType"
-    kind: "enum"
-    values:
-      - "FUND_MANDATE"
-      - "CORPORATE"
-      - "TRUST"
-  - name: "CbuType"
-    kind: "enum"
-    values:
-      - "fund"
-      - "corporate"
-      - "trust"
+- name: CbuClientType
+  kind: enum
+  description: null
+  uuid_type: null
+  values:
+  - FUND_MANDATE
+  - CORPORATE
+  - TRUST
+- name: CbuType
+  kind: enum
+  description: null
+  uuid_type: null
+  values:
+  - fund
+  - corporate
+  - trust

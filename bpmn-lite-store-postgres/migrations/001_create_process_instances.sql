@@ -1,6 +1,6 @@
 CREATE TABLE process_instances (
     instance_id       UUID PRIMARY KEY,
-    tenant_id         TEXT NOT NULL DEFAULT 'default',
+    tenant_id         TEXT NOT NULL,
     process_key       TEXT NOT NULL,
     bytecode_version  BYTEA NOT NULL,
     domain_payload    TEXT NOT NULL,

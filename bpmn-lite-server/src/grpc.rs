@@ -470,6 +470,7 @@ impl BpmnLite for BpmnLiteService {
                 session_stack,
                 entry_id: parse_uuid(&req.entry_id)?,
                 runbook_id: parse_uuid(&req.runbook_id)?,
+                expected_preconditions: None,
             })
             .await
             .map_err(engine_err)?;

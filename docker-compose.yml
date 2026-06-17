@@ -40,6 +40,8 @@ services:
     environment:
       POSTGRES_DB: bpmn_lite
       POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5435:5432"
     volumes:
       - bpmn-lite-pgdata:/var/lib/postgresql/data
     <<: *pg-healthcheck
@@ -76,10 +78,12 @@ services:
 
   # ── ob-poc ────────────────────────────────────────────────────────
   ob-poc-postgres:
-    image: postgres:16-bookworm
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: data_designer
       POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5433:5432"
     volumes:
       - ob-poc-pgdata:/var/lib/postgresql/data
     <<: *pg-healthcheck

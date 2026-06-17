@@ -104,6 +104,13 @@ pub trait PendingInvocationStore: Send + Sync {
         execution_id: Uuid,
     ) -> anyhow::Result<Option<PendingInvocation>>;
 
+    /// Stage 3 non-destructive lookup by execution_id. Returns
+    /// `None` if no row matches.
+    async fn lookup_by_execution_id(
+        &self,
+        execution_id: Uuid,
+    ) -> anyhow::Result<Option<PendingInvocation>>;
+
     /// Diagnostic / sender-side helper. Returns `None` if no row
     /// matches.
     async fn lookup_by_callout_id(
@@ -188,6 +195,18 @@ impl PendingInvocationStore for MemoryPendingInvocationStore {
             .find(|(_, v)| v.execution_id == Some(execution_id))
             .map(|(k, _)| *k);
         Ok(key.and_then(|k| guard.remove(&k)))
+    }
+
+    async fn lookup_by_execution_id(
+        &self,
+        execution_id: Uuid,
+    ) -> anyhow::Result<Option<PendingInvocation>> {
+        let guard = self.by_callout.lock().expect("poisoned");
+        let found = guard
+            .values()
+            .find(|v| v.execution_id == Some(execution_id))
+            .cloned();
+        Ok(found)
     }
 
     async fn lookup_by_callout_id(

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+                  id="Definitions_1"
+                  targetNamespace="http://bpmn.io/schema/bpmn"
+                  exporter="Camunda Modeler"
+                  exporterVersion="5.12.0">
+  <bpmn:process id="process_sese" name="SESE Balanced Gateways" isExecutable="true">
+    <bpmn:startEvent id="start" name="Start">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:exclusiveGateway id="split" name="Split">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="task1" name="Task 1">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task1" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="task2" name="Task 2">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task2" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="join" name="Join">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:endEvent id="end" name="End">
+      <bpmn:incoming>f6</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="split" />
+    <bpmn:sequenceFlow id="f2" sourceRef="split" targetRef="task1" />
+    <bpmn:sequenceFlow id="f3" sourceRef="split" targetRef="task2" />
+    <bpmn:sequenceFlow id="f4" sourceRef="task1" targetRef="join" />
+    <bpmn:sequenceFlow id="f5" sourceRef="task2" targetRef="join" />
+    <bpmn:sequenceFlow id="f6" sourceRef="join" targetRef="end" />
+  </bpmn:process>
+</bpmn:definitions>

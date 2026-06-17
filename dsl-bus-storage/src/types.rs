@@ -100,6 +100,7 @@ pub struct OutboxEntry {
     pub last_error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub submitted_at: Option<DateTime<Utc>>,
+    pub tenant_id: String,
 }
 
 impl OutboxEntry {
@@ -115,6 +116,7 @@ impl OutboxEntry {
         target_endpoint: BusEndpoint,
         payload: Vec<u8>,
         idempotency_key: Uuid,
+        tenant_id: String,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -131,6 +133,7 @@ impl OutboxEntry {
             last_error: None,
             created_at: now,
             submitted_at: None,
+            tenant_id,
         }
     }
 
@@ -182,6 +185,7 @@ pub struct InboxEntry {
     pub processed_at: Option<DateTime<Utc>>,
     pub status: InboxStatus,
     pub payload: Option<Vec<u8>>,
+    pub tenant_id: String,
 }
 
 impl InboxEntry {
@@ -194,6 +198,7 @@ impl InboxEntry {
         endpoint: BusEndpoint,
         execution_id: Option<Uuid>,
         payload: Option<Vec<u8>>,
+        tenant_id: String,
     ) -> Self {
         Self {
             idempotency_key,
@@ -204,6 +209,7 @@ impl InboxEntry {
             processed_at: None,
             status: InboxStatus::Received,
             payload,
+            tenant_id,
         }
     }
 }

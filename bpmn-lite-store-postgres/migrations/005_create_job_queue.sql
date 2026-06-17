@@ -1,6 +1,6 @@
 CREATE TABLE job_queue (
     job_key              TEXT PRIMARY KEY,
-    tenant_id            TEXT NOT NULL DEFAULT 'default',
+    tenant_id            TEXT NOT NULL,
     process_instance_id  UUID NOT NULL,
     task_type            TEXT NOT NULL,
     service_task_id      TEXT NOT NULL,

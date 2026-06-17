@@ -1,9 +1,18 @@
+#![allow(clippy::too_many_arguments)]
 use anyhow::Result;
 use async_trait::async_trait;
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TemplateSummary {
+    pub name: String,
+    pub latest_version: u32,
+    pub plan_hash: [u8; 32],
+    pub created_at: String,
+}
 
 /// Persistence trait for all BPMN-Lite state.
 ///
@@ -14,12 +23,12 @@ use uuid::Uuid;
 pub trait ProcessStore: Send + Sync {
     // ── Instance ──
 
-    async fn save_instance(&self, instance: &ProcessInstance) -> Result<()>;
+    async fn save_instance(&self, lease_owner: &str, instance: &ProcessInstance) -> Result<()>;
     async fn load_instance(&self, id: Uuid) -> Result<Option<ProcessInstance>>;
-    async fn update_instance_state(&self, id: Uuid, state: ProcessState) -> Result<()>;
-    async fn update_instance_flags(&self, id: Uuid, flags: &BTreeMap<FlagKey, Value>)
+    async fn update_instance_state(&self, tenant_id: &str, lease_owner: &str, id: Uuid, state: ProcessState) -> Result<()>;
+    async fn update_instance_flags(&self, tenant_id: &str, lease_owner: &str, id: Uuid, flags: &BTreeMap<FlagKey, Value>)
         -> Result<()>;
-    async fn update_instance_payload(&self, id: Uuid, payload: &str, hash: &[u8; 32])
+    async fn update_instance_payload(&self, tenant_id: &str, lease_owner: &str, id: Uuid, payload: &str, hash: &[u8; 32])
         -> Result<()>;
 
     // ── Fibers ──
@@ -59,15 +68,17 @@ pub trait ProcessStore: Send + Sync {
         worker_id: &str,
         lease_ms: u64,
     ) -> Result<Vec<JobActivation>>;
-    async fn ack_job(&self, job_key: &str) -> Result<()>;
+    async fn ack_job(&self, tenant_id: &str, job_key: &str) -> Result<()>;
     async fn validate_job_claim(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
     ) -> Result<bool>;
     async fn retry_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -77,6 +88,7 @@ pub trait ProcessStore: Send + Sync {
     ) -> Result<bool>;
     async fn dead_letter_claimed_job(
         &self,
+        tenant_id: &str,
         job_key: &str,
         worker_id: &str,
         claim_token: &str,
@@ -145,6 +157,29 @@ pub trait ProcessStore: Send + Sync {
     async fn reclaim_stale_buffered_message_claims(&self) -> Result<u32>;
     async fn prune_expired_messages(&self) -> Result<u32>;
 
+    // ── Template catalog ──
+
+    async fn store_template(
+        &self,
+        name: &str,
+        version: u32,
+        plan_hash: [u8; 32],
+        dsl_body: &str,
+    ) -> Result<()>;
+
+    async fn load_template_version(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Option<(String, [u8; 32])>>;
+
+    async fn load_latest_template_version(
+        &self,
+        name: &str,
+    ) -> Result<Option<(u32, String, [u8; 32])>>;
+
+    async fn list_templates(&self) -> Result<Vec<TemplateSummary>>;
+
     // ── Event log (append-only) ──
 
     /// Append an event and return its sequence number.
@@ -187,6 +222,8 @@ pub trait ProcessStore: Send + Sync {
     /// Returns the event sequence number.
     async fn atomic_start(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         root_fiber: &Fiber,
         event: &RuntimeEvent,
@@ -195,6 +232,8 @@ pub trait ProcessStore: Send + Sync {
     /// Atomically complete a job: save instance + dedupe + payload version + events + ack job.
     async fn atomic_complete(
         &self,
+        tenant_id: &str,
+        lease_owner: &str,
         instance: &ProcessInstance,
         completion: &JobCompletion,
         events: &[RuntimeEvent],
@@ -268,6 +307,87 @@ pub trait ProcessStore: Send + Sync {
         &self,
         instance_id: Uuid,
         tenant_id: &str,
+        lease_owner: &str,
         detection_point: &str,
     ) -> Result<()>;
+
+    /// Read the current arrive count for a join barrier.
+    async fn join_get(&self, instance_id: Uuid, join_id: JoinId) -> Result<u16>;
+
+    /// Commit a batch of tick operations atomically.
+    async fn commit_tick(
+        &self,
+        instance_id: Uuid,
+        tenant_id: &str,
+        lease_owner: &str,
+        ops: &[TickOperation],
+    ) -> Result<()>;
 }
+
+#[derive(Debug, Clone)]
+pub enum TickOperation {
+    SaveFiber { fiber: Fiber },
+    DeleteFiber { fiber_id: Uuid },
+    DeleteAllFibers,
+    JoinArrive { join_id: JoinId },
+    JoinReset { join_id: JoinId },
+    EnqueueJob { job: JobActivation },
+    CancelJobsForInstance,
+    AppendEvent { event: RuntimeEvent },
+    SaveIncident { incident: Incident },
+    SaveInstance { instance: ProcessInstance },
+    UpdateInstanceState { state: ProcessState },
+    ReleaseBufferedMessageClaim { message: ClaimedBufferedMessage },
+    ConsumeBufferedMessage { message: ClaimedBufferedMessage },
+    InsertPendingInvocation { pending: crate::pending::PendingInvocation },
+    InsertOutbox {
+        id: Uuid,
+        target_domain: String,
+        target_endpoint: String,
+        payload: Vec<u8>,
+        idempotency_key: Uuid,
+        callout_id: Uuid,
+    },
+    TakePendingInvocation { execution_id: Uuid },
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionContext {
+    pub instance_id: Uuid,
+    pub tenant_id: String,
+    pub ops: Vec<TickOperation>,
+}
+
+impl TransactionContext {
+    pub fn new(instance_id: Uuid, tenant_id: String) -> Self {
+        Self {
+            instance_id,
+            tenant_id,
+            ops: Vec::new(),
+        }
+    }
+
+    pub fn add_op(&mut self, op: TickOperation) {
+        self.ops.push(op);
+    }
+
+    pub fn get_join_count(&self, join_id: JoinId, base_count: u16) -> u16 {
+        let mut count = base_count;
+        for op in &self.ops {
+            match op {
+                TickOperation::JoinArrive { join_id: jid } if *jid == join_id => {
+                    count += 1;
+                }
+                TickOperation::JoinReset { join_id: jid } if *jid == join_id => {
+                    count = 0;
+                }
+                _ => {}
+            }
+        }
+        count
+    }
+}
+
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("TakePendingInvocation: already consumed")]
+pub struct AlreadyConsumedError;

@@ -26,3 +26,4 @@ pub mod types;
 pub use events::*;
 pub use ffi_bindings::*;
 pub use types::*;
+pub use integrity::IntegrityViolation;

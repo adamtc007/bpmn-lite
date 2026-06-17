@@ -1,5 +1,6 @@
 //! PostgreSQL implementation of `BpmnProcessInstanceStore` (v0.6 §8.4).
 
+#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use bpmn_lite_store::process_instance::{
     BpmnProcessInstance, BpmnProcessInstanceStore, ProcessStatus,
@@ -10,25 +11,56 @@ use uuid::Uuid;
 pub struct PostgresBpmnProcessInstanceStore {
     pool: PgPool,
 }
-
 impl PostgresBpmnProcessInstanceStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    async fn list_tenants(&self) -> anyhow::Result<Vec<String>> {
+        let rows_res = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
+            .fetch_all(&self.pool)
+            .await;
+        match rows_res {
+            Ok(rows) => {
+                let tenants: Vec<String> = rows.iter().map(|r| r.get::<String, _>("tenant_id")).collect();
+                if tenants.is_empty() {
+                    Ok(vec!["default".to_string()])
+                } else {
+                    Ok(tenants)
+                }
+            }
+            Err(_) => Ok(vec!["default".to_string()]),
+        }
+    }
+
+    async fn resolve_instance_tenant(&self, instance_id: Uuid) -> anyhow::Result<String> {
+        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_instance_tenant($1)")
+            .bind(instance_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0.unwrap_or_else(|| "default".to_string()))
     }
 }
 
 #[async_trait]
 impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
     async fn insert(&self, instance: BpmnProcessInstance) -> anyhow::Result<()> {
+        let tenant_id = self.resolve_instance_tenant(instance.id).await?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await?;
+
         sqlx::query(
             r#"
             INSERT INTO bpmn_process_instance (
                 id, workflow_id, current_node, status, variables,
                 waiting_on_callout_id, waiting_on_execution_id,
                 started_at, last_advanced_at, completed_at,
-                end_status, failure_reason
+                end_status, failure_reason, tenant_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
         .bind(instance.id)
@@ -43,12 +75,22 @@ impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
         .bind(instance.completed_at)
         .bind(&instance.end_status)
         .bind(&instance.failure_reason)
-        .execute(&self.pool)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     async fn load(&self, id: Uuid) -> anyhow::Result<Option<BpmnProcessInstance>> {
+        let tenant_id = self.resolve_instance_tenant(id).await?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await?;
+
         let row = sqlx::query(
             r#"
             SELECT id, workflow_id, current_node, status, variables,
@@ -60,12 +102,21 @@ impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
             "#,
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         row.map(row_to_instance).transpose()
     }
 
     async fn update(&self, instance: BpmnProcessInstance) -> anyhow::Result<()> {
+        let tenant_id = self.resolve_instance_tenant(instance.id).await?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await?;
+
         let res = sqlx::query(
             r#"
             UPDATE bpmn_process_instance
@@ -79,7 +130,7 @@ impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
                    completed_at = $9,
                    end_status = $10,
                    failure_reason = $11
-             WHERE id = $1
+              WHERE id = $1
             "#,
         )
         .bind(instance.id)
@@ -93,8 +144,10 @@ impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
         .bind(instance.completed_at)
         .bind(&instance.end_status)
         .bind(&instance.failure_reason)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         if res.rows_affected() != 1 {
             anyhow::bail!("bpmn_process_instance id {} not found", instance.id);
@@ -106,21 +159,37 @@ impl BpmnProcessInstanceStore for PostgresBpmnProcessInstanceStore {
         &self,
         status: ProcessStatus,
     ) -> anyhow::Result<Vec<BpmnProcessInstance>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, workflow_id, current_node, status, variables,
-                   waiting_on_callout_id, waiting_on_execution_id,
-                   started_at, last_advanced_at, completed_at,
-                   end_status, failure_reason
-              FROM bpmn_process_instance
-             WHERE status = $1
-             ORDER BY started_at
-            "#,
-        )
-        .bind(status.as_str())
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(row_to_instance).collect()
+        let tenants = self.list_tenants().await?;
+        let mut all_instances = Vec::new();
+        for tenant_id in tenants {
+            let mut tx = self.pool.begin().await?;
+            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+                .bind(&tenant_id)
+                .execute(&mut *tx)
+                .await
+            {
+                continue;
+            }
+            let rows = sqlx::query(
+                r#"
+                SELECT id, workflow_id, current_node, status, variables,
+                       waiting_on_callout_id, waiting_on_execution_id,
+                       started_at, last_advanced_at, completed_at,
+                       end_status, failure_reason
+                  FROM bpmn_process_instance
+                 WHERE status = $1
+                 ORDER BY started_at
+                "#,
+            )
+            .bind(status.as_str())
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            for row in rows {
+                all_instances.push(row_to_instance(row)?);
+            }
+        }
+        Ok(all_instances)
     }
 }
 
@@ -148,39 +217,33 @@ mod tests {
 
     const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
 
-    // Same workaround as `pending_store::tests`: skip `sqlx::migrate!`
-    // because the pre-existing migration 026 has a broken
-    // `GRANT CONNECT ON DATABASE current_database()` that can't be
-    // applied to a fresh DB. Apply only the two T2B.8 migrations.
-    const PENDING_MIGRATION: &str = include_str!("../migrations/033_bpmn_pending_invocation.sql");
-    const PROCESS_MIGRATION: &str = include_str!("../migrations/034_bpmn_process_instance.sql");
-
-    async fn setup() -> PostgresBpmnProcessInstanceStore {
+    async fn setup() -> (PostgresBpmnProcessInstanceStore, tokio::sync::MutexGuard<'static, ()>) {
+        let guard = crate::test_lock::get_mutex().lock().await;
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
         let pool = PgPool::connect(&url).await.expect("connect");
-        sqlx::query("DROP TABLE IF EXISTS bpmn_pending_invocation CASCADE")
+
+        // Run migrations
+        let migrator = sqlx::migrate!("./migrations");
+        migrator.run(&pool)
+            .await
+            .expect("run migrations");
+
+        // Perform TRUNCATE as admin before returning app connection
+        sqlx::query("TRUNCATE bpmn_pending_invocation, bpmn_process_instance CASCADE")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DROP TABLE IF EXISTS bpmn_process_instance CASCADE")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(PENDING_MIGRATION)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(PROCESS_MIGRATION)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("TRUNCATE bpmn_process_instance")
-            .execute(&pool)
-            .await
-            .unwrap();
-        PostgresBpmnProcessInstanceStore::new(pool)
+        let app_url = if url.contains("@") {
+            let parts: Vec<&str> = url.split('@').collect();
+            let host_part = parts[1];
+            format!("postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}", host_part)
+        } else {
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test".to_string()
+        };
+        let app_pool = PgPool::connect(&app_url).await.expect("Failed to connect as bpmn_lite_app");
+        (PostgresBpmnProcessInstanceStore::new(app_pool), guard)
     }
 
     fn fresh(id: Uuid) -> BpmnProcessInstance {
@@ -188,9 +251,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn insert_then_load_round_trips() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let id = Uuid::now_v7();
         store.insert(fresh(id)).await.unwrap();
         let row = store.load(id).await.unwrap().unwrap();
@@ -200,9 +262,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn update_changes_status_and_waiting_pointers() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let id = Uuid::now_v7();
         store.insert(fresh(id)).await.unwrap();
 
@@ -222,32 +283,37 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn update_rejects_unknown_id() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let err = store.update(fresh(Uuid::now_v7())).await;
         assert!(err.is_err());
     }
 
     #[tokio::test]
-    #[ignore]
     async fn status_check_constraint_rejects_bad_value() {
         // The Rust enum guarantees we never write a bad status, so
         // exercise the DB-level CHECK directly via raw SQL.
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let id = Uuid::now_v7();
         store.insert(fresh(id)).await.unwrap();
-        let res = sqlx::query("UPDATE bpmn_process_instance SET status = 'Bogus' WHERE id = $1")
-            .bind(id)
-            .execute(&store.pool)
-            .await;
+        let mut tx = store.pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('app.current_tenant', 'default', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        let res = sqlx::query(
+            "UPDATE bpmn_process_instance SET status = 'Bogus' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await;
         assert!(res.is_err());
     }
 
     #[tokio::test]
-    #[ignore]
     async fn list_by_status_groups_correctly() {
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         for status in [
             ProcessStatus::Running,
             ProcessStatus::WaitingOnSubmission,
@@ -282,12 +348,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn two_stage_durability_walks_status_correctly() {
         // Created → Running → WaitingOnSubmission → WaitingOnInvocation
         // → Completed. This is the happy-path the §10 demo walks per
         // BPMN node, verified end-to-end through the store.
-        let store = setup().await;
+        let (store, _lock) = setup().await;
         let id = Uuid::now_v7();
         store.insert(fresh(id)).await.unwrap();
 

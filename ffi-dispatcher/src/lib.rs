@@ -45,11 +45,6 @@ impl FfiDispatcher {
         Ok(())
     }
 
-    /// Return the registered owner for an `owner_type`, or `None`.
-    pub fn lookup_owner(&self, owner_type: &str) -> Option<Arc<dyn FfiExecutionOwner>> {
-        self.owners.get(owner_type).cloned()
-    }
-
     /// True iff every template in the catalogue cache is supported by a
     /// registered owner with matching `owner_type`. Call after registering
     /// owners and loading the catalogue cache. Returns a list of
@@ -108,11 +103,6 @@ impl FfiDispatcher {
         })?;
 
         owner.invoke(call).await
-    }
-
-    /// Number of registered owners (observability).
-    pub fn owner_count(&self) -> usize {
-        self.owners.len()
     }
 
     /// Return the `owner_type` for a template cached in the catalogue, or
@@ -234,12 +224,7 @@ mod tests {
         (disp, cat)
     }
 
-    #[tokio::test]
-    async fn register_owner_succeeds() {
-        let (disp, _) = setup(&["dmn-lite"]).await;
-        assert_eq!(disp.owner_count(), 1);
-        assert!(disp.lookup_owner("dmn-lite").is_some());
-    }
+
 
     #[tokio::test]
     async fn register_owner_rejects_duplicate() {

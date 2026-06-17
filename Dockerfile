@@ -42,7 +42,9 @@ RUN cargo build --release --features postgres -p bpmn-lite-server \
 # Distroless cc keeps glibc/runtime libs without a shell or package manager.
 FROM gcr.io/distroless/cc-debian12:nonroot
 
+WORKDIR /app
 COPY --from=builder /build/out/bpmn-lite-server /usr/local/bin/
+COPY manifests /app/manifests
 
 EXPOSE 50051
 

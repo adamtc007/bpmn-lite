@@ -36,6 +36,7 @@ postgres = ["dep:sqlx", "dep:chrono"]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
+dsl-manifest = { path = "../dsl-manifest" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

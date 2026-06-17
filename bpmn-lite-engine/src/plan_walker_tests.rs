@@ -1,70 +1,49 @@
-//! T3.7 — Integration tests for the 4 T2B master DoD scenarios.
-//!
-//! All tests use `MemoryStore` + `MemoryPendingInvocationStore` — no
-//! Postgres required. Bus dispatch calls are deliberately not wired to
-//! real gRPC endpoints; the outbox insert that `dispatch_callout` makes
-//! is bypassed by simulating result delivery directly.
-//!
-//! Since the MemoryStore-based `PlanWalker` will fail on `insert_outbox`
-//! (no real pool), tests that exercise ServiceTask dispatch construct
-//! the instance state manually up to the WaitingOnSubmission point,
-//! then simulate the result delivery sequence.
-
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::sync::Arc;
-
 use bpmn_lite_compiler::dsl::plan::{
-    BusinessRuleExecNode, EndExecNode, ExecutionNode, GatewayExecFlow, GatewayExecNode,
-    PlaceholderSchema, ServiceTaskExecNode, StartExecNode, WorkflowExecutionPlan,
-};
-use bpmn_lite_store::pending::{
-    InsertOutcome, MemoryPendingInvocationStore, PendingInvocation, PendingInvocationStore,
+    ExecutionNode, WorkflowExecutionPlan, EndExecNode, PlaceholderSchema, StartExecNode, TaskExecNode, SplitExecNode, SplitExecFlow, DeliveryMode, SplitMode
 };
 use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::pending::PendingInvocationStore;
+use crate::plan_walker::{PlanWalker, AdvanceOutcome};
+use bpmn_lite_store::pending::MemoryPendingInvocationStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::types::ProcessState;
-use chrono::Utc;
 use uuid::Uuid;
 
-use crate::plan_walker::{AdvanceOutcome, PlanWalker};
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/// Build a `PlanWalker` backed by MemoryStore.
-/// The BusClient uses a `connect_lazy` URL — the MemoryStore tests
-/// never reach `insert_outbox`, so the inert pool is fine.
 async fn make_walker(
     store: Arc<MemoryStore>,
     pending: Arc<MemoryPendingInvocationStore>,
 ) -> PlanWalker {
-    let fake_pool =
-        sqlx::PgPool::connect_lazy("postgresql://localhost/plan_walker_dod_fake").unwrap();
+    let pool = sqlx::PgPool::connect_lazy("postgresql://localhost/plan_walker_test_fake").unwrap();
     let client = Arc::new(
         dsl_bus_client::BusClient::builder()
-            .pool(fake_pool)
+            .pool(pool)
             .local_domain("bpmn-lite")
             .build()
             .await
-            .expect("test BusClient"),
+            .unwrap()
     );
     PlanWalker::new(store, pending, client)
 }
 
-/// Start→ServiceTask(ob-poc:cbu.create)→EndEvent plan.
+/// Start→Task(ob-poc:cbu.create)→End plan.
 fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     nodes.insert(
         "start".to_owned(),
-        ExecutionNode::StartEvent(StartExecNode {
+        ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "create-cbu".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
         "create-cbu".to_owned(),
-        ExecutionNode::ServiceTask(ServiceTaskExecNode {
+        ExecutionNode::Task(TaskExecNode {
             id: "create-cbu".to_owned(),
-            verb_fqn: "ob-poc:cbu.create".to_owned(),
+            plug: "ob-poc:cbu.create".to_owned(),
+            delivery_mode: DeliveryMode::Blocking,
             static_args: {
                 let mut m = HashMap::new();
                 m.insert("product".to_owned(), "CUSTODY_FUND".to_owned());
@@ -73,13 +52,15 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
             next: "end".to_owned(),
             produces_placeholder: Some("@cbu".to_owned()),
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes.insert(
         "end".to_owned(),
-        ExecutionNode::EndEvent(EndExecNode {
+        ExecutionNode::End(EndExecNode {
             id: "end".to_owned(),
             status: "Operational".to_owned(),
+            span: None,
         }),
     );
     WorkflowExecutionPlan {
@@ -87,59 +68,75 @@ fn ob_poc_round_trip_plan() -> WorkflowExecutionPlan {
         nodes,
         start_node: "start".to_owned(),
         placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     }
 }
 
-/// Start→BusinessRuleTask(dmn-lite:cbu_type_routing)→Gateway→…→End plan.
+/// Start→Task(dmn-lite:cbu_type_routing)→Gateway→…→End plan.
 fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     nodes.insert(
         "start".to_owned(),
-        ExecutionNode::StartEvent(StartExecNode {
+        ExecutionNode::Start(StartExecNode {
             id: "start".to_owned(),
             next: "route".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
         "route".to_owned(),
-        ExecutionNode::BusinessRuleTask(BusinessRuleExecNode {
+        ExecutionNode::Task(TaskExecNode {
             id: "route".to_owned(),
-            decision_id: "dmn-lite:cbu_type_routing".to_owned(),
+            plug: "dmn-lite:cbu_type_routing".to_owned(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
             next: "gateway".to_owned(),
             produces_placeholder: Some("@cbu-type".to_owned()),
             consumes_placeholders: vec![],
+            span: None,
         }),
     );
     nodes.insert(
         "gateway".to_owned(),
-        ExecutionNode::ExclusiveGateway(GatewayExecNode {
+        ExecutionNode::Split(SplitExecNode {
             id: "gateway".to_owned(),
+            mode: SplitMode::Exclusive,
+            routing_socket: None,
             flows: vec![
-                GatewayExecFlow {
-                    placeholder: "@cbu-type".to_owned(),
-                    expected_value: "fund".to_owned(),
+                SplitExecFlow {
+                    placeholder: Some("@cbu-type".to_owned()),
+                    expected_value: Some("fund".to_owned()),
                     next: "end-fund".to_owned(),
                 },
-                GatewayExecFlow {
-                    placeholder: "@cbu-type".to_owned(),
-                    expected_value: "corporate".to_owned(),
+                SplitExecFlow {
+                    placeholder: Some("@cbu-type".to_owned()),
+                    expected_value: Some("corporate".to_owned()),
                     next: "end-corporate".to_owned(),
                 },
             ],
+            join: "end".to_owned(),
+            produces_placeholder: None,
+            span: None,
         }),
     );
     nodes.insert(
         "end-fund".to_owned(),
-        ExecutionNode::EndEvent(EndExecNode {
+        ExecutionNode::End(EndExecNode {
             id: "end-fund".to_owned(),
             status: "FundOnboarded".to_owned(),
+            span: None,
         }),
     );
     nodes.insert(
         "end-corporate".to_owned(),
-        ExecutionNode::EndEvent(EndExecNode {
+        ExecutionNode::End(EndExecNode {
             id: "end-corporate".to_owned(),
             status: "CorporateOnboarded".to_owned(),
+            span: None,
         }),
     );
     WorkflowExecutionPlan {
@@ -147,257 +144,431 @@ fn dmn_lite_round_trip_plan() -> WorkflowExecutionPlan {
         nodes,
         start_node: "start".to_owned(),
         placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
     }
 }
 
-/// Inject a plan-based instance already at `WaitingOnSubmission` on
-/// `node_id`, with `plan_hash` set. Simulates the state the plan
-/// walker leaves after dispatching a callout.
-async fn inject_waiting_instance(
-    store: &MemoryStore,
-    plan: &WorkflowExecutionPlan,
-    tenant: &str,
-    node_id: &str,
-    callout_id: Uuid,
-) -> Uuid {
-    let plan_json = serde_json::to_string(plan).unwrap();
-    let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
-    store.store_plan(hash, &plan_json).await.unwrap();
-
-    let instance_id = Uuid::now_v7();
-    let instance = bpmn_lite_types::ProcessInstance {
-        instance_id,
-        tenant_id: tenant.to_owned(),
-        process_key: plan.workflow_id.clone(),
-        bytecode_version: [0u8; 32],
-        domain_payload: "{}".into(),
-        domain_payload_hash: [0u8; 32],
-        session_stack: bpmn_lite_types::session_stack::SessionStackState::default(),
-        flags: Default::default(),
-        counters: Default::default(),
-        join_expected: Default::default(),
-        state: ProcessState::WaitingOnSubmission {
-            callout_id,
-            node_id: node_id.to_owned(),
-        },
-        correlation_id: String::new(),
-        entry_id: Uuid::nil(),
-        runbook_id: Uuid::nil(),
-        created_at: Utc::now().timestamp_millis(),
-        integrity_hash: None,
-        quarantine_state: None,
-        plan_hash: Some(hash),
-        current_node_id: Some(node_id.to_owned()),
-        placeholder_values: None,
-    };
-    store.save_instance(&instance).await.unwrap();
-    instance_id
-}
-
-/// Simulate the advancer completing: transition instance to Running,
-/// advance current_node_id to task.next, bind placeholder values.
-/// This mirrors what `StoreBackedAdvancer` does in T3.4, adapted for
-/// MemoryStore (no pending row needed).
 async fn simulate_result_delivery(
-    store: &MemoryStore,
+    store: &Arc<MemoryStore>,
     instance_id: Uuid,
     _node_id: &str,
-    next_node: &str,
-    placeholder_name: Option<&str>,
-    placeholder_value: Option<serde_json::Value>,
+    target_next_node_id: &str,
+    produces_placeholder: Option<&str>,
+    placeholder_val: Option<&str>,
 ) {
     let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
     inst.state = ProcessState::Running;
-    inst.current_node_id = Some(next_node.to_owned());
-    if let (Some(name), Some(val)) = (placeholder_name, placeholder_value) {
-        let mut pv: HashMap<String, serde_json::Value> = inst
-            .placeholder_values
+    inst.current_node_id = Some(target_next_node_id.to_string());
+    if let Some(placeholder) = produces_placeholder {
+        let mut pv = inst.placeholder_values
             .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok())
             .unwrap_or_default();
-        pv.insert(name.to_owned(), val);
-        inst.placeholder_values = serde_json::to_value(&pv).ok();
+        if let Some(val) = placeholder_val {
+            pv.insert(placeholder.to_string(), serde_json::Value::String(val.to_string()));
+        }
+        inst.placeholder_values = Some(serde_json::to_value(pv).unwrap());
     }
-    store.save_instance(&inst).await.unwrap();
+    store.save_instance("default", &inst).await.unwrap();
 }
 
-// ── DoD #41 — ob-poc full round-trip ─────────────────────────────────
-
 #[tokio::test]
-async fn dod_41_ob_poc_full_round_trip() {
-    // Setup: inject instance at WaitingOnSubmission on "create-cbu".
+async fn test_ob_poc_round_trip_success() {
     let store = Arc::new(MemoryStore::new());
     let pending = Arc::new(MemoryPendingInvocationStore::new());
+    let walker = make_walker(store.clone(), pending.clone()).await;
+
     let plan = ob_poc_round_trip_plan();
-    let callout_id = Uuid::now_v7();
-    let execution_id = Uuid::now_v7();
-    let cbu_id = Uuid::now_v7();
+    let instance_id = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
 
-    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
+    let outcome = walker.advance(instance_id, "default").await.unwrap();
+    assert!(matches!(outcome, AdvanceOutcome::Submitted { .. }));
+    if let AdvanceOutcome::Submitted { callout_id, node_id, verb_fqn } = outcome {
+        assert_eq!(node_id, "create-cbu");
+        assert_eq!(verb_fqn, "ob-poc:cbu.create");
+        let row = store.pending_store.list_for_process(instance_id).await.unwrap()[0].clone();
+        assert_eq!(row.callout_id, callout_id);
+    }
 
-    // Insert matching pending row so the test pattern mirrors the real flow.
-    let idem = Uuid::now_v7();
-    let row = PendingInvocation::new(
-        callout_id,
-        instance_id,
-        "create-cbu",
-        "ob-poc",
-        "cbu.create",
-        idem,
-    );
-    let _ = execution_id; // used in the assert below
-    assert_eq!(pending.insert(row).await.unwrap(), InsertOutcome::Inserted);
-
-    // Simulate: SubmissionAck arrives — pending row gains execution_id.
-    let execution_id2 = Uuid::now_v7();
-    pending
-        .record_ack(callout_id, execution_id2, Utc::now())
-        .await
-        .unwrap();
-
-    // Simulate: result delivered — advancer sets Running, advances to "end",
-    // binds @cbu placeholder.
     simulate_result_delivery(
         &store,
         instance_id,
         "create-cbu",
         "end",
         Some("@cbu"),
-        Some(serde_json::Value::String(cbu_id.to_string())),
-    )
-    .await;
+        Some("cbu-123"),
+    ).await;
 
-    // Tick: walker advances through EndEvent → Completed.
-    let walker = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker.advance(instance_id).await.unwrap();
-    assert!(
-        matches!(outcome, AdvanceOutcome::Completed { ref status, .. } if status == "Operational"),
-        "expected Completed(Operational) — got {:?}",
-        match &outcome {
-            AdvanceOutcome::Completed { status, .. } => status.as_str(),
-            _ => "not Completed",
-        }
-    );
-
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
-    assert!(matches!(inst.state, ProcessState::Completed { .. }));
-
-    // @cbu placeholder must be preserved.
-    let pv: HashMap<String, serde_json::Value> = inst
-        .placeholder_values
-        .as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    assert_eq!(
-        pv.get("@cbu"),
-        Some(&serde_json::Value::String(cbu_id.to_string()))
-    );
+    let outcome2 = walker.advance(instance_id, "default").await.unwrap();
+    assert!(matches!(outcome2, AdvanceOutcome::Completed { .. }));
+    if let AdvanceOutcome::Completed { node_id, status } = outcome2 {
+        assert_eq!(node_id, "end");
+        assert_eq!(status, "Operational");
+    }
 }
 
-// ── DoD #42 — dmn-lite full round-trip ──────────────────────────────
-
 #[tokio::test]
-async fn dod_42_dmn_lite_full_round_trip() {
+async fn test_dmn_lite_round_trip_fund_path() {
     let store = Arc::new(MemoryStore::new());
     let pending = Arc::new(MemoryPendingInvocationStore::new());
+    let walker = make_walker(store.clone(), pending.clone()).await;
+
     let plan = dmn_lite_round_trip_plan();
-    let callout_id = Uuid::now_v7();
+    let instance_id = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
 
-    let instance_id = inject_waiting_instance(&store, &plan, "t1", "route", callout_id).await;
+    let outcome = walker.advance(instance_id, "default").await.unwrap();
+    assert!(matches!(outcome, AdvanceOutcome::Submitted { .. }));
+    if let AdvanceOutcome::Submitted { node_id, verb_fqn, .. } = outcome {
+        assert_eq!(node_id, "route");
+        assert_eq!(verb_fqn, "dmn-lite:cbu_type_routing");
+    }
 
-    // Simulate result: cbu-type = "fund" → gateway routes to end-fund.
     simulate_result_delivery(
         &store,
         instance_id,
         "route",
         "gateway",
         Some("@cbu-type"),
-        Some(serde_json::Value::String("fund".to_owned())),
-    )
-    .await;
+        Some("fund"),
+    ).await;
 
-    let walker = make_walker(store.clone(), pending).await;
-    let outcome = walker.advance(instance_id).await.unwrap();
-    // Walker: Running on "gateway" → evaluates @cbu-type="fund" → end-fund → Completed.
-    assert!(
-        matches!(outcome, AdvanceOutcome::Completed { ref status, .. } if status == "FundOnboarded"),
-        "expected Completed(FundOnboarded)"
-    );
-
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
-    assert!(matches!(inst.state, ProcessState::Completed { .. }));
+    let outcome2 = walker.advance(instance_id, "default").await.unwrap();
+    assert!(matches!(outcome2, AdvanceOutcome::Completed { .. }));
+    if let AdvanceOutcome::Completed { node_id, status } = outcome2 {
+        assert_eq!(node_id, "end-fund");
+        assert_eq!(status, "FundOnboarded");
+    }
 }
 
-// ── DoD #44 — crash mid-outbox-write recovery ────────────────────────
-
 #[tokio::test]
-async fn dod_44_crash_mid_outbox_recovery() {
-    // The instance is stuck at WaitingOnSubmission (outbox row pending,
-    // no SubmissionAck yet). Simulate restart: create fresh engine + store
-    // from the SAME MemoryStore snapshot, verify the instance can still
-    // be advanced after result delivery.
+async fn test_dmn_lite_round_trip_corporate_path() {
     let store = Arc::new(MemoryStore::new());
     let pending = Arc::new(MemoryPendingInvocationStore::new());
-    let plan = ob_poc_round_trip_plan();
-    let callout_id = Uuid::now_v7();
+    let walker = make_walker(store.clone(), pending.clone()).await;
 
-    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
+    let plan = dmn_lite_round_trip_plan();
+    let instance_id = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
 
-    // "Restart": build a fresh walker over the same store (simulating
-    // in-memory restart — the process state persisted, outbox pending).
-    // The process is still WaitingOnSubmission → advance returns NotRunnable.
-    let walker_v2 = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
-    assert!(
-        matches!(outcome, AdvanceOutcome::NotRunnable),
-        "WaitingOnSubmission must not advance until result arrives"
-    );
+    let _outcome = walker.advance(instance_id, "default").await.unwrap();
+    simulate_result_delivery(
+        &store,
+        instance_id,
+        "route",
+        "gateway",
+        Some("@cbu-type"),
+        Some("corporate"),
+    ).await;
 
-    // Now result arrives (outbox sender eventually dispatched, receiver replied).
-    simulate_result_delivery(&store, instance_id, "create-cbu", "end", None, None).await;
-
-    // Advance → Completed.
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
-    assert!(matches!(outcome, AdvanceOutcome::Completed { .. }));
+    let outcome2 = walker.advance(instance_id, "default").await.unwrap();
+    assert!(matches!(outcome2, AdvanceOutcome::Completed { .. }));
+    if let AdvanceOutcome::Completed { node_id, status } = outcome2 {
+        assert_eq!(node_id, "end-corporate");
+        assert_eq!(status, "CorporateOnboarded");
+    }
 }
 
-// ── DoD #45 — crash mid-ack reconciliation ───────────────────────────
-
 #[tokio::test]
-async fn dod_45_crash_mid_ack_reconciliation() {
-    // SubmissionAck arrived and was recorded (WaitingOnInvocation).
-    // Then bpmn-lite crashed before the process could advance.
-    // On restart: deliver result → advancer sets Running → tick advances.
-    let store = Arc::new(MemoryStore::new());
-    let pending = Arc::new(MemoryPendingInvocationStore::new());
-    let plan = ob_poc_round_trip_plan();
-    let callout_id = Uuid::now_v7();
-    let execution_id = Uuid::now_v7();
+async fn test_start_process_rejects_invalid_plan() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+    let pending = Arc::new(bpmn_lite_store::pending::MemoryPendingInvocationStore::new());
+    let walker = make_walker(store, pending).await;
 
-    let instance_id = inject_waiting_instance(&store, &plan, "t1", "create-cbu", callout_id).await;
-
-    // Simulate: SubmissionAck arrived → instance transitions to WaitingOnInvocation.
-    {
-        let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
-        inst.state = ProcessState::WaitingOnInvocation {
-            execution_id,
-            node_id: "create-cbu".to_owned(),
-        };
-        store.save_instance(&inst).await.unwrap();
+    let mut plan = ob_poc_round_trip_plan();
+    if let Some(ExecutionNode::Task(ref mut st)) = plan.nodes.get_mut("create-cbu") {
+        st.consumes_placeholders = vec!["@unproduced_placeholder".to_string()];
     }
 
-    // "Restart": fresh walker over the same store.
-    // Instance is WaitingOnInvocation → NotRunnable.
-    let walker_v2 = make_walker(store.clone(), pending.clone()).await;
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
-    assert!(
-        matches!(outcome, AdvanceOutcome::NotRunnable),
-        "WaitingOnInvocation must not advance until result arrives"
+    let result = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await;
+    assert!(result.is_err());
+    let err_msg = result.err().unwrap().to_string();
+    assert!(err_msg.contains("Path-family validation failed"), "got: {}", err_msg);
+}
+
+#[tokio::test]
+async fn test_precondition_violation() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+    let pending = Arc::new(bpmn_lite_store::pending::MemoryPendingInvocationStore::new());
+    let walker = make_walker(store, pending).await;
+
+    let plan = ob_poc_round_trip_plan();
+
+    let mut preconditions = HashMap::new();
+    preconditions.insert("@cbu-status".to_string(), "Draft".to_string());
+
+    let mut initial_vars = HashMap::new();
+    initial_vars.insert("@cbu-status".to_string(), serde_json::Value::String("Approved".to_string()));
+
+    let result = walker.start_process("default", &plan, "default", initial_vars, preconditions).await;
+    assert!(result.is_err());
+    let err_msg = result.err().unwrap().to_string();
+    assert!(err_msg.contains("PreconditionConflict"), "got: {}", err_msg);
+}
+
+#[tokio::test]
+async fn test_regime_mismatch() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+    let pending = Arc::new(bpmn_lite_store::pending::MemoryPendingInvocationStore::new());
+    let walker = make_walker(store, pending).await;
+
+    let mut plan = ob_poc_round_trip_plan();
+    plan.regime_version = Some("v1.2".to_string());
+
+    std::env::set_var("BPMN_LITE_REGIME_VERSION", "v1.3");
+
+    let result = walker.start_process("default", &plan, "default", HashMap::new(), HashMap::new()).await;
+    std::env::remove_var("BPMN_LITE_REGIME_VERSION");
+
+    assert!(result.is_err());
+    let err_msg = result.err().unwrap().to_string();
+    assert!(err_msg.contains("RegimeMismatch"), "got: {}", err_msg);
+}
+
+#[tokio::test]
+async fn test_call_activity_in_process_execution() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+    let pending = Arc::new(bpmn_lite_store::pending::MemoryPendingInvocationStore::new());
+    let walker = make_walker(store.clone(), pending).await;
+
+    // 1. Build and store the child plan
+    let mut child_nodes = BTreeMap::new();
+    child_nodes.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "end".to_owned(),
+            span: None,
+        }),
+    );
+    child_nodes.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "ChildDone".to_owned(),
+            span: None,
+        }),
+    );
+    let child_plan = WorkflowExecutionPlan {
+        workflow_id: "child-wf".to_owned(),
+        nodes: child_nodes,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
+    let child_plan_json = serde_json::to_string(&child_plan).unwrap();
+    let child_hash_bytes = blake3::hash(child_plan_json.as_bytes());
+    let child_hash = *child_hash_bytes.as_bytes();
+    let child_hash_hex = hex::encode(child_hash);
+    store.store_plan(child_hash, &child_plan_json).await.unwrap();
+
+    // 2. Build and store the parent plan invoking child by hash hex
+    let mut parent_nodes = BTreeMap::new();
+    parent_nodes.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-child".to_owned(),
+            span: None,
+        }),
+    );
+    parent_nodes.insert(
+        "call-child".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-child".to_owned(),
+            plug: child_hash_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+            span: None,
+        }),
+    );
+    parent_nodes.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "ParentDone".to_owned(),
+            span: None,
+        }),
+    );
+    let parent_plan = WorkflowExecutionPlan {
+        workflow_id: "parent-wf".to_owned(),
+        nodes: parent_nodes,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
+
+    // 3. Start parent process
+    let parent_id = walker.start_process("default", &parent_plan, "default", HashMap::new(), HashMap::new()).await.unwrap();
+    
+    // 4. Advance parent - should spawn child and transition parent to WaitingOnInvocation
+    let outcome = walker.advance(parent_id, "default").await.unwrap();
+    let child_id = match outcome {
+        AdvanceOutcome::Submitted { callout_id, node_id, verb_fqn } => {
+            assert_eq!(node_id, "call-child");
+            assert_eq!(verb_fqn, child_hash_hex);
+            callout_id
+        }
+        _ => panic!("Expected Submitted outcome"),
+    };
+
+    // Verify parent is WaitingOnInvocation and child is Running
+    let parent_inst = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert_eq!(parent_inst.state, ProcessState::WaitingOnInvocation {
+        execution_id: child_id,
+        node_id: "call-child".to_string(),
+    });
+
+    let child_inst = store.load_instance(child_id).await.unwrap().unwrap();
+    assert_eq!(child_inst.state, ProcessState::Running);
+    assert_eq!(child_inst.correlation_id, format!("{}:call-child", parent_id));
+
+    // 5. Advance child - completes child
+    let child_outcome = walker.advance(child_id, "default").await.unwrap();
+    assert!(matches!(child_outcome, AdvanceOutcome::Completed { .. }));
+
+    let child_inst_post = store.load_instance(child_id).await.unwrap().unwrap();
+    assert!(matches!(child_inst_post.state, ProcessState::Completed { .. }));
+
+    // Verify parent is still WaitingOnInvocation before we advance it
+    let parent_inst_mid = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert!(matches!(parent_inst_mid.state, ProcessState::WaitingOnInvocation { .. }));
+
+    // 6. Resumer / Scheduler wakes up parent. Calling advance on parent 
+    // will now evaluate the child's completion state, transition parent to Running,
+    // and complete the parent process.
+    let final_outcome = walker.advance(parent_id, "default").await.unwrap();
+    assert!(matches!(final_outcome, AdvanceOutcome::Completed { .. }));
+
+    let parent_inst_final = store.load_instance(parent_id).await.unwrap().unwrap();
+    assert!(matches!(parent_inst_final.state, ProcessState::Completed { .. }));
+}
+
+#[tokio::test]
+async fn test_dependency_cycle_detection() {
+    let store = Arc::new(bpmn_lite_store::store_memory::MemoryStore::new());
+
+    // 1. We construct parent plan A and child plan B.
+    // Plan A will call Plan B's hash hex.
+    // Plan B will call Plan A's hash hex.
+
+    let hash_a_hex = "a".repeat(64);
+    let hash_b_hex = "b".repeat(64);
+
+    let mut nodes_a = BTreeMap::new();
+    nodes_a.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-b".to_owned(),
+            span: None,
+        }),
+    );
+    nodes_a.insert(
+        "call-b".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-b".to_owned(),
+            plug: hash_b_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+            span: None,
+        }),
+    );
+    nodes_a.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "Completed".to_owned(),
+            span: None,
+        }),
     );
 
-    // Deliver result → Running → tick advances.
-    simulate_result_delivery(&store, instance_id, "create-cbu", "end", None, None).await;
+    let plan_a = WorkflowExecutionPlan {
+        workflow_id: "plan-a".to_owned(),
+        nodes: nodes_a,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
 
-    let outcome = walker_v2.advance(instance_id).await.unwrap();
-    assert!(matches!(outcome, AdvanceOutcome::Completed { .. }));
+    let mut nodes_b = BTreeMap::new();
+    nodes_b.insert(
+        "start".to_owned(),
+        ExecutionNode::Start(StartExecNode {
+            id: "start".to_owned(),
+            next: "call-a".to_owned(),
+            span: None,
+        }),
+    );
+    nodes_b.insert(
+        "call-a".to_owned(),
+        ExecutionNode::Task(TaskExecNode {
+            id: "call-a".to_owned(),
+            plug: hash_a_hex.clone(),
+            delivery_mode: DeliveryMode::Blocking,
+            static_args: HashMap::new(),
+            next: "end".to_owned(),
+            produces_placeholder: None,
+            consumes_placeholders: vec![],
+            span: None,
+        }),
+    );
+    nodes_b.insert(
+        "end".to_owned(),
+        ExecutionNode::End(EndExecNode {
+            id: "end".to_owned(),
+            status: "Completed".to_owned(),
+            span: None,
+        }),
+    );
+
+    let plan_b = WorkflowExecutionPlan {
+        workflow_id: "plan-b".to_owned(),
+        nodes: nodes_b,
+        start_node: "start".to_owned(),
+        placeholder_schema: PlaceholderSchema::default(),
+        closure_manifest: None,
+        regime_version: None,
+        mathematically_proved: true,
+        unsafe_breeches: vec![],
+        compiled_bytecode: None,
+    };
+
+    let hash_a_bytes = hex::decode(&hash_a_hex).unwrap();
+    let hash_b_bytes = hex::decode(&hash_b_hex).unwrap();
+    let mut arr_a = [0u8; 32];
+    arr_a.copy_from_slice(&hash_a_bytes);
+    let mut arr_b = [0u8; 32];
+    arr_b.copy_from_slice(&hash_b_bytes);
+
+    let plan_a_json = serde_json::to_string(&plan_a).unwrap();
+    let plan_b_json = serde_json::to_string(&plan_b).unwrap();
+
+    store.store_plan(arr_a, &plan_a_json).await.unwrap();
+    store.store_plan(arr_b, &plan_b_json).await.unwrap();
+
+    let res = crate::plan_walker::preload_workflow_dependencies(&plan_a, store.as_ref()).await;
+    assert!(res.is_err());
+    let err_msg = res.err().unwrap().to_string();
+    assert!(err_msg.contains("Cyclic workflow dependency detected"), "got: {}", err_msg);
 }

@@ -30,40 +30,37 @@ pub struct ContractRegistry {
     contracts: HashMap<String, VerbContract>,
     known_workflow_inputs: HashSet<String>,
 }
-
-// ── YAML format for deserialization ──
-
-#[derive(Debug, Deserialize)]
-struct ContractRegistryYaml {
-    #[serde(default)]
-    known_workflow_inputs: Vec<String>,
-    #[serde(default)]
-    contracts: Vec<VerbContractYaml>,
-}
-
-#[derive(Debug, Deserialize)]
-struct VerbContractYaml {
-    task_type: String,
-    #[serde(default)]
-    reads_flags: Vec<String>,
-    #[serde(default)]
-    writes_flags: Vec<String>,
-    #[serde(default)]
-    may_raise_errors: Vec<String>,
-    #[serde(default)]
-    produces_correlation: Vec<CorrelationContractYaml>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CorrelationContractYaml {
-    key_source: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
 impl ContractRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn from_manifest(m: &dsl_manifest::Manifest) -> Self {
+        let mut registry = ContractRegistry::default();
+        for verb in &m.verbs {
+            let mut reads_flags = HashSet::new();
+            let mut writes_flags = HashSet::new();
+
+            for input in &verb.signature.inputs {
+                if input.type_name.to_lowercase() == "bool" || input.type_name.to_lowercase() == "boolean" {
+                    reads_flags.insert(input.name.clone());
+                }
+            }
+            if let Some(ref output) = verb.signature.output {
+                if let Some(ref produces) = output.produces {
+                    writes_flags.insert(produces.clone());
+                }
+            }
+
+            registry.register(VerbContract {
+                task_type: verb.id.clone(),
+                reads_flags,
+                writes_flags,
+                may_raise_errors: HashSet::from(["*".to_string()]),
+                produces_correlation: vec![],
+            });
+        }
+        registry
     }
 
     /// Register a contract for a task type. Replaces any existing contract.
@@ -91,52 +88,6 @@ impl ContractRegistry {
         self.known_workflow_inputs.insert(flag.into());
     }
 
-    /// Builder: set all known workflow inputs at once.
-    pub fn with_known_inputs(
-        mut self,
-        inputs: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        self.known_workflow_inputs = inputs.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Parse a `ContractRegistry` from YAML.
-    ///
-    /// ```yaml
-    /// known_workflow_inputs: [orch_high_risk, document_request_id]
-    /// contracts:
-    ///   - task_type: check_sanctions
-    ///     reads_flags: [case_created]
-    ///     writes_flags: [sanctions_clear]
-    ///     may_raise_errors: [SANCTIONS_HIT, TIMEOUT]
-    ///     produces_correlation:
-    ///       - key_source: document_request_id
-    /// ```
-    pub fn from_yaml_str(yaml: &str) -> Result<Self, serde_yaml::Error> {
-        let raw: ContractRegistryYaml = serde_yaml::from_str(yaml)?;
-        let mut registry = ContractRegistry {
-            known_workflow_inputs: raw.known_workflow_inputs.into_iter().collect(),
-            contracts: HashMap::new(),
-        };
-        for c in raw.contracts {
-            let contract = VerbContract {
-                task_type: c.task_type,
-                reads_flags: c.reads_flags.into_iter().collect(),
-                writes_flags: c.writes_flags.into_iter().collect(),
-                may_raise_errors: c.may_raise_errors.into_iter().collect(),
-                produces_correlation: c
-                    .produces_correlation
-                    .into_iter()
-                    .map(|cc| CorrelationContract {
-                        key_source: cc.key_source,
-                        description: cc.description,
-                    })
-                    .collect(),
-            };
-            registry.register(contract);
-        }
-        Ok(registry)
-    }
 
     /// Iterate over all registered contracts.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &VerbContract)> {
@@ -166,47 +117,11 @@ mod tests {
 
     #[test]
     fn test_known_inputs() {
-        let reg =
-            ContractRegistry::new().with_known_inputs(["orch_high_risk", "document_request_id"]);
+        let mut reg = ContractRegistry::new();
+        reg.add_known_input("orch_high_risk");
+        reg.add_known_input("document_request_id");
         assert!(reg.is_known_input("orch_high_risk"));
         assert!(reg.is_known_input("document_request_id"));
         assert!(!reg.is_known_input("unknown"));
-    }
-
-    #[test]
-    fn test_from_yaml() {
-        let yaml = r#"
-known_workflow_inputs: [orch_high_risk, document_request_id]
-contracts:
-  - task_type: check_sanctions
-    reads_flags: [case_created]
-    writes_flags: [sanctions_clear]
-    may_raise_errors: [SANCTIONS_HIT, TIMEOUT]
-    produces_correlation:
-      - key_source: document_request_id
-        description: "Links to document request"
-  - task_type: collect_docs
-    reads_flags: []
-    writes_flags: [docs_collected]
-    may_raise_errors: ["*"]
-    produces_correlation: []
-"#;
-        let reg = ContractRegistry::from_yaml_str(yaml).unwrap();
-        assert!(reg.is_known_input("orch_high_risk"));
-        assert!(reg.has("check_sanctions"));
-        assert!(reg.has("collect_docs"));
-
-        let sanctions = reg.get("check_sanctions").unwrap();
-        assert!(sanctions.reads_flags.contains("case_created"));
-        assert!(sanctions.writes_flags.contains("sanctions_clear"));
-        assert!(sanctions.may_raise_errors.contains("SANCTIONS_HIT"));
-        assert_eq!(sanctions.produces_correlation.len(), 1);
-        assert_eq!(
-            sanctions.produces_correlation[0].key_source,
-            "document_request_id"
-        );
-
-        let docs = reg.get("collect_docs").unwrap();
-        assert!(docs.may_raise_errors.contains("*"));
     }
 }

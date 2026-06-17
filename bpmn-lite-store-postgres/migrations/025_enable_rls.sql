@@ -73,7 +73,7 @@ CREATE POLICY bpmn_lite_tenant_isolation ON ffi_invocation_record
 -- incidents.tenant_id was not added in earlier migrations; add it now.
 
 ALTER TABLE incidents
-    ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL;
 
 ALTER TABLE incidents ENABLE ROW LEVEL SECURITY;
 
