@@ -380,11 +380,13 @@ impl Vm {
                     .await?;
 
                 if matches!(buffer_result, BufferMessageResult::Inserted) {
-                    pending_events.push(RuntimeEvent::MessageBuffered {
-                        message_name: message_name.clone(),
-                        correlation_key: correlation_key.clone(),
-                        msg_id,
-                        expires_at: now_ms() + PUBLISHED_MESSAGE_TTL_MS as i64,
+                    tx_ctx.add_op(TickOperation::AppendEvent {
+                        event: RuntimeEvent::MessageBuffered {
+                            message_name: message_name.clone(),
+                            correlation_key: correlation_key.clone(),
+                            msg_id,
+                            expires_at: now_ms() + PUBLISHED_MESSAGE_TTL_MS as i64,
+                        },
                     });
                 }
 

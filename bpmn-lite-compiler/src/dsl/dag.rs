@@ -35,7 +35,6 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
     if let Some(cycle) = find_cycle(&plan.start_node, &adj, plan) {
         errors.push(DagError { message: format!("cycle detected: {}", cycle.join(" → ")) });
     }
-    }
 
     // Check all nodes reachable from start
     let reachable = bfs_reachable(&plan.start_node, &adj);
