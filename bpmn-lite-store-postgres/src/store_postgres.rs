@@ -1856,7 +1856,25 @@ impl ProcessStore for PostgresProcessStore {
         let events = events.to_vec();
 
         self.execute_tenant_scoped(&tenant_id, &lease_owner, |tx| Box::pin(async move {
-            // 1. UPSERT process_instances
+            // 1. INSERT dedupe_cache ON CONFLICT DO NOTHING (atomic-insert-wins gate)
+            let completion_json = serde_json::to_value(&completion)?;
+            let dedupe_result = sqlx::query(
+                r#"
+                INSERT INTO dedupe_cache (job_key, completion)
+                VALUES ($1, $2)
+                ON CONFLICT (job_key) DO NOTHING
+                "#,
+            )
+            .bind(&completion.job_key)
+            .bind(&completion_json)
+            .execute(&mut *tx.tx)
+            .await?;
+
+            if dedupe_result.rows_affected() == 0 {
+                return Ok(());
+            }
+
+            // 2. UPSERT process_instances
             let flags = serde_json::to_value(&instance.flags)?;
             let counters = serde_json::to_value(&instance.counters)?;
             let join_expected = serde_json::to_value(&instance.join_expected)?;
@@ -1903,20 +1921,6 @@ impl ProcessStore for PostgresProcessStore {
             .await?;
 
             tx.assert_rows_affected(&result, 1, "atomic_complete: process_instances update")?;
-
-            // 2. INSERT dedupe_cache ON CONFLICT
-            let completion_json = serde_json::to_value(&completion)?;
-            sqlx::query(
-                r#"
-                INSERT INTO dedupe_cache (job_key, completion)
-                VALUES ($1, $2)
-                ON CONFLICT (job_key) DO UPDATE SET completion = EXCLUDED.completion
-                "#,
-            )
-            .bind(&completion.job_key)
-            .bind(&completion_json)
-            .execute(&mut *tx.tx)
-            .await?;
 
             // 3. INSERT payload_history ON CONFLICT
             sqlx::query(
@@ -5058,6 +5062,70 @@ mod tests {
         let second_res = store.commit_tick(iid, tenant_id, "owner-second", &second_ops).await;
         assert!(second_res.is_err(), "Second delivery must fail because row is already gone");
         assert!(second_res.unwrap_err().to_string().contains("already consumed"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_atomic_complete_idempotency() {
+        let (_pool, store, _lock) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+        let lease_owner = "owner-a";
+
+        // Seed instance
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        inst.state = ProcessState::Running;
+        store.save_instance("default", &inst).await.unwrap();
+
+        // Claim lease
+        let claimed = store.claim_instance_for_transition(tenant_id, iid, lease_owner, 30000).await.unwrap();
+        assert!(claimed);
+
+        let job_key = format!("{}-job", iid);
+        let completion = JobCompletion {
+            job_key: job_key.clone(),
+            domain_payload: r#"{"done":true}"#.to_string(),
+            expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
+            orch_flags: BTreeMap::new(),
+        };
+
+        // First completion call: advance state to Completed { at: 11111 }, add one event
+        inst.state = ProcessState::Completed { at: 11111 };
+        let events1 = vec![RuntimeEvent::JobCompleted {
+            job_key: job_key.clone(),
+            payload_hash_before: [0; 32],
+            payload_hash_after: [1; 32],
+            orch_flags_out: BTreeMap::new(),
+            pc_next: 10,
+        }];
+        store.atomic_complete(tenant_id, lease_owner, &inst, &completion, &events1).await.unwrap();
+
+        // Load and verify first completion applied
+        let loaded1 = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded1.state, ProcessState::Completed { at: 11111 });
+        
+        let loaded_events1 = store.read_events(iid, 1).await.unwrap();
+        assert_eq!(loaded_events1.len(), 1);
+
+        // Second completion call: try to advance state to Completed { at: 22222 }, add another event
+        let mut inst2 = loaded1.clone();
+        inst2.state = ProcessState::Completed { at: 22222 };
+        let events2 = vec![RuntimeEvent::JobCompleted {
+            job_key: job_key.clone(),
+            payload_hash_before: [1; 32],
+            payload_hash_after: [2; 32],
+            orch_flags_out: BTreeMap::new(),
+            pc_next: 11,
+        }];
+        store.atomic_complete(tenant_id, lease_owner, &inst2, &completion, &events2).await.unwrap();
+
+        // Load and verify second completion was a NO-OP: state remains Completed { at: 11111 } and event count remains 1
+        let loaded2 = store.load_instance(iid).await.unwrap().unwrap();
+        assert_eq!(loaded2.state, ProcessState::Completed { at: 11111 });
+        
+        let loaded_events2 = store.read_events(iid, 1).await.unwrap();
+        assert_eq!(loaded_events2.len(), 1);
     }
 
     /// E-invariant F2 negative test: a non-dedup commit_tick failure on the advance path (e.g. lease fence failure)
