@@ -210,12 +210,12 @@ impl ProcessStore for MemoryStore {
 
     // ── Dedupe cache ──
 
-    async fn dedupe_get(&self, key: &str) -> Result<Option<JobCompletion>> {
+    async fn dedupe_get(&self, _tenant_id: &str, key: &str) -> Result<Option<JobCompletion>> {
         let r = self.inner.read().await;
         Ok(r.dedupe.get(key).map(|(c, _)| c.clone()))
     }
 
-    async fn dedupe_put(&self, key: &str, completion: &JobCompletion) -> Result<()> {
+    async fn dedupe_put(&self, _tenant_id: &str, key: &str, completion: &JobCompletion) -> Result<()> {
         let mut w = self.inner.write().await;
         w.dedupe
             .insert(key.to_string(), (completion.clone(), Instant::now()));
@@ -1344,10 +1344,10 @@ mod tests {
             orch_flags: BTreeMap::new(),
         };
 
-        assert!(store.dedupe_get("job-abc").await.unwrap().is_none());
-        store.dedupe_put("job-abc", &completion).await.unwrap();
+        assert!(store.dedupe_get("default", "job-abc").await.unwrap().is_none());
+        store.dedupe_put("default", "job-abc", &completion).await.unwrap();
 
-        let cached = store.dedupe_get("job-abc").await.unwrap().unwrap();
+        let cached = store.dedupe_get("default", "job-abc").await.unwrap().unwrap();
         assert_eq!(cached.job_key, "job-abc");
         assert_eq!(cached.domain_payload, r#"{"done":true}"#);
     }

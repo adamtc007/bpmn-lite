@@ -48,8 +48,8 @@ pub trait ProcessStore: Send + Sync {
 
     // ── Dedupe cache (engine-side) ──
 
-    async fn dedupe_get(&self, key: &str) -> Result<Option<JobCompletion>>;
-    async fn dedupe_put(&self, key: &str, completion: &JobCompletion) -> Result<()>;
+    async fn dedupe_get(&self, tenant_id: &str, key: &str) -> Result<Option<JobCompletion>>;
+    async fn dedupe_put(&self, tenant_id: &str, key: &str, completion: &JobCompletion) -> Result<()>;
     async fn record_message_delivery(
         &self,
         tenant_id: &str,

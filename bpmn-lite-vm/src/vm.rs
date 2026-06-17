@@ -182,7 +182,7 @@ impl Vm {
                 );
 
                 // Check dedupe
-                if let Some(cached) = self.store.dedupe_get(&job_key).await? {
+                if let Some(cached) = self.store.dedupe_get(&instance.tenant_id, &job_key).await? {
                     // Apply cached completion
                     apply_completion(instance, &cached);
                     // Push retc values (we push a single bool for simplicity)
@@ -1403,7 +1403,7 @@ mod tests {
         assert!(resumed.is_some());
         apply_completion(&mut instance, &completion);
         store
-            .dedupe_put(&completion.job_key, &completion)
+            .dedupe_put(&instance.tenant_id, &completion.job_key, &completion)
             .await
             .unwrap();
 

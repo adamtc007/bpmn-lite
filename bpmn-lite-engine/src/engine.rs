@@ -1425,17 +1425,17 @@ impl BpmnLiteEngine {
     ) -> Result<()> {
         let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
 
-        // ── Guard 1: dedupe ──
-        if self.store.dedupe_get(job_key).await?.is_some() {
-            return Ok(());
-        }
-
         // ── Guard 2: instance state ──
         let mut instance = self
             .store
             .load_instance(instance_id)
             .await?
             .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
+
+        // ── Guard 1: dedupe ──
+        if self.store.dedupe_get(&instance.tenant_id, job_key).await?.is_some() {
+            return Ok(());
+        }
 
         if instance.state.is_terminal() {
             self.emit_late(

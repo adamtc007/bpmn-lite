@@ -681,36 +681,44 @@ impl ProcessStore for PostgresProcessStore {
 
     // ── Dedupe cache ──
 
-    async fn dedupe_get(&self, key: &str) -> Result<Option<JobCompletion>> {
-        let row = sqlx::query("SELECT completion FROM dedupe_cache WHERE job_key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
+    async fn dedupe_get(&self, tenant_id: &str, key: &str) -> Result<Option<JobCompletion>> {
+        let key = key.to_string();
+        self.with_tenant(tenant_id, |tx| Box::pin(async move {
+            let row = sqlx::query("SELECT completion FROM dedupe_cache WHERE job_key = $1")
+                .bind(&key)
+                .fetch_optional(&mut **tx)
+                .await?;
 
-        match row {
-            None => Ok(None),
-            Some(row) => {
-                use sqlx::Row;
-                let json: serde_json::Value = row.get("completion");
-                Ok(Some(serde_json::from_value(json)?))
+            match row {
+                None => Ok(None),
+                Some(row) => {
+                    use sqlx::Row;
+                    let json: serde_json::Value = row.get("completion");
+                    Ok(Some(serde_json::from_value(json)?))
+                }
             }
-        }
+        })).await
     }
 
-    async fn dedupe_put(&self, key: &str, completion: &JobCompletion) -> Result<()> {
+    async fn dedupe_put(&self, tenant_id: &str, key: &str, completion: &JobCompletion) -> Result<()> {
         let json = serde_json::to_value(completion)?;
-        sqlx::query(
-            r#"
-            INSERT INTO dedupe_cache (job_key, completion)
-            VALUES ($1, $2)
-            ON CONFLICT (job_key) DO UPDATE SET completion = EXCLUDED.completion
-            "#,
-        )
-        .bind(key)
-        .bind(&json)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let tenant_id_str = tenant_id.to_string();
+        let key = key.to_string();
+        self.with_tenant(tenant_id, |tx| Box::pin(async move {
+            sqlx::query(
+                r#"
+                INSERT INTO dedupe_cache (job_key, completion, tenant_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (job_key) DO UPDATE SET completion = EXCLUDED.completion, tenant_id = EXCLUDED.tenant_id
+                "#,
+            )
+            .bind(&key)
+            .bind(&json)
+            .bind(&tenant_id_str)
+            .execute(&mut **tx)
+            .await?;
+            Ok(())
+        })).await
     }
 
     async fn record_message_delivery(
@@ -1860,13 +1868,14 @@ impl ProcessStore for PostgresProcessStore {
             let completion_json = serde_json::to_value(&completion)?;
             let dedupe_result = sqlx::query(
                 r#"
-                INSERT INTO dedupe_cache (job_key, completion)
-                VALUES ($1, $2)
+                INSERT INTO dedupe_cache (job_key, completion, tenant_id)
+                VALUES ($1, $2, $3)
                 ON CONFLICT (job_key) DO NOTHING
                 "#,
             )
             .bind(&completion.job_key)
             .bind(&completion_json)
+            .bind(&tx.tenant_id)
             .execute(&mut *tx.tx)
             .await?;
 
@@ -3332,15 +3341,41 @@ mod tests {
             orch_flags: BTreeMap::new(),
         };
 
-        assert!(store.dedupe_get("job-abc").await.unwrap().is_none());
-        store.dedupe_put("job-abc", &completion).await.unwrap();
+        assert!(store.dedupe_get("default", "job-abc").await.unwrap().is_none());
+        store.dedupe_put("default", "job-abc", &completion).await.unwrap();
 
-        let cached = store.dedupe_get("job-abc").await.unwrap().unwrap();
+        let cached = store.dedupe_get("default", "job-abc").await.unwrap().unwrap();
         assert_eq!(cached.job_key, "job-abc");
         assert_eq!(cached.domain_payload, r#"{"done":true}"#);
 
         // Idempotent put
-        store.dedupe_put("job-abc", &completion).await.unwrap();
+        store.dedupe_put("default", "job-abc", &completion).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_pg_dedupe_rls_isolation() {
+        let (_pool, store, _lock) = setup().await;
+        let completion = JobCompletion {
+            job_key: "job-tenant-isolation".to_string(),
+            domain_payload: r#"{"done":true}"#.to_string(),
+            expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
+            orch_flags: BTreeMap::new(),
+        };
+
+        // Initially both tenants see nothing
+        assert!(store.dedupe_get("tenant-A", "job-tenant-isolation").await.unwrap().is_none());
+        assert!(store.dedupe_get("tenant-B", "job-tenant-isolation").await.unwrap().is_none());
+
+        // Put under tenant-A
+        store.dedupe_put("tenant-A", "job-tenant-isolation", &completion).await.unwrap();
+
+        // tenant-B MUST still see nothing (RSL isolation)
+        assert!(store.dedupe_get("tenant-B", "job-tenant-isolation").await.unwrap().is_none());
+
+        // tenant-A MUST see the completion
+        let cached = store.dedupe_get("tenant-A", "job-tenant-isolation").await.unwrap().unwrap();
+        assert_eq!(cached.job_key, "job-tenant-isolation");
     }
 
     /// T-PG-5: Job queue
@@ -5341,11 +5376,11 @@ mod tests {
         async fn join_delete_all(&self, instance_id: Uuid) -> Result<()> {
             self.inner.join_delete_all(instance_id).await
         }
-        async fn dedupe_get(&self, key: &str) -> Result<Option<JobCompletion>> {
-            self.inner.dedupe_get(key).await
+        async fn dedupe_get(&self, tenant_id: &str, key: &str) -> Result<Option<JobCompletion>> {
+            self.inner.dedupe_get(tenant_id, key).await
         }
-        async fn dedupe_put(&self, key: &str, completion: &JobCompletion) -> Result<()> {
-            self.inner.dedupe_put(key, completion).await
+        async fn dedupe_put(&self, tenant_id: &str, key: &str, completion: &JobCompletion) -> Result<()> {
+            self.inner.dedupe_put(tenant_id, key, completion).await
         }
         async fn record_message_delivery(&self, tenant_id: &str, instance_id: Uuid, msg_id: &str) -> Result<bool> {
             self.inner.record_message_delivery(tenant_id, instance_id, msg_id).await
