@@ -237,8 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let scheduler_owner = std::env::var("BPMN_LITE_SCHEDULER_OWNER")
-        .unwrap_or_else(|_| format!("bpmn-lite-{}", Uuid::now_v7()));
+    let scheduler_owner = generate_scheduler_owner();
     let tick_batch_size = parse_usize_env("BPMN_LITE_TICK_BATCH_SIZE", 128);
     let tick_lease_ms = parse_u64_env("BPMN_LITE_TICK_LEASE_MS", 5_000);
     let tick_interval_ms = parse_u64_env("BPMN_LITE_TICK_INTERVAL_MS", 500);
@@ -447,6 +446,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn generate_scheduler_owner() -> String {
+    match std::env::var("BPMN_LITE_SCHEDULER_OWNER") {
+        Ok(label) => format!("{}-{}", label, Uuid::now_v7()),
+        Err(_) => format!("bpmn-lite-{}", Uuid::now_v7()),
+    }
+}
+
 fn parse_usize_env(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -545,6 +551,26 @@ fn parse_bind_addr() -> String {
     }
 
     std::env::var("BPMN_LITE_BIND").unwrap_or_else(|_| "0.0.0.0:50051".to_string())
+}
+
+#[cfg(test)]
+mod tests_owner {
+    use super::*;
+
+    #[test]
+    fn test_generate_scheduler_owner() {
+        std::env::set_var("BPMN_LITE_SCHEDULER_OWNER", "test-label");
+        let owner = generate_scheduler_owner();
+        assert!(owner.starts_with("test-label-"));
+        let suffix = &owner["test-label-".len()..];
+        assert!(uuid::Uuid::parse_str(suffix).is_ok());
+
+        std::env::remove_var("BPMN_LITE_SCHEDULER_OWNER");
+        let owner_default = generate_scheduler_owner();
+        assert!(owner_default.starts_with("bpmn-lite-"));
+        let suffix_default = &owner_default["bpmn-lite-".len()..];
+        assert!(uuid::Uuid::parse_str(suffix_default).is_ok());
+    }
 }
 
 #[cfg(test)]
