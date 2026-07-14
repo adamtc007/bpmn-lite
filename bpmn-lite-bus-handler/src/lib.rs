@@ -150,6 +150,40 @@ impl BpmnLiteBusHandler {
         }
     }
 
+    /// Spawns a process instance for `idempotency_key`, or returns the
+    /// instance already spawned for that key.
+    ///
+    /// Returns `(instance_id, was_replay)` — `was_replay` is `true` when
+    /// an existing instance was found and no new instance was created.
+    ///
+    /// # Concurrency
+    ///
+    /// This closes a TOCTOU race that existed between the caller's
+    /// [`Self::lookup_spawn_idempotency`] pre-check and this method's own
+    /// writes: two concurrent `spawn-instance` invocations carrying the
+    /// *same* `idempotency_key` could both observe "not yet spawned",
+    /// both call [`bpmn_lite_engine::plan_walker::PlanWalker::start_process`]
+    /// (a real, side-effecting instance creation that writes the fiber
+    /// VM's `process_instances`/`fibers` rows via the engine's own store,
+    /// independently of the `tx` below), and only then race to insert the
+    /// `bpmn_spawn_idempotency` bookkeeping row. The `idempotency_key`
+    /// PRIMARY KEY on that table stops the *second* bookkeeping insert
+    /// from committing, but by then the second `start_process()` call has
+    /// already produced a real, fully-persisted, orphaned process
+    /// instance with no bookkeeping row pointing at it — duplicate work,
+    /// not prevented, only inconsistently recorded.
+    ///
+    /// The fix takes a transaction-scoped Postgres advisory lock keyed on
+    /// the idempotency_key *before* doing anything side-effecting, then
+    /// re-checks `bpmn_spawn_idempotency` under that lock. Concurrent
+    /// callers for the same key are serialized: the first to acquire the
+    /// lock proceeds to spawn+insert+commit (which releases the lock);
+    /// every other concurrent caller blocks on the lock, then — once
+    /// unblocked — finds the row already committed and returns it as a
+    /// replay without ever calling `start_process()` again. Callers for
+    /// *different* idempotency keys are unaffected (advisory locks are
+    /// per-key; an occasional `hashtext` collision only costs a benign
+    /// extra serialization, never a correctness violation).
     async fn spawn_process_with_idempotency(
         &self,
         plan: &bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan,
@@ -158,7 +192,7 @@ impl BpmnLiteBusHandler {
         _entry_id: Uuid,
         _runbook_id: Uuid,
         expected_preconditions: std::collections::HashMap<String, String>,
-    ) -> Result<Uuid, BusServerError> {
+    ) -> Result<(Uuid, bool), BusServerError> {
         if let Some(pool) = &self.pool {
             let mut tx = pool.begin().await.map_err(|e| BusServerError::Internal(e.to_string()))?;
             sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
@@ -166,6 +200,32 @@ impl BpmnLiteBusHandler {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
+            // Transaction-scoped advisory lock, released automatically on
+            // commit/rollback of `tx`. MUST happen before any side-effecting
+            // work (start_process) or bookkeeping reads below — see doc
+            // comment above.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text), 0)")
+                .bind(idempotency_key.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
+            // Re-check under the lock: a concurrent caller for this same
+            // key may have already spawned and committed while we were
+            // waiting to acquire the lock above.
+            let existing: Option<Uuid> = sqlx::query_scalar(
+                "SELECT instance_id FROM bpmn_spawn_idempotency WHERE idempotency_key = $1"
+            )
+            .bind(idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| BusServerError::Internal(e.to_string()))?;
+
+            if let Some(existing_iid) = existing {
+                tx.commit().await.map_err(|e| BusServerError::Internal(e.to_string()))?;
+                return Ok((existing_iid, true));
+            }
 
             let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
             let pending_store = engine_ref.pending_store().ok_or_else(|| BusServerError::Internal("pending store missing".into()))?;
@@ -207,7 +267,7 @@ impl BpmnLiteBusHandler {
             .map_err(|e| BusServerError::Internal(e.to_string()))?;
 
             tx.commit().await.map_err(|e| BusServerError::Internal(e.to_string()))?;
-            Ok(iid)
+            Ok((iid, false))
         } else {
             let engine_ref = self.engine.as_ref().ok_or_else(|| BusServerError::Internal("engine missing".into()))?;
             let pending_store = engine_ref.pending_store().ok_or_else(|| BusServerError::Internal("pending store missing".into()))?;
@@ -226,7 +286,7 @@ impl BpmnLiteBusHandler {
                 std::collections::HashMap::new(),
                 expected_preconditions,
             ).await.map_err(|e| BusServerError::Malformed(e.to_string()))?;
-            Ok(iid)
+            Ok((iid, false))
         }
     }
 
@@ -493,7 +553,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
 
                 let expected_preconditions = get_preconditions_binding(&inputs, "expected_preconditions")?;
 
-                let instance_id = self.spawn_process_with_idempotency(
+                let (instance_id, was_replay) = self.spawn_process_with_idempotency(
                     &plan,
                     &ctx.tenant_id,
                     idempotency_key,
@@ -506,7 +566,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     execution_id: instance_id,
                     outcome: ExecutionOutcome {
                         kind: dsl_bus_protocol::v1::ExecutionOutcomeKind::Committed as i32,
-                        detail: "Instance spawned".to_string(),
+                        detail: if was_replay { "idempotency replay".to_string() } else { "Instance spawned".to_string() },
                         bindings: vec![
                             string_binding("instance_id".to_string(), instance_id.to_string()),
                         ],

@@ -415,3 +415,234 @@ async fn test_postgres_store_and_retrieve_via_bus_handler() {
     .expect("query instance");
     assert_eq!(iid_stored, Some(spawned_iid));
 }
+
+/// Reconstructed 2026-07-14 after the original working-tree copy was lost
+/// to concurrent-session interference (a parallel agent editing this same
+/// repo checkout during the same window); rebuilt from the setup pattern
+/// already established by `test_postgres_store_and_retrieve_via_bus_handler`
+/// above and the fix's own doc comment in `lib.rs::spawn_process_with_
+/// idempotency` (see `docs/idempotency-race-fix-2026-07-14.md`).
+///
+/// Fires N concurrent `spawn-instance` dispatches sharing one
+/// `idempotency_key` and asserts they converge on exactly one instance:
+/// the transaction-scoped `pg_advisory_xact_lock` in `spawn_process_
+/// with_idempotency` serializes concurrent callers for the same key, so
+/// exactly one call actually spawns (`was_replay == false`, reflected as
+/// `detail == "Instance spawned"`) and every other call finds the
+/// already-committed bookkeeping row and replays it
+/// (`detail == "idempotency replay"`) rather than either erroring on the
+/// underlying `bpmn_spawn_idempotency` PRIMARY KEY violation or spawning
+/// a second, orphaned process instance.
+#[tokio::test]
+async fn test_concurrent_spawn_instance_same_idempotency_key_creates_exactly_one_instance() {
+    let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgresql://postgres@localhost:5435/bpmn_lite".to_string());
+
+    let pool = match sqlx::PgPool::connect(&url).await {
+        Ok(p) => p,
+        Err(e) => {
+            println!(
+                "Skipping test_concurrent_spawn_instance_same_idempotency_key_creates_exactly_one_instance \
+                 because PG connection failed: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let migrator = sqlx::migrate!("../bpmn-lite-store-postgres/migrations");
+    migrator.run(&pool).await.expect("run migrations");
+
+    let postgres_store = Arc::new(bpmn_lite_store_postgres::PostgresProcessStore::new(pool.clone()));
+    let postgres_pending_store = Arc::new(bpmn_lite_store_postgres::PostgresPendingInvocationStore::new(pool.clone()));
+
+    let bus_client = Arc::new(
+        dsl_bus_client::BusClient::builder()
+            .pool(pool.clone())
+            .local_domain("bpmn-lite")
+            .build()
+            .await
+            .unwrap(),
+    );
+
+    let engine = Arc::new(
+        bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(postgres_store.clone(), "default")
+            .with_bus_client(bus_client, postgres_pending_store),
+    );
+    let handler = Arc::new(BpmnLiteBusHandler::new_with_engine(DummyAdvancer, engine.clone(), pool.clone()));
+
+    // Define a template to spawn instances from — same minimal workflow
+    // shape as the sibling Postgres test above.
+    let raw_sexpr = r#"(workflow onboarding-concurrency-test
+      (start-event :id start :next task1)
+      (service-task :id task1 :verb cbu.create :next end)
+      (end-event :id end :status "completed"))"#;
+
+    let registry = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new().with_demo_bindings();
+    let plan = bpmn_lite_compiler::dsl::compile(raw_sexpr, &registry).expect("Compile failed");
+    let plan_body = serde_json::to_string(&plan).unwrap();
+    let original_hash = *blake3::hash(plan_body.as_bytes()).as_bytes();
+    let plan_hash_hex = hex::encode(original_hash);
+
+    let auth = dsl_bus_protocol::v1::AuthorityContext {
+        service_identity: "ob-poc".into(),
+        user_identity: "analyst@example.com".into(),
+        roles: vec!["bpmn.template.write".into()],
+        signed_token: vec![],
+    };
+
+    let ctx_define = InvocationContext {
+        idempotency_key: Uuid::now_v7(),
+        source_domain: "ob-poc".into(),
+        catalogue_version: "v1.0.0".into(),
+        local_verb_id: "define-template".into(),
+        result_callback_endpoint: String::new(),
+        authority: Some(auth),
+        tenant_id: "default".into(),
+        snapshot_pin: None,
+    };
+
+    let inputs_define = vec![
+        ResolvedBinding {
+            name: "template_key".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue(
+                    "onboarding-concurrency-test".into(),
+                )),
+                type_name: "String".into(),
+            }),
+        },
+        ResolvedBinding {
+            name: "plan_body".into(),
+            value: Some(dsl_bus_protocol::v1::TypedValue {
+                value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue(plan_body.clone())),
+                type_name: "String".into(),
+            }),
+        },
+    ];
+
+    handler.dispatch(ctx_define, inputs_define).await.expect("Define template failed");
+
+    // One shared idempotency key for the whole burst — this is the
+    // property under test.
+    let shared_idempotency_key = Uuid::now_v7();
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let handler = handler.clone();
+        let plan_hash_hex = plan_hash_hex.clone();
+        join_set.spawn(async move {
+            let auth_spawn = dsl_bus_protocol::v1::AuthorityContext {
+                service_identity: "ob-poc".into(),
+                user_identity: "analyst@example.com".into(),
+                roles: vec!["bpmn.instance.write".into()],
+                signed_token: vec![],
+            };
+
+            let ctx_spawn = InvocationContext {
+                idempotency_key: Uuid::now_v7(),
+                source_domain: "ob-poc".into(),
+                catalogue_version: "v1.0.0".into(),
+                local_verb_id: "spawn-instance".into(),
+                result_callback_endpoint: String::new(),
+                authority: Some(auth_spawn),
+                tenant_id: "default".into(),
+                snapshot_pin: None,
+            };
+
+            let inputs_spawn = vec![
+                ResolvedBinding {
+                    name: "template_key".into(),
+                    value: Some(dsl_bus_protocol::v1::TypedValue {
+                        value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue(plan_hash_hex)),
+                        type_name: "String".into(),
+                    }),
+                },
+                ResolvedBinding {
+                    name: "idempotency_key".into(),
+                    value: Some(dsl_bus_protocol::v1::TypedValue {
+                        value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                            dsl_bus_protocol::v1::Uuid {
+                                value: shared_idempotency_key.into_bytes().to_vec(),
+                            },
+                        )),
+                        type_name: "Uuid".into(),
+                    }),
+                },
+                ResolvedBinding {
+                    name: "entry_id".into(),
+                    value: Some(dsl_bus_protocol::v1::TypedValue {
+                        value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                            dsl_bus_protocol::v1::Uuid {
+                                value: Uuid::now_v7().into_bytes().to_vec(),
+                            },
+                        )),
+                        type_name: "Uuid".into(),
+                    }),
+                },
+                ResolvedBinding {
+                    name: "runbook_id".into(),
+                    value: Some(dsl_bus_protocol::v1::TypedValue {
+                        value: Some(dsl_bus_protocol::v1::typed_value::Value::UuidValue(
+                            dsl_bus_protocol::v1::Uuid {
+                                value: Uuid::now_v7().into_bytes().to_vec(),
+                            },
+                        )),
+                        type_name: "Uuid".into(),
+                    }),
+                },
+                ResolvedBinding {
+                    name: "expected_preconditions".into(),
+                    value: Some(dsl_bus_protocol::v1::TypedValue {
+                        value: Some(dsl_bus_protocol::v1::typed_value::Value::StringValue("{}".to_string())),
+                        type_name: "String".into(),
+                    }),
+                },
+            ];
+
+            handler.dispatch(ctx_spawn, inputs_spawn).await
+        });
+    }
+
+    let mut execution_ids = std::collections::HashSet::new();
+    let mut spawned_count = 0usize;
+    let mut replay_count = 0usize;
+    while let Some(res) = join_set.join_next().await {
+        let outcome = res.expect("task panicked").expect("spawn-instance dispatch failed");
+        execution_ids.insert(outcome.execution_id);
+        match outcome.outcome.detail.as_str() {
+            "Instance spawned" => spawned_count += 1,
+            "idempotency replay" => replay_count += 1,
+            other => panic!("unexpected outcome detail: {other}"),
+        }
+    }
+
+    assert_eq!(
+        execution_ids.len(),
+        1,
+        "all 8 concurrent same-key spawns must converge on exactly one execution_id"
+    );
+    assert_eq!(spawned_count, 1, "exactly one caller must have actually spawned the instance");
+    assert_eq!(replay_count, 7, "the other 7 callers must have replayed the already-spawned instance");
+
+    let sole_iid = *execution_ids.iter().next().unwrap();
+
+    let instance_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM bpmn_process_instance WHERE id = $1")
+        .bind(sole_iid)
+        .fetch_one(&pool)
+        .await
+        .expect("count instance rows");
+    assert_eq!(instance_rows, 1, "exactly one process-instance row must exist for the converged id");
+
+    let idempotency_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM bpmn_spawn_idempotency WHERE idempotency_key = $1")
+            .bind(shared_idempotency_key)
+            .fetch_one(&pool)
+            .await
+            .expect("count idempotency rows");
+    assert_eq!(
+        idempotency_rows, 1,
+        "exactly one bookkeeping row must exist for the shared idempotency key"
+    );
+}
