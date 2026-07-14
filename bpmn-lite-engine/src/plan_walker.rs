@@ -326,6 +326,17 @@ impl PlanWalker {
         let placeholder_vals = deserialize_placeholder_values(instance.placeholder_values.as_ref());
         let inputs = build_inputs(&static_args, &placeholder_vals);
 
+        // G6a (EOP-DESIGN-CONTROLPLANE-G6A-SNAPSHOT-PIN-CARRIER-001 §2):
+        // `snapshot_pin` carries `callout_id` — a stable, deterministic,
+        // per-callout-attempt correlation id already computed above and
+        // used for this same call's `PendingInvocation` dedup bookkeeping.
+        // The receiver (ob-poc) never trusts this value for identity or
+        // security; it only ever becomes `persist_sealed`'s `entry_id`
+        // audit-correlation column on a row `ob-poc` itself seals and
+        // consumes with its own independently-computed content hash — see
+        // that design doc's §1/§3 for why bpmn-lite cannot mint a real
+        // security handle at all, and why a bare correlation UUID is the
+        // right-shaped thing for this field to carry from this side.
         let req = InvocationRequest {
             idempotency_key: Some(uuid_to_proto(idempotency_key)),
             verb_id: verb_id.to_owned(),
@@ -333,7 +344,7 @@ impl PlanWalker {
             authority: None,
             source_domain: "bpmn-lite".to_owned(),
             catalogue_version: "v1.0.0".to_owned(),
-            snapshot_pin: None,
+            snapshot_pin: Some(uuid_to_proto(callout_id)),
             result_callback_endpoint: String::new(),
             timeout_at: None,
         };

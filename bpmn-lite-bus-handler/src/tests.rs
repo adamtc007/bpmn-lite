@@ -108,6 +108,7 @@ async fn reject_invocation_dispatcher_responds_with_unknown_verb() {
             result_callback_endpoint: String::new(),
             authority: None,
             tenant_id: "default".into(),
+            snapshot_pin: None,
         },
         vec![],
     )

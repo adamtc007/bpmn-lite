@@ -211,6 +211,50 @@ async fn test_ob_poc_round_trip_success() {
     }
 }
 
+/// G6a (EOP-DESIGN-CONTROLPLANE-G6A-SNAPSHOT-PIN-CARRIER-001 §2/§8):
+/// `dispatch_callout` must populate `InvocationRequest.snapshot_pin` with
+/// the same `callout_id` it uses for `PendingInvocation` dedup bookkeeping
+/// — decodes the real outbox-queued wire payload, not just asserts on the
+/// in-process `AdvanceOutcome`, so this proves the field actually reaches
+/// the message that gets sent, not merely a coincidentally-matching value
+/// computed twice.
+#[tokio::test]
+async fn dispatch_callout_populates_snapshot_pin_with_callout_id() {
+    use prost::Message;
+
+    let store = Arc::new(MemoryStore::new());
+    let pending = Arc::new(MemoryPendingInvocationStore::new());
+    let walker = make_walker(store.clone(), pending.clone()).await;
+
+    let plan = ob_poc_round_trip_plan();
+    let instance_id = walker
+        .start_process("default", &plan, "default", HashMap::new(), HashMap::new())
+        .await
+        .unwrap();
+
+    let outcome = walker.advance(instance_id, "default").await.unwrap();
+    let AdvanceOutcome::Submitted { callout_id, .. } = outcome else {
+        panic!("expected Submitted, got a different AdvanceOutcome");
+    };
+
+    let rows = store.outbox_rows_for_test().await;
+    let (_, _, payload) = rows
+        .iter()
+        .find(|(_, endpoint, _)| endpoint == "invocation")
+        .expect("an invocation-endpoint outbox row must exist");
+    let req = dsl_bus_protocol::v1::InvocationRequest::decode(payload.as_slice())
+        .expect("outbox payload must decode as InvocationRequest");
+
+    let pin = req
+        .snapshot_pin
+        .expect("snapshot_pin must be populated, not left None");
+    let pin_uuid = Uuid::from_slice(&pin.value).expect("16-byte uuid");
+    assert_eq!(
+        pin_uuid, callout_id,
+        "snapshot_pin must carry the same callout_id used for PendingInvocation dedup"
+    );
+}
+
 #[tokio::test]
 async fn test_dmn_lite_round_trip_fund_path() {
     let store = Arc::new(MemoryStore::new());

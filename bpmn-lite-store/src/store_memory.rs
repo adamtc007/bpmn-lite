@@ -68,6 +68,26 @@ impl MemoryStore {
             pending_store: crate::pending::MemoryPendingInvocationStore::new(),
         }
     }
+
+    /// Test-only visibility into the in-memory outbox: raw encoded
+    /// `(target_domain, target_endpoint, payload)` rows, most-recent-last
+    /// insertion order is not guaranteed (`HashMap`-backed) — callers that
+    /// care about a specific row should filter/assert rather than index.
+    /// Added for G6a (EOP-DESIGN-CONTROLPLANE-G6A-SNAPSHOT-PIN-CARRIER-001
+    /// §8) so `plan_walker_tests.rs` can decode a real submitted
+    /// `InvocationRequest` and assert its `snapshot_pin` without a live
+    /// Postgres-backed `dsl-bus-storage` outbox.
+    pub async fn outbox_rows_for_test(&self) -> Vec<(String, String, Vec<u8>)> {
+        self.inner
+            .read()
+            .await
+            .outbox
+            .values()
+            .map(|(target_domain, target_endpoint, payload, _idem, _callout)| {
+                (target_domain.clone(), target_endpoint.clone(), payload.clone())
+            })
+            .collect()
+    }
 }
 
 impl Default for MemoryStore {

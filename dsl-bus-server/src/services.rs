@@ -46,6 +46,17 @@ pub struct InvocationContext {
     pub result_callback_endpoint: String,
     pub authority: Option<dsl_bus_protocol::v1::AuthorityContext>,
     pub tenant_id: String,
+    /// G6a (EOP-DESIGN-CONTROLPLANE-G6A-SNAPSHOT-PIN-CARRIER-001 §2/§5):
+    /// the `InvocationRequest.snapshot_pin` wire field, copied through
+    /// verbatim. A bare correlation id (e.g. bpmn-lite's `callout_id`),
+    /// never a security credential — the receiver domain's own admission
+    /// mechanism decides what (if anything) it means; this crate does not
+    /// interpret it. Malformed-but-present degrades to `None` (see
+    /// `submit()`'s construction site) rather than rejecting the whole
+    /// invocation, matching this field's "optional correlation metadata"
+    /// contract — contrast `idempotency_key`, which is trusted for
+    /// identity and correctly hard-rejects on malformed input.
+    pub snapshot_pin: Option<Uuid>,
 }
 
 /// Successful dispatch result. `execution_id` is the receiver-domain
@@ -172,6 +183,10 @@ impl InvocationService for InvocationServiceImpl {
         }
 
         let local_verb_id = strip_domain_prefix(&req.verb_id);
+        // G6a: malformed-but-present degrades to `None` — see the field's
+        // own doc comment on `InvocationContext::snapshot_pin` for why
+        // this does not hard-reject the way `idempotency_key` does.
+        let snapshot_pin = from_proto_opt(&req.snapshot_pin).unwrap_or(None);
         let ctx = InvocationContext {
             idempotency_key: key,
             source_domain: req.source_domain.clone(),
@@ -180,6 +195,7 @@ impl InvocationService for InvocationServiceImpl {
             result_callback_endpoint: req.result_callback_endpoint.clone(),
             authority: req.authority.clone(),
             tenant_id: tenant_id.clone(),
+            snapshot_pin,
         };
 
         // `req.encode_to_vec()` is needed later for the inbox payload, so

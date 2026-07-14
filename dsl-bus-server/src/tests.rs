@@ -139,6 +139,17 @@ fn sample_request(idempotency_key: Uuid, verb_id: &str) -> InvocationRequest {
     }
 }
 
+/// G6a (EOP-DESIGN-CONTROLPLANE-G6A-SNAPSHOT-PIN-CARRIER-001 §5/§8):
+/// [`sample_request`], but with `snapshot_pin` set — proves the field
+/// actually flows from the wire into `InvocationContext`, not just that
+/// its absence doesn't break anything.
+fn sample_request_with_pin(idempotency_key: Uuid, verb_id: &str, pin: Uuid) -> InvocationRequest {
+    InvocationRequest {
+        snapshot_pin: Some(proto_uuid(pin)),
+        ..sample_request(idempotency_key, verb_id)
+    }
+}
+
 // ── Dispatchers ──────────────────────────────────────────────────────
 
 struct AcceptingInvocationDispatcher {
@@ -269,6 +280,89 @@ async fn invocation_round_trip_inserts_inbox_and_enqueues_result_outbox() {
     .await
     .unwrap();
     assert_eq!(outbox_count, 1);
+
+    handle.shutdown().await.unwrap();
+}
+
+/// G6a §5/§8: `InvocationRequest.snapshot_pin` (a bare `Uuid` — bpmn-lite's
+/// `callout_id` in production, per `plan_walker.rs::dispatch_callout`)
+/// must flow through `submit()` into the `InvocationContext` the
+/// dispatcher receives, verbatim. This is the wire-level half of G6a —
+/// the receiver domain's own admission mechanism decides what (if
+/// anything) it means; this crate only has to carry it faithfully.
+#[tokio::test]
+#[ignore]
+async fn snapshot_pin_flows_from_wire_into_invocation_context() {
+    let pool = setup_pool().await;
+    let inv = AcceptingInvocationDispatcher::new();
+    let seen = inv.seen_contexts.clone();
+    let res = RecordingResultDispatcher::new();
+
+    let server = BusServer::builder()
+        .pool(pool.clone())
+        .local_domain("ob-poc")
+        .invocation_dispatcher(inv)
+        .result_dispatcher(res)
+        .outbox_notifier(test_outbox_notifier(pool.clone()).await)
+        .bind(ephemeral_addr())
+        .build();
+    let handle = server.serve().await.unwrap();
+
+    let mut client = connect_invocation_client(handle.local_addr()).await;
+
+    let key = Uuid::now_v7();
+    let pin = Uuid::now_v7();
+    let resp = client
+        .submit(sample_request_with_pin(key, "ob-poc:cbu.create", pin))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.status, SubmissionStatus::Accepted as i32);
+
+    let ctx = seen.lock().unwrap().first().unwrap().clone();
+    assert_eq!(
+        ctx.snapshot_pin,
+        Some(pin),
+        "snapshot_pin must reach the dispatcher's InvocationContext unchanged"
+    );
+
+    handle.shutdown().await.unwrap();
+}
+
+/// G6a §5: the regression guard sibling of the test above — a request
+/// with no `snapshot_pin` at all (the shape every non-bpmn-lite caller,
+/// and bpmn-lite itself before this tranche, has always sent) must still
+/// carry `None` through cleanly, not error or default to something else.
+#[tokio::test]
+#[ignore]
+async fn absent_snapshot_pin_flows_through_as_none() {
+    let pool = setup_pool().await;
+    let inv = AcceptingInvocationDispatcher::new();
+    let seen = inv.seen_contexts.clone();
+    let res = RecordingResultDispatcher::new();
+
+    let server = BusServer::builder()
+        .pool(pool.clone())
+        .local_domain("ob-poc")
+        .invocation_dispatcher(inv)
+        .result_dispatcher(res)
+        .outbox_notifier(test_outbox_notifier(pool.clone()).await)
+        .bind(ephemeral_addr())
+        .build();
+    let handle = server.serve().await.unwrap();
+
+    let mut client = connect_invocation_client(handle.local_addr()).await;
+
+    let key = Uuid::now_v7();
+    let resp = client
+        .submit(sample_request(key, "ob-poc:cbu.create"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.status, SubmissionStatus::Accepted as i32);
+
+    let ctx = seen.lock().unwrap().first().unwrap().clone();
+    assert_eq!(ctx.snapshot_pin, None);
 
     handle.shutdown().await.unwrap();
 }

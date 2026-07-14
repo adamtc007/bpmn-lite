@@ -46,6 +46,7 @@ async fn test_sage_template_registration_via_bus() {
         result_callback_endpoint: String::new(),
         authority: Some(auth),
         tenant_id: "default".into(),
+        snapshot_pin: None,
     };
 
     let inputs = vec![
@@ -163,6 +164,7 @@ async fn test_sage_transitive_validation_propagation() {
         result_callback_endpoint: String::new(),
         authority: Some(auth.clone()),
         tenant_id: "default".into(),
+        snapshot_pin: None,
     };
 
     let inputs_strict = vec![
@@ -300,6 +302,7 @@ async fn test_postgres_store_and_retrieve_via_bus_handler() {
         result_callback_endpoint: String::new(),
         authority: Some(auth),
         tenant_id: "default".into(),
+        snapshot_pin: None,
     };
 
     let inputs = vec![
@@ -344,6 +347,7 @@ async fn test_postgres_store_and_retrieve_via_bus_handler() {
         result_callback_endpoint: String::new(),
         authority: Some(auth_spawn),
         tenant_id: "default".into(),
+        snapshot_pin: None,
     };
 
     let instance_idempotency_key = Uuid::now_v7();

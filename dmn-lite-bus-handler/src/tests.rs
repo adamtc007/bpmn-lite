@@ -45,6 +45,7 @@ fn ctx(decision: &str) -> InvocationContext {
         result_callback_endpoint: "http://bpmn-lite/result".into(),
         authority: None,
         tenant_id: "default".into(),
+        snapshot_pin: None,
     }
 }
 
