@@ -740,7 +740,7 @@ impl RuntimeStore for MemoryStore {
                     claim_token,
                     ..
                 } => (*timer_id, *claim_token),
-                TimerMutation::CancelRace { .. } => continue,
+                TimerMutation::CancelRace { .. } | TimerMutation::V2CancelRace { .. } => continue,
             };
             let Some(timer) = w.timers.get(&timer_id) else {
                 return Ok(CommitOutcome::IdempotentNoOp);
@@ -1047,6 +1047,27 @@ impl RuntimeStore for MemoryStore {
                         let same_race = matches!(
                             &timer.kind,
                             TimerKind::Race { race_id: current, .. } if *current == *race_id
+                        );
+                        if *timer_id != *except
+                            && timer.instance_id == instance_id
+                            && timer.fiber_id == *fiber_id
+                            && same_race
+                            && timer.state == MemoryTimerState::Armed
+                        {
+                            timer.state = MemoryTimerState::Cancelled;
+                            timer.claim = None;
+                        }
+                    }
+                }
+                TimerMutation::V2CancelRace {
+                    fiber_id,
+                    record_id,
+                    except,
+                } => {
+                    for (timer_id, timer) in &mut w.timers {
+                        let same_race = matches!(
+                            &timer.kind,
+                            TimerKind::V2Race { record_id: current, .. } if *current == *record_id
                         );
                         if *timer_id != *except
                             && timer.instance_id == instance_id

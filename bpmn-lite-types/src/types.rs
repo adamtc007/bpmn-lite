@@ -187,7 +187,23 @@ pub struct PayloadRouteBranch {
 
 // ─── Bytecode instructions ────────────────────────────────────
 
-/// The 18-opcode ISA for the BPMN-Lite VM.
+/// The 18-opcode ISA for the BPMN-Lite VM, plus the v2 D2 instruction set
+/// (EOP-BPMN-ISA-002 V2.7, `V2`-prefixed variants below the v1 block).
+///
+/// V2.7 7.2 addressing-wall proof: every v2 `Instr` addressing field is
+/// typed `Addr`, never `bpmn_lite_types::concurrency::RecordId` — the same
+/// activation-law wall `Addr` itself documents (V1.1). This is a hard
+/// compiler error, not a lint, since `Addr`/`RecordId` have no `From`/
+/// `Into` between them.
+///
+/// ```compile_fail
+/// use bpmn_lite_types::concurrency::RecordId;
+/// use bpmn_lite_types::types::Instr;
+///
+/// let _bad = Instr::V2Guard {
+///     handler: RecordId::new(uuid::Uuid::nil()),
+/// };
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instr {
     // Control flow
@@ -330,6 +346,183 @@ pub enum Instr {
     Fail {
         code: u32,
     },
+
+    // ─── v2 ISA (EOP-BPMN-ISA-002 V2.7) ────────────────────────
+    //
+    // D2 word inventory, transcribed from `docs/todo/EOP-VS-BPMN-ISA-002.md`
+    // §5 ("the stack effects ARE the spec — transcribe them, do not
+    // reinterpret"). Every word below carries a `V2`-prefixed identifier by
+    // explicit, confirmed disposition (V2.7 entry amendment): the v1
+    // `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/`WaitAny`/`WaitArm`
+    // variants above are live, currently-executing v1 semantics that look
+    // name- or shape-adjacent to several D2 words but are NOT conformant
+    // (v1 `Fork`/`Join` use static `JoinId`+arrival-counting, not D2's
+    // dynamic-handle/activation-record model; v1 `WaitArm::Timer` encodes
+    // interrupting-vs-not as a `bool` flag, the exact anti-pattern D2's
+    // `GUARD>`/`GUARD-N>` rejects by using distinct opcodes; v1
+    // `WaitFor`/`WaitUntil`/`WaitMsg` are bare parks, but D2's words are
+    // durable-effect-emitting). Reusing a v1 identifier for v2 semantics
+    // would be a dual-path-by-stealth — the same variant meaning two things
+    // depending on which tranche's code touches it. Every v1 variant above
+    // stays byte-frozen; V5.3 deletes the entire v1 block as one unit.
+    //
+    // Addressing (V2.7 7.2): guard handler extents, race arm resume
+    // targets, and the FORK/JOIN static pairing annotation are all
+    // `Addr`-space, never `RecordId` (`bpmn_lite_types::concurrency::RecordId`)
+    // — proof material for the verifier (V-3's arity check), never runtime
+    // execution state. Runtime `V2Join` resolution is exclusively via the
+    // dynamically-inherited handle minted by `V2Fork`, "never by static
+    // identity" (§5). See the compile-fail doctest below.
+    /// `GUARD>` — `( -- ) [ -- h ]`. Allocate an interrupting-guard record,
+    /// push its handle onto the control stack. `handler` is a verified code
+    /// address (never a `RecordId` — see module-level addressing note).
+    V2Guard {
+        handler: Addr,
+    },
+    /// `<GUARD` — `( -- ) [ h -- ]`. Pop and retire the guard. Verifier:
+    /// must match its `V2Guard` on every path (V-1).
+    V2GuardEnd,
+    /// `GUARD-N>` — as `V2Guard`, non-interrupting: on trigger, spawn the
+    /// handler fibre without unwinding members. Distinct opcode from
+    /// `V2Guard`, not a flag — "the distinction must be visible to static
+    /// analysis at the opcode level" (§5, review-ratified).
+    V2GuardN {
+        handler: Addr,
+    },
+    /// `<GUARD-N` — retire a non-interrupting guard.
+    V2GuardNEnd,
+
+    /// `RACE{` — `( n -- ) [ -- h ]`. Open a first-wins race record over
+    /// the next `arm_count` arms. `arm_count` is a static embedded field
+    /// (not an operand-stack value) because V-5's race-shape theorem needs
+    /// to count `V2Arm*` words statically, mirroring v1 `Fork`'s embedded
+    /// arity convention.
+    V2RaceOpen {
+        arm_count: u16,
+    },
+    /// `ARM-TIMER` — `( duration -- ) [ h ]`. Arm a timer alternative.
+    /// `target` is the static resume address if this arm wins (V2.7 7.2
+    /// addressing decision) — verifier-checkable, and genuinely static
+    /// (V-5 needs it verify-time-known). `duration`, per §5's literal
+    /// notation, is popped from the **operand stack** — deliberately NOT
+    /// embedded as a static field (V2.7 addressing-review BLOCKING #2.4:
+    /// an embedded `u64` cannot carry a duration computed at runtime from
+    /// a BPMN data object, which V5's frontends must be able to lower; a
+    /// compile-time-constant duration is simply `PushI64(const); ArmTimer`
+    /// — the constant case costs nothing, the dynamic case is now
+    /// representable). Do not conflate this with `arm_count`/`pairing`,
+    /// which stay static because they are genuinely compile-time-known,
+    /// unlike a duration. Execution emits `DurableEffect::ScheduleTimer`
+    /// with `TimerKind::Race` (§5: "per T5") — an effect-emitting word,
+    /// not a bare park; this is the specific behaviour v1's
+    /// `WaitArm::Timer` does not provide as a standalone instruction.
+    V2ArmTimer {
+        target: Addr,
+    },
+    /// `ARM-MSG` — `( correlation -- ) [ h ]`. Arm a message alternative.
+    /// `target` as above; `corr_reg` names the register holding the
+    /// correlation key (mirrors v1 `WaitMsg`'s `corr_reg` convention).
+    V2ArmMsg {
+        target: Addr,
+        name: u32,
+        corr_reg: u8,
+    },
+    /// `ARM-EFFECT` — `( effect-desc -- ) [ h ]`. Arm an external-effect
+    /// alternative; emits `DurableEffect::Invoke` on arming. Shape mirrors
+    /// `ExecFfi`'s existing FFI-invocation convention (`template_id` +
+    /// operand-stack `argc`/`retc`).
+    V2ArmEffect {
+        target: Addr,
+        template_id: [u8; 32],
+        argc: u16,
+        retc: u16,
+    },
+    /// `}RACE` — `( -- ) [ h -- ]`. Park on the race. A command addressed
+    /// to an armed alternative resolves it: winner continuation runs at
+    /// its arm's `target`; other arms' pending effects consumed/cancelled;
+    /// losing members cancelled in fibre-ID order — one transition (§5).
+    V2RaceClose,
+
+    /// `FORK n` — `( addr1..addrn n -- ) [ s ]`. Allocate a fresh barrier
+    /// *activation record*; create fibres at `targets`, each inheriting
+    /// the parent's control stack **with the barrier handle pushed on
+    /// top**. Re-entry (a bounded loop containing this instruction)
+    /// allocates a fresh activation per execution. `pairing` is a static
+    /// `Addr`-space identity (this instruction's own address) that the
+    /// matching `V2Join`(s) reference — proof material for V-3's arity
+    /// check only; runtime resolution is exclusively via the dynamically
+    /// inherited handle, never by `pairing` (§5: "never by static
+    /// identity").
+    V2Fork {
+        targets: Box<[Addr]>,
+        pairing: Addr,
+    },
+    /// `JOIN` — `( -- ) [ h -- ]`. Pop the inherited barrier handle;
+    /// decrement that activation; park unless last arrival; last arrival
+    /// continues and retires it. `pairing` matches the allocating
+    /// `V2Fork`'s `pairing` field (verifier-only, see above) — resolution
+    /// itself is by dynamic handle only.
+    V2Join {
+        pairing: Addr,
+    },
+
+    /// `WAIT-FOR` — `( duration -- )`. Pops `duration` from the operand
+    /// stack (V2.7 addressing-review BLOCKING #2.4 — not an embedded
+    /// field; see `V2ArmTimer`'s doc comment for the full rationale: a
+    /// static field cannot carry a runtime-computed duration, which V5
+    /// must be able to lower a dynamic BPMN timer expression to). Parks +
+    /// emits `DurableEffect::ScheduleTimer` (`TimerKind::Wait`) bound to
+    /// this instruction's `(instance, fibre, pc)` per T5's deterministic
+    /// derivation (`EffectId::for_instruction`). Deliberately distinct
+    /// from v1 `WaitFor` (see module-level note) — the difference is
+    /// behavioural: this word MUST append the effect, v1's `WaitFor` is a
+    /// bare park.
+    V2WaitFor,
+    /// `WAIT-UNTIL` — as `V2WaitFor`, absolute deadline popped from the
+    /// operand stack.
+    V2WaitUntil,
+    /// `WAIT-MSG` — `( correlation -- )`. Park + register message
+    /// correlation. No durable effect (message arrival is external, not
+    /// kernel-scheduled) — matches v1 `WaitMsg`'s shape but kept as a
+    /// distinct identifier per the coexistence rule.
+    V2WaitMsg {
+        name: u32,
+        corr_reg: u8,
+    },
+    /// `AWAIT-EFFECT` — `( effect-desc -- )`. Emit
+    /// `DurableEffect::Invoke` + park on completion; effect-ID derivation
+    /// is the word's responsibility (§5, E5). Shape mirrors
+    /// `ExecFfi`/`V2ArmEffect`'s `template_id`+`argc`/`retc` convention.
+    V2AwaitEffect {
+        template_id: [u8; 32],
+        argc: u16,
+        retc: u16,
+    },
+
+    /// `CANCEL-SCOPE` — `( -- ) [ h ]`. Explicit cancellation (BPMN
+    /// *terminate* semantics): unwind members innermost-first, run no
+    /// handler. Cancel-events are encoded as guards (§5, "see Q4").
+    V2CancelScope,
+}
+
+/// One armed alternative of a v2 race, captured at runtime by
+/// `V2ArmTimer`/`V2ArmMsg` as they execute (V&S §5 — a v2-bearing artifact
+/// carries no static `race_plan` side table, V-9's structural check
+/// forbids it; every alternative's resolution data must live in runtime
+/// state instead). `target` is each arm's own winning-resume address.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum V2RaceArm {
+    Timer { target: Addr },
+    Msg { target: Addr, name: u32, corr_reg: u8 },
+    /// Captured by `V2ArmEffect` — the effect's own `effect_id` (derived at
+    /// arm time from `(instance, fiber, pc)`, same as `V2AwaitEffect`) is
+    /// the resolution key; `apply_ffi_completion` matches it against this
+    /// arm the same way message delivery matches `Msg`'s `name`/`corr_reg`.
+    Effect {
+        target: Addr,
+        effect_id: crate::EffectId,
+        template_id: [u8; 32],
+    },
 }
 
 // ─── Fiber ────────────────────────────────────────────────────
@@ -374,6 +567,29 @@ pub enum WaitState {
     },
     Incident {
         incident_id: Uuid,
+    },
+    /// Parked at a v2 `JOIN` (non-last arrival), waiting for the barrier
+    /// record to retire (V&S v0.4 §5/§12 ruling B). `record_id` is the
+    /// dynamic handle — v2 barriers are `RecordId`-identified, not the v1
+    /// static `JoinId`, so this cannot reuse `WaitState::Join` (V2.7's
+    /// coexistence rule: distinct identifier, never reuse a v1-shaped
+    /// variant for v2 semantics even where it looks close).
+    V2Barrier {
+        record_id: crate::concurrency::RecordId,
+    },
+    /// Parked at a v2 `}RACE` — waiting for the first of `arms` to
+    /// resolve (a message delivery matching an armed `V2ArmMsg`, or the
+    /// armed `V2ArmTimer`'s durable timer firing). `record_id` is the
+    /// `RecordKind::Race` handle on the fiber's own control stack (V4.1
+    /// design note, Adam-ratified: race-arm data lives here, on the
+    /// fiber's `WaitState`, not on the shared `ConcurrencyRecord` — arms
+    /// are single-fiber-owned per V-5, so nothing else ever needs to see
+    /// them, and this mirrors v1 `WaitState::Race`'s own inline-data
+    /// shape exactly rather than forcing a race-only payload onto the
+    /// already-frozen `ConcurrencyRecord`).
+    V2Race {
+        record_id: crate::concurrency::RecordId,
+        arms: Vec<V2RaceArm>,
     },
 }
 
@@ -661,6 +877,15 @@ pub struct CompiledProgram {
     /// Populated by the A5 lowering pass; empty for processes with no
     /// `<bpmn:taskDefinition implementation="...">` annotations.
     pub(crate) ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    /// V4 D2 — compiled FFI task declarations for `V2ArmEffect`/`V2AwaitEffect`,
+    /// indexed by the bytecode address of the corresponding v2 instruction.
+    /// Kept as a separate table from `ffi_task_decls` because V-9 requires
+    /// every `ffi_task_decls` address to be `Instr::ExecFfi` — mixing v1/v2
+    /// addresses into one table would violate that pairing check. Not part
+    /// of `LegacyProgramParts`/`legacy_program!`: defaulted to empty in
+    /// `from_legacy_parts` so none of the existing macro call sites break;
+    /// set via `with_v2_ffi_task_decls` for programs that need it.
+    pub(crate) v2_ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
 }
 
 /// Field-less compatibility tuple used only while pre-T7 callers migrate.
@@ -717,7 +942,23 @@ impl CompiledProgram {
             flag_symbol_table,
             data_objects,
             ffi_task_decls,
+            v2_ffi_task_decls: BTreeMap::new(),
         }
+    }
+
+    /// Set the v2 FFI-effect binding table (`V2ArmEffect`/`V2AwaitEffect`).
+    /// Not part of `LegacyProgramParts` — see field doc on `v2_ffi_task_decls`.
+    #[doc(hidden)]
+    pub fn with_v2_ffi_task_decls(
+        mut self,
+        decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    ) -> Self {
+        self.v2_ffi_task_decls = decls;
+        self
+    }
+
+    pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl> {
+        &self.v2_ffi_task_decls
     }
 
     pub fn bytecode_version(&self) -> [u8; 32] {

@@ -622,6 +622,12 @@ impl BpmnLite for BpmnLiteService {
                         ("EFFECT".to_string(), effect_id.as_uuid().to_string())
                     }
                     bpmn_lite_types::WaitState::Join { .. } => ("JOIN".to_string(), String::new()),
+                    bpmn_lite_types::WaitState::V2Barrier { record_id } => {
+                        ("V2_BARRIER".to_string(), record_id.to_string())
+                    }
+                    bpmn_lite_types::WaitState::V2Race { record_id, .. } => {
+                        ("V2_RACE".to_string(), record_id.to_string())
+                    }
                     bpmn_lite_types::WaitState::Incident { incident_id } => {
                         ("INCIDENT".to_string(), incident_id.to_string())
                     }

@@ -231,6 +231,7 @@ impl JournalCommand {
             Self::Kernel(Command::ResolveIncident { .. }) => "resolve_incident",
             Self::Kernel(Command::StartChildResult { .. }) => "start_child_result",
             Self::Kernel(Command::JobClaimed { .. }) => "job_claimed",
+            Self::Kernel(Command::V2TriggerGuard { .. }) => "v2_trigger_guard",
             Self::Start(_) => "start",
             Self::Administrative { .. } => "administrative",
         }

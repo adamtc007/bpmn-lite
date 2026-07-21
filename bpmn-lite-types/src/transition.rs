@@ -401,6 +401,13 @@ pub enum TimerKind {
         boundary_element_id: Option<String>,
         arm_count: usize,
     },
+    /// A v2 `V2ArmTimer` alternative (V2.7 coexistence rule: distinct from
+    /// `Race` — no interrupting/cycle/boundary fields, since v2 races have
+    /// no non-interrupting-boundary-timer concept; first-wins only).
+    V2Race {
+        record_id: crate::concurrency::RecordId,
+        resume_at: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -774,6 +781,15 @@ pub enum TimerMutation {
         race_id: u32,
         except: EffectId,
     },
+    /// As `CancelRace`, for a v2 `RecordKind::Race` — kept as a distinct
+    /// variant (V2.7 coexistence rule) since v2 races are `RecordId`-keyed,
+    /// not v1's static `u32` race_id, and carry none of v1 Race's
+    /// interrupting/cycle/boundary baggage.
+    V2CancelRace {
+        fiber_id: Uuid,
+        record_id: crate::concurrency::RecordId,
+        except: EffectId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -834,6 +850,14 @@ pub enum Command {
         job_key: String,
         worker_id: String,
         claim_expires_at: Timestamp,
+    },
+    /// External signal resolving a v2 interrupting guard's trigger
+    /// condition (EOP-EX-BPMN-ISA-002 §3's cancellation cascade). V4.1:
+    /// the exact triggering mechanism (what upstream event maps to this)
+    /// is deliberately out of scope here — this `Command` only fixes the
+    /// kernel-side contract once something decides to fire.
+    V2TriggerGuard {
+        record_id: crate::concurrency::RecordId,
     },
 }
 

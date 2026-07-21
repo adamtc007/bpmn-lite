@@ -102,6 +102,19 @@ pub struct RecordCounters {
 /// One concurrency-table record: `{ id, kind, members, handler, state,
 /// counters }` per V&S §4. `members` is a `BTreeSet` for canonical
 /// ordering (Ring 1 requires BTreeMap/BTreeSet-only, fixed field order).
+///
+/// `rollback_domain_payload`/`rollback_domain_payload_hash` (V4.1, Adam-
+/// ratified): a `Guard`-kind record captures the process instance's
+/// `domain_payload` at the moment its opening word (`V2Guard`/`V2GuardN`)
+/// executes — "a standard lifecycle snapshot," not opt-in, not a distinct
+/// word. `V2CancelScope` restores it. This is deliberately narrower than
+/// `RecordKind::Compensation`'s full "reverse-order handler execution"
+/// (§5) — that record kind stays uninhabited by v2 (see its own doc
+/// comment); this is a property of `Guard` scopes specifically. The
+/// kernel is pure (E4) and cannot reach the store's `payload_history`
+/// mid-transition, so the actual payload text (not just its hash) must
+/// travel here for `V2CancelScope` to restore it as a pure function of
+/// already-available snapshot state.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ConcurrencyRecord {
     pub id: RecordId,
@@ -110,6 +123,8 @@ pub struct ConcurrencyRecord {
     pub handler: Option<Addr>,
     pub state: RecordState,
     pub counters: RecordCounters,
+    pub rollback_domain_payload: Option<Box<str>>,
+    pub rollback_domain_payload_hash: Option<[u8; 32]>,
 }
 
 impl ConcurrencyRecord {
@@ -121,6 +136,8 @@ impl ConcurrencyRecord {
             handler: None,
             state: RecordState::Armed,
             counters: RecordCounters::default(),
+            rollback_domain_payload: None,
+            rollback_domain_payload_hash: None,
         }
     }
 }

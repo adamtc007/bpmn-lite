@@ -2213,9 +2213,35 @@ impl RuntimeStore for PostgresWorkflowStore {
                     .execute(&mut *tx)
                     .await
                 }
+                TimerMutation::V2CancelRace {
+                    fiber_id,
+                    record_id,
+                    except,
+                } => {
+                    sqlx::query(
+                        r#"
+                        UPDATE workflow_timers
+                        SET state = 'cancelled', updated_at = now(),
+                            claim_owner = NULL, claim_token = NULL, claim_until = NULL
+                        WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3
+                          AND state = 'armed' AND timer_id <> $4
+                          AND kind #>> '{V2Race,record_id}' = $5
+                        "#,
+                    )
+                    .bind(claim.tenant_id().as_str())
+                    .bind(claim.instance_id())
+                    .bind(fiber_id)
+                    .bind(except.as_uuid())
+                    .bind(record_id.as_uuid().to_string())
+                    .execute(&mut *tx)
+                    .await
+                }
             }
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
-            if !matches!(mutation, TimerMutation::CancelRace { .. }) && result.rows_affected() != 1
+            if !matches!(
+                mutation,
+                TimerMutation::CancelRace { .. } | TimerMutation::V2CancelRace { .. }
+            ) && result.rows_affected() != 1
             {
                 tx.rollback()
                     .await

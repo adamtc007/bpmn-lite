@@ -89,6 +89,9 @@ pub struct ArtifactMetadata {
     flag_symbol_table: BTreeMap<FlagKey, String>,
     data_objects: BTreeMap<String, crate::DataObjectDecl>,
     ffi_task_decls: BTreeMap<Addr, FfiTaskDecl>,
+    /// V4 D2 — `V2ArmEffect`/`V2AwaitEffect` binding table. See doc on
+    /// `CompiledProgram::v2_ffi_task_decls`.
+    v2_ffi_task_decls: BTreeMap<Addr, FfiTaskDecl>,
 }
 
 impl ArtifactMetadata {
@@ -138,6 +141,10 @@ impl ArtifactMetadata {
 
     pub fn ffi_task_decls(&self) -> &BTreeMap<Addr, FfiTaskDecl> {
         &self.ffi_task_decls
+    }
+
+    pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, FfiTaskDecl> {
+        &self.v2_ffi_task_decls
     }
 }
 
@@ -194,6 +201,7 @@ impl ArtifactEnvelope {
             flag_symbol_table: program.flag_symbol_table.clone(),
             data_objects: program.data_objects.clone(),
             ffi_task_decls: program.ffi_task_decls.clone(),
+            v2_ffi_task_decls: program.v2_ffi_task_decls.clone(),
         };
         let limits = verify_program(&program.program, &metadata)?;
         Ok(Self {
@@ -276,6 +284,7 @@ impl ExecutableWorkflow {
             flag_symbol_table: metadata.flag_symbol_table.clone(),
             data_objects: metadata.data_objects.clone(),
             ffi_task_decls: metadata.ffi_task_decls.clone(),
+            v2_ffi_task_decls: metadata.v2_ffi_task_decls.clone(),
         }
     }
 }
@@ -330,13 +339,35 @@ fn verify_program(
             )));
         }
     }
+    for address in metadata.v2_ffi_task_decls.keys().copied() {
+        require_address(address, len, address, "v2 FFI effect table")?;
+        if !matches!(
+            instructions[address.index()],
+            Instr::V2ArmEffect { .. } | Instr::V2AwaitEffect { .. }
+        ) {
+            return Err(ArtifactError::InvalidMetadata(format!(
+                "v2 FFI effect declaration address {address} is not V2ArmEffect/V2AwaitEffect"
+            )));
+        }
+    }
     for address in metadata.error_route_map.keys().copied() {
         require_address(address, len, address, "error route table")?;
     }
     let mut referenced_races = BTreeSet::new();
     let mut referenced_waits = BTreeSet::new();
     let mut referenced_joins = BTreeSet::new();
+    // V-9, active check (V3 review remediation — confirmed a mixed v1/v2
+    // artifact IS type-level constructible: `Instr` is one enum
+    // containing both v1 and v2 variants, and nothing in the type system
+    // stops a `Vec<Instr>` from mixing them; a passing test alone would
+    // have been a vacuous "nothing populates this yet" observation, not
+    // an active guarantee). If this program contains any v2 instruction,
+    // it must carry none of the v1 side tables V-9 names.
+    let mut has_v2_instruction = false;
     for (address, instruction) in instructions.iter().enumerate() {
+        if is_v2_instruction(instruction) {
+            has_v2_instruction = true;
+        }
         match instruction {
             Instr::ExecNative { task_type, .. } | Instr::ExecDslTask { task_type, .. }
                 if *task_type as usize >= metadata.task_manifest.len() =>
@@ -349,6 +380,15 @@ fn verify_program(
             Instr::ExecFfi { .. } if !metadata.ffi_task_decls.contains_key(&(Addr::from(address as u32))) => {
                 return Err(ArtifactError::InvalidMetadata(format!(
                     "ExecFfi at address {address} has no FFI declaration"
+                )));
+            }
+            Instr::V2ArmEffect { .. } | Instr::V2AwaitEffect { .. }
+                if !metadata
+                    .v2_ffi_task_decls
+                    .contains_key(&(Addr::from(address as u32))) =>
+            {
+                return Err(ArtifactError::InvalidMetadata(format!(
+                    "{instruction:?} at address {address} has no v2 FFI effect declaration"
                 )));
             }
             Instr::WaitMsg { wait_id, name, .. } => {
@@ -388,6 +428,18 @@ fn verify_program(
             "static join side table and instruction references are not bijective".to_string(),
         ));
     }
+    if has_v2_instruction
+        && (!metadata.race_plan.is_empty()
+            || !metadata.join_plan.is_empty()
+            || !metadata.boundary_map.is_empty())
+    {
+        return Err(ArtifactError::InvalidMetadata(
+            "V-9: a v2-bearing artifact must carry none of the v1 race-plan/join-plan/\
+             boundary-route side tables — a mixed v1/v2 artifact with any of those \
+             populated is rejected outright, not silently tolerated"
+                .to_string(),
+        ));
+    }
 
     let mut heights = vec![None; len];
     heights[0] = Some(0u32);
@@ -423,6 +475,17 @@ fn verify_program(
             Instr::ForkInclusive { branches, .. } => {
                 max_fibers = max_fibers.saturating_add(branches.len() as u32);
             }
+            Instr::V2Fork { targets, .. } => {
+                max_fibers = max_fibers.saturating_add(targets.len() as u32);
+            }
+            // A guard's handler spawns exactly one fibre when triggered
+            // (`apply_v2_trigger_guard`), independent of the main line —
+            // same undercounting gap as `V2Fork`'s targets, found the
+            // same way (a real trigger test hit `ResourceLimitExceeded`
+            // on a legal program).
+            Instr::V2Guard { .. } | Instr::V2GuardN { .. } => {
+                max_fibers = max_fibers.saturating_add(1);
+            }
             Instr::RoutePayload { branches, .. } | Instr::ForkPayload { branches, .. }
                 if branches.is_empty() =>
             {
@@ -455,7 +518,7 @@ fn verify_program(
             _ => {}
         }
 
-        for successor in successors(address, instruction, len)? {
+        for successor in successors(address, instruction, instructions, len)? {
             match heights[successor] {
                 Some(existing) if existing != next_height => {
                     return Err(ArtifactError::InvalidInstruction {
@@ -499,21 +562,61 @@ fn verify_program(
         }
     }
 
+    // V-7 (V&S §7): the dual-stack abstract interpreter's control-stack
+    // half. A v1-only artifact has no D2 words, so this returns zeroed
+    // limits for it (not a special case — the walk simply never visits a
+    // scope-opening instruction); a v2-bearing artifact gets the real
+    // computed maxima. This call is also where V-1..V-5/V-8 are actually
+    // enforced — `verify_program` rejects a malformed v2 control-stack
+    // shape here, not just the operand-stack/reachability properties
+    // already checked above.
+    // `loop_multiplier` (computed above, over reachable backward
+    // `BrCounterLt` bounds) is threaded through so V-7's record/barrier
+    // maxima account for loop re-entry, not just fork-fibre multiplicity
+    // — a second static instruction visit inside a bounded loop's body is
+    // otherwise invisible to `verify_v2_control_stack`'s worklist, which
+    // (correctly, for V-1/V-2 purposes) treats a revisited address as
+    // "already checked," not "count it again."
+    let control_stack_limits =
+        crate::v2_verifier::verify_v2_control_stack(instructions, loop_multiplier)?;
+
     Ok(VerifiedLimits {
         max_stack,
         max_registers: max_register.max(8),
         max_fibers,
         max_steps: (len as u64).saturating_mul(loop_multiplier),
-        // No D2 words exist in a v2-pre-V3 artifact to create control-stack
-        // depth, armed scopes, or concurrency-table records — V3's verifier
-        // computes real maxima once V4's words exist to bound (V&S V-7).
-        max_control_depth: 0,
-        max_barriers: 0,
-        max_records: 0,
+        max_control_depth: control_stack_limits.max_control_depth,
+        max_barriers: control_stack_limits.max_barriers,
+        max_records: control_stack_limits.max_records,
     })
 }
 
-fn stack_effect(instruction: &Instr) -> (u32, u32) {
+/// V-9's active check needs to distinguish v2 words from v1 without
+/// depending on `v2_verifier`'s internals — a plain tag match, kept next
+/// to `Instr`'s own definition-adjacent helpers rather than duplicated.
+fn is_v2_instruction(instruction: &Instr) -> bool {
+    matches!(
+        instruction,
+        Instr::V2Guard { .. }
+            | Instr::V2GuardEnd
+            | Instr::V2GuardN { .. }
+            | Instr::V2GuardNEnd
+            | Instr::V2RaceOpen { .. }
+            | Instr::V2ArmTimer { .. }
+            | Instr::V2ArmMsg { .. }
+            | Instr::V2ArmEffect { .. }
+            | Instr::V2RaceClose
+            | Instr::V2Fork { .. }
+            | Instr::V2Join { .. }
+            | Instr::V2WaitFor
+            | Instr::V2WaitUntil
+            | Instr::V2WaitMsg { .. }
+            | Instr::V2AwaitEffect { .. }
+            | Instr::V2CancelScope
+    )
+}
+
+pub(crate) fn stack_effect(instruction: &Instr) -> (u32, u32) {
     match instruction {
         Instr::PushBool(_) | Instr::PushI64(_) | Instr::LoadFlag { .. } => (0, 1),
         Instr::Pop | Instr::StoreFlag { .. } | Instr::BrIf { .. } | Instr::BrIfNot { .. } => (1, 0),
@@ -522,13 +625,18 @@ fn stack_effect(instruction: &Instr) -> (u32, u32) {
         // FFI values are resolved through the compiled binding side table and
         // written back through binding targets; they never touch the VM stack.
         Instr::ExecFfi { .. } => (0, 0),
+        // V2.7 addressing-review BLOCKING #2.4: duration/deadline pop from
+        // the operand stack per §5's literal `( duration -- )` notation,
+        // not an embedded field — see `V2ArmTimer`'s doc comment.
+        Instr::V2WaitFor | Instr::V2WaitUntil | Instr::V2ArmTimer { .. } => (1, 0),
         _ => (0, 0),
     }
 }
 
-fn successors(
+pub(crate) fn successors(
     address: usize,
     instruction: &Instr,
+    instructions: &[Instr],
     len: usize,
 ) -> Result<Vec<usize>, ArtifactError> {
     let mut result = Vec::new();
@@ -592,13 +700,211 @@ fn successors(
             }
         }
         Instr::End | Instr::EndTerminate | Instr::Fail { .. } => {}
+
+        // ─── v2 ISA (V2.7 7.3) ──────────────────────────────────
+        //
+        // The verifier walks a CFG built directly over this same flat v2
+        // `Instr` stream, not the compiler's `IRGraph` (`bpmn-lite-compiler`'s
+        // `IRNode`/`IREdge`, BPMN-XML-shaped and disconnected from bytecode):
+        // V2.7 7.4's hand-assembled fixtures have no compiler-side IR at all
+        // (v2 frontends don't exist until V5), so `IRGraph` cannot be the
+        // representation V3 verifies. `successors()` — already the verifier's
+        // existing home for v1 branch/fork/join edges — is extended here with
+        // the v2 words that introduce additional static reachable edges
+        // beyond plain fallthrough; V3 builds its abstract control-stack
+        // dataflow on top of these edges plus `v2_control_stack_effect`
+        // below.
+        Instr::V2Guard { handler } | Instr::V2GuardN { handler } => {
+            add(*handler, "guard handler")?;
+            if address + 1 < len {
+                result.push(address + 1);
+            }
+        }
+        // V2.7 addressing-review CONCERN #2.3: an ARM-* word only
+        // *registers* an alternative — it does not itself transfer
+        // control. `}RACE` is where resolution happens (§5: "A command
+        // addressed to an armed alternative resolves it: winner
+        // continuation runs") and, not incidentally, where the race's
+        // control-stack handle is popped (`[ h -- ]`). Modeling the arm
+        // target as a successor of the ARM-* word (the original V2.7 cut)
+        // stranded that pop on a dead-end `V2RaceClose` node the CFG walk
+        // never threaded through to the winning target's abstract entry
+        // state — exactly the gap V-1 balance would have missed. So the
+        // arm word only falls through to the next arm/`}RACE`; the arm
+        // targets are attributed to `V2RaceClose` below, via
+        // `race_arm_targets`, so any future dataflow walk necessarily
+        // applies `}RACE`'s pop before it reaches an arm target.
+        Instr::V2ArmTimer { .. } | Instr::V2ArmMsg { .. } | Instr::V2ArmEffect { .. }
+            if address + 1 < len =>
+        {
+            result.push(address + 1);
+        }
+        Instr::V2ArmTimer { .. } | Instr::V2ArmMsg { .. } | Instr::V2ArmEffect { .. } => {}
+        Instr::V2Fork { targets, .. } => {
+            for target in targets.iter().copied() {
+                add(target, "v2 fork")?;
+            }
+        }
+        // `}RACE` parks, pops the race's control-stack handle, then
+        // transfers control to whichever arm won — so each arm's static
+        // `target` is a successor of `V2RaceClose`, not of the arm word
+        // that registered it. `race_arm_targets` scans back to the
+        // matching `V2RaceOpen`; V-5 (race shape) requires the n ARM-*
+        // words to sit contiguously between `RACE{` and `}RACE` with no
+        // other control flow, so the backward scan is exact, and doubles
+        // as a structural check of that shape (mismatched/missing
+        // `RACE{` or a non-ARM instruction in between is a verifier
+        // rejection here, not a silent miscount).
+        Instr::V2RaceClose => {
+            for target in race_arm_targets(address, instructions)? {
+                add(target, "race arm target (via }RACE resolution)")?;
+            }
+        }
+        // `CANCEL-SCOPE` unwinds and does not resume this fiber, matching
+        // `End`/`EndTerminate`/`Fail`'s no-fallthrough treatment above.
+        Instr::V2CancelScope => {}
+
         _ if address + 1 < len => result.push(address + 1),
         _ => {}
     }
     Ok(result)
 }
 
-fn require_address(
+/// Scan backward from a `V2RaceClose` at `close_address` to its matching
+/// `V2RaceOpen`, collecting each `V2Arm*` word's `target` in declaration
+/// order. V-5 (race shape, V&S §7) requires the arms to sit contiguously
+/// between `RACE{` and `}RACE` with no *state mutation* in between — not
+/// zero tolerance for any other instruction at all: `V2ArmTimer` pops its
+/// own `duration` operand (V2.7 addressing-review BLOCKING #2.4), so a
+/// pure operand-stack producer (`PushI64`/`PushBool`/`LoadFlag`/`Pop`)
+/// immediately before an arm word, supplying that arm's own operand, is
+/// legal region content. Anything else — a branch, a nested guard/race/
+/// fork, or reaching the front of the program without a `V2RaceOpen` — is
+/// rejected as a malformed race, doubling this function as an early,
+/// partial V-5 shape check.
+pub(crate) fn race_arm_targets(
+    close_address: usize,
+    instructions: &[Instr],
+) -> Result<Vec<Addr>, ArtifactError> {
+    let mut targets = Vec::new();
+    let mut cursor = close_address;
+    loop {
+        if cursor == 0 {
+            return Err(ArtifactError::InvalidInstruction {
+                address: Addr::from(close_address as u32),
+                reason: "}RACE has no matching RACE{ (scanned back to program start)"
+                    .to_string(),
+            });
+        }
+        cursor -= 1;
+        match &instructions[cursor] {
+            Instr::V2ArmTimer { target }
+            | Instr::V2ArmMsg { target, .. }
+            | Instr::V2ArmEffect { target, .. } => targets.push(*target),
+            Instr::V2RaceOpen { arm_count } => {
+                targets.reverse();
+                if targets.len() != *arm_count as usize {
+                    return Err(ArtifactError::InvalidInstruction {
+                        address: Addr::from(close_address as u32),
+                        reason: format!(
+                            "}}RACE arm count mismatch: RACE{{ at {cursor} declared \
+                             {arm_count} arms, found {}",
+                            targets.len()
+                        ),
+                    });
+                }
+                return Ok(targets);
+            }
+            // An arm word's own operand computation — not a foreign
+            // instruction breaking the region's contiguity. V3 review
+            // remediation forward note (V-5): this is the READ-vs-MUTATE
+            // line, and it is deliberate, not an oversight to "complete
+            // later." `PushBool`/`PushI64`/`LoadFlag` read a constant or
+            // an existing flag onto the operand stack — none of them can
+            // observe or change anything about the enclosing race/guard
+            // scope. `Pop` only discards a value already computed inside
+            // this same tolerated region. `StoreFlag` is deliberately
+            // EXCLUDED and falls through to the rejection arm below: it
+            // WRITES `ProcessInstance.flags`, exactly the "unguarded
+            // state mutation between arm and park" V-5 (V&S §7) forbids.
+            // If a future edit is tempted to add `StoreFlag` here "to let
+            // an arm compute something more complex," that tempting edit
+            // is the one this comment exists to stop — a mutation inside
+            // an armed-but-unresolved race is a real V-5 violation, not
+            // an artificial restriction.
+            Instr::PushBool(_) | Instr::PushI64(_) | Instr::LoadFlag { .. } | Instr::Pop => {}
+            _ => {
+                return Err(ArtifactError::InvalidInstruction {
+                    address: Addr::from(close_address as u32),
+                    reason: format!(
+                        "}}RACE's arm region contains a non-arm, non-operand \
+                         instruction at {cursor} — race shape is not contiguous \
+                         back to RACE{{"
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Whether a v2 `Instr` pushes, pops, or leaves untouched the abstract
+/// control stack (V&S §5's `[ ... ]` notation) — the dataflow fact V2.7 7.3
+/// exposes for V3's abstract interpretation to consume. This is *not* the
+/// interpretation itself (V3 owns balance/nesting/arity proofs); it is the
+/// minimal per-instruction classification those proofs are built from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlStackEffect {
+    /// `[ -- h ]` — allocates a record, pushes its handle.
+    Push,
+    /// `[ h -- ]` — pops and retires a handle.
+    Pop,
+    /// `[ h ]` — reads the top handle without popping it (armed/park words
+    /// that act on the race/guard/barrier they're already inside).
+    Peek,
+    /// No control-stack interaction (`( ... )` only, or a v1 instruction).
+    None,
+}
+
+pub fn v2_control_stack_effect(instr: &Instr) -> ControlStackEffect {
+    match instr {
+        Instr::V2Guard { .. } | Instr::V2GuardN { .. } | Instr::V2RaceOpen { .. } => {
+            ControlStackEffect::Push
+        }
+        Instr::V2GuardEnd | Instr::V2GuardNEnd | Instr::V2RaceClose | Instr::V2Join { .. } => {
+            ControlStackEffect::Pop
+        }
+        Instr::V2ArmTimer { .. }
+        | Instr::V2ArmMsg { .. }
+        | Instr::V2ArmEffect { .. }
+        | Instr::V2CancelScope => ControlStackEffect::Peek,
+        // V2Fork pushes the barrier handle onto each *spawned fibre's*
+        // inherited control stack (V&S §5: "each inheriting the parent's
+        // control stack with the barrier handle pushed on top") — not onto
+        // the forking fibre's own stack, which is a cross-fibre effect V3's
+        // per-CFG-edge dataflow models separately from this single-fibre
+        // classification.
+        //
+        // **V3 handoff note (addressing-review disposition, recorded not
+        // as a defect):** this function is NOT total for `V2Fork` in the
+        // sense its `None` return might suggest. `None` here means "no
+        // effect on *this* fibre's own control stack" — it does not mean
+        // "no control-stack effect anywhere as a result of this
+        // instruction." V3's abstract interpreter must model the
+        // children-inherit-handle semantics explicitly, as a distinct,
+        // cross-fibre dataflow fact (each spawned fibre's *entry* control
+        // stack = the forking fibre's stack + the barrier handle), and
+        // must not attempt to derive that fact by calling this function
+        // and reading `None` as "nothing to model."
+        Instr::V2Fork { .. } => ControlStackEffect::None,
+        Instr::V2WaitFor
+        | Instr::V2WaitUntil
+        | Instr::V2WaitMsg { .. }
+        | Instr::V2AwaitEffect { .. } => ControlStackEffect::None,
+        _ => ControlStackEffect::None,
+    }
+}
+
+pub(crate) fn require_address(
     target: Addr,
     len: usize,
     address: Addr,
@@ -611,4 +917,196 @@ fn require_address(
         });
     }
     Ok(())
+}
+
+/// V2.7 7.4 — hand-assembled v2 `Instr` fixtures. No compiler emits v2 words
+/// yet (that's V5); these are built directly, address by address, and
+/// proven to decode, round-trip, and pass the same `verify_program`
+/// structural checks every v1 artifact passes. Neither fixture exercises
+/// `kernel::apply` — v2 word *semantics* are V4's scope
+/// (`bpmn-lite-kernel`'s `apply_tick`).
+#[cfg(test)]
+mod v2_fixtures {
+    use super::*;
+
+    fn empty_compiled_program(instructions: Vec<Instr>) -> CompiledProgram {
+        CompiledProgram {
+            bytecode_version: [0u8; 32],
+            program: instructions,
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: Vec::new(),
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+            v2_ffi_task_decls: BTreeMap::new(),
+        }
+    }
+
+    fn assert_decodes_and_round_trips(instructions: Vec<Instr>) -> ArtifactEnvelope {
+        let program = empty_compiled_program(instructions);
+        let envelope = ArtifactEnvelope::from_legacy_program(program, "v2.7-fixture")
+            .expect("hand-assembled v2 fixture must pass verify_program");
+        let bytes = envelope.canonical_bytes().expect("canonical_bytes");
+        let workflow =
+            ExecutableWorkflow::verify(&bytes).expect("decode + verify must round-trip");
+        assert_eq!(
+            workflow.envelope().canonical_bytes().unwrap(),
+            bytes,
+            "re-encoding a decoded v2 envelope must reproduce the exact original bytes"
+        );
+        envelope
+    }
+
+    /// EX-oracle-shaped: an interrupting guard (`V2Guard`) wraps a parallel
+    /// subprocess (`V2Fork`/`V2Join`); the guard's handler is a race
+    /// (`V2RaceOpen`/`V2ArmTimer`/`V2ArmMsg`/`V2RaceClose`) with a timer
+    /// alternative and a message alternative. `V2ArmTimer`'s `duration` is
+    /// supplied via `PushI64` immediately before it (V2.7 addressing-review
+    /// BLOCKING #2.4 — operand stack, not an embedded field).
+    #[test]
+    fn ex_oracle_shaped_guard_over_fork_join_with_race_handler_decodes_and_round_trips() {
+        let instructions = ex_oracle_program();
+        let envelope = assert_decodes_and_round_trips(instructions);
+        assert_eq!(envelope.instructions().len(), 16);
+    }
+
+    /// Addresses, named, for the EX-oracle fixture — shared by the fixture
+    /// test above and the race-handle-pop proof below, so the two can't
+    /// silently drift out of sync with each other.
+    struct ExOracleAddrs {
+        race_open: usize,
+        timer_win: usize,
+        msg_win: usize,
+    }
+
+    fn ex_oracle_program() -> Vec<Instr> {
+        vec![
+            /* 0  */ Instr::V2Guard { handler: Addr::new(8) },
+            /* 1  */ Instr::V2Fork {
+                targets: Box::new([Addr::new(2), Addr::new(4)]),
+                pairing: Addr::new(1),
+            },
+            /* 2  */ Instr::V2Join { pairing: Addr::new(1) }, // branch A
+            /* 3  */ Instr::Jump { target: Addr::new(6) },
+            /* 4  */ Instr::V2Join { pairing: Addr::new(1) }, // branch B
+            /* 5  */ Instr::Jump { target: Addr::new(6) },
+            /* 6  */ Instr::V2GuardEnd,
+            /* 7  */ Instr::End,
+            /* 8  */ Instr::V2RaceOpen { arm_count: 2 }, // guard handler entry
+            /* 9  */ Instr::PushI64(5_000), // V2ArmTimer's own duration operand
+            /* 10 */ Instr::V2ArmTimer { target: Addr::new(13) },
+            /* 11 */ Instr::V2ArmMsg {
+                target: Addr::new(14),
+                name: 42,
+                corr_reg: 0,
+            },
+            /* 12 */ Instr::V2RaceClose,
+            /* 13 */ Instr::Jump { target: Addr::new(15) }, // timer-win continuation
+            /* 14 */ Instr::Jump { target: Addr::new(15) }, // msg-win continuation
+            /* 15 */ Instr::End,
+        ]
+    }
+
+    fn ex_oracle_addrs() -> ExOracleAddrs {
+        ExOracleAddrs {
+            race_open: 8,
+            timer_win: 13,
+            msg_win: 14,
+        }
+    }
+
+    /// V2.7 addressing-review CONCERN #2.3: confirms the race's
+    /// control-stack handle (pushed by `V2RaceOpen`, popped by
+    /// `V2RaceClose`) is popped in the ABSTRACT ENTRY STATE at each arm
+    /// target — not stranded on a dead path at `V2RaceClose` itself. Walks
+    /// the same `successors()` graph the (future) verifier will use,
+    /// threading `v2_control_stack_effect` forward from `V2RaceOpen` as a
+    /// simple depth counter (mirrors `verify_program`'s existing
+    /// operand-stack-height BFS, scoped to control-stack depth instead).
+    /// If the arm-target edge were still attributed to the `V2Arm*` word
+    /// (the original V2.7 cut, before this remediation), this would fail:
+    /// the target's entry depth would be computed relative to `V2RaceOpen`
+    /// directly, never passing through `V2RaceClose`'s `Pop`.
+    #[test]
+    fn race_handle_is_popped_in_abstract_entry_state_at_each_arm_target() {
+        let instructions = ex_oracle_program();
+        let addrs = ex_oracle_addrs();
+        let len = instructions.len();
+
+        // entry_depth[addr] = control-stack depth *before* executing the
+        // instruction at addr, relative to `race_open`'s own entry depth
+        // (taken as the zero baseline — this test is scoped to the race's
+        // own handle, not the enclosing guard's).
+        let mut entry_depth: BTreeMap<usize, i64> = BTreeMap::new();
+        entry_depth.insert(addrs.race_open, 0);
+        let mut queue = std::collections::VecDeque::from([addrs.race_open]);
+        while let Some(addr) = queue.pop_front() {
+            let depth = entry_depth[&addr];
+            let instruction = &instructions[addr];
+            let delta = match v2_control_stack_effect(instruction) {
+                ControlStackEffect::Push => 1,
+                ControlStackEffect::Pop => -1,
+                ControlStackEffect::Peek | ControlStackEffect::None => 0,
+            };
+            let exit_depth = depth + delta;
+            for successor in successors(addr, instruction, &instructions, len).unwrap() {
+                match entry_depth.get(&successor) {
+                    Some(existing) => assert_eq!(
+                        *existing, exit_depth,
+                        "control-stack depth must agree at CFG merge point {successor}"
+                    ),
+                    None => {
+                        entry_depth.insert(successor, exit_depth);
+                        queue.push_back(successor);
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            entry_depth[&addrs.timer_win], 0,
+            "race handle must already be popped on entry to the timer-win arm target"
+        );
+        assert_eq!(
+            entry_depth[&addrs.msg_win], 0,
+            "race handle must already be popped on entry to the msg-win arm target"
+        );
+    }
+
+    /// Re-entrant `V2Fork`/`V2Join`: a bounded loop (v1's `IncCounter`/
+    /// `BrCounterLt`, the only legal backward-branch mechanism) whose body
+    /// is a `V2Fork`/`V2Join` pair — proving the same static addresses
+    /// admit repeated execution (a fresh activation per V&S §5, a runtime
+    /// property V4 discharges; this fixture proves only that the *shape*
+    /// is legal, decodes, and round-trips).
+    #[test]
+    fn reentrant_fork_join_in_bounded_loop_decodes_and_round_trips() {
+        let instructions = vec![
+            /* 0 */ Instr::IncCounter { counter_id: 0 },
+            /* 1 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(3), Addr::new(5)]),
+                pairing: Addr::new(1),
+            },
+            /* 2 */ Instr::V2CancelScope, // unreachable filler slot, never targeted
+            /* 3 */ Instr::V2Join { pairing: Addr::new(1) }, // branch A
+            /* 4 */ Instr::Jump { target: Addr::new(7) },
+            /* 5 */ Instr::V2Join { pairing: Addr::new(1) }, // branch B
+            /* 6 */ Instr::Jump { target: Addr::new(7) },
+            /* 7 */ Instr::BrCounterLt {
+                counter_id: 0,
+                limit: 3,
+                target: Addr::new(0),
+            },
+            /* 8 */ Instr::End,
+        ];
+        let envelope = assert_decodes_and_round_trips(instructions);
+        assert_eq!(envelope.instructions().len(), 9);
+    }
 }

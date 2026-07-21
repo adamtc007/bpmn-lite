@@ -386,6 +386,10 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         w.write_option(&self.handler, |w, a| a.canonical_encode(w));
         self.state.canonical_encode(w);
         self.counters.canonical_encode(w);
+        w.write_option(&self.rollback_domain_payload, |w, p| w.write_str(p));
+        w.write_option(&self.rollback_domain_payload_hash, |w, h| {
+            w.write_bytes_fixed(h)
+        });
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
         let id = crate::concurrency::RecordId::canonical_decode(r)?;
@@ -397,6 +401,10 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         let handler = r.read_option(crate::types::Addr::canonical_decode)?;
         let state = crate::concurrency::RecordState::canonical_decode(r)?;
         let counters = crate::concurrency::RecordCounters::canonical_decode(r)?;
+        let rollback_domain_payload = r
+            .read_option(|r| r.read_str())?
+            .map(String::into_boxed_str);
+        let rollback_domain_payload_hash = r.read_option(|r| r.read_bytes_fixed::<32>())?;
         Ok(Self {
             id,
             kind,
@@ -404,6 +412,8 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             handler,
             state,
             counters,
+            rollback_domain_payload,
+            rollback_domain_payload_hash,
         })
     }
 }
@@ -475,7 +485,7 @@ impl CanonicalEncode for crate::types::Value {
 }
 
 /// Tags: `0x00` Running, `0x01` Timer, `0x02` Msg, `0x03` Job, `0x04` Effect,
-/// `0x05` Join, `0x06` Race, `0x07` Incident.
+/// `0x05` Join, `0x06` Race, `0x07` Incident, `0x08` V2Barrier, `0x09` V2Race.
 impl CanonicalEncode for crate::types::WaitState {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
         match self {
@@ -528,6 +538,15 @@ impl CanonicalEncode for crate::types::WaitState {
                 w.write_u8(0x07);
                 incident_id.canonical_encode(w);
             }
+            Self::V2Barrier { record_id } => {
+                w.write_u8(0x08);
+                record_id.canonical_encode(w);
+            }
+            Self::V2Race { record_id, arms } => {
+                w.write_u8(0x09);
+                record_id.canonical_encode(w);
+                w.write_seq(arms.iter(), |w, arm| arm.canonical_encode(w));
+            }
         }
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
@@ -562,10 +581,72 @@ impl CanonicalEncode for crate::types::WaitState {
             0x07 => Self::Incident {
                 incident_id: uuid::Uuid::canonical_decode(r)?,
             },
+            0x08 => Self::V2Barrier {
+                record_id: crate::concurrency::RecordId::canonical_decode(r)?,
+            },
+            0x09 => Self::V2Race {
+                record_id: crate::concurrency::RecordId::canonical_decode(r)?,
+                arms: r.read_seq(crate::types::V2RaceArm::canonical_decode)?,
+            },
             tag => {
                 return Err(CanonicalDecodeError::UnknownTag {
                     tag,
                     type_name: "WaitState",
+                })
+            }
+        })
+    }
+}
+
+/// Tags: `0x00` Timer, `0x01` Msg, `0x02` Effect.
+impl CanonicalEncode for crate::types::V2RaceArm {
+    fn canonical_encode(&self, w: &mut CanonicalWriter) {
+        match self {
+            Self::Timer { target } => {
+                w.write_u8(0x00);
+                target.canonical_encode(w);
+            }
+            Self::Msg {
+                target,
+                name,
+                corr_reg,
+            } => {
+                w.write_u8(0x01);
+                target.canonical_encode(w);
+                w.write_u32(*name);
+                w.write_u8(*corr_reg);
+            }
+            Self::Effect {
+                target,
+                effect_id,
+                template_id,
+            } => {
+                w.write_u8(0x02);
+                target.canonical_encode(w);
+                effect_id.canonical_encode(w);
+                w.write_bytes_fixed(template_id);
+            }
+        }
+    }
+    fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
+        Ok(match r.read_u8()? {
+            0x00 => Self::Timer {
+                target: crate::types::Addr::canonical_decode(r)?,
+            },
+            0x01 => Self::Msg {
+                target: crate::types::Addr::canonical_decode(r)?,
+                name: r.read_u32()?,
+                corr_reg: r.read_u8()?,
+            },
+            0x02 => Self::Effect {
+                target: crate::types::Addr::canonical_decode(r)?,
+                effect_id: crate::EffectId::canonical_decode(r)?,
+                template_id: r.read_bytes_fixed::<32>()?,
+            },
+            tag => {
+                return Err(CanonicalDecodeError::UnknownTag {
+                    tag,
+                    type_name: "V2RaceArm",
                 })
             }
         })
@@ -1092,6 +1173,10 @@ mod tests {
             // counters: arity=2, count=0
             0x02, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
+            // rollback_domain_payload: None
+            0x00,
+            // rollback_domain_payload_hash: None
+            0x00,
             // -- record 2: id = Uuid::from_u128(2) --
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
@@ -1106,6 +1191,10 @@ mod tests {
             // counters: arity=0, count=0
             0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
+            // rollback_domain_payload: None
+            0x00,
+            // rollback_domain_payload_hash: None
+            0x00,
         ];
         assert_eq!(bytes, golden, "canonical encoding drifted from the committed golden bytes — this is exactly the R1 risk V2.1 exists to catch; any change here must be a reviewed, deliberate encoding change, not an incidental one");
     }
@@ -1207,6 +1296,26 @@ mod tests {
                 0x00, 0x00, 0x00, 0x0C
             ]
         );
+    }
+
+    #[test]
+    fn v2_race_arm_all_variants_round_trip_through_canonical_bytes() {
+        use crate::types::{Addr, V2RaceArm};
+        let arms = vec![
+            V2RaceArm::Timer { target: Addr::new(1) },
+            V2RaceArm::Msg { target: Addr::new(2), name: 3, corr_reg: 4 },
+            V2RaceArm::Effect {
+                target: Addr::new(5),
+                effect_id: crate::EffectId::from_uuid(Uuid::from_u128(6)),
+                template_id: [7u8; 32],
+            },
+        ];
+        for arm in arms {
+            let bytes = arm.to_canonical_bytes();
+            let mut reader = CanonicalReader::new(&bytes);
+            let decoded = V2RaceArm::canonical_decode(&mut reader).expect("decode");
+            assert_eq!(decoded, arm);
+        }
     }
 
     #[test]
@@ -1497,15 +1606,23 @@ mod proptest_round_trip {
             arb_record_state(),
             any::<u32>(),
             any::<u32>(),
+            proptest::option::of(".{0,16}"),
+            proptest::option::of(any::<[u8; 32]>()),
         )
-            .prop_map(|(id, kind, members, handler, state, arity, count)| ConcurrencyRecord {
-                id: RecordId::new(id),
-                kind,
-                members,
-                handler: handler.map(Addr::new),
-                state,
-                counters: RecordCounters { arity, count },
-            })
+            .prop_map(
+                |(id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash)| {
+                    ConcurrencyRecord {
+                        id: RecordId::new(id),
+                        kind,
+                        members,
+                        handler: handler.map(Addr::new),
+                        state,
+                        counters: RecordCounters { arity, count },
+                        rollback_domain_payload: rollback_payload.map(String::into_boxed_str),
+                        rollback_domain_payload_hash: rollback_hash,
+                    }
+                },
+            )
     }
 
     fn arb_table() -> impl Strategy<Value = ConcurrencyTable> {

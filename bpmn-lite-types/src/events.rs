@@ -265,4 +265,86 @@ pub enum RuntimeEvent {
         failure_reason: String,
         detected_at: Timestamp,
     },
+
+    // ── V4 D2 word audit events ────────────────────────────────────────────
+    // V2-prefixed per the V2.7 coexistence rule (module docs on `Instr`):
+    // these carry `RecordId`, not v1's static `JoinId`, so they are not
+    // reuses of `Forked`/`JoinArrived`/`JoinReleased` even where the shape
+    // looks close. Not part of the canonical hash domain (audit log only —
+    // see `canonical.rs`, which has no `RuntimeEvent` impl).
+    /// `V2Guard` opened an interrupting-guard record.
+    V2GuardOpened {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        handler: Addr,
+    },
+    /// `V2GuardEnd` retired a guard record on its normal (non-triggered) path.
+    V2GuardRetired {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// `V2Fork` allocated a barrier record and spawned member fibres.
+    V2Forked {
+        record_id: crate::concurrency::RecordId,
+        fork_fiber_id: Uuid,
+        child_fibers: Vec<Uuid>,
+        targets: Vec<Addr>,
+    },
+    /// `V2Join` arrived but was not the last member — parked.
+    V2JoinArrived {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// `V2Join`'s last arrival — barrier retired, `survivor_fiber_id`
+    /// continues in place, `cancelled_fibers` were deleted (V&S v0.4 ruling B).
+    V2JoinReleased {
+        record_id: crate::concurrency::RecordId,
+        survivor_fiber_id: Uuid,
+        next_pc: Addr,
+        cancelled_fibers: Vec<Uuid>,
+    },
+    /// `V2RaceOpen` allocated a race record.
+    V2RaceOpened {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        arm_count: u16,
+    },
+    /// `V2RaceClose` parked the fiber on its armed alternatives.
+    V2RaceClosed {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        arm_count: u16,
+    },
+    /// A v2 race resolved — `fiber_id`'s winning arm fired (message
+    /// delivery or timer). The race record retires in the same transition.
+    V2RaceWon {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// An interrupting guard fired: every record nested under it (and
+    /// their member fibres) is cancelled in the same transition (V&S
+    /// v0.4 §4/§12 ruling A order — `cancelled_records` is listed
+    /// deepest-first), and the handler fibre spawns.
+    V2GuardTriggered {
+        record_id: crate::concurrency::RecordId,
+        handler_fiber_id: Uuid,
+        cancelled_records: Vec<crate::concurrency::RecordId>,
+        cancelled_fibers: Vec<Uuid>,
+    },
+    /// A non-interrupting guard (`GUARD-N>`) fired: the handler spawns,
+    /// nothing is cancelled, the record re-arms (V&S §13 amendment v0.5,
+    /// ruling A) — it was never retired, so there is nothing to re-`Insert`.
+    V2GuardNTriggered {
+        record_id: crate::concurrency::RecordId,
+        handler_fiber_id: Uuid,
+    },
+    /// `V2CancelScope` fired: nested records/fibres cancelled (as
+    /// `V2GuardTriggered`, no handler), and the instance's
+    /// `domain_payload` was restored to the scope's rollback snapshot.
+    V2ScopeCancelled {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        cancelled_records: Vec<crate::concurrency::RecordId>,
+        cancelled_fibers: Vec<Uuid>,
+    },
 }
