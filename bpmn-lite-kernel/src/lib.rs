@@ -4668,6 +4668,247 @@ mod tests {
         );
     }
 
+    /// V4.5 — `EOP-EX-BPMN-ISA-002.md` §2, Scenario 1 (happy path, message
+    /// wins the race), reproduced end-to-end for real: F0 forks into F1
+    /// (60s wait) and F2 (race between a 30s timer and an approval
+    /// message); the message wins, F2 parks at its own `JOIN` (non-last
+    /// arrival); F1's timer later fires, F1 reaches `JOIN` last — sole
+    /// survivor, continues straight through `V2GuardEnd` to `End` in the
+    /// same transition, F2 is cancelled at that moment.
+    ///
+    /// **Documented deviation from the oracle's literal bullet list, not
+    /// silently reconciled**: §2 step 5 states
+    /// `concurrency_mutations: [Retire(BAR)]` — but the same paragraph's
+    /// prose says F1 "continues to 14 (`V2GuardEnd`, pops `G`) → 15
+    /// (`End`)" in the *same* transition, which necessarily also retires
+    /// `G`. Read literally, the bullet list just under-enumerates what its
+    /// own prose describes (drafted by hand, before V4 existed to catch
+    /// it) — omitting `Retire(G)` would leave `G` `Armed` forever with no
+    /// live fibre able to reach it again, a K-1 violation the property
+    /// test in `k_invariant_properties` would catch on its own terms. This
+    /// test asserts the K-1-compliant reading (`Retire(BAR)` then
+    /// `Retire(G)`, plus V4.2's K-1 ancestor-membership fix-up for the
+    /// cancelled F2, which the oracle — drafted before that defect was
+    /// found — could not have anticipated either), not the literal bullet.
+    #[test]
+    fn v2_ex_oracle_scenario_1_message_wins_reproduces_last_arrival_survivor_transition() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [24u8; 32],
+            program: vec![
+                /* 0  */ Instr::V2Guard { handler: Addr::new(16) },
+                /* 1  */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(2), Addr::new(6)]),
+                    pairing: Addr::new(1),
+                },
+                /* 2  */ Instr::PushI64(60_000),
+                /* 3  */ Instr::V2WaitFor,
+                /* 4  */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 5  */ Instr::Jump { target: Addr::new(14) },
+                /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
+                /* 7  */ Instr::PushI64(30_000),
+                /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
+                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                /* 10 */ Instr::V2RaceClose,
+                /* 11 */ Instr::Jump { target: Addr::new(13) },
+                /* 12 */ Instr::Jump { target: Addr::new(13) },
+                /* 13 */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 14 */ Instr::V2GuardEnd,
+                /* 15 */ Instr::End,
+                /* 16 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 17 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["NotifyCancelled".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4.5-ex-oracle-scenario-1").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: F0 -> V2Guard + V2Fork -> F1 (branch A), F2 (branch B).
+        let context1 = DeterministicContext::new(200, Uuid::from_u128(201), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let (f1, f2) = (t1.fibers_upsert()[0].clone(), t1.fibers_upsert()[1].clone());
+        let guard_handle = f1.control_stack[0];
+        let barrier_handle = f1.control_stack[1];
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+
+        // F1 runs 2 -> 3, parks on WaitState::Timer (60s).
+        let context1b = DeterministicContext::new(200, Uuid::from_u128(2015), 1);
+        let t1b = apply(
+            &workflow,
+            &Snapshot::new(after_t1.state().instance().clone(), after_t1.state().fibers().values().cloned())
+                .with_concurrency_table(after_t1.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(f1.fiber_id) },
+            &context1b,
+        )
+        .unwrap();
+        let after_t1b = materialize_snapshot(after_t1.state(), &t1b, workflow.envelope().abi_version(), 1);
+
+        // F2 runs 6 -> 10, parks on WaitState::V2Race (30s timer + msg arms).
+        let context2 = DeterministicContext::new(201, Uuid::from_u128(202), 2);
+        let t2 = apply(
+            &workflow,
+            &Snapshot::new(after_t1b.state().instance().clone(), after_t1b.state().fibers().values().cloned())
+                .with_concurrency_table(after_t1b.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(f2.fiber_id) },
+            &context2,
+        )
+        .unwrap();
+        let after_t2 = materialize_snapshot(after_t1b.state(), &t2, workflow.envelope().abi_version(), 2);
+
+        // ApprovalReceived arrives, correlation matches register 0's
+        // default (Value::Bool(false) -> "b:false") — resolves the race,
+        // F2 resumes at 12 -> 13 (V2Join), non-last arrival, parks.
+        let context3 = DeterministicContext::new(202, Uuid::from_u128(203), 3);
+        let t3 = apply(
+            &workflow,
+            &Snapshot::new(after_t2.state().instance().clone(), after_t2.state().fibers().values().cloned())
+                .with_concurrency_table(after_t2.state().concurrency_table().clone()),
+            &Command::MessageDelivered {
+                message_id: "m1".to_string(),
+                name: "100".to_string(),
+                correlation_key: "b:false".to_string(),
+                payload: b"{}".to_vec(),
+                payload_hash: None,
+                expires_at: 0,
+            },
+            &context3,
+        )
+        .unwrap();
+        assert_eq!(t3.fibers_upsert()[0].pc, Addr::new(12), "message arm's own target");
+        assert_eq!(t3.fibers_upsert()[0].wait, WaitState::Running);
+        let after_t3 = materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 3);
+
+        // F2 resumes: 12 (Jump) -> 13 (V2Join), non-last arrival, parks.
+        let context3b = DeterministicContext::new(202, Uuid::from_u128(2025), 3);
+        let t3b = apply(
+            &workflow,
+            &Snapshot::new(after_t3.state().instance().clone(), after_t3.state().fibers().values().cloned())
+                .with_concurrency_table(after_t3.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(f2.fiber_id) },
+            &context3b,
+        )
+        .unwrap();
+        assert!(matches!(
+            t3b.fibers_upsert()[0].wait,
+            WaitState::V2Barrier { record_id } if record_id == barrier_handle
+        ));
+        let after_t3 = materialize_snapshot(after_t3.state(), &t3b, workflow.envelope().abi_version(), 3);
+        assert_eq!(after_t3.state().fibers().len(), 2, "F1 (parked on its 60s timer) and F2 (parked on BAR) both still live");
+
+        // F1's 60s timer fires — resumes to WaitState::Running (does not
+        // yet re-enter the instruction stream; that's the next Tick).
+        let context4 = DeterministicContext::new(203, Uuid::from_u128(204), 4);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(f1.fiber_id, f1.fiber_id, 3),
+                after_t3.state().instance().instance_id,
+                f1.fiber_id,
+            ),
+            60_200,
+            TimerKind::Wait,
+            None,
+            Uuid::nil(),
+        );
+        let t4 = apply(
+            &workflow,
+            &Snapshot::new(after_t3.state().instance().clone(), after_t3.state().fibers().values().cloned())
+                .with_concurrency_table(after_t3.state().concurrency_table().clone()),
+            &Command::TimerFired { timer: claimed_timer, fired_at: 60_200 },
+            &context4,
+        )
+        .unwrap();
+        assert_eq!(t4.fibers_upsert()[0].wait, WaitState::Running);
+        let after_t4 = materialize_snapshot(after_t3.state(), &t4, workflow.envelope().abi_version(), 4);
+
+        // F1 resumes: 4 (V2Join, LAST arrival — BAR retires) -> 14
+        // (V2GuardEnd, pops+retires G) -> 15 (End), all in one transition.
+        // This is the oracle's §2 step 5 golden transition.
+        let context5 = DeterministicContext::new(204, Uuid::from_u128(205), 5);
+        let t5 = apply(
+            &workflow,
+            &Snapshot::new(after_t4.state().instance().clone(), after_t4.state().fibers().values().cloned())
+                .with_concurrency_table(after_t4.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(f1.fiber_id) },
+            &context5,
+        )
+        .unwrap();
+
+        assert_eq!(
+            t5.fibers_delete(),
+            &[f2.fiber_id, f1.fiber_id],
+            "F2 cancelled when BAR retires, then F1 itself deletes on reaching End"
+        );
+        assert!(
+            t5.fibers_upsert().is_empty(),
+            "F1 (the survivor) runs straight through GuardEnd to End in the same transition — not parked, not re-upserted"
+        );
+        assert_eq!(
+            t5.concurrency_mutations().len(),
+            3,
+            "K-1 ancestor fix-up for F2 (still lists G via effective_control_stack, V4.2) + Retire(BAR) + Retire(G)"
+        );
+        assert!(matches!(
+            &t5.concurrency_mutations()[0],
+            ConcurrencyMutation::Insert(record) if record.id == guard_handle
+        ));
+        assert!(matches!(
+            &t5.concurrency_mutations()[1],
+            ConcurrencyMutation::Retire(id) if *id == barrier_handle
+        ));
+        assert!(matches!(
+            &t5.concurrency_mutations()[2],
+            ConcurrencyMutation::Retire(id) if *id == guard_handle
+        ));
+        assert_eq!(
+            t5.control_stack_deltas().len(),
+            2,
+            "F1's own Pop(BAR) then Pop(G) — F2's stack was already fully accounted for by its deletion (v0.4 ruling C)"
+        );
+
+        // Byte-identical reproducibility (plan 4.5): the same (artifact,
+        // frame, command, context) tuple must produce byte-identical
+        // canonical bytes across runs.
+        let t5_replay = apply(
+            &workflow,
+            &Snapshot::new(after_t4.state().instance().clone(), after_t4.state().fibers().values().cloned())
+                .with_concurrency_table(after_t4.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(f1.fiber_id) },
+            &context5,
+        )
+        .unwrap();
+        assert_eq!(t5.canonical_bytes().unwrap(), t5_replay.canonical_bytes().unwrap());
+    }
+
     /// V4.1 `V2CancelScope` (Adam-ratified V&S §10 Q4: reuses the
     /// compensation op — restore the scope's rollback snapshot, unwind
     /// nested members, no handler). `V2Guard` captures `domain_payload`
