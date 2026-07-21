@@ -67,6 +67,9 @@ pub enum TransitionError {
     StepLimitExceeded(u64),
     NumericOverflow(&'static str),
     OptimisticConflict,
+    /// V4.3 — Ring 3 shadow assert failure over the frame this transition
+    /// would produce. See `bpmn_lite_types::IntegrityError::Ring3Runtime`.
+    Integrity(bpmn_lite_types::IntegrityError),
     RouteNotMatched(String),
 }
 
@@ -100,6 +103,7 @@ impl fmt::Display for TransitionError {
             }
             Self::NumericOverflow(value) => write!(formatter, "numeric overflow: {value}"),
             Self::OptimisticConflict => write!(formatter, "optimistic payload conflict"),
+            Self::Integrity(error) => write!(formatter, "{error}"),
             Self::RouteNotMatched(node) => {
                 write!(formatter, "no deterministic route matched at {node}")
             }
@@ -397,6 +401,130 @@ pub fn check_k_invariants(
     Ok(())
 }
 
+/// V4.3 — folds a `Transition`'s deltas onto `snapshot`'s fibre map and
+/// concurrency table, the minimum needed for Ring 3's shadow asserts (no
+/// joins/incidents/pending-effects bookkeeping — those aren't part of
+/// what Ring 3 checks). Mirrors `materialize_snapshot`'s fiber/table
+/// folding exactly; kept separate because that function also threads
+/// join counts and incidents through `PersistedSnapshotState`, which
+/// `apply` itself has no need of and no access to (only the store layer
+/// carries that forward).
+fn derive_post_transition_frame(
+    snapshot: &Snapshot,
+    transition: &Transition,
+) -> (
+    std::collections::BTreeMap<Uuid, Fiber>,
+    bpmn_lite_types::concurrency::ConcurrencyTable,
+) {
+    let mut fibers = snapshot.fibers().clone();
+    for fiber in transition.fibers_upsert() {
+        fibers.insert(fiber.fiber_id, fiber.clone());
+    }
+    for fiber_id in transition.fibers_delete() {
+        fibers.remove(fiber_id);
+    }
+    if transition.terminal_cleanup().delete_all_fibers() {
+        fibers.clear();
+    }
+    let mut table = snapshot.concurrency_table().clone();
+    for mutation in transition.concurrency_mutations() {
+        match mutation {
+            ConcurrencyMutation::Insert(record) => table.insert(record.clone()),
+            ConcurrencyMutation::Retire(id) => {
+                if let Some(record) = table.get_mut(*id) {
+                    record.state = RecordState::Retired;
+                }
+            }
+            ConcurrencyMutation::Remove(id) => {
+                table.remove(*id);
+            }
+        }
+    }
+    (fibers, table)
+}
+
+/// V4.3 — Ring 3 (V&S §6): unconditional structural asserts over the
+/// frame a transition would produce, run on *every* `apply` call (every
+/// call either parks a fibre or resumes/advances one — there is no
+/// separate "park" vs "resume" code path to distinguish, so checking the
+/// result unconditionally realizes "at every park/resume" exactly).
+/// Fail-closed: a verified program under a proven kernel yielding a
+/// structurally invalid frame has one explanation — corruption.
+///
+/// Checks, each O(fibres + records):
+/// - PC within program, for every touched (`fibers_upsert`) fibre.
+/// - Operand/control stack heights within `VerifiedLimits`, same scope.
+/// - K-1/K-2/K-3 shadows (`check_k_invariants`) — subsumes "every handle
+///   resolves in the concurrency table" (K-2 already rejects a dangling
+///   handle) and "barrier counts <= static arity" (K-3).
+/// - Every pending effect owned by exactly one waiting fibre: no two
+///   fibres in the resulting frame reference the same `EffectId`, whether
+///   parked directly (`WaitState::Effect`) or as a race alternative
+///   (`WaitState::V2Race`'s `Effect` arms).
+fn ring3_shadow_check(
+    workflow: &ExecutableWorkflow,
+    snapshot: &Snapshot,
+    transition: &Transition,
+) -> Result<(), bpmn_lite_types::IntegrityError> {
+    let (fibers, table) = derive_post_transition_frame(snapshot, transition);
+    let limits = workflow.envelope().limits();
+    let program_len = workflow.envelope().instructions().len();
+
+    for fiber in transition.fibers_upsert() {
+        if fiber.pc.index() >= program_len {
+            return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+                "fibre {} pc {} out of bounds (program length {program_len})",
+                fiber.fiber_id, fiber.pc
+            )));
+        }
+        if fiber.stack.len() > limits.max_stack() as usize {
+            return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+                "fibre {} operand stack height {} exceeds verified limit {}",
+                fiber.fiber_id,
+                fiber.stack.len(),
+                limits.max_stack()
+            )));
+        }
+        if fiber.control_stack.len() > limits.max_control_depth() as usize {
+            return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+                "fibre {} control-stack depth {} exceeds verified limit {}",
+                fiber.fiber_id,
+                fiber.control_stack.len(),
+                limits.max_control_depth()
+            )));
+        }
+    }
+
+    check_k_invariants(&fibers, &table).map_err(bpmn_lite_types::IntegrityError::Ring3Runtime)?;
+
+    let mut effect_owners: std::collections::BTreeMap<EffectId, Uuid> =
+        std::collections::BTreeMap::new();
+    for fiber in fibers.values() {
+        let referenced: Vec<EffectId> = match &fiber.wait {
+            WaitState::Effect { effect_id } => vec![*effect_id],
+            WaitState::V2Race { arms, .. } => arms
+                .iter()
+                .filter_map(|arm| match arm {
+                    bpmn_lite_types::V2RaceArm::Effect { effect_id, .. } => Some(*effect_id),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for effect_id in referenced {
+            if let Some(other) = effect_owners.insert(effect_id, fiber.fiber_id)
+                && other != fiber.fiber_id
+            {
+                return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+                    "effect {effect_id:?} owned by both fibre {other} and fibre {}",
+                    fiber.fiber_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pure transition function. It performs no I/O and obtains time and identity only
 /// from `DeterministicContext` or the durable command.
 pub fn apply(
@@ -525,6 +653,7 @@ pub fn apply(
             .build()),
         Command::V2TriggerGuard { .. } => apply_v2_trigger_guard(snapshot, command, context),
     }?;
+    ring3_shadow_check(workflow, snapshot, &transition).map_err(TransitionError::Integrity)?;
     let logical_time = i64::try_from(context.logical_time())
         .map_err(|_| TransitionError::NumericOverflow("logical time"))?;
     Ok(transition.with_command_envelope(CommandEnvelope::new(
@@ -5067,6 +5196,130 @@ mod tests {
             t2.events().iter().find(|e| matches!(e, RuntimeEvent::FfiInvocationCompleted { .. })),
             Some(RuntimeEvent::FfiInvocationCompleted { outcome_kind, .. }) if outcome_kind == "success"
         ));
+    }
+
+    /// V4.3 — Ring 3 must actually reject a corrupted frame, not just stay
+    /// silent because everything happens to be fine (a gate with only a
+    /// passing test is not a gate). Hand-constructs a fibre whose control
+    /// stack already carries a handle that resolves to no concurrency
+    /// record at all — real corruption (or a hand-authored test snapshot,
+    /// same thing from the kernel's point of view) — and confirms `apply`
+    /// rejects it via `TransitionError::Integrity` even though the word
+    /// actually executed (`V2WaitFor`) never touches `control_stack`.
+    #[test]
+    fn ring3_rejects_a_dangling_control_stack_handle() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [20u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushI64(60_000),
+                /* 1 */ Instr::V2WaitFor,
+                /* 2 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4.3-ring3-dangling-handle").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let bogus_handle = RecordId::new(Uuid::from_u128(0xDEAD));
+        let mut fiber = Fiber::new(root_fiber_id, 0);
+        fiber.control_stack = vec![bogus_handle];
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [fiber]);
+
+        let result = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context);
+        assert!(
+            matches!(&result, Err(TransitionError::Integrity(_))),
+            "expected a Ring 3 rejection, got {result:?}"
+        );
+    }
+
+    /// V4.3 — isolates the K-2 shadow specifically (as opposed to the
+    /// depth-limit check `ring3_rejects_a_dangling_control_stack_handle`
+    /// happens to hit first for a program with no scope words at all):
+    /// runs a real `V2Guard` to get a legitimately-`Armed` record and a
+    /// control-stack depth within the verified limit, then feeds `apply`
+    /// a snapshot where that same record has been dropped from the
+    /// concurrency table entirely — depth is fine, the handle just
+    /// doesn't resolve.
+    #[test]
+    fn ring3_rejects_a_handle_whose_record_was_dropped() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [23u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
+                /* 1 */ Instr::PushI64(60_000),
+                /* 2 */ Instr::V2WaitFor,
+                /* 3 */ Instr::V2GuardEnd,
+                /* 4 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4.3-ring3-dropped-record").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context1) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let parked = t1.fibers_upsert()[0].clone();
+        assert_eq!(parked.control_stack.len(), 1);
+
+        // Corruption: the fibre still carries the handle, but the record
+        // it points to was never inserted.
+        let corrupted_snapshot = Snapshot::new(base_snapshot.instance().clone(), [parked]);
+        let context2 = DeterministicContext::new(1_100, Uuid::from_u128(1_101), 2);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                base_snapshot.instance().instance_id,
+                root_fiber_id,
+            ),
+            60_000,
+            TimerKind::Wait,
+            None,
+            Uuid::nil(),
+        );
+        let result = apply(
+            &workflow,
+            &corrupted_snapshot,
+            &Command::TimerFired { timer: claimed_timer, fired_at: 60_000 },
+            &context2,
+        );
+        assert!(
+            matches!(
+                &result,
+                Err(TransitionError::Integrity(bpmn_lite_types::IntegrityError::Ring3Runtime(msg)))
+                    if msg.contains("no such record exists")
+            ),
+            "expected a K-2 Ring 3 rejection, got {result:?}"
+        );
     }
 
     /// V4.2 — K-1..K-3 property tests. Random sequences of `Tick`/
