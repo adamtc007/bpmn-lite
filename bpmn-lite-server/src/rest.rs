@@ -460,7 +460,7 @@ async fn create_instance(
     let placeholder_values = if initial_variables.is_empty() {
         None
     } else {
-        Some(serde_json::to_value(&initial_variables)?)
+        Some(serde_json::Value::Object(initial_variables.into_iter().collect()))
     };
 
     let instance = ProcessInstance {
@@ -617,7 +617,7 @@ async fn drive_forward(
                         updated_pv.remove("__pending_branches");
                     }
 
-                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
                     inst.current_node_id = Some(first);
                     let _ = commit_demo_instance(store, &inst).await;
                 }
@@ -640,13 +640,13 @@ async fn drive_forward(
                             updated_pv.remove("__pending_branches");
                         }
 
-                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                        inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
                         inst.current_node_id = Some(next_branch);
                         let _ = commit_demo_instance(store, &inst).await;
                     } else {
                         let mut updated_pv = pv.clone();
                         updated_pv.remove("__pending_branches");
-                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                        inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
                         inst.current_node_id = Some(j.next.clone());
                         let _ = commit_demo_instance(store, &inst).await;
                     }
@@ -672,13 +672,13 @@ async fn drive_forward(
                         counter_key,
                         serde_json::Value::Number((current_count + 1).into()),
                     );
-                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
                     inst.current_node_id = Some(next_node);
                     let _ = commit_demo_instance(store, &inst).await;
                 } else {
                     let mut updated_pv = pv.clone();
                     updated_pv.remove(&counter_key);
-                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
                     inst.current_node_id = Some(l.next.clone());
                     let _ = commit_demo_instance(store, &inst).await;
                 }
@@ -847,7 +847,7 @@ async fn apply_step(
     if let Some((name, val)) = placeholder {
         pv.insert(name.to_owned(), val);
     }
-    inst.placeholder_values = serde_json::to_value(&pv).ok();
+    inst.placeholder_values = Some(serde_json::Value::Object(pv.into_iter().collect()));
     let _ = commit_demo_instance(store, &inst).await;
 }
 

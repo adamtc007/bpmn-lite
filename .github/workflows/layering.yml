@@ -21,6 +21,10 @@ jobs:
         run: bash scripts/check-glossary.sh --self-test
       - name: Glossary guard
         run: bash scripts/check-glossary.sh
+      - name: Canonical hash-domain invariant guard self-test (D3 Ring 2, V2.1h.1/h.6)
+        run: bash scripts/check-canonical-invariant.sh --self-test
+      - name: Canonical hash-domain invariant guard
+        run: bash scripts/check-canonical-invariant.sh
       - name: Deterministic kernel WASI Preview 2 build
         run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
       - name: Native/WASM replay byte equality
