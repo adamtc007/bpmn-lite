@@ -15,6 +15,7 @@
 //! below).
 
 pub mod artifact;
+pub mod canonical;
 pub mod concurrency;
 pub mod events;
 pub mod ffi_bindings;
@@ -29,6 +30,7 @@ pub mod types;
 // bpmn_lite_types::*` and get the full vocabulary, mirroring the
 // way `bpmn-lite-core` used to expose these via `pub mod`.
 pub use artifact::*;
+pub use canonical::{CanonicalDecodeError, CanonicalEncode, CanonicalReader, CanonicalWriter};
 pub use concurrency::*;
 pub use events::*;
 pub use ffi_bindings::*;

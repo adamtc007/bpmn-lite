@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc aa074a869652b2f6ccc5c7e409a33c2c66fff7e70a6c01a62ade9efe3045fe0f # shrinks to table = ConcurrencyTable({RecordId(00000000-0000-0000-0000-000000000000): ConcurrencyRecord { id: RecordId(00000000-0000-0000-0000-000000000000), kind: Guard { interrupting: false }, members: {00000000-0000-0000-0000-000000000000, 00000000-0000-0000-0000-000000000001, 00000000-0000-0000-0000-000000000002}, handler: Some(Addr(0)), state: Armed, counters: RecordCounters { arity: 0, count: 0 } }}), flip_index = 13852872443191240698, flip_bits = 2

@@ -160,7 +160,7 @@ impl ConcurrencyTable {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&RecordId, &ConcurrencyRecord)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&RecordId, &ConcurrencyRecord)> {
         self.0.iter()
     }
 }

@@ -36,9 +36,10 @@ impl std::fmt::Display for TripwireSurface {
 }
 
 /// The typed error every D3 ring reports through, naming the firing ring
-/// (V&S §6, Ring 5: "typed `IntegrityError` variant naming the ring"). Only
-/// the Ring-1 tripwire variant is declared in V1; Ring 2-5 variants are
-/// added as V2-V4 wire their detection logic.
+/// (V&S §6, Ring 5: "typed `IntegrityError` variant naming the ring").
+/// V1 declared `Tripwire`; V2 adds `Ring1Physical` and `Ring2Frame` as its
+/// Ring 1/2 detection lands (`bpmn-lite-store-postgres`). Ring 3 (V4) and
+/// Ring 4 (V6) variants are added as those tranches wire their detection.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IntegrityError {
     /// Ring 1: a versioned surface decoded to anything other than its one
@@ -54,6 +55,16 @@ pub enum IntegrityError {
         expected: u32,
         actual: u32,
     },
+    /// Ring 1: physical-integrity hash mismatch — the persisted frame's
+    /// raw bytes no longer hash to the stored `frame_hash`. Detected
+    /// before any deserialization is attempted (V&S §6).
+    #[error("Ring 1 physical integrity violation: {0}")]
+    Ring1Physical(String),
+    /// Ring 2: frame/state_hash mismatch — either the three-way agreement
+    /// (recomputed == stored snapshot == journal head) or the journal
+    /// chain (`prior_state_hash` == previous record's `state_hash`) fails.
+    #[error("Ring 2 frame integrity violation: {0}")]
+    Ring2Frame(String),
 }
 
 #[cfg(test)]

@@ -60,6 +60,25 @@ where
 
 const EVENT_NOTIFY_CHANNEL: &str = "bpmn_lite_events";
 
+/// R1 mitigation (c) (EOP-VS-BPMN-ISA-002 §"Named risk R1"): default rate
+/// for the sampled canonical round-trip assertion on commit — every 128th
+/// revision pays the `decode` + `canonical_bytes` cost to catch canonical-
+/// form drift (nondeterministic serialization) live, not just in CI.
+/// `BPMN_LITE_CANONICAL_SAMPLE_RATE` overrides it; `0` disables sampling
+/// explicitly (an operator opt-out, not a silent default).
+const DEFAULT_CANONICAL_SAMPLE_RATE: u64 = 128;
+
+/// `revision % rate == 0` is deterministic across replicas (no RNG, no
+/// wall-clock) so the same commit always samples the same way, keeping the
+/// check reproducible under `BPMN_LITE_CANONICAL_SAMPLE_RATE=1` in tests.
+fn should_sample_canonical_round_trip(revision: u64) -> bool {
+    let rate = std::env::var("BPMN_LITE_CANONICAL_SAMPLE_RATE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CANONICAL_SAMPLE_RATE);
+    rate != 0 && revision.is_multiple_of(rate)
+}
+
 /// Serialize a `Value` into a deterministic string key for dead-letter lookup.
 /// Must match MemoryStore's `value_key()` exactly.
 fn value_key(v: &Value) -> String {
@@ -1074,7 +1093,7 @@ impl RuntimeStore for PostgresWorkflowStore {
               AND instance_id = $2
               AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
             RETURNING revision, fence, bytecode_version, snapshot_schema_version,
-                      artifact_abi, snapshot_envelope
+                      artifact_abi, snapshot_envelope, frame_hash
             "#,
         )
         .bind(tenant_id.as_str())
@@ -1098,12 +1117,22 @@ impl RuntimeStore for PostgresWorkflowStore {
         let snapshot_schema_version: Option<i16> = row.get("snapshot_schema_version");
         let artifact_abi: Option<i32> = row.get("artifact_abi");
         let snapshot_bytes: Option<Vec<u8>> = row.get("snapshot_envelope");
+        let stored_frame_hash: Option<Vec<u8>> = row.get("frame_hash");
         let integrity_result = async {
             let revision_u64 =
                 u64::try_from(revision).map_err(|_| "negative instance revision".to_string())?;
             let snapshot_bytes = snapshot_bytes
                 .as_deref()
                 .ok_or_else(|| "missing snapshot envelope".to_string())?;
+            // D3 Ring 1: verify the physical-integrity hash over the RAW
+            // bytes before any deserialization is attempted — a corrupted
+            // frame never reaches the deserializer.
+            let stored_frame_hash = stored_frame_hash
+                .as_deref()
+                .ok_or_else(|| "missing frame hash".to_string())?;
+            if blake3::hash(snapshot_bytes).as_bytes().as_slice() != stored_frame_hash {
+                return Err(IntegrityError::Ring1Physical("frame hash mismatch on raw bytes (pre-decode)".to_string()).to_string());
+            }
             let snapshot =
                 SnapshotEnvelope::decode(snapshot_bytes).map_err(|error| error.to_string())?;
             let canonical = snapshot
@@ -1128,7 +1157,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             }
             let journal_row = sqlx::query(
                 r#"
-                SELECT new_revision, state_hash, artifact_hash, record_envelope
+                SELECT new_revision, prior_state_hash, state_hash, artifact_hash, record_envelope
                 FROM workflow_journal
                 WHERE tenant_id = $1 AND instance_id = $2
                 ORDER BY new_revision DESC
@@ -1142,6 +1171,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "missing journal head".to_string())?;
             let journal_revision: i64 = journal_row.get("new_revision");
+            let journal_prior_state_hash: Vec<u8> = journal_row.get("prior_state_hash");
             let journal_state_hash: Vec<u8> = journal_row.get("state_hash");
             let journal_artifact_hash: Vec<u8> = journal_row.get("artifact_hash");
             let journal_bytes: Vec<u8> = journal_row.get("record_envelope");
@@ -1156,8 +1186,33 @@ impl RuntimeStore for PostgresWorkflowStore {
                 || journal.state_hash()
                     != snapshot.state_hash().map_err(|error| error.to_string())?
                 || journal.artifact_hash() != artifact_hash
+                || bytes_to_hash(journal_prior_state_hash).map_err(|error| error.to_string())?
+                    != journal.prior_state_hash()
             {
-                return Err("snapshot and journal head diverge".to_string());
+                return Err(IntegrityError::Ring2Frame("snapshot and journal head diverge".to_string()).to_string());
+            }
+            // D3 Ring 2 chain: this record's prior_state_hash must equal the
+            // previous record's state_hash (genesis: prior_state_hash is zero).
+            if journal.prior_revision() < 0 {
+                if journal.prior_state_hash() != [0u8; 32] {
+                    return Err(IntegrityError::Ring2Frame("genesis journal record has non-zero prior_state_hash".to_string()).to_string());
+                }
+            } else {
+                let previous_state_hash: Vec<u8> = sqlx::query_scalar(
+                    "SELECT state_hash FROM workflow_journal WHERE tenant_id = $1 AND instance_id = $2 AND new_revision = $3",
+                )
+                .bind(tenant_id.as_str())
+                .bind(instance_id)
+                .bind(journal.prior_revision())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| IntegrityError::Ring2Frame("journal chain broken: prior revision missing".to_string()).to_string())?;
+                if bytes_to_hash(previous_state_hash).map_err(|error| error.to_string())?
+                    != journal.prior_state_hash()
+                {
+                    return Err(IntegrityError::Ring2Frame("journal chain broken: prior_state_hash does not match previous record's state_hash".to_string()).to_string());
+                }
             }
             Ok::<(), String>(())
         }
@@ -2281,11 +2336,14 @@ impl RuntimeStore for PostgresWorkflowStore {
 
             let child_snapshot = SnapshotEnvelope::new(
                 CURRENT_ARTIFACT_ABI,
+                instance.bytecode_version,
                 0,
                 PersistedSnapshotState::new(
                     instance.clone(),
                     [fiber.clone()],
                     std::collections::BTreeMap::new(),
+                    [],
+                    ConcurrencyTable::new(),
                     [],
                 ),
             );
@@ -2304,16 +2362,21 @@ impl RuntimeStore for PostgresWorkflowStore {
                 -1,
                 0,
                 instance.bytecode_version,
+                [0u8; 32],
                 child_state_hash,
                 std::slice::from_ref(child.start_event()),
                 &[],
             );
+            let child_snapshot_bytes = child_snapshot
+                .canonical_bytes()
+                .map_err(|error| CommitError::Integrity(error.to_string()))?;
+            let child_frame_hash: [u8; 32] = *blake3::hash(&child_snapshot_bytes).as_bytes();
             let child_snapshot_update =
                 sqlx::query(
                     r#"
                 UPDATE workflow_instances
-                SET snapshot_schema_version = $1, artifact_abi = $2, snapshot_envelope = $3
-                WHERE tenant_id = $4 AND instance_id = $5 AND revision = 0
+                SET snapshot_schema_version = $1, artifact_abi = $2, snapshot_envelope = $3, frame_hash = $4
+                WHERE tenant_id = $5 AND instance_id = $6 AND revision = 0
                 "#,
                 )
                 .bind(i16::try_from(child_snapshot.schema_version()).map_err(|_| {
@@ -2322,11 +2385,8 @@ impl RuntimeStore for PostgresWorkflowStore {
                 .bind(i32::try_from(child_snapshot.artifact_abi()).map_err(|_| {
                     CommitError::Integrity("artifact ABI exceeds INTEGER".to_string())
                 })?)
-                .bind(
-                    child_snapshot
-                        .canonical_bytes()
-                        .map_err(|error| CommitError::Integrity(error.to_string()))?,
-                )
+                .bind(child_snapshot_bytes)
+                .bind(&child_frame_hash[..])
                 .bind(claim.tenant_id().as_str())
                 .bind(instance.instance_id)
                 .execute(&mut *tx)
@@ -2342,8 +2402,8 @@ impl RuntimeStore for PostgresWorkflowStore {
                 INSERT INTO workflow_journal (
                     tenant_id, instance_id, schema_version, command_schema_version,
                     command_id, command_type, logical_time, prior_revision, new_revision,
-                    artifact_hash, state_hash, record_envelope
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,-1,0,$8,$9,$10)
+                    artifact_hash, prior_state_hash, state_hash, record_envelope
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,-1,0,$8,$9,$10,$11)
                 "#,
             )
             .bind(claim.tenant_id().as_str())
@@ -2360,6 +2420,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .bind(child_journal.command().command_type())
             .bind(child_journal.command().logical_time())
             .bind(&child_journal.artifact_hash()[..])
+            .bind(&child_journal.prior_state_hash()[..])
             .bind(&child_journal.state_hash()[..])
             .bind(
                 child_journal
@@ -2514,22 +2575,89 @@ impl RuntimeStore for PostgresWorkflowStore {
         if let Some(state) = transition.state_override() {
             persisted_instance.state = state.clone();
         }
+        // D1 concurrency table: baseline is whatever the prior commit
+        // persisted (empty for the first commit after start); apply this
+        // transition's mutations on top. `concurrency_mutations()` is
+        // always empty until V4's words exist to produce them — this path
+        // is exercised now so V4 lands on already-correct plumbing.
+        let prior_envelope_bytes: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE tenant_id = $1 AND instance_id = $2",
+        )
+        .bind(claim.tenant_id().as_str())
+        .bind(claim.instance_id())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| CommitError::Unavailable(error.to_string()))?
+        .flatten();
+        let mut concurrency_table = prior_envelope_bytes
+            .as_deref()
+            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
+            .map(|envelope| envelope.state().concurrency_table().clone())
+            .unwrap_or_default();
+        for mutation in transition.concurrency_mutations() {
+            match mutation {
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Retire(id) => {
+                    if let Some(record) = concurrency_table.get_mut(*id) {
+                        record.state = RecordState::Retired;
+                    }
+                }
+                ConcurrencyMutation::Remove(id) => {
+                    concurrency_table.remove(*id);
+                }
+            }
+        }
         let snapshot_envelope = SnapshotEnvelope::new(
             CURRENT_ARTIFACT_ABI,
+            persisted_instance.bytecode_version,
             new_revision,
             PersistedSnapshotState::new(
                 persisted_instance,
                 persisted_fibers,
                 persisted_joins,
                 persisted_incidents,
+                concurrency_table,
+                [],
             ),
         );
         let snapshot_bytes = snapshot_envelope
             .canonical_bytes()
             .map_err(|error| CommitError::Integrity(error.to_string()))?;
+        // D3 Ring 1: physical-integrity hash over the exact bytes stored.
+        // Verified on load BEFORE decode (see claim_work_for_transition) —
+        // a corrupted frame never reaches the deserializer.
+        let frame_hash: [u8; 32] = *blake3::hash(&snapshot_bytes).as_bytes();
+        // R1 mitigation (c): sampled runtime round-trip assertion on commit.
+        // Golden-bytes fixtures and property tests (canonical.rs) prove the
+        // fixed point in CI on a handful of frames; this samples *live*
+        // commits so a canonical-form regression (dependency upgrade
+        // changing field order, a new nondeterministic field type slipping
+        // past the CI lint) is caught in production, not just at merge time.
+        if should_sample_canonical_round_trip(new_revision) {
+            let decoded = SnapshotEnvelope::decode(&snapshot_bytes).map_err(|error| {
+                CommitError::Integrity(format!(
+                    "R1 sampled round-trip: decode of just-encoded envelope failed: {error}"
+                ))
+            })?;
+            let recanonicalized = decoded.canonical_bytes().map_err(|error| {
+                CommitError::Integrity(format!(
+                    "R1 sampled round-trip: re-canonicalization failed: {error}"
+                ))
+            })?;
+            if recanonicalized != snapshot_bytes {
+                return Err(CommitError::Integrity(
+                    "R1 sampled round-trip: canonicalize(decode(bytes)) != bytes — canonical-form drift detected on commit".to_string(),
+                ));
+            }
+        }
         let state_hash = snapshot_envelope
             .state_hash()
             .map_err(|error| CommitError::Integrity(error.to_string()))?;
+        let prior_state_hash = prior_envelope_bytes
+            .as_deref()
+            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
+            .and_then(|envelope| envelope.state_hash().ok())
+            .unwrap_or([0u8; 32]);
         let command = transition.command_envelope().cloned().unwrap_or_else(|| {
             transition.start_dedupe().map_or_else(
                 || {
@@ -2563,6 +2691,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             prior_revision,
             new_revision,
             snapshot.bytecode_version,
+            prior_state_hash,
             state_hash,
             transition.events(),
             transition.effects(),
@@ -2573,8 +2702,8 @@ impl RuntimeStore for PostgresWorkflowStore {
         let snapshot_update = sqlx::query(
             r#"
             UPDATE workflow_instances
-            SET snapshot_schema_version = $1, artifact_abi = $2, snapshot_envelope = $3
-            WHERE tenant_id = $4 AND instance_id = $5 AND revision = $6
+            SET snapshot_schema_version = $1, artifact_abi = $2, snapshot_envelope = $3, frame_hash = $4
+            WHERE tenant_id = $5 AND instance_id = $6 AND revision = $7
             "#,
         )
         .bind(
@@ -2587,6 +2716,7 @@ impl RuntimeStore for PostgresWorkflowStore {
                 .map_err(|_| CommitError::Integrity("artifact ABI exceeds INTEGER".to_string()))?,
         )
         .bind(snapshot_bytes)
+        .bind(&frame_hash[..])
         .bind(claim.tenant_id().as_str())
         .bind(claim.instance_id())
         .bind(i64::try_from(new_revision).map_err(|_| {
@@ -2604,8 +2734,8 @@ impl RuntimeStore for PostgresWorkflowStore {
             INSERT INTO workflow_journal (
                 tenant_id, instance_id, schema_version, command_schema_version,
                 command_id, command_type, logical_time, prior_revision, new_revision,
-                artifact_hash, state_hash, record_envelope
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                artifact_hash, prior_state_hash, state_hash, record_envelope
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
             "#,
             )
             .bind(claim.tenant_id().as_str())
@@ -2626,6 +2756,7 @@ impl RuntimeStore for PostgresWorkflowStore {
                 CommitError::Integrity("journal revision exceeds BIGINT".to_string())
             })?)
             .bind(&journal.artifact_hash()[..])
+            .bind(&journal.prior_state_hash()[..])
             .bind(&journal.state_hash()[..])
             .bind(journal_bytes)
             .execute(&mut *tx)
@@ -3873,6 +4004,29 @@ mod tests {
     use std::sync::Arc;
 
     const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
+
+    /// V2.6 (R1 mitigation c): the sampling decision itself is a pure,
+    /// deterministic function of revision number — no env mutation needed
+    /// to prove the gate. Genesis (revision 0) always samples under the
+    /// default rate, so every test in this module that commits at least
+    /// once already exercises the live round-trip path at
+    /// `commit_transition`'s frame_hash computation site; this test proves
+    /// the *rate itself* is config-gated and revision-keyed, not that a
+    /// single commit happened to pass.
+    #[test]
+    fn canonical_round_trip_sampling_is_deterministic_and_rate_gated() {
+        assert!(
+            should_sample_canonical_round_trip(0),
+            "genesis must always sample"
+        );
+        assert!(should_sample_canonical_round_trip(DEFAULT_CANONICAL_SAMPLE_RATE));
+        assert!(should_sample_canonical_round_trip(2 * DEFAULT_CANONICAL_SAMPLE_RATE));
+        assert!(!should_sample_canonical_round_trip(1));
+        assert!(!should_sample_canonical_round_trip(DEFAULT_CANONICAL_SAMPLE_RATE - 1));
+        assert!(!should_sample_canonical_round_trip(
+            DEFAULT_CANONICAL_SAMPLE_RATE + 1
+        ));
+    }
 
     async fn setup() -> (
         PgPool,
@@ -6169,7 +6323,7 @@ mod tests {
 
         let mut inst = make_instance(iid);
         inst.tenant_id = tenant_id.to_string();
-        inst.domain_payload = "initial_payload".to_string().into();
+        inst.domain_payload = r#""initial_payload""#.to_string().into();
         inst.domain_payload_hash = [1u8; 32];
         inst.state = ProcessState::Running;
 
@@ -6266,7 +6420,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded_inst.domain_payload.as_ref(), "initial_payload");
+        assert_eq!(loaded_inst.domain_payload.as_ref(), r#""initial_payload""#);
 
         // 5. Re-run the tick without the failing op; assert it commits and all ops persist correctly
         let successful_ops = vec![
@@ -8307,6 +8461,274 @@ mod tests {
                 .unwrap();
         assert!(lease_owner.is_none());
     }
+
+    /// V2.5 Ring 1: unlike `test_claim_load_quarantines_corrupt_snapshot_atomically`
+    /// (whose fixture is garbage bytes that never even parse as JSON), this
+    /// flips one byte in an otherwise well-formed, previously-committed
+    /// `snapshot_envelope` while leaving `frame_hash` at its original
+    /// correct value. Proves the pre-decode BLAKE3 comparison — not merely
+    /// "decode failed" — is what fires, and fires atomically (quarantine
+    /// state set, lease released) before `SnapshotEnvelope::decode` runs.
+    #[tokio::test]
+    async fn test_claim_load_quarantines_ring1_flipped_byte_under_stale_hash() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let mut envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Flip a byte inside the JSON payload; frame_hash column is left
+        // untouched, so it now describes bytes that no longer exist.
+        let flip_at = envelope_bytes.len() / 2;
+        envelope_bytes[flip_at] ^= 0xFF;
+        sqlx::query("UPDATE workflow_instances SET snapshot_envelope = $1 WHERE instance_id = $2")
+            .bind(&envelope_bytes)
+            .bind(instance_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        match result {
+            Err(ClaimError::Integrity(message)) => {
+                assert!(
+                    message.contains("Ring 1"),
+                    "expected Ring 1 physical integrity violation, got: {message}"
+                );
+            }
+            other => panic!("expected ClaimError::Integrity naming Ring 1, got {other:?}"),
+        }
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(quarantine.as_deref(), Some("replay_integrity_violation"));
+        let lease_owner: Option<String> =
+            sqlx::query_scalar("SELECT lease_owner FROM workflow_instances WHERE instance_id = $1")
+                .bind(instance_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(lease_owner.is_none());
+    }
+
+    /// V2.5 Ring 2: directly corrupts the journal head's `prior_state_hash`
+    /// column so it no longer equals the previous record's `state_hash`,
+    /// proving the chain-walk added in V2.3 (not merely the three-way
+    /// snapshot/journal agreement) is what detects a broken hash chain.
+    #[tokio::test]
+    async fn test_claim_load_quarantines_ring2_chain_break() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        // Two commits: genesis, then one more, so the journal head has a
+        // real (non-zero, non-genesis) prior_state_hash to corrupt.
+        let claim1 = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(
+                &claim1,
+                &TransitionBuilder::new(instance.clone()).build(),
+            )
+            .await
+            .unwrap();
+        let claim2 = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim2, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let head_revision: i64 = sqlx::query_scalar(
+            "SELECT new_revision FROM workflow_journal WHERE instance_id = $1 ORDER BY new_revision DESC LIMIT 1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(head_revision > 0, "need a non-genesis journal head to break its chain link");
+        sqlx::query(
+            "UPDATE workflow_journal SET prior_state_hash = $1 WHERE instance_id = $2 AND new_revision = $3",
+        )
+        .bind(vec![0xAB_u8; 32])
+        .bind(instance_id)
+        .bind(head_revision)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        match result {
+            Err(ClaimError::Integrity(message)) => {
+                assert!(
+                    message.contains("Ring 2"),
+                    "expected Ring 2 frame integrity violation, got: {message}"
+                );
+            }
+            other => panic!("expected ClaimError::Integrity naming Ring 2, got {other:?}"),
+        }
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(quarantine.as_deref(), Some("replay_integrity_violation"));
+    }
+
+    /// V2.5: DB-level tripwire test, distinct from `persistence.rs`'s
+    /// unit-level `unknown_snapshot_version_is_refused` (which calls
+    /// `SnapshotEnvelope::decode` directly, in-process). Corrupts the
+    /// persisted `schema_version` field in a real committed row and
+    /// recomputes `frame_hash` to match, proving that even a Ring
+    /// 1-consistent (hash-correct) but Ring-1-tripwire-violating frame is
+    /// rejected — the tripwire fires on the versioned value itself, not on
+    /// whether the bytes hash-match (V&S §6: "a dispatch key, not a
+    /// version").
+    #[tokio::test]
+    async fn test_claim_load_quarantines_wrong_schema_version_tripwire() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&envelope_bytes).unwrap();
+        value["schema_version"] = serde_json::json!(99);
+        let corrupted_bytes = serde_json::to_vec(&value).unwrap();
+        let corrupted_frame_hash = *blake3::hash(&corrupted_bytes).as_bytes();
+        sqlx::query(
+            "UPDATE workflow_instances SET snapshot_envelope = $1, frame_hash = $2 WHERE instance_id = $3",
+        )
+        .bind(&corrupted_bytes)
+        .bind(&corrupted_frame_hash[..])
+        .bind(instance_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        match result {
+            Err(ClaimError::Integrity(message)) => {
+                assert!(
+                    message.contains("unsupported") && message.contains("99"),
+                    "expected unsupported-version tripwire naming version 99, got: {message}"
+                );
+            }
+            other => panic!("expected ClaimError::Integrity naming the version tripwire, got {other:?}"),
+        }
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(quarantine.as_deref(), Some("replay_integrity_violation"));
+    }
+
+    // V2.5 remaining named corruption fixtures — dangling handle, membership
+    // asymmetry, over-arity barrier, orphaned pending effect — are all D1
+    // concurrency-table-shaped corruptions. Ring 1 cannot distinguish *which*
+    // of these occurred: it is a single BLAKE3 hash over the whole frame, so
+    // any single-bit flip inside the encoded `ConcurrencyTable`/pending-effects
+    // region manifests identically to `test_claim_load_quarantines_ring1_flipped_byte_under_stale_hash`
+    // above — "hash mismatch on raw bytes (pre-decode)", full stop. That
+    // generic detection is what the byte-flip test above proves at the
+    // Postgres layer, and what `flipping_any_byte_never_reproduces_the_original_value`
+    // (bpmn-lite-types/src/canonical.rs) proves exhaustively at the encoding
+    // layer: no corruption of the canonical-binary region survives re-encoding
+    // undetected. Semantic distinction between these four cases — naming
+    // *which* invariant broke, not just that the frame no longer hashes
+    // correctly — is Ring 3's job (runtime shadow asserts, V4), per the plan's
+    // explicit ring split (V&S §6). Writing four more byte-flip tests here
+    // would assert the same mechanism four more times without adding
+    // detection coverage; the plan permits deferring the semantic split to V4.
 
     #[tokio::test]
     async fn test_transient_effect_failure_retains_effect_without_advancing_instance() {

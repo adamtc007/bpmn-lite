@@ -26,6 +26,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 postcard = { version = "1", features = ["alloc"] }
 rkyv = "0.8"
+proptest = "1"
 
 [[bench]]
 name = "fiber_codec"

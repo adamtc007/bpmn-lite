@@ -319,7 +319,7 @@ impl Claim {
 }
 
 /// Stable identity for a durable side effect.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EffectId(Uuid);
 
 impl EffectId {
@@ -880,6 +880,10 @@ pub struct Snapshot {
     /// records, keyed by `RecordId` (V&S §2, §4). Empty for every
     /// v2-pre-V4 snapshot — V4's words are the sole producers.
     concurrency_table: crate::concurrency::ConcurrencyTable,
+    /// D3 Ring 2 hash domain: the identity set of effects this snapshot's
+    /// fibres are currently waiting on. Empty until the store layer wires
+    /// population from the effects/inbox tables.
+    pending_effects: std::collections::BTreeSet<EffectId>,
 }
 
 impl Snapshot {
@@ -895,6 +899,7 @@ impl Snapshot {
             buffered_messages: Vec::new(),
             incidents: BTreeMap::new(),
             concurrency_table: crate::concurrency::ConcurrencyTable::new(),
+            pending_effects: std::collections::BTreeSet::new(),
         }
     }
 
@@ -908,6 +913,18 @@ impl Snapshot {
 
     pub fn concurrency_table(&self) -> &crate::concurrency::ConcurrencyTable {
         &self.concurrency_table
+    }
+
+    pub fn with_pending_effects(
+        mut self,
+        pending_effects: impl IntoIterator<Item = EffectId>,
+    ) -> Self {
+        self.pending_effects = pending_effects.into_iter().collect();
+        self
+    }
+
+    pub fn pending_effects(&self) -> &std::collections::BTreeSet<EffectId> {
+        &self.pending_effects
     }
 
     pub fn with_join_counts(mut self, join_counts: BTreeMap<JoinId, u16>) -> Self {

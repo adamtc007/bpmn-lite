@@ -520,6 +520,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "postcard",
+ "proptest",
  "rkyv",
  "serde",
  "serde_json",

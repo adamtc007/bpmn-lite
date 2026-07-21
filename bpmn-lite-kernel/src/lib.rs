@@ -2,12 +2,13 @@
 
 use bpmn_lite_types::ffi_bindings::{apply_ffi_outputs, encode_ffi_inputs};
 use bpmn_lite_types::{
-    Addr, BufferedMessageMutation, Command, CommandEnvelope, DedupeWrite, DurableEffect, EffectId,
-    EffectMutation, EffectOutput, EffectTerminalState, ErrorClass, ExecutableWorkflow, Fiber,
-    Incident, Instr, JobActivation, JobMutation, JoinId, JoinMutation, JournalCommand,
-    JournalRecord, PersistedSnapshotState, ProcessInstance, ProcessState, RuntimeEvent, Snapshot,
-    SnapshotEnvelope, TerminalCleanup, TimerKind, TimerMutation, TimerRepeatSpec, Transition,
-    TransitionBuilder, Uuid, Value, WaitArm, WaitState,
+    Addr, BufferedMessageMutation, Command, CommandEnvelope, ConcurrencyMutation, DedupeWrite,
+    DurableEffect, EffectId, EffectMutation, EffectOutput, EffectTerminalState, ErrorClass,
+    ExecutableWorkflow, Fiber, Incident, Instr, JobActivation, JobMutation, JoinId, JoinMutation,
+    JournalCommand, JournalRecord, PersistedSnapshotState, ProcessInstance, ProcessState,
+    RecordState, RuntimeEvent, Snapshot, SnapshotEnvelope, TerminalCleanup, TimerKind,
+    TimerMutation, TimerRepeatSpec, Transition, TransitionBuilder, Uuid, Value, WaitArm,
+    WaitState,
 };
 use std::fmt;
 
@@ -243,20 +244,38 @@ fn materialize_snapshot(
     for incident in transition.incidents() {
         incidents.insert(incident.incident_id, incident.clone());
     }
+    let mut concurrency_table = prior.concurrency_table().clone();
+    for mutation in transition.concurrency_mutations() {
+        match mutation {
+            ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+            ConcurrencyMutation::Retire(id) => {
+                if let Some(record) = concurrency_table.get_mut(*id) {
+                    record.state = RecordState::Retired;
+                }
+            }
+            ConcurrencyMutation::Remove(id) => {
+                concurrency_table.remove(*id);
+            }
+        }
+    }
     if transition.terminal_cleanup().delete_all_fibers() {
         fibers.clear();
     }
     if transition.terminal_cleanup().delete_all_joins() {
         joins.clear();
     }
+    let artifact_hash = instance.bytecode_version;
     SnapshotEnvelope::new(
         artifact_abi,
+        artifact_hash,
         revision,
         PersistedSnapshotState::new(
             instance,
             fibers.into_values(),
             joins,
             incidents.into_values(),
+            concurrency_table,
+            prior.pending_effects().iter().copied(),
         ),
     )
 }
@@ -2270,11 +2289,14 @@ mod tests {
         let command = Command::Tick { fiber_id: None };
         let genesis = SnapshotEnvelope::new(
             workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
             0,
             PersistedSnapshotState::new(
                 snapshot.instance().clone(),
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -2290,6 +2312,7 @@ mod tests {
             0,
             1,
             workflow.hash().into_bytes(),
+            genesis.state_hash().unwrap(),
             expected.state_hash().unwrap(),
             transition.events(),
             transition.effects(),
@@ -2308,11 +2331,14 @@ mod tests {
         let command = Command::Tick { fiber_id: None };
         let genesis = SnapshotEnvelope::new(
             workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
             0,
             PersistedSnapshotState::new(
                 snapshot.instance().clone(),
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -2328,6 +2354,7 @@ mod tests {
             0,
             1,
             workflow.hash().into_bytes(),
+            genesis.state_hash().unwrap(),
             expected.state_hash().unwrap(),
             transition.events(),
             transition.effects(),
@@ -2350,11 +2377,14 @@ mod tests {
         let command = Command::Tick { fiber_id: None };
         let genesis = SnapshotEnvelope::new(
             workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
             0,
             PersistedSnapshotState::new(
                 snapshot.instance().clone(),
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -2364,6 +2394,7 @@ mod tests {
             0,
             1,
             workflow.hash().into_bytes(),
+            [0u8; 32],
             [0xA5; 32],
             transition.events(),
             transition.effects(),

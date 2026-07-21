@@ -34,6 +34,7 @@ struct Inner {
     event_seq: HashMap<Uuid, u64>,
     payload_history: HashMap<(Uuid, [u8; 32]), String>,
     incidents: HashMap<Uuid, Vec<Incident>>,
+    concurrency_tables: HashMap<Uuid, ConcurrencyTable>,
     transition_leases: HashMap<Uuid, (String, Instant, u64)>,
     revisions: HashMap<Uuid, u64>,
     durable_effects: HashMap<EffectId, MemoryEffect>,
@@ -112,6 +113,7 @@ impl MemoryStore {
                 event_seq: HashMap::new(),
                 payload_history: HashMap::new(),
                 incidents: HashMap::new(),
+                concurrency_tables: HashMap::new(),
                 transition_leases: HashMap::new(),
                 revisions: HashMap::new(),
                 durable_effects: HashMap::new(),
@@ -1076,11 +1078,14 @@ impl RuntimeStore for MemoryStore {
                 .push((child_seq, child.start_event().clone()));
             let child_snapshot = SnapshotEnvelope::new(
                 CURRENT_ARTIFACT_ABI,
+                child.instance().bytecode_version,
                 0,
                 PersistedSnapshotState::new(
                     child.instance().clone(),
                     [child.root_fiber().clone()],
                     BTreeMap::new(),
+                    [],
+                    ConcurrencyTable::new(),
                     [],
                 ),
             );
@@ -1103,6 +1108,7 @@ impl RuntimeStore for MemoryStore {
                     -1,
                     0,
                     child.instance().bytecode_version,
+                    [0u8; 32],
                     child_state_hash,
                     std::slice::from_ref(child.start_event()),
                     &[],
@@ -1139,10 +1145,33 @@ impl RuntimeStore for MemoryStore {
             .map(|((_, join_id), count)| (*join_id, *count))
             .collect::<BTreeMap<_, _>>();
         let incidents = w.incidents.get(&instance_id).cloned().unwrap_or_default();
+        let concurrency_table = w.concurrency_tables.entry(instance_id).or_default();
+        for mutation in transition.concurrency_mutations() {
+            match mutation {
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Retire(id) => {
+                    if let Some(record) = concurrency_table.get_mut(*id) {
+                        record.state = RecordState::Retired;
+                    }
+                }
+                ConcurrencyMutation::Remove(id) => {
+                    concurrency_table.remove(*id);
+                }
+            }
+        }
+        let concurrency_table = concurrency_table.clone();
         let snapshot_envelope = SnapshotEnvelope::new(
             CURRENT_ARTIFACT_ABI,
+            snapshot.bytecode_version,
             new_revision,
-            PersistedSnapshotState::new(snapshot.clone(), fibers, join_counts, incidents),
+            PersistedSnapshotState::new(
+                snapshot.clone(),
+                fibers,
+                join_counts,
+                incidents,
+                concurrency_table,
+                [],
+            ),
         );
         let state_hash = snapshot_envelope
             .state_hash()
@@ -1174,11 +1203,17 @@ impl RuntimeStore for MemoryStore {
                 CommitError::Integrity("revision exceeds signed journal range".to_string())
             })?
         };
+        let prior_state_hash = w
+            .snapshots
+            .get(&instance_id)
+            .and_then(|envelope| envelope.state_hash().ok())
+            .unwrap_or([0u8; 32]);
         let journal = JournalRecord::new(
             command,
             prior_revision,
             new_revision,
             snapshot.bytecode_version,
+            prior_state_hash,
             state_hash,
             transition.events(),
             transition.effects(),
