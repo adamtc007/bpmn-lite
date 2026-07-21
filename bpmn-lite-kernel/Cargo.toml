@@ -9,5 +9,8 @@ description = "Synchronous deterministic BPMN transition kernel"
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

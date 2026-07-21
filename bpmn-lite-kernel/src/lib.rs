@@ -281,6 +281,122 @@ fn materialize_snapshot(
     )
 }
 
+/// V4.2 — the K-1..K-3 kernel-preservation theorems (EOP-VS-BPMN-ISA-002
+/// §7), checked directly against a materialized frame rather than argued
+/// only in doc comments. Exposed (not `#[cfg(test)]`-gated) because V4.3's
+/// Ring 3 shadow asserts are the same facts checked unconditionally in
+/// production, at every park/resume, over live snapshot state instead of a
+/// property test's synthetic one — this is the one implementation both
+/// consult.
+///
+/// Scope: every check below is over `RecordState::Armed` records only.
+/// §7's "live concurrency record" is the *currently open* structure being
+/// tracked; a `Retired` record is a closed historical fact (kept, per
+/// `RecordKind::Compensation`'s doc comment, because some kinds demand
+/// history) and its membership is deliberately allowed to dangle — nothing
+/// un-registers a fibre from a record's `members` set on retirement, only
+/// the record's own `state` flips and (for barriers) `Retire`/`Remove`
+/// mutations delete losing members' fibres outright. K-2's "for live F" is
+/// scoped to fibres for the same reason: a retired record does not
+/// obligate any surviving fibre's control stack to still reference it.
+///
+/// K-2 is checked against each fibre's *effective* stack, not the literal
+/// `control_stack` field: `V2Join` (non-last-arrival) and `V2RaceClose`
+/// both pop their handle before parking, moving it into
+/// `WaitState::V2Barrier`/`WaitState::V2Race` instead — the handle is still
+/// logically held (the record still lists the fibre as a member, correctly
+/// — it may yet be the one that resolves the barrier/race), just relocated
+/// off the vector while parked. `v2_cancel_guard_scope`'s tree walk already
+/// treats this construction as canonical (`chain = control_stack.clone()`
+/// + wait-derived handle); this function reuses the same one.
+pub fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
+    let mut chain = fiber.control_stack.clone();
+    match &fiber.wait {
+        WaitState::V2Barrier { record_id } | WaitState::V2Race { record_id, .. } => {
+            chain.push(*record_id);
+        }
+        _ => {}
+    }
+    chain
+}
+
+pub fn check_k_invariants(
+    fibers: &std::collections::BTreeMap<Uuid, Fiber>,
+    table: &bpmn_lite_types::concurrency::ConcurrencyTable,
+) -> Result<(), String> {
+    for (record_id, record) in table.iter() {
+        if record.state != RecordState::Armed {
+            continue;
+        }
+        // K-1: every member of a live record references a live fibre.
+        for member in &record.members {
+            if !fibers.contains_key(member) {
+                return Err(format!(
+                    "K-1 violated: record {record_id} (armed) has member {member}, no live fibre"
+                ));
+            }
+        }
+        // K-3: for live barriers, 0 < count <= arity — a barrier that hit
+        // zero must have retired in the same transition it did, so an
+        // *armed* barrier observed with count == 0 is itself a violation.
+        if record.kind == RecordKind::Barrier {
+            let RecordCounters { arity, count } = record.counters;
+            if count == 0 || count > arity {
+                return Err(format!(
+                    "K-3 violated: barrier {record_id} armed with count={count}, arity={arity}"
+                ));
+            }
+        }
+    }
+
+    // K-2: for every live fibre F, h on F's effective stack iff F is a
+    // member of armed record h. Checked both directions.
+    for (fiber_id, fiber) in fibers {
+        for handle in &effective_control_stack(fiber) {
+            match table.get(*handle) {
+                Some(record) if record.state == RecordState::Armed => {
+                    if !record.members.contains(fiber_id) {
+                        return Err(format!(
+                            "K-2 violated: fibre {fiber_id} has handle {handle} on its \
+                             control stack, but is not a member of record {handle}"
+                        ));
+                    }
+                }
+                Some(record) => {
+                    return Err(format!(
+                        "K-2 violated: fibre {fiber_id} has handle {handle} on its control \
+                         stack, but record {handle} is {:?}, not Armed",
+                        record.state
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "K-2 violated: fibre {fiber_id} has handle {handle} on its control \
+                         stack, but no such record exists"
+                    ));
+                }
+            }
+        }
+    }
+    for (record_id, record) in table.iter() {
+        if record.state != RecordState::Armed {
+            continue;
+        }
+        for member in &record.members {
+            let Some(fiber) = fibers.get(member) else {
+                continue; // already reported as a K-1 violation above
+            };
+            if !effective_control_stack(fiber).contains(record_id) {
+                return Err(format!(
+                    "K-2 violated: fibre {member} is a member of armed record {record_id}, \
+                     but does not have it on its control stack"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pure transition function. It performs no I/O and obtains time and identity only
 /// from `DeterministicContext` or the durable command.
 pub fn apply(
@@ -930,6 +1046,9 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
+            // K-1/K-2/K-3 (V4.2): touches no concurrency record and pushes
+            // nothing onto the control stack — vacuously preserves all
+            // three (the fibre's own set of held handles is unchanged).
             Instr::V2AwaitEffect { template_id, .. } => {
                 // `AWAIT-EFFECT` — shares `WaitState::Effect`/`EffectOutput::Ffi`
                 // completion machinery with v1 `ExecFfi` (V&S §5: same
@@ -1362,13 +1481,17 @@ fn apply_tick(
                 );
             }
             // V4.1: core scope words (V&S §5, plan Tranche V4 4.1). Guard
-            // open/close and the fork/barrier/join pair. Remaining v2 words
-            // (race, wait, cancel) stay in the not-yet-interpretable arm
-            // below until their own V4.1 sub-steps land.
+            // open/close and the fork/barrier/join pair.
+            //
+            // K-1/K-2 (V4.2): allocates a fresh `Armed` record and pushes
+            // its handle onto the opening fibre's own stack, registering
+            // that same fibre as the record's sole initial member in the
+            // same step — the two canonical facts are established
+            // together, by construction. K-3: n/a (not a barrier).
             Instr::V2Guard { handler } => {
                 let record_id = RecordId::new(context.derived_id(ordinal));
                 ordinal = ordinal.saturating_add(1);
-                let record = ConcurrencyRecord {
+                let mut record = ConcurrencyRecord {
                     handler: Some(*handler),
                     // V4.1, Adam-ratified: every guard scope's opening
                     // word captures a rollback snapshot as standard
@@ -1379,6 +1502,11 @@ fn apply_tick(
                     rollback_domain_payload_hash: Some(instance.domain_payload_hash),
                     ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true })
                 };
+                // K-1/K-2 (V4.2): the opening fibre is this record's first
+                // member — omitting this left every guard record's
+                // `members` permanently empty (V2RaceOpen/V2Fork already
+                // register their own opener/children; guards did not).
+                record.members.insert(fiber.fiber_id);
                 changes
                     .concurrency_mutations
                     .push(ConcurrencyMutation::Insert(record));
@@ -1394,6 +1522,12 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2 (V4.2): the closing fibre pops its own handle and
+            // the record retires (moot membership henceforth, per
+            // `check_k_invariants`'s doc comment); no other live fibre can
+            // hold this handle (SESE nesting — a guard's only members are
+            // fibres inside it, and none survive its own close without
+            // also popping). K-3: n/a.
             Instr::V2GuardEnd => {
                 let handle = fiber
                     .control_stack
@@ -1412,6 +1546,16 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2/K-3 (V4.2): allocates a fresh barrier with `arity =
+            // count = |targets|` (K-3's bound holds at birth: 0 <
+            // |targets| <= |targets|, verifier admits only non-empty
+            // fork target lists), registers every child as a member as it
+            // spawns them (K-1/K-2 for the barrier itself), and — since
+            // the forking fibre dies in this same step — reconciles every
+            // *ancestor* handle already on its stack via
+            // `v2_reconcile_ancestor_membership`: the dying fibre is
+            // removed and every child added, in one batched update per
+            // ancestor (K-1/K-2 for enclosing scopes).
             Instr::V2Fork { targets, pairing: _ } => {
                 let record_id = RecordId::new(context.derived_id(ordinal));
                 ordinal = ordinal.saturating_add(1);
@@ -1443,15 +1587,48 @@ fn apply_tick(
                 changes.events.push(RuntimeEvent::V2Forked {
                     record_id,
                     fork_fiber_id: fiber.fiber_id,
-                    child_fibers: ids,
+                    child_fibers: ids.clone(),
                     targets: targets.to_vec(),
                 });
                 changes
                     .concurrency_mutations
                     .push(ConcurrencyMutation::Insert(record));
+                // K-1/K-2 (V4.2): the children inherit every ancestor
+                // handle already on the forking fibre's own stack (e.g. an
+                // enclosing `V2Guard`), and the forking fibre itself is
+                // about to die — both sides of those ancestor records'
+                // `members` need to move with it, or the ancestor is left
+                // either missing the new members (K-2) or still listing a
+                // now-dead one (K-1).
+                let mut ancestor_ops = Vec::new();
+                for ancestor in &fiber.control_stack {
+                    ancestor_ops.push((*ancestor, MembershipOp::Remove(fiber.fiber_id)));
+                    for child_id in &ids {
+                        ancestor_ops.push((*ancestor, MembershipOp::Add(*child_id)));
+                    }
+                }
+                v2_reconcile_ancestor_membership(
+                    snapshot,
+                    &ancestor_ops,
+                    &std::collections::BTreeSet::new(),
+                    &mut changes,
+                );
                 changes.fibers_delete.push(fiber.fiber_id);
                 return Ok(changes.finish(instance));
             }
+            // K-3 (V4.2): decrements `count` by exactly one per arrival,
+            // never below zero (`saturating_sub`, and the verifier's
+            // static arity check bounds how many arrivals a barrier can
+            // ever see) — retirement fires exactly at zero, in the same
+            // step. K-1/K-2, non-last arrival: the arriving fibre pops the
+            // handle into `WaitState::V2Barrier` instead of the literal
+            // stack — `effective_control_stack`/`v2_cancel_guard_scope`
+            // treat that as equivalent, so membership stays intact. K-1/
+            // K-2, last arrival: every other member is deleted outright
+            // (K-1 — no live fibre left to reference), and
+            // `v2_reconcile_ancestor_membership` drops each from any
+            // *ancestor* record above the retiring barrier that isn't
+            // itself retiring in this same step.
             Instr::V2Join { pairing: _ } => {
                 let handle = fiber
                     .control_stack
@@ -1482,6 +1659,26 @@ fn apply_tick(
                     for member in &cancelled {
                         changes.fibers_delete.push(*member);
                     }
+                    // K-1 (V4.2): a cancelled member may still carry
+                    // ancestor handles beyond `handle` (e.g. the enclosing
+                    // `V2Guard`) — `handle` itself is retiring in this same
+                    // transition so its own membership is moot, but any
+                    // outer ancestor still `Armed` must drop the now-dead
+                    // fibre or it dangles.
+                    let mut ancestor_ops = Vec::new();
+                    for member in &cancelled {
+                        if let Some(member_fiber) = snapshot.fibers().get(member) {
+                            for ancestor in &member_fiber.control_stack {
+                                ancestor_ops.push((*ancestor, MembershipOp::Remove(*member)));
+                            }
+                        }
+                    }
+                    v2_reconcile_ancestor_membership(
+                        snapshot,
+                        &ancestor_ops,
+                        &std::collections::BTreeSet::from([handle]),
+                        &mut changes,
+                    );
                     changes
                         .concurrency_mutations
                         .push(ConcurrencyMutation::Retire(handle));
@@ -1505,6 +1702,13 @@ fn apply_tick(
                     return Ok(changes.finish(instance));
                 }
             }
+            // K-1/K-2/K-3 (V4.2): allocates a fresh race with the opening
+            // fibre as its sole member and pushes the handle onto that
+            // same fibre's stack in the same step (as `V2Guard`). K-3:
+            // `arity = count = arm_count`; a race isn't a `Barrier`-kind
+            // record so K-3's literal bound doesn't apply to it, but the
+            // same 0-at-birth-would-be-a-bug shape holds by construction
+            // (the verifier admits only `arm_count >= 1`).
             Instr::V2RaceOpen { arm_count } => {
                 let record_id = RecordId::new(context.derived_id(ordinal));
                 ordinal = ordinal.saturating_add(1);
@@ -1530,6 +1734,11 @@ fn apply_tick(
                 race_arms.clear();
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2/K-3 (V4.2): arms an alternative on the already-open
+            // race (opened by `V2RaceOpen` in this same tick, per the
+            // module's `race_arms` accumulator) — schedules a timer effect
+            // but touches no concurrency record and pushes/pops nothing;
+            // the fibre's held-handle set is unchanged.
             Instr::V2ArmTimer { target } => {
                 let value = fiber
                     .stack
@@ -1559,6 +1768,9 @@ fn apply_tick(
                 race_arms.push(bpmn_lite_types::V2RaceArm::Timer { target: *target });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2/K-3 (V4.2): as `V2ArmTimer` — records the
+            // alternative for `V2RaceClose` to park on; no concurrency
+            // record or control-stack change.
             Instr::V2ArmMsg {
                 target,
                 name,
@@ -1571,6 +1783,11 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2/K-3 (V4.2): as `V2ArmTimer`/`V2ArmMsg` — the effect
+            // invocation dispatches immediately but, like its siblings,
+            // touches no concurrency record or control stack; the arm's
+            // `effect_id` is the resolution key `apply_ffi_completion`
+            // matches later, not a handle.
             Instr::V2ArmEffect {
                 target,
                 template_id,
@@ -1628,6 +1845,12 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2 (V4.2): pops the race handle off the literal control
+            // stack and moves it into `WaitState::V2Race` instead — the
+            // record's membership (set at `V2RaceOpen`, unchanged since)
+            // stays correct because `effective_control_stack` treats a
+            // parked `V2Race`'s `record_id` as still "held". K-3: n/a (not
+            // a barrier).
             Instr::V2RaceClose => {
                 let handle = fiber
                     .control_stack
@@ -1649,6 +1872,8 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
+            // K-1/K-2 (V4.2): as `V2Guard` — opening fibre registered as
+            // sole member in the same step the handle is pushed. K-3: n/a.
             Instr::V2GuardN { handler } => {
                 // As V2Guard, `RecordKind::Guard { interrupting: false }`.
                 // Q2 (EOP-VS-BPMN-ISA-002 §10, Adam-ratified): a
@@ -1658,12 +1883,13 @@ fn apply_tick(
                 // it, once built.
                 let record_id = RecordId::new(context.derived_id(ordinal));
                 ordinal = ordinal.saturating_add(1);
-                let record = ConcurrencyRecord {
+                let mut record = ConcurrencyRecord {
                     handler: Some(*handler),
                     rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
                     rollback_domain_payload_hash: Some(instance.domain_payload_hash),
                     ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: false })
                 };
+                record.members.insert(fiber.fiber_id);
                 changes
                     .concurrency_mutations
                     .push(ConcurrencyMutation::Insert(record));
@@ -1679,6 +1905,9 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2 (V4.2): as `V2GuardEnd` — this is the record's
+            // normal (non-triggered) close path; retires the record in the
+            // same step the fibre pops its handle. K-3: n/a.
             Instr::V2GuardNEnd => {
                 let handle = fiber
                     .control_stack
@@ -1697,6 +1926,8 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // K-1/K-2/K-3 (V4.2): a bare park — no concurrency record or
+            // control-stack change, so all three are vacuously preserved.
             Instr::V2WaitFor => {
                 let value = fiber
                     .stack
@@ -1728,6 +1959,7 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
+            // K-1/K-2/K-3 (V4.2): as `V2WaitFor`.
             Instr::V2WaitUntil => {
                 let value = fiber
                     .stack
@@ -1756,6 +1988,7 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
+            // K-1/K-2/K-3 (V4.2): as `V2WaitFor`.
             Instr::V2WaitMsg { name, corr_reg } => {
                 let corr_key = fiber
                     .regs
@@ -1779,6 +2012,13 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
+            // K-1/K-2 (V4.2): the popped handle and everything nested
+            // under it retires/deletes via `v2_rollback_guard_scope`
+            // (itself K-1/K-2-preserving — see its own doc comment); the
+            // calling fibre `Continues`, so its own remaining handles are
+            // untouched. K-3: any barrier nested under the cancelled scope
+            // retires along with it (moot membership thereafter), not
+            // left mid-count.
             Instr::V2CancelScope => {
                 // Adam-ratified (V&S §13 amendment v0.5, ruling B): reuses
                 // the compensation op via the shared `v2_rollback_guard_scope`
@@ -2605,6 +2845,93 @@ fn apply_job_completion(
 /// (V4.1 design note: the popped handle is not lost information — the
 /// record tree is reconstructed here from the union of every live
 /// fibre's stack-plus-wait-state, not from any single fibre's history).
+/// One membership change against an *existing* (already-`Insert`ed in a
+/// prior transition) ancestor record: `Add` when a new fibre inherits that
+/// record's handle onto its own control stack (e.g. `V2Fork`'s children,
+/// a triggered guard's handler fibre), `Remove` when a fibre carrying that
+/// handle dies (e.g. `V2Fork`'s own forking fibre, a race's/barrier's
+/// cancelled members) without the record itself being retired in the same
+/// transition (a retired record's membership is moot — K-2/K-1 are scoped
+/// to `Armed` records, see `check_k_invariants`'s doc comment).
+enum MembershipOp {
+    Add(Uuid),
+    Remove(Uuid),
+}
+
+/// K-1/K-2 discharge helper (V&S §7): every word that creates a fibre
+/// inheriting a prefix of another fibre's control stack, or deletes a
+/// fibre that still carries ancestor handles beyond whatever record it is
+/// directly being removed from, must keep those ancestor records'
+/// `members` sets in agreement with "who has my handle on their stack" —
+/// otherwise K-1 (member liveness) or K-2 (stack↔membership consistency)
+/// breaks for the *enclosing* scope, not just the one the word directly
+/// touches. Batches all ops per record before emitting `Insert` mutations
+/// (multiple ops against the same ancestor in one call must fold into a
+/// single mutation — emitting one stale `Insert` per op would make later
+/// ones silently undo earlier ones, since `Insert` overwrites by key).
+/// `exclude` skips records already being `Insert`ed/`Retire`d/`Remove`d
+/// elsewhere in the same transition (their membership is moot or already
+/// current).
+fn v2_reconcile_ancestor_membership(
+    snapshot: &Snapshot,
+    ops: &[(RecordId, MembershipOp)],
+    exclude: &std::collections::BTreeSet<RecordId>,
+    changes: &mut Changes,
+) {
+    let mut touched: std::collections::BTreeMap<RecordId, ConcurrencyRecord> =
+        std::collections::BTreeMap::new();
+    for (handle, op) in ops {
+        if exclude.contains(handle) {
+            continue;
+        }
+        // An ancestor record may have been freshly `Insert`ed earlier in
+        // this very transition (e.g. `V2Guard` opening the record that
+        // `V2Fork` inherits onto its children in the same tick) — that
+        // Insert has not been materialized into `snapshot` yet, so it must
+        // be found here first; only fall back to `snapshot` for a record
+        // that predates this transition.
+        let pending = changes.concurrency_mutations.iter().rev().find_map(|m| match m {
+            ConcurrencyMutation::Insert(record) if record.id == *handle => Some(record.clone()),
+            _ => None,
+        });
+        let Some(record) = touched
+            .get(handle)
+            .cloned()
+            .or(pending)
+            .or_else(|| snapshot.concurrency_table().get(*handle).cloned())
+        else {
+            continue;
+        };
+        let mut record = record;
+        match op {
+            MembershipOp::Add(fiber_id) => {
+                record.members.insert(*fiber_id);
+            }
+            MembershipOp::Remove(fiber_id) => {
+                record.members.remove(fiber_id);
+            }
+        }
+        touched.insert(*handle, record);
+    }
+    for record in touched.into_values() {
+        changes.concurrency_mutations.push(ConcurrencyMutation::Insert(record));
+    }
+}
+
+/// K-1/K-2 (V4.2 discharge for `Command::V2TriggerGuard`, both branches):
+/// spawns the handler with `handler_stack` (a prefix of some existing
+/// live fibre's own effective stack — established invariant, hence a
+/// valid prefix by construction) and immediately registers it as a member
+/// of every record on that prefix via `v2_reconcile_ancestor_membership`
+/// before anything else runs. Interrupting branch: `v2_cancel_guard_scope`
+/// discovers the *entire* live subtree under `record_id` by walking
+/// control-stack/wait-state membership directly (not `.members`), so
+/// `retire_order`/`cancelled_fibers` are exhaustive; every cancelled fibre
+/// is then swept from any *ancestor* record above `record_id` that isn't
+/// itself retiring this same step. K-3: any barrier in the cancelled
+/// subtree retires with it (moot thereafter). Non-interrupting branch: the
+/// record re-arms unchanged (still `Armed`, same identity) — only the
+/// handler's own ancestor registration applies.
 fn apply_v2_trigger_guard(
     snapshot: &Snapshot,
     command: &Command,
@@ -2668,13 +2995,27 @@ fn apply_v2_trigger_guard(
     let mut changes = Changes::default();
     let handler_fiber_id = context.derived_id(0);
     let mut handler_fiber = Fiber::new(handler_fiber_id, handler_target);
-    handler_fiber.control_stack = handler_stack;
+    handler_fiber.control_stack = handler_stack.clone();
     changes.fibers_upsert.push(handler_fiber);
     changes.events.push(RuntimeEvent::FiberSpawned {
         fiber_id: handler_fiber_id,
         pc: handler_target,
         parent: None,
     });
+    // K-1/K-2 (V4.2): the handler fibre inherits every handle in
+    // `handler_stack` (ancestors above this guard for the interrupting
+    // case; those plus the guard's own re-armed token for `V2GuardN`) —
+    // each such still-`Armed` record must count it as a member.
+    let handler_ops: Vec<_> = handler_stack
+        .iter()
+        .map(|ancestor| (*ancestor, MembershipOp::Add(handler_fiber_id)))
+        .collect();
+    v2_reconcile_ancestor_membership(
+        snapshot,
+        &handler_ops,
+        &std::collections::BTreeSet::new(),
+        &mut changes,
+    );
 
     if interrupting {
         let mut retire_order = Vec::new();
@@ -2688,6 +3029,21 @@ fn apply_v2_trigger_guard(
         for fiber_id in &cancelled_fibers {
             changes.fibers_delete.push(*fiber_id);
         }
+        // K-1 (V4.2): cancelled fibres may carry ancestor handles above
+        // `record_id` (this guard nested inside another scope) — those
+        // records aren't in `retire_order` (only `record_id` and its own
+        // descendants are), so a still-`Armed` outer ancestor must drop
+        // the now-dead fibre explicitly.
+        let retiring: std::collections::BTreeSet<RecordId> = retire_order.iter().copied().collect();
+        let mut ancestor_ops = Vec::new();
+        for fiber_id in &cancelled_fibers {
+            if let Some(dead_fiber) = snapshot.fibers().get(fiber_id) {
+                for ancestor in &dead_fiber.control_stack {
+                    ancestor_ops.push((*ancestor, MembershipOp::Remove(*fiber_id)));
+                }
+            }
+        }
+        v2_reconcile_ancestor_membership(snapshot, &ancestor_ops, &retiring, &mut changes);
         changes.events.push(RuntimeEvent::V2GuardTriggered {
             record_id: *record_id,
             handler_fiber_id,
@@ -2765,6 +3121,12 @@ enum RollbackCaller {
 /// the caller to apply to its own `instance` (this function doesn't own
 /// `instance` — `V2CancelScope` mutates the in-flight `apply_tick`
 /// local, `apply_job_failure` clones fresh from `snapshot`).
+///
+/// K-1/K-2 (V4.2): identical discharge argument to the interrupting branch
+/// of `apply_v2_trigger_guard` — `v2_cancel_guard_scope`'s walk is
+/// exhaustive over the live subtree, and every cancelled fibre is swept
+/// from ancestor records above `guard_handle` not themselves retiring this
+/// step. K-3: as above, subtree barriers retire with the scope.
 fn v2_rollback_guard_scope(
     snapshot: &Snapshot,
     guard_handle: RecordId,
@@ -2811,6 +3173,19 @@ fn v2_rollback_guard_scope(
     for fiber_id in &cancelled_fibers {
         changes.fibers_delete.push(*fiber_id);
     }
+    // K-1 (V4.2): as in the interrupting-trigger path — cancelled fibres
+    // may carry ancestor handles above `guard_handle` that aren't in
+    // `retire_order`.
+    let retiring: std::collections::BTreeSet<RecordId> = retire_order.iter().copied().collect();
+    let mut ancestor_ops = Vec::new();
+    for dead_id in &cancelled_fibers {
+        if let Some(dead_fiber) = snapshot.fibers().get(dead_id) {
+            for ancestor in &dead_fiber.control_stack {
+                ancestor_ops.push((*ancestor, MembershipOp::Remove(*dead_id)));
+            }
+        }
+    }
+    v2_reconcile_ancestor_membership(snapshot, &ancestor_ops, &retiring, changes);
     changes.events.push(RuntimeEvent::V2ScopeCancelled {
         record_id: guard_handle,
         fiber_id,
@@ -3490,7 +3865,12 @@ mod tests {
         assert_eq!(child_b.control_stack, child_a.control_stack);
         let guard_handle = child_a.control_stack[0];
         let barrier_handle = child_a.control_stack[1];
-        assert_eq!(t1.concurrency_mutations().len(), 2);
+        assert_eq!(
+            t1.concurrency_mutations().len(),
+            3,
+            "V2Guard's own Insert, V2Fork's barrier Insert, and V4.2's K-2 ancestor-membership \
+             fix-up (guard re-Insert transferring membership from the dying forker to its children)"
+        );
         assert!(matches!(
             &t1.concurrency_mutations()[0],
             ConcurrencyMutation::Insert(record) if record.id == guard_handle
@@ -3501,6 +3881,13 @@ mod tests {
             ConcurrencyMutation::Insert(record) if record.id == barrier_handle
                 && record.counters.arity == 2
                 && record.counters.count == 2
+        ));
+        assert!(matches!(
+            &t1.concurrency_mutations()[2],
+            ConcurrencyMutation::Insert(record) if record.id == guard_handle
+                && record.members.contains(&child_a.fiber_id)
+                && record.members.contains(&child_b.fiber_id)
+                && !record.members.contains(&root_fiber_id)
         ));
         assert_eq!(t1.control_stack_deltas().len(), 3);
 
@@ -3573,15 +3960,24 @@ mod tests {
         );
         assert_eq!(
             t3.concurrency_mutations().len(),
-            2,
-            "Retire(BAR) then Retire(G)"
+            3,
+            "K-1 ancestor fix-up (child_a still lists guard_handle on its own control stack, \
+             independent of BAR — V4.2) then Retire(BAR) then Retire(G). The fix-up is moot \
+             here since G retires later in this same transition anyway (straight-through to \
+             V2GuardEnd), but the word can't know that in general, so it always corrects."
         );
         assert!(matches!(
             &t3.concurrency_mutations()[0],
-            ConcurrencyMutation::Retire(id) if *id == barrier_handle
+            ConcurrencyMutation::Insert(record) if record.id == guard_handle
+                && !record.members.contains(&child_a.fiber_id)
+                && record.members.contains(&child_b.fiber_id)
         ));
         assert!(matches!(
             &t3.concurrency_mutations()[1],
+            ConcurrencyMutation::Retire(id) if *id == barrier_handle
+        ));
+        assert!(matches!(
+            &t3.concurrency_mutations()[2],
             ConcurrencyMutation::Retire(id) if *id == guard_handle
         ));
         assert_eq!(
@@ -4544,7 +4940,20 @@ mod tests {
             vec![guard_handle],
             "post-push: the handler inherits the still-armed GuardN token"
         );
-        assert!(t2.concurrency_mutations().is_empty(), "record re-arms — nothing to mutate, it never changed");
+        assert_eq!(
+            t2.concurrency_mutations().len(),
+            1,
+            "record re-arms with the same identity/state — the one mutation is K-2's \
+             ancestor-membership fix-up (V4.2): the handler now shares guard_handle on its \
+             own control stack, so it must be added to guard_handle's members too"
+        );
+        assert!(matches!(
+            &t2.concurrency_mutations()[0],
+            ConcurrencyMutation::Insert(record)
+                if record.id == guard_handle
+                    && record.members.contains(&t2.fibers_upsert()[0].fiber_id)
+                    && record.members.contains(&root_fiber_id)
+        ));
         assert!(matches!(
             t2.events().iter().find(|e| matches!(e, RuntimeEvent::V2GuardNTriggered { .. })),
             Some(RuntimeEvent::V2GuardNTriggered { record_id, .. }) if *record_id == guard_handle
@@ -4658,5 +5067,152 @@ mod tests {
             t2.events().iter().find(|e| matches!(e, RuntimeEvent::FfiInvocationCompleted { .. })),
             Some(RuntimeEvent::FfiInvocationCompleted { outcome_kind, .. }) if outcome_kind == "success"
         ));
+    }
+
+    /// V4.2 — K-1..K-3 property tests. Random sequences of `Tick`/
+    /// `V2TriggerGuard` commands are fired at the oracle-shaped program
+    /// (the same 18-instruction Guard+Fork+Join+Race+handler fixture as
+    /// `v2_trigger_guard_reproduces_oracle_cancellation_cascade`), and
+    /// `check_k_invariants` is asserted after every command that the
+    /// kernel accepts. A K-violation surfacing here is a kernel defect by
+    /// definition (V&S §7's discharge protocol).
+    ///
+    /// Scope, stated rather than silently capped: this generator only
+    /// drives `Tick`/`V2TriggerGuard` — it never resolves the fork's
+    /// `V2WaitFor` timer or the race's timer/message arms externally
+    /// (`TimerFired`/`MessageDelivered` are not in the action set). Fibres
+    /// that park on those effects simply stop progressing for the rest of
+    /// that run; `V2TriggerGuard` still reaches and cancels them (it does
+    /// not require its members to be `Running`), so the interrupting-guard
+    /// unwind path — the one most likely to desynchronize control stack
+    /// from membership — is still exercised under random timing. Full
+    /// external-event coverage is V4.5's golden-transition fixtures.
+    mod k_invariant_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn oracle_workflow() -> ExecutableWorkflow {
+            let program = bpmn_lite_types::legacy_program! {
+                bytecode_version: [19u8; 32],
+                program: vec![
+                    /* 0  */ Instr::V2Guard { handler: Addr::new(16) },
+                    /* 1  */ Instr::V2Fork {
+                        targets: Box::new([Addr::new(2), Addr::new(6)]),
+                        pairing: Addr::new(1),
+                    },
+                    /* 2  */ Instr::PushI64(60_000),
+                    /* 3  */ Instr::V2WaitFor,
+                    /* 4  */ Instr::V2Join { pairing: Addr::new(1) },
+                    /* 5  */ Instr::Jump { target: Addr::new(14) },
+                    /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
+                    /* 7  */ Instr::PushI64(30_000),
+                    /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
+                    /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                    /* 10 */ Instr::V2RaceClose,
+                    /* 11 */ Instr::Jump { target: Addr::new(13) },
+                    /* 12 */ Instr::Jump { target: Addr::new(13) },
+                    /* 13 */ Instr::V2Join { pairing: Addr::new(1) },
+                    /* 14 */ Instr::V2GuardEnd,
+                    /* 15 */ Instr::End,
+                    /* 16 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                    /* 17 */ Instr::End,
+                ],
+                debug_map: BTreeMap::new(),
+                join_plan: BTreeMap::new(),
+                wait_plan: BTreeMap::new(),
+                message_name_map: BTreeMap::new(),
+                race_plan: BTreeMap::new(),
+                boundary_map: BTreeMap::new(),
+                write_set: BTreeMap::new(),
+                task_manifest: vec!["NotifyCancelled".to_string()],
+                error_route_map: BTreeMap::new(),
+                flag_symbol_table: BTreeMap::new(),
+                data_objects: BTreeMap::new(),
+                ffi_task_decls: BTreeMap::new(),
+            };
+            ExecutableWorkflow::from_verified_envelope(
+                ArtifactEnvelope::from_legacy_program(program, "v4.2-k-invariant-property").unwrap(),
+            )
+            .unwrap()
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+            #[test]
+            fn k_invariants_hold_after_random_tick_and_trigger_sequences(
+                steps in proptest::collection::vec((0u8..3, 0u8..8), 0..15)
+            ) {
+                let workflow = oracle_workflow();
+                let (_, base_snapshot, _) = fixture();
+                let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+                let mut state = PersistedSnapshotState::new(
+                    base_snapshot.instance().clone(),
+                    [Fiber::new(root_fiber_id, 0)],
+                    BTreeMap::new(),
+                    [],
+                    bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                    [],
+                );
+                let mut revision = 0u64;
+
+                for (step_index, (action_sel, index_sel)) in steps.into_iter().enumerate() {
+                    let snapshot = Snapshot::new(
+                        state.instance().clone(),
+                        state.fibers().values().cloned(),
+                    )
+                    .with_concurrency_table(state.concurrency_table().clone());
+
+                    let running_fibers: Vec<Uuid> = state
+                        .fibers()
+                        .values()
+                        .filter(|f| f.wait == WaitState::Running)
+                        .map(|f| f.fiber_id)
+                        .collect();
+                    let armed_guards: Vec<RecordId> = state
+                        .concurrency_table()
+                        .iter()
+                        .filter(|(_, record)| {
+                            record.state == RecordState::Armed
+                                && matches!(record.kind, RecordKind::Guard { interrupting: true })
+                        })
+                        .map(|(id, _)| *id)
+                        .collect();
+
+                    let command = if action_sel % 2 == 0 && !running_fibers.is_empty() {
+                        let idx = index_sel as usize % running_fibers.len();
+                        Command::Tick { fiber_id: Some(running_fibers[idx]) }
+                    } else if !armed_guards.is_empty() {
+                        let idx = index_sel as usize % armed_guards.len();
+                        Command::V2TriggerGuard { record_id: armed_guards[idx] }
+                    } else if !running_fibers.is_empty() {
+                        Command::Tick { fiber_id: Some(running_fibers[0]) }
+                    } else {
+                        continue;
+                    };
+
+                    let context = DeterministicContext::new(
+                        1_000,
+                        Uuid::from_u128(9_000_000 + step_index as u128),
+                        revision + 1,
+                    );
+                    let Ok(transition) = apply(&workflow, &snapshot, &command, &context) else {
+                        continue;
+                    };
+                    let next = materialize_snapshot(
+                        &state,
+                        &transition,
+                        workflow.envelope().abi_version(),
+                        revision + 1,
+                    );
+                    revision += 1;
+                    state = next.state().clone();
+                    prop_assert!(
+                        check_k_invariants(state.fibers(), state.concurrency_table()).is_ok(),
+                        "{:?}",
+                        check_k_invariants(state.fibers(), state.concurrency_table())
+                    );
+                }
+            }
+        }
     }
 }
