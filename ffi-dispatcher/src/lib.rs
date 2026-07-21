@@ -151,6 +151,7 @@ fn hex_short(bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use bpmn_lite_types::TenantId;
     use ffi_catalogue::{FfiTemplateStore, MemoryFfiTemplateStore};
     use ffi_types::{compute_template_id, FfiTemplate, FieldSchema, Idempotency, SchemaKind};
     use uuid::Uuid;
@@ -224,8 +225,6 @@ mod tests {
         (disp, cat)
     }
 
-
-
     #[tokio::test]
     async fn register_owner_rejects_duplicate() {
         let (mut disp, _) = setup(&["dmn-lite"]).await;
@@ -243,7 +242,9 @@ mod tests {
         let t = make_template("dmn-lite");
         store.publish(&t).await.unwrap();
         let cat = Arc::new(FfiCatalogue::new(store));
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let mut disp = FfiDispatcher::new(cat);
         disp.register_owner(Arc::new(MockOwner {
@@ -277,7 +278,9 @@ mod tests {
         store.publish(&t1).await.unwrap();
         store.publish(&t2).await.unwrap();
         let cat = Arc::new(FfiCatalogue::new(store));
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let mut disp = FfiDispatcher::new(cat);
         disp.register_owner(Arc::new(MockOwner {
@@ -301,7 +304,9 @@ mod tests {
         store.publish(&t_dmn).await.unwrap();
         store.publish(&t_http).await.unwrap();
         let cat = Arc::new(FfiCatalogue::new(store));
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let mut disp = FfiDispatcher::new(cat);
         // Register only dmn-lite; http is uncovered.
@@ -338,7 +343,9 @@ mod tests {
         let t = make_template("strict");
         store.publish(&t).await.unwrap();
         let cat = Arc::new(FfiCatalogue::new(store));
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let mut disp = FfiDispatcher::new(cat);
         disp.register_owner(Arc::new(StrictOwner)).unwrap();
@@ -354,7 +361,9 @@ mod tests {
         let t = make_template("http"); // owner_type that we won't register
         store.publish(&t).await.unwrap();
         let cat = Arc::new(FfiCatalogue::new(store));
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let mut disp = FfiDispatcher::new(cat);
         disp.register_owner(Arc::new(MockOwner {

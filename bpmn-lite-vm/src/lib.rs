@@ -1,14 +1,8 @@
-//! BPMN-Lite bytecode interpreter.
-//!
-//! Single-concern crate that owns the fiber dispatch + instruction
-//! execution + wait/race/loop primitives. Kept separate from
-//! `bpmn-lite-engine` (the orchestrator) so the interpreter's
-//! surface area stays locked once the instruction set is stable.
-//!
-//! Phase 2.5 (2026-05-14) migrated `vm.rs` (2,010 LOC) here from
-//! `bpmn-lite-core/src/`.
+//! Compatibility utilities retained after the interpreter moved into
+//! `bpmn-lite-kernel` in T7. This crate owns no workflow mutation path.
 
 pub mod json_path;
-pub mod vm;
 
-pub use vm::*;
+pub fn compute_hash(data: &str) -> [u8; 32] {
+    blake3::hash(data.as_bytes()).into()
+}

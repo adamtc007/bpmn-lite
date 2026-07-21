@@ -544,8 +544,14 @@ fn test_20_bpmn_compatibility_scenarios() {
     let xml4 = wrap_process("p4", BODY_4_AND_SESE);
     let plan4 = import_zeebe_bpmn(&xml4, "p4", false).unwrap();
     assert!(plan4.mathematically_proved);
-    assert!(matches!(plan4.nodes.get("split").unwrap(), ExecutionNode::Split(_)));
-    assert!(matches!(plan4.nodes.get("join").unwrap(), ExecutionNode::Join(_)));
+    assert!(matches!(
+        plan4.nodes.get("split").unwrap(),
+        ExecutionNode::Split(_)
+    ));
+    assert!(matches!(
+        plan4.nodes.get("join").unwrap(),
+        ExecutionNode::Join(_)
+    ));
 
     // Test 5: Inclusive Gateway (Valid SESE)
     let xml5 = wrap_process("p5", BODY_5_OR_SESE);
@@ -559,7 +565,9 @@ fn test_20_bpmn_compatibility_scenarios() {
     // Allowed in permissive but unproved
     let plan6_permissive = import_zeebe_bpmn(&xml6, "p6", true).unwrap();
     assert!(!plan6_permissive.mathematically_proved);
-    assert!(plan6_permissive.unsafe_breeches.contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
+    assert!(plan6_permissive
+        .unsafe_breeches
+        .contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
 
     // Test 7: Unpaired Parallel Gateway (Rejected in strict & permissive)
     let xml7 = wrap_process("p7", BODY_7_AND_UNPAIRED);
@@ -597,7 +605,9 @@ fn test_20_bpmn_compatibility_scenarios() {
     assert!(res13.is_err());
     let plan13 = import_zeebe_bpmn(&xml13, "p13", true).unwrap();
     assert!(!plan13.mathematically_proved);
-    assert!(plan13.unsafe_breeches.contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
+    assert!(plan13
+        .unsafe_breeches
+        .contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
 
     // Test 14: Loop with Sequential inside (Rejected in strict, permissive compiles with SESE warning)
     let xml14 = wrap_process("p14", BODY_14_LOOP_SEQ);
@@ -605,7 +615,9 @@ fn test_20_bpmn_compatibility_scenarios() {
     assert!(res14.is_err());
     let plan14 = import_zeebe_bpmn(&xml14, "p14", true).unwrap();
     assert!(!plan14.mathematically_proved);
-    assert!(plan14.unsafe_breeches.contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
+    assert!(plan14
+        .unsafe_breeches
+        .contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
 
     // Test 15: Boundary Timer Event (Hard-rejected in BOTH strict & permissive)
     let xml15 = wrap_process("p15", BODY_15_BOUNDARY_TIMER);
@@ -622,14 +634,18 @@ fn test_20_bpmn_compatibility_scenarios() {
     assert!(import_zeebe_bpmn(&xml17, "p17", false).is_err());
     let plan17 = import_zeebe_bpmn(&xml17, "p17", true).unwrap();
     assert!(!plan17.mathematically_proved);
-    assert!(plan17.unsafe_breeches.contains(&"FEEL_EVALUATION_WARNING".to_string()));
+    assert!(plan17
+        .unsafe_breeches
+        .contains(&"FEEL_EVALUATION_WARNING".to_string()));
 
     // Test 18: Unparsed FEEL Expression (Missing =)
     let xml18 = wrap_process("p18", BODY_18_BAD_FEEL);
     assert!(import_zeebe_bpmn(&xml18, "p18", false).is_err());
     let plan18 = import_zeebe_bpmn(&xml18, "p18", true).unwrap();
     assert!(!plan18.mathematically_proved);
-    assert!(plan18.unsafe_breeches.contains(&"FEEL_EVALUATION_WARNING".to_string()));
+    assert!(plan18
+        .unsafe_breeches
+        .contains(&"FEEL_EVALUATION_WARNING".to_string()));
 
     // Test 19: Duplicate Node IDs (Rejected)
     let xml19 = wrap_process("p19", BODY_19_DUPLICATE_IDS);

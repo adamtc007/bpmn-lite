@@ -14,16 +14,27 @@
 //! `bpmn_lite_types::Foo` / `Bar` (via the prelude `pub use`s
 //! below).
 
+pub mod artifact;
+pub mod concurrency;
 pub mod events;
 pub mod ffi_bindings;
 pub mod integrity;
+pub mod integrity_rings;
+pub mod persistence;
 pub mod session_stack;
+pub mod transition;
 pub mod types;
 
 // Crate-prelude re-exports — every external consumer can `use
 // bpmn_lite_types::*` and get the full vocabulary, mirroring the
 // way `bpmn-lite-core` used to expose these via `pub mod`.
+pub use artifact::*;
+pub use concurrency::*;
 pub use events::*;
 pub use ffi_bindings::*;
-pub use types::*;
 pub use integrity::IntegrityViolation;
+pub use integrity_rings::{IntegrityError, TripwireSurface};
+pub use persistence::*;
+pub use transition::*;
+pub use types::*;
+pub use uuid::Uuid;

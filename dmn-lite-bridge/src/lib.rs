@@ -5,7 +5,7 @@
 //!
 //! ## Registration
 //!
-//! ```rust,ignore
+//! ```text
 //! let owner = Arc::new(DmnLiteOwner::new());
 //! // Register a decision; receive the FfiTemplate to publish in the catalogue.
 //! let template = owner.register_decision(

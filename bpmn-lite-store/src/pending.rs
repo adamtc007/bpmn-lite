@@ -19,7 +19,9 @@
 //!                           Tx-coupled with the process_instance advance.
 //! ```
 
+use crate::{StoreError, StoreResult};
 use async_trait::async_trait;
+use bpmn_lite_types::TenantId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,6 +31,7 @@ use uuid::Uuid;
 /// One row in `bpmn_pending_invocation`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingInvocation {
+    pub tenant_id: TenantId,
     pub callout_id: Uuid,
     pub process_instance_id: Uuid,
     pub node_id: String,
@@ -45,6 +48,7 @@ impl PendingInvocation {
     /// Build a stage-1 record. `submitted_at` is set to `now()`;
     /// `execution_id` / `ack_received_at` start unset.
     pub fn new(
+        tenant_id: TenantId,
         callout_id: Uuid,
         process_instance_id: Uuid,
         node_id: impl Into<String>,
@@ -53,6 +57,7 @@ impl PendingInvocation {
         idempotency_key: Uuid,
     ) -> Self {
         Self {
+            tenant_id,
             callout_id,
             process_instance_id,
             node_id: node_id.into(),
@@ -86,45 +91,50 @@ pub trait PendingInvocationStore: Send + Sync {
     /// Stage 1 — caller has committed intent. Insert returns the
     /// duplicate-detection outcome so re-submits of the same
     /// `callout_id` don't multiply rows.
-    async fn insert(&self, record: PendingInvocation) -> anyhow::Result<InsertOutcome>;
+    async fn insert(&self, record: PendingInvocation) -> StoreResult<InsertOutcome>;
 
     /// Stage 2 — record the receiver's `execution_id` and the time
     /// of the SubmissionAck. Returns `Err` if no row matches.
     async fn record_ack(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
         execution_id: Uuid,
         ack_received_at: DateTime<Utc>,
-    ) -> anyhow::Result<()>;
+    ) -> StoreResult<()>;
 
     /// Stage 3 — atomic look-up + delete by execution_id. Returns
     /// `None` if no row matches (e.g. duplicate result delivery).
     async fn take_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>>;
+    ) -> StoreResult<Option<PendingInvocation>>;
 
     /// Stage 3 non-destructive lookup by execution_id. Returns
     /// `None` if no row matches.
     async fn lookup_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>>;
+    ) -> StoreResult<Option<PendingInvocation>>;
 
     /// Diagnostic / sender-side helper. Returns `None` if no row
     /// matches.
     async fn lookup_by_callout_id(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>>;
+    ) -> StoreResult<Option<PendingInvocation>>;
 
     /// Diagnostic / recovery sweep — list every pending row for a
     /// given process instance (e.g. on startup to inventory what's
     /// in flight).
     async fn list_for_process(
         &self,
+        tenant_id: &TenantId,
         process_instance_id: Uuid,
-    ) -> anyhow::Result<Vec<PendingInvocation>>;
+    ) -> StoreResult<Vec<PendingInvocation>>;
 }
 
 /// Did the insert land or did the `(callout_id)` PK already hold the row?
@@ -155,8 +165,11 @@ impl MemoryPendingInvocationStore {
 
 #[async_trait]
 impl PendingInvocationStore for MemoryPendingInvocationStore {
-    async fn insert(&self, record: PendingInvocation) -> anyhow::Result<InsertOutcome> {
-        let mut guard = self.by_callout.lock().expect("poisoned");
+    async fn insert(&self, record: PendingInvocation) -> StoreResult<InsertOutcome> {
+        let mut guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
         if guard.contains_key(&record.callout_id) {
             return Ok(InsertOutcome::Duplicate);
         }
@@ -172,14 +185,21 @@ impl PendingInvocationStore for MemoryPendingInvocationStore {
 
     async fn record_ack(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
         execution_id: Uuid,
         ack_received_at: DateTime<Utc>,
-    ) -> anyhow::Result<()> {
-        let mut guard = self.by_callout.lock().expect("poisoned");
+    ) -> StoreResult<()> {
+        let mut guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
         let row = guard
             .get_mut(&callout_id)
-            .ok_or_else(|| anyhow::anyhow!("no pending row for callout_id {callout_id}"))?;
+            .filter(|row| &row.tenant_id == tenant_id)
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("pending row for callout_id {callout_id}"))
+            })?;
         row.execution_id = Some(execution_id);
         row.ack_received_at = Some(ack_received_at);
         Ok(())
@@ -187,44 +207,63 @@ impl PendingInvocationStore for MemoryPendingInvocationStore {
 
     async fn take_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let mut guard = self.by_callout.lock().expect("poisoned");
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let mut guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
         let key = guard
             .iter()
-            .find(|(_, v)| v.execution_id == Some(execution_id))
+            .find(|(_, v)| &v.tenant_id == tenant_id && v.execution_id == Some(execution_id))
             .map(|(k, _)| *k);
         Ok(key.and_then(|k| guard.remove(&k)))
     }
 
     async fn lookup_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let guard = self.by_callout.lock().expect("poisoned");
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
         let found = guard
             .values()
-            .find(|v| v.execution_id == Some(execution_id))
+            .find(|v| &v.tenant_id == tenant_id && v.execution_id == Some(execution_id))
             .cloned();
         Ok(found)
     }
 
     async fn lookup_by_callout_id(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let guard = self.by_callout.lock().expect("poisoned");
-        Ok(guard.get(&callout_id).cloned())
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
+        Ok(guard
+            .get(&callout_id)
+            .filter(|row| &row.tenant_id == tenant_id)
+            .cloned())
     }
 
     async fn list_for_process(
         &self,
+        tenant_id: &TenantId,
         process_instance_id: Uuid,
-    ) -> anyhow::Result<Vec<PendingInvocation>> {
-        let guard = self.by_callout.lock().expect("poisoned");
+    ) -> StoreResult<Vec<PendingInvocation>> {
+        let guard = self
+            .by_callout
+            .lock()
+            .map_err(|_| StoreError::Unavailable("pending invocation lock poisoned".into()))?;
         Ok(guard
             .values()
-            .filter(|r| r.process_instance_id == process_instance_id)
+            .filter(|r| &r.tenant_id == tenant_id && r.process_instance_id == process_instance_id)
             .cloned()
             .collect())
     }
@@ -235,7 +274,15 @@ mod tests {
     use super::*;
 
     fn record(callout: Uuid, process: Uuid, idem: Uuid) -> PendingInvocation {
-        PendingInvocation::new(callout, process, "node-x", "ob-poc", "cbu.create", idem)
+        PendingInvocation::new(
+            TenantId::new("default").unwrap(),
+            callout,
+            process,
+            "node-x",
+            "ob-poc",
+            "cbu.create",
+            idem,
+        )
     }
 
     #[tokio::test]
@@ -249,7 +296,11 @@ mod tests {
             InsertOutcome::Inserted
         );
 
-        let hit = store.lookup_by_callout_id(cid).await.unwrap().unwrap();
+        let hit = store
+            .lookup_by_callout_id(&TenantId::new("default").unwrap(), cid)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(hit.process_instance_id, pid);
         assert_eq!(hit.idempotency_key, idem);
         assert!(hit.execution_id.is_none());
@@ -296,9 +347,16 @@ mod tests {
 
         let exec = Uuid::now_v7();
         let now = Utc::now();
-        store.record_ack(cid, exec, now).await.unwrap();
+        store
+            .record_ack(&TenantId::new("default").unwrap(), cid, exec, now)
+            .await
+            .unwrap();
 
-        let row = store.lookup_by_callout_id(cid).await.unwrap().unwrap();
+        let row = store
+            .lookup_by_callout_id(&TenantId::new("default").unwrap(), cid)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row.execution_id, Some(exec));
         assert_eq!(row.ack_received_at, Some(now));
     }
@@ -312,15 +370,28 @@ mod tests {
             .await
             .unwrap();
         let exec = Uuid::now_v7();
-        store.record_ack(cid, exec, Utc::now()).await.unwrap();
+        store
+            .record_ack(&TenantId::new("default").unwrap(), cid, exec, Utc::now())
+            .await
+            .unwrap();
 
-        let taken = store.take_by_execution_id(exec).await.unwrap();
+        let taken = store
+            .take_by_execution_id(&TenantId::new("default").unwrap(), exec)
+            .await
+            .unwrap();
         assert!(taken.is_some());
         // Second take returns None — duplicate result delivery is a no-op.
-        let taken_again = store.take_by_execution_id(exec).await.unwrap();
+        let taken_again = store
+            .take_by_execution_id(&TenantId::new("default").unwrap(), exec)
+            .await
+            .unwrap();
         assert!(taken_again.is_none());
         // lookup_by_callout_id also returns None now.
-        assert!(store.lookup_by_callout_id(cid).await.unwrap().is_none());
+        assert!(store
+            .lookup_by_callout_id(&TenantId::new("default").unwrap(), cid)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -339,11 +410,17 @@ mod tests {
             .await
             .unwrap();
 
-        let a_rows = store.list_for_process(pid_a).await.unwrap();
+        let a_rows = store
+            .list_for_process(&TenantId::new("default").unwrap(), pid_a)
+            .await
+            .unwrap();
         assert_eq!(a_rows.len(), 3);
         assert!(a_rows.iter().all(|r| r.process_instance_id == pid_a));
 
-        let b_rows = store.list_for_process(pid_b).await.unwrap();
+        let b_rows = store
+            .list_for_process(&TenantId::new("default").unwrap(), pid_b)
+            .await
+            .unwrap();
         assert_eq!(b_rows.len(), 1);
     }
 }

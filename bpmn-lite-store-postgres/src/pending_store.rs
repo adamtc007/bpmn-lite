@@ -3,9 +3,10 @@
 //! SQL strings live here as private items; the public surface is the
 //! `PostgresPendingInvocationStore` struct + its trait impl.
 
-#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
 use bpmn_lite_store::pending::{InsertOutcome, PendingInvocation, PendingInvocationStore};
+use bpmn_lite_store::{StoreError, StoreResult};
+use bpmn_lite_types::TenantId;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -18,67 +19,17 @@ impl PostgresPendingInvocationStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-
-    async fn list_tenants(&self) -> anyhow::Result<Vec<String>> {
-        let rows_res = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
-            .fetch_all(&self.pool)
-            .await;
-        match rows_res {
-            Ok(rows) => {
-                let tenants: Vec<String> = rows.iter().map(|r| r.get::<String, _>("tenant_id")).collect();
-                if tenants.is_empty() {
-                    Ok(vec!["default".to_string()])
-                } else {
-                    Ok(tenants)
-                }
-            }
-            Err(_) => Ok(vec!["default".to_string()]),
-        }
-    }
-
-    async fn resolve_instance_tenant(&self, instance_id: Uuid) -> anyhow::Result<String> {
-        let row: (Option<String>,) = sqlx::query_as("SELECT resolve_instance_tenant($1)")
-            .bind(instance_id)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row.0.unwrap_or_else(|| "default".to_string()))
-    }
-
-    async fn resolve_callout_tenant(&self, callout_id: Uuid) -> anyhow::Result<(String, Uuid)> {
-        let tenants = self.list_tenants().await?;
-        for tenant_id in tenants {
-            let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-                .bind(&tenant_id)
-                .execute(&mut *tx)
-                .await
-            {
-                continue;
-            }
-            let res: Option<(Uuid,)> = sqlx::query_as("SELECT process_instance_id FROM bpmn_pending_invocation WHERE callout_id = $1")
-                .bind(callout_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .ok()
-                .flatten();
-            let _ = tx.commit().await;
-            if let Some((pi_id,)) = res {
-                return Ok((tenant_id, pi_id));
-            }
-        }
-        anyhow::bail!("no pending row for callout_id {callout_id}")
-    }
 }
 
 #[async_trait]
 impl PendingInvocationStore for PostgresPendingInvocationStore {
-    async fn insert(&self, record: PendingInvocation) -> anyhow::Result<InsertOutcome> {
-        let tenant_id = self.resolve_instance_tenant(record.process_instance_id).await?;
-        let mut tx = self.pool.begin().await?;
+    async fn insert(&self, record: PendingInvocation) -> StoreResult<InsertOutcome> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
         sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-            .bind(&tenant_id)
+            .bind(record.tenant_id.as_str())
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(StoreError::unavailable)?;
 
         // `(callout_id)` is PK and `(idempotency_key)` is UNIQUE.
         // ON CONFLICT on either deduplicates, so a re-submit of the
@@ -103,11 +54,12 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         .bind(record.submitted_at)
         .bind(record.ack_received_at)
         .bind(record.timeout_at)
-        .bind(&tenant_id)
+        .bind(record.tenant_id.as_str())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(StoreError::unavailable)?;
 
-        tx.commit().await?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
 
         Ok(if res.rows_affected() == 1 {
             InsertOutcome::Inserted
@@ -118,179 +70,197 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
 
     async fn record_ack(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
         execution_id: Uuid,
         ack_received_at: DateTime<Utc>,
-    ) -> anyhow::Result<()> {
-        let (tenant_id, _) = self.resolve_callout_tenant(callout_id).await?;
-        let mut tx = self.pool.begin().await?;
+    ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
         sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-            .bind(&tenant_id)
+            .bind(tenant_id.as_str())
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(StoreError::unavailable)?;
 
         let res = sqlx::query(
             r#"
             UPDATE bpmn_pending_invocation
                SET execution_id = $2,
                    ack_received_at = $3
-             WHERE callout_id = $1
+             WHERE tenant_id = $4 AND callout_id = $1
             "#,
         )
         .bind(callout_id)
         .bind(execution_id)
         .bind(ack_received_at)
+        .bind(tenant_id.as_str())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(StoreError::unavailable)?;
 
-        tx.commit().await?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
 
         if res.rows_affected() != 1 {
-            anyhow::bail!("no pending row for callout_id {callout_id}");
+            return Err(StoreError::NotFound(format!(
+                "pending row for callout_id {callout_id}"
+            )));
         }
         Ok(())
     }
 
     async fn take_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let tenants = self.list_tenants().await?;
-        for tenant_id in tenants {
-            let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-                .bind(&tenant_id)
-                .execute(&mut *tx)
-                .await
-            {
-                continue;
-            }
-            let row = sqlx::query(
-                r#"
-                DELETE FROM bpmn_pending_invocation
-                 WHERE execution_id = $1
-                 RETURNING callout_id, process_instance_id, node_id, target_domain, verb_id,
-                           idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
-                "#,
-            )
-            .bind(execution_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            if let Some(r) = row {
-                return Ok(Some(row_to_record(r)?));
-            }
-        }
-        Ok(None)
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        set_tenant(&mut tx, tenant_id)
+            .await
+            .map_err(StoreError::unavailable)?;
+        let row = sqlx::query(
+            r#"
+            DELETE FROM bpmn_pending_invocation
+             WHERE tenant_id = $1 AND execution_id = $2
+             RETURNING callout_id, process_instance_id, node_id, target_domain, verb_id,
+                       idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at,
+                       tenant_id
+            "#,
+        )
+        .bind(tenant_id.as_str())
+        .bind(execution_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
+        row.map(row_to_record).transpose()
     }
 
     async fn lookup_by_execution_id(
         &self,
+        tenant_id: &TenantId,
         execution_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let tenants = self.list_tenants().await?;
-        for tenant_id in tenants {
-            let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-                .bind(&tenant_id)
-                .execute(&mut *tx)
-                .await
-            {
-                continue;
-            }
-            let row = sqlx::query(
-                r#"
-                SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
-                       idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
-                  FROM bpmn_pending_invocation
-                 WHERE execution_id = $1
-                "#,
-            )
-            .bind(execution_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            if let Some(r) = row {
-                return Ok(Some(row_to_record(r)?));
-            }
-        }
-        Ok(None)
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        set_tenant(&mut tx, tenant_id)
+            .await
+            .map_err(StoreError::unavailable)?;
+        let row = sqlx::query(
+            r#"
+            SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
+                   idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at,
+                   tenant_id
+              FROM bpmn_pending_invocation
+             WHERE tenant_id = $1 AND execution_id = $2
+            "#,
+        )
+        .bind(tenant_id.as_str())
+        .bind(execution_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
+        row.map(row_to_record).transpose()
     }
 
     async fn lookup_by_callout_id(
         &self,
+        tenant_id: &TenantId,
         callout_id: Uuid,
-    ) -> anyhow::Result<Option<PendingInvocation>> {
-        let tenants = self.list_tenants().await?;
-        for tenant_id in tenants {
-            let mut tx = self.pool.begin().await?;
-            if let Err(_) = sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-                .bind(&tenant_id)
-                .execute(&mut *tx)
-                .await
-            {
-                continue;
-            }
-            let row = sqlx::query(
-                r#"
-                SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
-                       idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
-                  FROM bpmn_pending_invocation
-                 WHERE callout_id = $1
-                "#,
-            )
-            .bind(callout_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            if let Some(r) = row {
-                return Ok(Some(row_to_record(r)?));
-            }
-        }
-        Ok(None)
+    ) -> StoreResult<Option<PendingInvocation>> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        set_tenant(&mut tx, tenant_id)
+            .await
+            .map_err(StoreError::unavailable)?;
+        let row = sqlx::query(
+            r#"
+            SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
+                   idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at,
+                   tenant_id
+              FROM bpmn_pending_invocation
+             WHERE tenant_id = $1 AND callout_id = $2
+            "#,
+        )
+        .bind(tenant_id.as_str())
+        .bind(callout_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
+        row.map(row_to_record).transpose()
     }
 
     async fn list_for_process(
         &self,
+        tenant_id: &TenantId,
         process_instance_id: Uuid,
-    ) -> anyhow::Result<Vec<PendingInvocation>> {
-        let tenant_id = self.resolve_instance_tenant(process_instance_id).await?;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
-            .bind(&tenant_id)
-            .execute(&mut *tx)
-            .await?;
+    ) -> StoreResult<Vec<PendingInvocation>> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        set_tenant(&mut tx, tenant_id)
+            .await
+            .map_err(StoreError::unavailable)?;
 
         let rows = sqlx::query(
             r#"
             SELECT callout_id, process_instance_id, node_id, target_domain, verb_id,
-                   idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at
+                   idempotency_key, execution_id, submitted_at, ack_received_at, timeout_at,
+                   tenant_id
               FROM bpmn_pending_invocation
-             WHERE process_instance_id = $1
+             WHERE tenant_id = $1 AND process_instance_id = $2
              ORDER BY submitted_at
             "#,
         )
+        .bind(tenant_id.as_str())
         .bind(process_instance_id)
         .fetch_all(&mut *tx)
-        .await?;
+        .await
+        .map_err(StoreError::unavailable)?;
 
-        tx.commit().await?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
         rows.into_iter().map(row_to_record).collect()
     }
 }
 
-fn row_to_record(row: sqlx::postgres::PgRow) -> anyhow::Result<PendingInvocation> {
+async fn set_tenant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: &TenantId,
+) -> StoreResult<()> {
+    sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+        .bind(tenant_id.as_str())
+        .execute(&mut **tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+    Ok(())
+}
+
+fn row_to_record(row: sqlx::postgres::PgRow) -> StoreResult<PendingInvocation> {
     Ok(PendingInvocation {
-        callout_id: row.try_get("callout_id")?,
-        process_instance_id: row.try_get("process_instance_id")?,
-        node_id: row.try_get("node_id")?,
-        target_domain: row.try_get("target_domain")?,
-        verb_id: row.try_get("verb_id")?,
-        idempotency_key: row.try_get("idempotency_key")?,
-        execution_id: row.try_get("execution_id")?,
-        submitted_at: row.try_get("submitted_at")?,
-        ack_received_at: row.try_get("ack_received_at")?,
-        timeout_at: row.try_get("timeout_at")?,
+        tenant_id: TenantId::new(
+            row.try_get::<String, _>("tenant_id")
+                .map_err(StoreError::unavailable)?,
+        )
+        .map_err(StoreError::invalid)?,
+        callout_id: row.try_get("callout_id").map_err(StoreError::unavailable)?,
+        process_instance_id: row
+            .try_get("process_instance_id")
+            .map_err(StoreError::unavailable)?,
+        node_id: row.try_get("node_id").map_err(StoreError::unavailable)?,
+        target_domain: row
+            .try_get("target_domain")
+            .map_err(StoreError::unavailable)?,
+        verb_id: row.try_get("verb_id").map_err(StoreError::unavailable)?,
+        idempotency_key: row
+            .try_get("idempotency_key")
+            .map_err(StoreError::unavailable)?,
+        execution_id: row
+            .try_get("execution_id")
+            .map_err(StoreError::unavailable)?,
+        submitted_at: row
+            .try_get("submitted_at")
+            .map_err(StoreError::unavailable)?,
+        ack_received_at: row
+            .try_get("ack_received_at")
+            .map_err(StoreError::unavailable)?,
+        timeout_at: row.try_get("timeout_at").map_err(StoreError::unavailable)?,
     })
 }
 
@@ -309,33 +279,72 @@ mod tests {
 
         // Run migrations
         let migrator = sqlx::migrate!("./migrations");
-        migrator.run(&pool)
-            .await
-            .expect("run migrations");
+        migrator.run(&pool).await.expect("run migrations");
 
         // Perform TRUNCATE as admin before returning app connection
-        sqlx::query("TRUNCATE bpmn_pending_invocation, bpmn_process_instance CASCADE")
+        sqlx::query("TRUNCATE bpmn_pending_invocation, workflow_instances CASCADE")
             .execute(&pool)
             .await
             .unwrap();
         let app_url = if url.contains("@") {
             let parts: Vec<&str> = url.split('@').collect();
             let host_part = parts[1];
-            format!("postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}", host_part)
+            format!(
+                "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}",
+                host_part
+            )
         } else {
-            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test".to_string()
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test"
+                .to_string()
         };
-        let app_pool = PgPool::connect(&app_url).await.expect("Failed to connect as bpmn_lite_app");
+        let app_pool = PgPool::connect(&app_url)
+            .await
+            .expect("Failed to connect as bpmn_lite_app");
         (app_pool, guard)
     }
 
-    async fn setup() -> (PostgresPendingInvocationStore, tokio::sync::MutexGuard<'static, ()>) {
+    async fn setup() -> (
+        PostgresPendingInvocationStore,
+        tokio::sync::MutexGuard<'static, ()>,
+    ) {
         let (pool, guard) = setup_t2b8_pool().await;
         (PostgresPendingInvocationStore::new(pool), guard)
     }
 
     fn record(callout: Uuid, process: Uuid, idem: Uuid) -> PendingInvocation {
-        PendingInvocation::new(callout, process, "create-cbu", "ob-poc", "cbu.create", idem)
+        PendingInvocation::new(
+            TenantId::new("default").unwrap(),
+            callout,
+            process,
+            "create-cbu",
+            "ob-poc",
+            "cbu.create",
+            idem,
+        )
+    }
+
+    async fn insert_instance(store: &PostgresPendingInvocationStore, instance_id: Uuid) {
+        let mut tx = store.pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('app.current_tenant', 'default', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO workflow_instances
+                (instance_id, tenant_id, process_key, bytecode_version,
+                 domain_payload, domain_payload_hash, state, correlation_id)
+            VALUES ($1, 'default', 'pending-test', $2, '{}', $3, '"Running"'::jsonb, $4)
+            "#,
+        )
+        .bind(instance_id)
+        .bind(vec![0u8; 32])
+        .bind(blake3::hash(b"{}").as_bytes().as_slice())
+        .bind(instance_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
     }
 
     #[tokio::test]
@@ -344,11 +353,16 @@ mod tests {
         let cid = Uuid::now_v7();
         let pid = Uuid::now_v7();
         let idem = Uuid::now_v7();
+        insert_instance(&store, pid).await;
         assert_eq!(
             store.insert(record(cid, pid, idem)).await.unwrap(),
             InsertOutcome::Inserted
         );
-        let hit = store.lookup_by_callout_id(cid).await.unwrap().unwrap();
+        let hit = store
+            .lookup_by_callout_id(&TenantId::new("default").unwrap(), cid)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(hit.process_instance_id, pid);
         assert_eq!(hit.idempotency_key, idem);
         assert!(hit.execution_id.is_none());
@@ -359,12 +373,16 @@ mod tests {
     async fn duplicate_callout_id_is_a_no_op_insert() {
         let (store, _lock) = setup().await;
         let cid = Uuid::now_v7();
+        let first_pid = Uuid::now_v7();
+        let second_pid = Uuid::now_v7();
+        insert_instance(&store, first_pid).await;
+        insert_instance(&store, second_pid).await;
         store
-            .insert(record(cid, Uuid::now_v7(), Uuid::now_v7()))
+            .insert(record(cid, first_pid, Uuid::now_v7()))
             .await
             .unwrap();
         let second = store
-            .insert(record(cid, Uuid::now_v7(), Uuid::now_v7()))
+            .insert(record(cid, second_pid, Uuid::now_v7()))
             .await
             .unwrap();
         assert_eq!(second, InsertOutcome::Duplicate);
@@ -374,12 +392,16 @@ mod tests {
     async fn duplicate_idempotency_key_violates_unique_constraint() {
         let (store, _lock) = setup().await;
         let idem = Uuid::now_v7();
+        let first_pid = Uuid::now_v7();
+        let second_pid = Uuid::now_v7();
+        insert_instance(&store, first_pid).await;
+        insert_instance(&store, second_pid).await;
         store
-            .insert(record(Uuid::now_v7(), Uuid::now_v7(), idem))
+            .insert(record(Uuid::now_v7(), first_pid, idem))
             .await
             .unwrap();
         let second = store
-            .insert(record(Uuid::now_v7(), Uuid::now_v7(), idem))
+            .insert(record(Uuid::now_v7(), second_pid, idem))
             .await
             .unwrap();
         assert_eq!(second, InsertOutcome::Duplicate);
@@ -390,6 +412,7 @@ mod tests {
         let (store, _lock) = setup().await;
         let cid = Uuid::now_v7();
         let pid = Uuid::now_v7();
+        insert_instance(&store, pid).await;
         store
             .insert(record(cid, pid, Uuid::now_v7()))
             .await
@@ -397,24 +420,43 @@ mod tests {
 
         let exec = Uuid::now_v7();
         let now = Utc::now();
-        store.record_ack(cid, exec, now).await.unwrap();
+        store
+            .record_ack(&TenantId::new("default").unwrap(), cid, exec, now)
+            .await
+            .unwrap();
 
         // Stage 3: delete + return.
-        let taken = store.take_by_execution_id(exec).await.unwrap();
+        let taken = store
+            .take_by_execution_id(&TenantId::new("default").unwrap(), exec)
+            .await
+            .unwrap();
         assert!(taken.is_some());
         assert_eq!(taken.as_ref().unwrap().callout_id, cid);
 
         // Duplicate take is a clean None.
-        assert!(store.take_by_execution_id(exec).await.unwrap().is_none());
+        assert!(store
+            .take_by_execution_id(&TenantId::new("default").unwrap(), exec)
+            .await
+            .unwrap()
+            .is_none());
         // And lookup_by_callout_id confirms the row is gone.
-        assert!(store.lookup_by_callout_id(cid).await.unwrap().is_none());
+        assert!(store
+            .lookup_by_callout_id(&TenantId::new("default").unwrap(), cid)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn record_ack_fails_on_unknown_callout_id() {
         let (store, _lock) = setup().await;
         let err = store
-            .record_ack(Uuid::now_v7(), Uuid::now_v7(), Utc::now())
+            .record_ack(
+                &TenantId::new("default").unwrap(),
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+                Utc::now(),
+            )
             .await;
         assert!(err.is_err());
     }
@@ -424,6 +466,8 @@ mod tests {
         let (store, _lock) = setup().await;
         let pid_a = Uuid::now_v7();
         let pid_b = Uuid::now_v7();
+        insert_instance(&store, pid_a).await;
+        insert_instance(&store, pid_b).await;
         for _ in 0..3 {
             store
                 .insert(record(Uuid::now_v7(), pid_a, Uuid::now_v7()))
@@ -435,9 +479,19 @@ mod tests {
             .await
             .unwrap();
 
-        let a_rows = store.list_for_process(pid_a).await.unwrap();
+        let a_rows = store
+            .list_for_process(&TenantId::new("default").unwrap(), pid_a)
+            .await
+            .unwrap();
         assert_eq!(a_rows.len(), 3);
         assert!(a_rows.iter().all(|r| r.process_instance_id == pid_a));
-        assert_eq!(store.list_for_process(pid_b).await.unwrap().len(), 1);
+        assert_eq!(
+            store
+                .list_for_process(&TenantId::new("default").unwrap(), pid_b)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

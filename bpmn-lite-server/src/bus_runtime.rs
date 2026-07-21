@@ -1,12 +1,12 @@
 //! Federated DSL bus runtime for `bpmn-lite-server` (v0.6 §T2B.9 + T3.4).
 //!
-//! T3.4 update: `StoreBackedAdvancer` now operates on `ProcessStore`
+//! T3.4 update: `StoreBackedAdvancer` now operates on `WorkflowStore`
 //! (the bytecode engine store with plan_hash support) instead of the
 //! separate `BpmnProcessInstanceStore`. When a result arrives for a
 //! plan-based instance it:
 //!
 //! 1. Takes the pending invocation row (establishes which node fired).
-//! 2. Loads the `ProcessInstance` via `ProcessStore`.
+//! 2. Loads the `ProcessInstance` via `WorkflowStore`.
 //! 3. If the instance has a `plan_hash`, loads the plan and advances
 //!    `current_node_id` to the completed node's `next` neighbour.
 //! 4. Populates `placeholder_values` from the result bindings.
@@ -15,39 +15,128 @@
 
 #![cfg(feature = "postgres")]
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bpmn_lite_bus_handler::{
     BpmnLiteBusHandler, ProcessAdvanceInput, ProcessAdvancer, ProcessAdvancerError,
-    RejectInvocationDispatcher,
 };
-use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_store::pending::PendingInvocationStore;
-use bpmn_lite_store::store::{ProcessStore, TickOperation};
+use bpmn_lite_store::store::{transition_from_tick_ops, TickOperation, WorkflowStore};
 use bpmn_lite_store_postgres::PostgresPendingInvocationStore;
 use bpmn_lite_types::types::ProcessState;
+use bpmn_lite_types::TenantId;
 use dsl_bus_client::BusClient;
-use dsl_bus_protocol::v1::{typed_value::Value as ProtoValueKind, ExecutionOutcomeKind};
+use dsl_bus_client::{SubmissionAckFuture, SubmissionAckHandler};
+use dsl_bus_protocol::v1::ExecutionOutcomeKind;
 use dsl_bus_server::{BusServer, ServerHandle};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+pub(crate) struct StoreSubmissionAckHandler {
+    pending: Arc<PostgresPendingInvocationStore>,
+    store: Arc<dyn WorkflowStore>,
+}
+
+impl StoreSubmissionAckHandler {
+    pub(crate) fn new(
+        pending: Arc<PostgresPendingInvocationStore>,
+        store: Arc<dyn WorkflowStore>,
+    ) -> Self {
+        Self { pending, store }
+    }
+}
+
+impl SubmissionAckHandler for StoreSubmissionAckHandler {
+    fn accepted<'a>(
+        &'a self,
+        entry: &'a dsl_bus_storage::OutboxEntry,
+        execution_id: Uuid,
+    ) -> SubmissionAckFuture<'a> {
+        Box::pin(async move {
+            let callout_id = entry
+                .callout_id
+                .ok_or_else(|| "invocation outbox row has no callout_id".to_string())?;
+            let dispatch_claim_token = entry
+                .claim_token
+                .ok_or_else(|| "claimed outbox row has no claim token".to_string())?;
+            let pending = self
+                .pending
+                .lookup_by_callout_id(
+                    &TenantId::new(entry.tenant_id.clone()).map_err(|error| error.to_string())?,
+                    callout_id,
+                )
+                .await
+                .map_err(|error| format!("lookup pending invocation: {error}"))?
+                .ok_or_else(|| format!("no pending invocation for callout {callout_id}"))?;
+            let mut instance = self
+                .store
+                .load_instance(&pending.tenant_id, pending.process_instance_id)
+                .await
+                .map_err(|error| format!("load ack instance: {error}"))?
+                .ok_or_else(|| "pending invocation references missing instance".to_string())?;
+            if matches!(
+                instance.state,
+                ProcessState::WaitingOnInvocation { execution_id: current, .. }
+                    if current == execution_id
+            ) {
+                return Ok(());
+            }
+            let ProcessState::WaitingOnSubmission {
+                callout_id: waiting_callout,
+                node_id,
+            } = &instance.state
+            else {
+                return Err("submission ack does not match instance state".to_string());
+            };
+            if *waiting_callout != callout_id {
+                return Err("submission ack callout identity mismatch".to_string());
+            }
+            let node_id = node_id.clone();
+            let owner = format!("bus-ack-{dispatch_claim_token}");
+            let claim = self
+                .store
+                .claim_instance_for_transition(
+                    &pending.tenant_id,
+                    instance.instance_id,
+                    &owner,
+                    30_000,
+                )
+                .await
+                .map_err(|error| format!("claim ack instance: {error}"))?
+                .ok_or_else(|| "submission ack lost instance claim race".to_string())?;
+            instance.state = ProcessState::WaitingOnInvocation {
+                execution_id,
+                node_id,
+            };
+            let transition = bpmn_lite_types::TransitionBuilder::new(instance.clone())
+                .bus_submission_ack(bpmn_lite_types::BusSubmissionAckMutation::new(
+                    entry.id,
+                    callout_id,
+                    execution_id,
+                    dispatch_claim_token,
+                ))
+                .build();
+            let commit = self.store.commit_transition(&claim, &transition).await;
+            let release = self
+                .store
+                .release_instance_transition(&pending.tenant_id, instance.instance_id, &owner)
+                .await;
+            commit.map_err(|error| format!("commit submission ack: {error}"))?;
+            release.map_err(|error| format!("release ack instance: {error}"))?;
+            Ok(())
+        })
+    }
+}
 
 /// Owned bus runtime.
 pub(crate) struct BusRuntime {
     server: ServerHandle,
     sender: dsl_bus_client::SenderHandle,
-    client: Arc<BusClient>,
 }
 
 impl BusRuntime {
-    /// Clone of the bus client for wiring into BpmnLiteEngine (T3.3).
-    pub(crate) fn bus_client(&self) -> Arc<BusClient> {
-        self.client.clone()
-    }
-
     pub(crate) async fn shutdown(self) -> anyhow::Result<()> {
         let _ = self.server.shutdown().await;
         let _ = self.sender.shutdown().await;
@@ -61,8 +150,8 @@ pub(crate) struct BusRuntimeConfig {
     pub(crate) bind_addr: SocketAddr,
     /// Pre-built bus client (T3.3 — built before engine so it can be wired in).
     pub(crate) client: Arc<BusClient>,
-    /// T3.4 — engine's ProcessStore for loading/saving plan-based instances.
-    pub(crate) store: Arc<dyn ProcessStore>,
+    /// T3.4 — engine's WorkflowStore for loading/saving plan-based instances.
+    pub(crate) store: Arc<dyn WorkflowStore>,
     pub(crate) engine: Arc<bpmn_lite_engine::BpmnLiteEngine>,
 }
 
@@ -97,11 +186,7 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
         "bpmn-lite bus server listening (result receiver)"
     );
 
-    Ok(BusRuntime {
-        server,
-        sender,
-        client,
-    })
+    Ok(BusRuntime { server, sender })
 }
 
 // ── StoreBackedAdvancer ──────────────────────────────────────────────
@@ -110,26 +195,52 @@ pub(crate) async fn start(config: BusRuntimeConfig) -> anyhow::Result<BusRuntime
 ///
 /// Flow:
 /// 1. Take pending invocation row (establishes node_id + process_instance_id).
-/// 2. Load ProcessInstance from ProcessStore.
-/// 3. For plan-based instances (plan_hash.is_some()):
-///    a. Load the WorkflowExecutionPlan.
-///    b. Advance current_node_id to the completed node's `next` neighbour
-///       so the next tick walks past the completed service/business-rule node.
-///    c. Bind placeholder values from result bindings.
+/// 2. Load ProcessInstance from WorkflowStore.
+/// 3. For plan-based instances, load the plan, advance past the completed node,
+///    and bind validated result values.
 /// 4. Set state = Running (tick loop will call PlanWalker.advance() on next cycle).
 /// 5. For terminal outcomes (VerbFailed etc.) set state = Failed.
 #[derive(Clone)]
 struct StoreBackedAdvancer {
     pending: Arc<PostgresPendingInvocationStore>,
-    store: Arc<dyn ProcessStore>,
+    store: Arc<dyn WorkflowStore>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutcomeDisposition {
+    Commit,
+    Retry,
+    Terminal,
+    Malformed,
+}
+
+fn classify_outcome(outcome: ExecutionOutcomeKind) -> OutcomeDisposition {
+    match outcome {
+        ExecutionOutcomeKind::Committed | ExecutionOutcomeKind::IdempotentReplayReturned => {
+            OutcomeDisposition::Commit
+        }
+        ExecutionOutcomeKind::OptimisticConflict | ExecutionOutcomeKind::LockTimeout => {
+            OutcomeDisposition::Retry
+        }
+        ExecutionOutcomeKind::OutcomeUnspecified => OutcomeDisposition::Malformed,
+        ExecutionOutcomeKind::VerbFailed
+        | ExecutionOutcomeKind::AuthorityDenied
+        | ExecutionOutcomeKind::Cancelled
+        | ExecutionOutcomeKind::TimedOut
+        | ExecutionOutcomeKind::PanicRecovered
+        | ExecutionOutcomeKind::RejectedByAdmission
+        | ExecutionOutcomeKind::VersionMismatch => OutcomeDisposition::Terminal,
+    }
 }
 
 #[async_trait]
 impl ProcessAdvancer for StoreBackedAdvancer {
     async fn advance(&self, input: ProcessAdvanceInput) -> Result<(), ProcessAdvancerError> {
+        let tenant_id = TenantId::new(input.tenant_id.clone())
+            .map_err(|error| ProcessAdvancerError::Malformed(error.to_string()))?;
         let row = self
             .pending
-            .lookup_by_execution_id(input.execution_id)
+            .lookup_by_execution_id(&tenant_id, input.execution_id)
             .await
             .map_err(|e| ProcessAdvancerError::Internal(format!("lookup pending: {e}")))?;
 
@@ -139,7 +250,11 @@ impl ProcessAdvancer for StoreBackedAdvancer {
 
         let owner = format!("bus-resumer-{}", Uuid::now_v7());
 
-        let mut instance = match self.store.load_instance(row.process_instance_id).await {
+        let mut instance = match self
+            .store
+            .load_instance(&row.tenant_id, row.process_instance_id)
+            .await
+        {
             Ok(Some(inst)) => inst,
             Ok(None) => {
                 return Err(ProcessAdvancerError::Internal(format!(
@@ -148,116 +263,94 @@ impl ProcessAdvancer for StoreBackedAdvancer {
                 )));
             }
             Err(e) => {
-                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
-                    tracing::error!(
-                        process_instance_id = %row.process_instance_id,
-                        error = %e,
-                        "IntegrityViolation during load_instance in bus advance; quarantining instance"
-                    );
-                    if let Err(q_err) = self.store.quarantine_instance(
-                        violation.instance_id,
-                        &violation.tenant_id,
-                        &owner,
-                        &violation.detection_point,
-                    ).await {
-                        tracing::error!(
-                            process_instance_id = %row.process_instance_id,
-                            error = %q_err,
-                            "Failed to quarantine instance after IntegrityViolation during load_instance"
-                        );
-                    }
-                    return Ok(());
-                }
-                return Err(ProcessAdvancerError::Internal(format!("load instance: {e}")));
+                return Err(ProcessAdvancerError::Internal(format!(
+                    "load instance: {e}"
+                )));
             }
         };
 
-        let claimed = self.store
-            .claim_instance_for_transition(&instance.tenant_id, instance.instance_id, &owner, 30_000)
+        let claim = self
+            .store
+            .claim_instance_for_transition(&row.tenant_id, instance.instance_id, &owner, 30_000)
             .await
             .map_err(|e| ProcessAdvancerError::Internal(format!("claim instance: {e}")))?;
-        if !claimed {
-            return Err(ProcessAdvancerError::Internal("failed to claim instance lease for bus resume".to_owned()));
-        }
+        let claim = claim.ok_or_else(|| {
+            ProcessAdvancerError::Internal(
+                "failed to claim instance lease for bus resume".to_owned(),
+            )
+        })?;
 
-        let is_success = matches!(
-            input.outcome_kind,
-            ExecutionOutcomeKind::Committed | ExecutionOutcomeKind::IdempotentReplayReturned
-        );
-        let is_transient = matches!(
-            input.outcome_kind,
-            ExecutionOutcomeKind::OptimisticConflict | ExecutionOutcomeKind::LockTimeout
-        );
-
-        if is_success || is_transient {
-            // T3.4 — plan-based: advance node + bind placeholders.
-            if let Some(plan_hash) = instance.plan_hash {
-                if let Ok(Some(plan_json)) = self.store.load_plan(plan_hash).await {
-                    if let Ok(plan) = serde_json::from_str::<WorkflowExecutionPlan>(&plan_json) {
-                        if let Some(node) = plan.nodes.get(&row.node_id) {
-                            advance_node_and_bind(&mut instance, node, &input);
-                        }
-                    }
-                }
+        match classify_outcome(input.outcome_kind) {
+            OutcomeDisposition::Commit => {
+                let incident_id = bpmn_lite_types::EffectId::for_transition(
+                    instance.instance_id,
+                    claim.expected_revision().saturating_add(1),
+                    0,
+                )
+                .as_uuid();
+                instance.quarantine_state = Some(
+                    "legacy pending invocation has no canonical effect command mapping".to_string(),
+                );
+                instance.state = ProcessState::Failed { incident_id };
             }
-            instance.state = ProcessState::Running;
-        } else if let ExecutionOutcomeKind::OutcomeUnspecified = input.outcome_kind {
-            let _ = self.store
-                .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
-                .await;
-            return Err(ProcessAdvancerError::Malformed(
-                "ExecutionOutcomeKind::OutcomeUnspecified — peer must populate kind".to_owned(),
-            ));
-        } else {
-            // Terminal failure.
-            instance.state = ProcessState::Failed {
-                incident_id: Uuid::now_v7(),
-            };
+            OutcomeDisposition::Retry => {
+                self.store
+                    .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
+                    .await
+                    .map_err(|error| {
+                        ProcessAdvancerError::Internal(format!("release instance: {error}"))
+                    })?;
+                return Ok(());
+            }
+            OutcomeDisposition::Malformed => {
+                let _ = self
+                    .store
+                    .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
+                    .await;
+                return Err(ProcessAdvancerError::Malformed(
+                    "ExecutionOutcomeKind::OutcomeUnspecified — peer must populate kind".to_owned(),
+                ));
+            }
+            OutcomeDisposition::Terminal => {
+                instance.state = ProcessState::Failed {
+                    incident_id: bpmn_lite_types::EffectId::for_transition(
+                        instance.instance_id,
+                        claim.expected_revision().saturating_add(1),
+                        0,
+                    )
+                    .as_uuid(),
+                };
+            }
         }
 
         let ops = vec![
-            TickOperation::TakePendingInvocation { execution_id: input.execution_id },
-            TickOperation::SaveInstance { instance: instance.clone() },
+            TickOperation::TakePendingInvocation {
+                execution_id: input.execution_id,
+            },
+            TickOperation::SaveInstance {
+                instance: instance.clone(),
+            },
         ];
 
-        let commit_res = self.store
-            .commit_tick(instance.instance_id, &instance.tenant_id, &owner, &ops)
-            .await;
+        let transition = transition_from_tick_ops(&instance, &ops);
+        let commit_res = self.store.commit_transition(&claim, &transition).await;
 
-        let release_res = self.store
-            .release_instance_transition(&instance.tenant_id, instance.instance_id, &owner)
+        let release_res = self
+            .store
+            .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
             .await;
 
         match commit_res {
             Err(e) => {
-                if e.is::<bpmn_lite_store::store::AlreadyConsumedError>() {
-                    return Ok(());
-                }
-                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
-                    tracing::error!(
-                        process_instance_id = %instance.instance_id,
-                        error = %e,
-                        "IntegrityViolation during commit_tick in bus advance; quarantining instance"
-                    );
-                    if let Err(q_err) = self.store.quarantine_instance(
-                        violation.instance_id,
-                        &violation.tenant_id,
-                        &owner,
-                        &violation.detection_point,
-                    ).await {
-                        tracing::error!(
-                            process_instance_id = %instance.instance_id,
-                            error = %q_err,
-                            "Failed to quarantine instance after IntegrityViolation during commit_tick"
-                        );
-                    }
-                    return Ok(());
-                }
-                return Err(ProcessAdvancerError::Internal(format!("commit tick: {e}")));
+                return Err(ProcessAdvancerError::Internal(format!(
+                    "commit transition: {e}"
+                )));
             }
-            Ok(()) => {
+            Ok(_) => {
                 if let Err(e) = release_res {
-                    return Err(ProcessAdvancerError::Internal(format!("release instance: {e}")));
+                    return Err(ProcessAdvancerError::Internal(format!(
+                        "release instance: {e}"
+                    )));
                 }
             }
         }
@@ -269,76 +362,45 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             node_id = %row.node_id,
             source_domain = %input.source_domain,
             outcome = ?input.outcome_kind,
-            has_plan = instance.plan_hash.is_some(),
-            "bus result received; instance set to Running for tick loop"
+            "legacy bus result quarantined; canonical DSL execution uses kernel jobs/effects"
         );
         Ok(())
     }
 }
 
-fn advance_node_and_bind(
-    instance: &mut bpmn_lite_types::ProcessInstance,
-    node: &ExecutionNode,
-    input: &ProcessAdvanceInput,
-) {
-    let produces = match node {
-        ExecutionNode::Task(t) => {
-            instance.current_node_id = Some(t.next.clone());
-            t.produces_placeholder.as_deref()
-        }
-        ExecutionNode::Split(sp) => {
-            // Do NOT advance current_node_id here; the engine tick will evaluate the populated placeholder and advance.
-            sp.produces_placeholder.as_deref()
-        }
-        _ => return,
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Bind placeholder value from result bindings.
-    if let Some(placeholder_name) = produces {
-        let value = extract_binding_value(input);
-        let mut placeholders: HashMap<String, serde_json::Value> = instance
-            .placeholder_values
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        placeholders.insert(placeholder_name.to_owned(), value);
-        instance.placeholder_values = serde_json::to_value(&placeholders).ok();
+    #[test]
+    fn conflict_and_timeout_are_retry_only() {
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::OptimisticConflict),
+            OutcomeDisposition::Retry
+        );
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::LockTimeout),
+            OutcomeDisposition::Retry
+        );
     }
-}
 
-/// Extract the primary output value from the result, preferring the
-/// "result" binding if present, then falling back to the first binding,
-/// then to `outcome_detail`.
-fn extract_binding_value(input: &ProcessAdvanceInput) -> serde_json::Value {
-    // Look for "result" binding first (ob-poc verb output convention),
-    // then first binding, then string-encode outcome_detail.
-    let binding = input
-        .bindings
-        .iter()
-        .find(|b| b.name == "result")
-        .or_else(|| input.bindings.first());
-
-    if let Some(b) = binding {
-        if let Some(tv) = b.value.as_ref() {
-            let val: Option<serde_json::Value> = match tv.value.as_ref() {
-                Some(ProtoValueKind::StringValue(s)) => Some(serde_json::Value::String(s.clone())),
-                Some(ProtoValueKind::UuidValue(u)) => {
-                    if u.value.len() == 16 {
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(&u.value);
-                        Some(serde_json::Value::String(Uuid::from_bytes(arr).to_string()))
-                    } else {
-                        None
-                    }
-                }
-                Some(ProtoValueKind::BoolValue(b)) => Some(serde_json::Value::Bool(*b)),
-                Some(ProtoValueKind::IntValue(n)) => Some(serde_json::Value::from(*n)),
-                _ => None,
-            };
-            if let Some(v) = val {
-                return v;
-            }
-        }
+    #[test]
+    fn only_committed_outcomes_bind_outputs() {
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::Committed),
+            OutcomeDisposition::Commit
+        );
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::IdempotentReplayReturned),
+            OutcomeDisposition::Commit
+        );
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::AuthorityDenied),
+            OutcomeDisposition::Terminal
+        );
+        assert_eq!(
+            classify_outcome(ExecutionOutcomeKind::OutcomeUnspecified),
+            OutcomeDisposition::Malformed
+        );
     }
-    serde_json::Value::String(input.outcome_detail.clone())
 }

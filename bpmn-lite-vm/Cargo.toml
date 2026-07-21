@@ -2,7 +2,7 @@
 name = "bpmn-lite-vm"
 version = "0.1.0"
 edition = "2021"
-description = "BPMN-Lite bytecode interpreter — fiber dispatch, instruction execution, wait/race/loop primitives. Stable single-concern crate the engine orchestrates over."
+description = "Compatibility JSON and hashing utilities; execution lives in bpmn-lite-kernel."
 
 # Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
 #   IN-SCOPE  : the bytecode interpreter — `tick_fiber_inner`,
@@ -17,18 +17,9 @@ description = "BPMN-Lite bytecode interpreter — fiber dispatch, instruction ex
 #                 (bpmn-lite-store-*), authoring (bpmn-lite-authoring).
 
 [dependencies]
-bpmn-lite-types = { path = "../bpmn-lite-types" }
-bpmn-lite-store = { path = "../bpmn-lite-store" }
-async-trait = { workspace = true }
 anyhow = { workspace = true }
 blake3 = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
-bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
-tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

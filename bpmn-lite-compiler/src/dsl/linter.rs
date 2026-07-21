@@ -8,7 +8,7 @@
 //! 3. Validates gateway/split predicates reference known placeholders.
 //! 4. Produces a `WorkflowExecutionPlan` ready for DAG validation.
 
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 
 use super::ast::*;
 use super::plan::*;
@@ -104,7 +104,9 @@ pub struct StubPlaceholderRegistry {
 }
 
 impl StubPlaceholderRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn register_verb(&mut self, fqn: impl Into<String>, decl: BindingDecl) {
         self.verbs.insert(fqn.into(), decl);
@@ -118,11 +120,22 @@ impl StubPlaceholderRegistry {
         self.decision_enums.insert(id.into(), values);
     }
 
-    pub fn register_decision_type_info(&mut self, id: impl Into<String>, type_name: String, kind: String) {
-        self.decision_type_kinds.insert(id.into(), (type_name, kind));
+    pub fn register_decision_type_info(
+        &mut self,
+        id: impl Into<String>,
+        type_name: String,
+        kind: String,
+    ) {
+        self.decision_type_kinds
+            .insert(id.into(), (type_name, kind));
     }
 
-    pub fn register_workflow(&mut self, hash: impl Into<String>, decl: BindingDecl, satisfies_l2: bool) {
+    pub fn register_workflow(
+        &mut self,
+        hash: impl Into<String>,
+        decl: BindingDecl,
+        satisfies_l2: bool,
+    ) {
         let h = hash.into();
         self.workflows.insert(h.clone(), decl);
         self.workflow_l2.insert(h, satisfies_l2);
@@ -135,40 +148,66 @@ impl StubPlaceholderRegistry {
     /// Seed with the Phase 5.5 demo model bindings.
     pub fn with_demo_bindings(mut self) -> Self {
         // cbu.create → produces @cbu
-        self.register_verb("cbu.create", BindingDecl {
-            produces: Some("@cbu".into()),
-            consumes: vec![],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        self.register_verb(
+            "cbu.create",
+            BindingDecl {
+                produces: Some("@cbu".into()),
+                consumes: vec![],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
         // cbu.add-product → consumes @cbu, no new placeholder
-        self.register_verb("cbu.add-product", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into()],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        self.register_verb(
+            "cbu.add-product",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into()],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
         // instrument-matrix.attach → consumes @cbu, no new placeholder
-        self.register_verb("instrument-matrix.attach", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into()],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        self.register_verb(
+            "instrument-matrix.attach",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into()],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
         // cbu_type_routing DMN: consumes @cbu, produces @cbu-type
-        self.register_decision("cbu_type_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
-        self.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
-        self.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+        self.register_decision(
+            "cbu_type_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
+        self.register_decision_enum(
+            "cbu_type_routing",
+            vec!["fund".into(), "corporate".into(), "trust".into()],
+        );
+        self.register_decision_type_info(
+            "cbu_type_routing",
+            "CbuType".to_string(),
+            "enum".to_string(),
+        );
 
         // check_eligibility DMN: consumes @cbu, produces @eligible (boolean result)
-        self.register_decision("check_eligibility", BindingDecl {
-            produces: Some("@eligible".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
+        self.register_decision(
+            "check_eligibility",
+            BindingDecl {
+                produces: Some("@eligible".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
         self.register_decision_enum("check_eligibility", vec!["true".into(), "false".into()]);
-        self.register_decision_type_info("check_eligibility", "boolean".to_string(), "bool".to_string());
+        self.register_decision_type_info(
+            "check_eligibility",
+            "boolean".to_string(),
+            "bool".to_string(),
+        );
         self
     }
 }
@@ -196,7 +235,10 @@ impl PlaceholderRegistry for StubPlaceholderRegistry {
         self.workflows.get(hash).cloned()
     }
     fn get_workflow_child_calls(&self, hash: &str) -> Vec<String> {
-        self.workflow_child_calls.get(hash).cloned().unwrap_or_default()
+        self.workflow_child_calls
+            .get(hash)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -230,11 +272,17 @@ struct Linter<'a> {
 
 impl<'a> Linter<'a> {
     fn new(registry: &'a dyn PlaceholderRegistry) -> Self {
-        Self { registry, errors: Vec::new() }
+        Self {
+            registry,
+            errors: Vec::new(),
+        }
     }
 
     fn err(&mut self, node_id: &str, msg: impl Into<String>) {
-        self.errors.push(LintError { node_id: node_id.into(), message: msg.into() });
+        self.errors.push(LintError {
+            node_id: node_id.into(),
+            message: msg.into(),
+        });
     }
 
     fn run(mut self, source: &WorkflowSource) -> Result<WorkflowExecutionPlan, Vec<LintError>> {
@@ -243,7 +291,8 @@ impl<'a> Linter<'a> {
         self.flatten_nodes(&source.nodes, &mut flat_ast_nodes);
 
         // ── Pass 1: collect all node ids ──────────────────────────────────────
-        let node_ids: HashMap<String, ()> = flat_ast_nodes.iter()
+        let node_ids: HashMap<String, ()> = flat_ast_nodes
+            .iter()
             .map(|n| (n.id().to_owned(), ()))
             .collect();
 
@@ -275,7 +324,11 @@ impl<'a> Linter<'a> {
                         self.err(id, "multiple start events");
                     }
                     self.check_next_ref(id, &n.next, &node_ids);
-                    ExecutionNode::Start(StartExecNode { id: n.id.clone(), next: n.next.clone(), span: Some(n.span) })
+                    ExecutionNode::Start(StartExecNode {
+                        id: n.id.clone(),
+                        next: n.next.clone(),
+                        span: Some(n.span),
+                    })
                 }
 
                 NodeAst::Task(n) => {
@@ -309,9 +362,16 @@ impl<'a> Linter<'a> {
                                     ),
                                 );
                             }
-                            SymbolResolution::UnknownInDomain { domain, known_count } => {
+                            SymbolResolution::UnknownInDomain {
+                                domain,
+                                known_count,
+                            } => {
                                 let mut is_decision_err = false;
-                                if let SymbolResolution::UnknownInDomain { domain: d, known_count: k } = dec_res {
+                                if let SymbolResolution::UnknownInDomain {
+                                    domain: d,
+                                    known_count: k,
+                                } = dec_res
+                                {
                                     if k > 0 {
                                         self.err(
                                             id,
@@ -438,13 +498,11 @@ impl<'a> Linter<'a> {
                     })
                 }
 
-                NodeAst::End(n) => {
-                    ExecutionNode::End(EndExecNode {
-                        id: n.id.clone(),
-                        status: n.status.clone(),
-                        span: Some(n.span),
-                    })
-                }
+                NodeAst::End(n) => ExecutionNode::End(EndExecNode {
+                    id: n.id.clone(),
+                    status: n.status.clone(),
+                    span: Some(n.span),
+                }),
             };
             exec_nodes.insert(id.to_owned(), exec_node);
         }
@@ -539,7 +597,10 @@ impl<'a> Linter<'a> {
         }
 
         if start_node.is_empty() {
-            self.errors.push(LintError { node_id: "<workflow>".into(), message: "no start node found".into() });
+            self.errors.push(LintError {
+                node_id: "<workflow>".into(),
+                message: "no start node found".into(),
+            });
         }
 
         // ── Pass 4: validate gateway/split predicates reference known placeholders ───
@@ -567,17 +628,26 @@ impl<'a> Linter<'a> {
                 NodeAst::Task(_) => {
                     let exec = exec_nodes.get(id).unwrap();
                     if let ExecutionNode::Task(t) = exec {
-                        (t.produces_placeholder.clone(), t.consumes_placeholders.clone())
-                    } else { (None, Vec::new()) }
+                        (
+                            t.produces_placeholder.clone(),
+                            t.consumes_placeholders.clone(),
+                        )
+                    } else {
+                        (None, Vec::new())
+                    }
                 }
                 NodeAst::Split(_) => {
                     let exec = exec_nodes.get(id).unwrap();
                     if let ExecutionNode::Split(s) = exec {
-                        let decl = s.routing_socket.as_ref()
+                        let decl = s
+                            .routing_socket
+                            .as_ref()
                             .and_then(|plug| self.registry.decision_bindings(plug))
                             .unwrap_or_default();
                         (decl.produces, decl.consumes)
-                    } else { (None, Vec::new()) }
+                    } else {
+                        (None, Vec::new())
+                    }
                 }
                 _ => (None, Vec::new()),
             };
@@ -614,7 +684,8 @@ impl<'a> Linter<'a> {
 
         // Derive task delivery modes based on dataflow (P6 / L8)
         let registry = self.registry;
-        let ast_delivery_modes: HashMap<String, Option<String>> = flat_ast_nodes.iter()
+        let ast_delivery_modes: HashMap<String, Option<String>> = flat_ast_nodes
+            .iter()
             .filter_map(|node| {
                 if let NodeAst::Task(t) = node {
                     Some((t.id.clone(), t.delivery_mode.clone()))
@@ -626,7 +697,10 @@ impl<'a> Linter<'a> {
 
         for (id, node) in &mut plan.nodes {
             if let ExecutionNode::Task(t) = node {
-                let has_explicit = ast_delivery_modes.get(id).and_then(|opt| opt.as_ref()).is_some();
+                let has_explicit = ast_delivery_modes
+                    .get(id)
+                    .and_then(|opt| opt.as_ref())
+                    .is_some();
                 if !has_explicit {
                     let mut output_consumed = false;
                     if let Some(ref prod) = t.produces_placeholder {
@@ -637,10 +711,14 @@ impl<'a> Linter<'a> {
                         }
                     }
 
-                    let decl = registry.verb_bindings(&t.plug)
+                    let decl = registry
+                        .verb_bindings(&t.plug)
                         .or_else(|| registry.get_workflow_signature(&t.plug))
                         .unwrap_or_default();
-                    let is_must_complete = matches!(decl.effect_class.as_deref(), Some("read_modify_write") | Some("write_obligation"));
+                    let is_must_complete = matches!(
+                        decl.effect_class.as_deref(),
+                        Some("read_modify_write") | Some("write_obligation")
+                    );
 
                     if output_consumed {
                         t.delivery_mode = DeliveryMode::Blocking;
@@ -675,15 +753,20 @@ impl<'a> Linter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::parser::Parser;
     use crate::dsl::lexer::lex;
+    use crate::dsl::parser::Parser;
 
     fn parse_and_lint(src: &str) -> Result<WorkflowExecutionPlan, String> {
         let (tokens, _) = lex(src);
         let mut p = Parser::new(tokens);
         let ast = p.parse_workflow().expect("parse failed");
         let reg = StubPlaceholderRegistry::new().with_demo_bindings();
-        lint(&ast, &reg).map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+        lint(&ast, &reg).map_err(|errs| {
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
     }
 
     #[test]

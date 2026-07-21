@@ -96,6 +96,10 @@ services:
     depends_on:
       ob-poc-postgres:
         condition: service_healthy
+    volumes:
+      - /Users/adamtc007/dev/rust/config:/app/config
+      - /Users/adamtc007/dev/rust/config:/build/rust/config
+      - /Users/adamtc007/dev/rust/config:/build/rust/crates/ob-poc-web
     ports:
       - "3000:3000"     # HTTP axum (React frontend + REST API)
       - "50061:50061"   # Federated bus — invocation receiver

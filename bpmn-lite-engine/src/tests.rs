@@ -1,17 +1,148 @@
 use super::*;
-use bpmn_lite_store::store::{ProcessStore, TransactionContext};
+use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
+use bpmn_lite_store::{ArtifactRepository as _, JournalReader as _, RuntimeStore as _};
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
-use bpmn_lite_vm::{compute_hash, TickOutcome, Vm};
+use bpmn_lite_vm::compute_hash;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+const FAR_FUTURE_TIMER_MS: u64 = 4_070_908_800_000;
+
+const ORDINARY_TIMER_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  <bpmn:process id="ordinary_timer" isExecutable="true">
+    <bpmn:startEvent id="start" />
+    <bpmn:intermediateCatchEvent id="wait_two_seconds">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT2S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="end" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="wait_two_seconds" />
+    <bpmn:sequenceFlow id="f2" sourceRef="wait_two_seconds" targetRef="end" />
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+const ABSOLUTE_TIMER_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  <bpmn:process id="absolute_timer" isExecutable="true">
+    <bpmn:startEvent id="start" />
+    <bpmn:intermediateCatchEvent id="wait_until">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDate>4070908800000</bpmn:timeDate>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="end" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="wait_until" />
+    <bpmn:sequenceFlow id="f2" sourceRef="wait_until" targetRef="end" />
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+#[tokio::test]
+async fn durable_wait_for_two_seconds_resumes_via_scheduler() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let compiled = engine.compile(ORDINARY_TIMER_BPMN).await.unwrap();
+    let payload = "{}";
+    let instance_id = engine
+        .start(
+            "ordinary_timer",
+            compiled.bytecode_version,
+            payload,
+            compute_hash(payload),
+            "timer-wait-for",
+        )
+        .await
+        .unwrap();
+
+    engine.tick_instance(instance_id).await.unwrap();
+    assert!(matches!(
+        store
+            .load_fibers(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id
+            )
+            .await
+            .unwrap()[0]
+            .wait,
+        WaitState::Timer { .. }
+    ));
+
+    tokio::time::sleep(std::time::Duration::from_millis(2_050)).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert_eq!(
+        engine
+            .tick_due_timers("timer-test", now, 10, 30_000)
+            .await
+            .unwrap(),
+        1
+    );
+    engine.tick_instance(instance_id).await.unwrap();
+    assert!(matches!(
+        engine.inspect(instance_id).await.unwrap().state,
+        ProcessState::Completed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn durable_wait_until_duplicate_delivery_is_typed_noop() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let compiled = engine.compile(ABSOLUTE_TIMER_BPMN).await.unwrap();
+    let instance_id = engine
+        .start(
+            "absolute_timer",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "timer-wait-until",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+
+    let timer = store
+        .claim_due_timers(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            "timer-test",
+            FAR_FUTURE_TIMER_MS,
+            1,
+            30_000,
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let command = Command::TimerFired {
+        timer,
+        fired_at: FAR_FUTURE_TIMER_MS,
+    };
+    assert_eq!(
+        engine
+            .apply_timer_command(command.clone(), "timer-test")
+            .await
+            .unwrap(),
+        TimerFireOutcome::Applied
+    );
+    assert_eq!(
+        engine
+            .apply_timer_command(command, "timer-test")
+            .await
+            .unwrap(),
+        TimerFireOutcome::AlreadyConsumed
+    );
+}
+
 /// Integration test: compile → start → run → activate jobs → complete → verify completion
 #[tokio::test]
 async fn test_engine_full_lifecycle() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     // 1. Compile a minimal BPMN
@@ -95,7 +226,7 @@ async fn test_engine_full_lifecycle() {
 
 #[tokio::test]
 async fn test_start_with_session_stack_copies_value() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -148,7 +279,14 @@ async fn test_start_with_session_stack_copies_value() {
         Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
     session_stack.trace_sequence = 77;
 
-    let loaded = store.load_instance(instance_id).await.unwrap().unwrap();
+    let loaded = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         loaded
             .session_stack
@@ -166,7 +304,7 @@ async fn test_start_with_session_stack_copies_value() {
 
 #[tokio::test]
 async fn test_job_activation_preserves_runbook_lineage() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -233,12 +371,12 @@ const SINGLE_TASK_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// Helper: compile + start + run until job is parked, return (engine, store, instance_id, job_key, hash).
 async fn setup_parked_job() -> (
     BpmnLiteEngine,
-    Arc<dyn ProcessStore>,
+    Arc<dyn WorkflowStore>,
     Uuid,
     String,
     [u8; 32],
 ) {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let cr = engine.compile(SINGLE_TASK_BPMN).await.unwrap();
@@ -286,7 +424,10 @@ async fn t_cancel_complete_after_cancel() {
     );
 
     // Verify SignalIgnored event was emitted
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_signal_ignored = events.iter().any(|(_, e)| {
             matches!(e, RuntimeEvent::SignalIgnored { signal_desc } if signal_desc.contains("Cancelled"))
         });
@@ -314,7 +455,11 @@ async fn t_cancel_duplicate_complete() {
         .unwrap();
 
     // Count events after first complete
-    let events_after_first = store.read_events(iid, 0).await.unwrap().len();
+    let events_after_first = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap()
+        .len();
 
     // Second complete with same job_key — should be silently accepted (dedupe)
     let result = engine
@@ -323,7 +468,11 @@ async fn t_cancel_duplicate_complete() {
     assert!(result.is_ok(), "Duplicate complete_job should not error");
 
     // No new events should be emitted (dedupe short-circuits)
-    let events_after_second = store.read_events(iid, 0).await.unwrap().len();
+    let events_after_second = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap()
+        .len();
     assert_eq!(
         events_after_first, events_after_second,
         "Dedupe should not emit additional events"
@@ -341,18 +490,29 @@ async fn test_complete_job_recomputes_payload_hash() {
         .await
         .unwrap();
 
-    let persisted = store.load_instance(iid).await.unwrap().unwrap();
+    let persisted = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(persisted.domain_payload.as_ref(), new_payload);
     assert_eq!(persisted.domain_payload_hash, new_hash);
 
     let history_payload = store
-        .load_payload_version(iid, &new_hash)
+        .load_payload_version(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            iid,
+            &new_hash,
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(history_payload, new_payload);
 
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let completed = events
         .iter()
         .find_map(|(_, event)| match event {
@@ -383,7 +543,11 @@ async fn test_complete_job_rejects_stale_expected_hash() {
         .await;
     assert!(result.is_err(), "stale expected hash must be rejected");
 
-    let persisted = store.load_instance(iid).await.unwrap().unwrap();
+    let persisted = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         persisted.domain_payload.as_ref(),
         r#"{"case":"cancel-test"}"#
@@ -429,7 +593,10 @@ async fn t_cancel_purges_jobs() {
     );
 
     // Verify WaitCancelled event was emitted
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_wait_cancelled = events.iter().any(
         |(_, e)| matches!(e, RuntimeEvent::WaitCancelled { reason, .. } if reason == "cleanup"),
     );
@@ -477,7 +644,10 @@ async fn t_cancel_signal_after_complete() {
     );
 
     // Verify SignalIgnored event was emitted
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_signal_ignored = events.iter().any(|(_, e)| {
             matches!(e, RuntimeEvent::SignalIgnored { signal_desc } if signal_desc.contains("Completed"))
         });
@@ -511,7 +681,10 @@ async fn t_cancel_signal_no_match() {
     );
 
     // Verify the unmatched running signal was durably buffered.
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_signal_ignored = events.iter().any(
         |(_, e)| matches!(e, RuntimeEvent::MessageBuffered { msg_id, .. } if msg_id == "ghost-1"),
     );
@@ -524,7 +697,7 @@ async fn t_cancel_signal_no_match() {
 
 #[tokio::test]
 async fn test_transient_fail_with_claim_retries_then_requeues() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let cr = engine.compile(SINGLE_TASK_BPMN).await.unwrap();
@@ -575,10 +748,10 @@ async fn test_transient_fail_with_claim_retries_then_requeues() {
 
 #[tokio::test]
 async fn test_signal_matches_message_name_and_correlation_key() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [90u8; 32],
         program: vec![
             Instr::WaitMsg {
@@ -590,7 +763,11 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::from([(0, WaitPlanEntry {
+            wait_type: WaitType::Msg,
+            name: Some(1),
+            corr_source: Some(0),
+        })]),
         message_name_map: BTreeMap::from([(1, "case_arrived".to_string())]),
         race_plan: BTreeMap::new(),
         boundary_map: BTreeMap::new(),
@@ -602,7 +779,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
@@ -611,7 +788,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
     let iid = engine
         .start(
             "signal_proc",
-            program.bytecode_version,
+            program.bytecode_version(),
             payload,
             hash,
             "corr",
@@ -620,7 +797,10 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .unwrap();
     engine.tick_instance(iid).await.unwrap();
 
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert!(matches!(fibers[0].wait, WaitState::Msg { .. }));
 
     engine
@@ -634,7 +814,10 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         )
         .await
         .unwrap();
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert!(matches!(fibers[0].wait, WaitState::Msg { .. }));
 
     engine
@@ -648,11 +831,18 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         )
         .await
         .unwrap();
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert_eq!(fibers[0].wait, WaitState::Running);
-    assert_eq!(fibers[0].pc, 1);
+    assert_eq!(fibers[0].pc, 1.into());
 
-    let events_after_first_delivery = store.read_events(iid, 0).await.unwrap().len();
+    let events_after_first_delivery = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap()
+        .len();
     engine
         .signal_with_value(
             iid,
@@ -664,16 +854,20 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         )
         .await
         .unwrap();
-    let events_after_duplicate = store.read_events(iid, 0).await.unwrap().len();
+    let events_after_duplicate = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap()
+        .len();
     assert_eq!(events_after_duplicate, events_after_first_delivery);
 }
 
 #[tokio::test]
 async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [91u8; 32],
         program: vec![
             Instr::WaitMsg {
@@ -685,8 +879,12 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
+        wait_plan: BTreeMap::from([(0, WaitPlanEntry {
+            wait_type: WaitType::Msg,
+            name: Some(1),
+            corr_source: Some(0),
+        })]),
+        message_name_map: BTreeMap::from([(1, "1".to_string())]),
         race_plan: BTreeMap::new(),
         boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
@@ -697,7 +895,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
@@ -706,7 +904,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
     let iid = engine
         .start(
             "signal_proc",
-            program.bytecode_version,
+            program.bytecode_version(),
             payload,
             hash,
             "corr",
@@ -723,7 +921,10 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
 
     let inspection = engine.inspect(iid).await.unwrap();
     assert!(matches!(inspection.state, ProcessState::Completed { .. }));
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     assert!(events
         .iter()
         .any(|(_, event)| matches!(event, RuntimeEvent::MessageBuffered { .. })));
@@ -749,9 +950,15 @@ async fn test_signal_requires_msg_id_for_idempotency() {
 
 #[tokio::test]
 async fn test_tenant_scoped_engine_rejects_cross_tenant_instance_access() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
-    let tenant_a = BpmnLiteEngine::new_with_tenant(store.clone(), "tenant-a");
-    let tenant_b = BpmnLiteEngine::new_with_tenant(store.clone(), "tenant-b");
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let tenant_a = BpmnLiteEngine::new_with_tenant(
+        store.clone(),
+        bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+    );
+    let tenant_b = BpmnLiteEngine::new_with_tenant(
+        store.clone(),
+        bpmn_lite_types::TenantId::new("tenant-b").unwrap(),
+    );
 
     let compile_result = tenant_a.compile(SINGLE_TASK_BPMN).await.unwrap();
     let payload = r#"{"case":"tenant-a"}"#;
@@ -790,9 +997,15 @@ async fn test_tenant_scoped_engine_rejects_cross_tenant_instance_access() {
 
 #[tokio::test]
 async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenant() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
-    let tenant_a = BpmnLiteEngine::new_with_tenant(store.clone(), "tenant-a");
-    let tenant_b = BpmnLiteEngine::new_with_tenant(store.clone(), "tenant-b");
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let tenant_a = BpmnLiteEngine::new_with_tenant(
+        store.clone(),
+        bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+    );
+    let tenant_b = BpmnLiteEngine::new_with_tenant(
+        store.clone(),
+        bpmn_lite_types::TenantId::new("tenant-b").unwrap(),
+    );
 
     let instance_id = Uuid::now_v7();
     let payload = "{}";
@@ -818,19 +1031,56 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance("default", &instance).await.unwrap();
+    bpmn_lite_store::store::commit_initial_snapshot(store.as_ref(), instance)
+        .await
+        .unwrap();
 
     let issues = tenant_a.scan_recoverable_inconsistencies().await.unwrap();
     let kinds = issues
         .iter()
         .map(|issue| issue.kind.as_str())
         .collect::<Vec<_>>();
-    assert!(kinds.contains(&"missing_program"));
+    assert!(kinds.contains(&"missing_artifact"));
     assert!(kinds.contains(&"missing_fibers"));
     assert!(kinds.contains(&"missing_start_event"));
 
     let tenant_b_issues = tenant_b.scan_recoverable_inconsistencies().await.unwrap();
     assert!(tenant_b_issues.is_empty());
+}
+
+#[tokio::test]
+async fn startup_recovery_scans_every_tenant_before_readiness() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let runtime = Arc::new(crate::DeterministicRuntimeContext::new(
+        1_800_000_000_000,
+        Uuid::from_u128(900),
+    ));
+    let engine = BpmnLiteEngine::new_with_runtime_context(
+        store,
+        bpmn_lite_types::TenantId::default(),
+        runtime,
+    );
+    for tenant_id in ["tenant-a", "tenant-b"] {
+        let tenant = engine.for_tenant(bpmn_lite_types::TenantId::new(tenant_id).unwrap());
+        let compiled = tenant.compile(ORDINARY_TIMER_BPMN).await.unwrap();
+        tenant
+            .start(
+                "recovery-all-tenants",
+                compiled.bytecode_version,
+                "{}",
+                compute_hash("{}"),
+                tenant_id,
+            )
+            .await
+            .unwrap();
+    }
+
+    let report = engine
+        .recover_all_tenants("recovery", 32, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(report.tenants_scanned, 2);
+    assert_eq!(report.instances_verified, 2);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -897,18 +1147,17 @@ const NI_CYCLE_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
       </bpmn:process>
     </bpmn:definitions>"#;
 
-/// Helper: compile + start + tick until fiber is promoted to Race, return components.
-/// Manipulates timer deadline to be in the past for immediate firing.
+/// Helper: compile + start + tick until fiber is promoted to a durable timer race.
 async fn setup_ni_race(
     bpmn: &str,
 ) -> (
     BpmnLiteEngine,
-    Arc<dyn ProcessStore>,
+    Arc<dyn WorkflowStore>,
     Uuid,
     String,
     [u8; 32],
 ) {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let cr = engine.compile(bpmn).await.unwrap();
@@ -931,24 +1180,16 @@ async fn setup_ni_race(
     let job_key = jobs[0].job_key.clone();
 
     // Verify fiber is now in Race state
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert_eq!(fibers.len(), 1);
     assert!(
         matches!(&fibers[0].wait, WaitState::Race { .. }),
         "Expected Race, got {:?}",
         fibers[0].wait
     );
-
-    // Manipulate deadline to be in the past so next tick fires the timer
-    let mut fiber = fibers[0].clone();
-    if let WaitState::Race {
-        ref mut timer_deadline_ms,
-        ..
-    } = fiber.wait
-    {
-        *timer_deadline_ms = Some(0); // epoch = definitely in the past
-    }
-    store.save_fiber(iid, &fiber).await.unwrap();
 
     (engine, store, iid, job_key, hash)
 }
@@ -959,11 +1200,16 @@ async fn setup_ni_race(
 async fn t_ni_1_non_interrupting_spawns_child() {
     let (engine, store, iid, job_key, _hash) = setup_ni_race(NI_BOUNDARY_BPMN).await;
 
-    // Tick — timer deadline is in the past, should fire non-interrupting
-    engine.tick_instance(iid).await.unwrap();
+    engine
+        .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+        .await
+        .unwrap();
 
     // Verify: should now have 2 fibers (main in Race/Job, child Running)
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert_eq!(
         fibers.len(),
         2,
@@ -982,7 +1228,10 @@ async fn t_ni_1_non_interrupting_spawns_child() {
     );
 
     // Verify BoundaryFired event was emitted
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_boundary_fired = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }));
@@ -1003,11 +1252,18 @@ async fn t_ni_1_non_interrupting_spawns_child() {
 async fn t_ni_2_cycle_fires_multiple_times() {
     let (engine, store, iid, _job_key, _hash) = setup_ni_race(NI_CYCLE_BPMN).await;
 
-    // Fire 3 iterations by ticking + resetting deadline each time
+    // Fire 3 durable iterations using a representable deterministic test clock.
     for i in 0..3 {
-        engine.tick_instance(iid).await.unwrap();
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
 
-        let fibers = store.load_fibers(iid).await.unwrap();
+        let fibers = store
+            .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+            .await
+            .unwrap();
         // After each fire: 1 main + (i+1) child fibers
         // But child fibers may have run to End and been removed
         // Just check that total is >= 1 (main still exists)
@@ -1016,25 +1272,13 @@ async fn t_ni_2_cycle_fires_multiple_times() {
             "Fibers should not be empty after iteration {}",
             i
         );
-
-        // Reset deadline on the Race fiber for next iteration (if still in Race)
-        for f in &fibers {
-            if let WaitState::Race { .. } = &f.wait {
-                let mut updated = f.clone();
-                if let WaitState::Race {
-                    ref mut timer_deadline_ms,
-                    ..
-                } = updated.wait
-                {
-                    *timer_deadline_ms = Some(0);
-                }
-                store.save_fiber(iid, &updated).await.unwrap();
-            }
-        }
     }
 
     // Verify 3 BoundaryFired events were emitted
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let boundary_fired_count = events
         .iter()
         .filter(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }))
@@ -1064,28 +1308,19 @@ async fn t_ni_3_cycle_exhausted_reverts_to_job() {
     let (engine, store, iid, job_key, _hash) = setup_ni_race(NI_CYCLE_BPMN).await;
 
     // Fire all 3 iterations
-    for _ in 0..3 {
-        engine.tick_instance(iid).await.unwrap();
-
-        // Reset deadline for next tick
-        let fibers = store.load_fibers(iid).await.unwrap();
-        for f in &fibers {
-            if let WaitState::Race { .. } = &f.wait {
-                let mut updated = f.clone();
-                if let WaitState::Race {
-                    ref mut timer_deadline_ms,
-                    ..
-                } = updated.wait
-                {
-                    *timer_deadline_ms = Some(0);
-                }
-                store.save_fiber(iid, &updated).await.unwrap();
-            }
-        }
+    for i in 0..3 {
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
     }
 
     // After 3 fires, the main fiber should revert to Job state (cycle exhausted)
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     let main_has_job = fibers
         .iter()
         .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key));
@@ -1096,7 +1331,10 @@ async fn t_ni_3_cycle_exhausted_reverts_to_job() {
     );
 
     // Verify TimerCycleExhausted event
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_exhausted = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::TimerCycleExhausted { total_fired: 3, .. }));
@@ -1110,7 +1348,7 @@ async fn t_ni_3_cycle_exhausted_reverts_to_job() {
 
 #[tokio::test]
 async fn t_ni_4_job_completes_before_timer() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let cr = engine.compile(NI_BOUNDARY_BPMN).await.unwrap();
@@ -1153,7 +1391,7 @@ async fn t_ni_4_job_completes_before_timer() {
                 r#"{"r":"done"}"#,
                 compute_hash(
                     &store
-                        .load_instance(iid)
+                        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
                         .await
                         .unwrap()
                         .unwrap()
@@ -1178,7 +1416,10 @@ async fn t_ni_4_job_completes_before_timer() {
     );
 
     // No BoundaryFired events (timer never fired)
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let boundary_fired = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }));
@@ -1215,7 +1456,7 @@ async fn t_ni_5_verifier_rejects_cycle_interrupting() {
           </bpmn:process>
         </bpmn:definitions>"#;
 
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store);
 
     let result = engine.compile(bpmn).await;
@@ -1236,7 +1477,7 @@ async fn t_term_1_single_fiber_terminate() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [40u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1246,7 +1487,7 @@ async fn t_term_1_single_fiber_terminate() {
             },
             Instr::EndTerminate,
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1260,12 +1501,18 @@ async fn t_term_1_single_fiber_terminate() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-1")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-1",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1280,7 +1527,14 @@ async fn t_term_1_single_fiber_terminate() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: Terminated
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Terminated { .. }),
         "Expected Terminated, got {:?}",
@@ -1288,11 +1542,24 @@ async fn t_term_1_single_fiber_terminate() {
     );
 
     // Assert: no fibers remain
-    let fibers = store.load_fibers(instance_id).await.unwrap();
+    let fibers = store
+        .load_fibers(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap();
     assert!(fibers.is_empty());
 
     // Assert: Terminated event
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_term = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::Terminated { .. }));
@@ -1307,11 +1574,11 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Fork → Branch A (EndTerminate), Branch B (ExecNative → End)
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [41u8; 32],
         program: vec![
             Instr::Fork {
-                targets: Box::new([1, 2]),
+                targets: Box::new([1.into(), 2.into()]),
             }, // 0: fork
             Instr::EndTerminate, // 1: Branch A terminates
             Instr::ExecNative {
@@ -1321,7 +1588,7 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
             }, // 2: Branch B task
             Instr::End,          // 3: Branch B end
         ],
-        debug_map: BTreeMap::from([(2, "slow_task".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "slow_task".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1335,26 +1602,46 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-2")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-2",
+        )
         .await
         .unwrap();
 
     // Tick until instance reaches terminal state.
     for _ in 0..5 {
         engine.tick_instance(instance_id).await.unwrap();
-        let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+        let inst = store
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         if inst.state.is_terminal() {
             break;
         }
     }
 
     // Assert: instance is Terminated (not Completed, not Running)
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Terminated { .. }),
         "Expected Terminated, got {:?}",
@@ -1362,11 +1649,24 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
     );
 
     // Assert: no fibers remain
-    let fibers = store.load_fibers(instance_id).await.unwrap();
+    let fibers = store
+        .load_fibers(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap();
     assert!(fibers.is_empty(), "All fibers should be deleted");
 
     // Assert: Terminated event emitted
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_term = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::Terminated { .. }));
@@ -1377,7 +1677,7 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
         .dequeue_jobs(
             &["slow_task".to_string()],
             100,
-            "default",
+            &bpmn_lite_types::TenantId::default(),
             "test-worker",
             300_000,
         )
@@ -1400,7 +1700,7 @@ async fn t_term_3_complete_job_after_terminate() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Single fiber: ExecNative → EndTerminate
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [42u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1410,7 +1710,7 @@ async fn t_term_3_complete_job_after_terminate() {
             },
             Instr::EndTerminate,
         ],
-        debug_map: BTreeMap::from([(0, "task_x".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_x".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1424,12 +1724,18 @@ async fn t_term_3_complete_job_after_terminate() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-3")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-3",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1446,7 +1752,10 @@ async fn t_term_3_complete_job_after_terminate() {
 
     assert!(matches!(
         store
-            .load_instance(instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id
+            )
             .await
             .unwrap()
             .unwrap()
@@ -1465,7 +1774,14 @@ async fn t_term_3_complete_job_after_terminate() {
     );
 
     // State unchanged
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(instance.state, ProcessState::Terminated { .. }));
 }
 
@@ -1511,7 +1827,7 @@ async fn t_term_4_parse_terminate_end_event() {
         .expect("Program should be stored after compile");
 
     let has_end_terminate = program
-        .program
+        .program()
         .iter()
         .any(|i| matches!(i, Instr::EndTerminate));
     assert!(
@@ -1536,7 +1852,7 @@ async fn t_err_1_business_error_routes_to_handler() {
     // 2: ExecNative(enhanced_review)  — error handler path
     // 3: End                          — error handler end
     // 4: End                          — normal end
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [50u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1544,7 +1860,7 @@ async fn t_err_1_business_error_routes_to_handler() {
                 argc: 0,
                 retc: 0,
             }, // 0
-            Instr::Jump { target: 4 }, // 1
+            Instr::Jump { target: 4.into() }, // 1
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
@@ -1554,8 +1870,8 @@ async fn t_err_1_business_error_routes_to_handler() {
             Instr::End,                // 4
         ],
         debug_map: BTreeMap::from([
-            (0, "sanctions_check".to_string()),
-            (2, "enhanced_review".to_string()),
+            (0.into(), "sanctions_check".to_string()),
+            (2.into(), "enhanced_review".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
@@ -1565,10 +1881,10 @@ async fn t_err_1_business_error_routes_to_handler() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["sanctions_check".to_string(), "enhanced_review".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 2,
+                resume_at: 2.into(),
                 boundary_element_id: "catch_sanctions".to_string(),
             }],
         )]),
@@ -1577,12 +1893,18 @@ async fn t_err_1_business_error_routes_to_handler() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-1")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-1",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1602,7 +1924,14 @@ async fn t_err_1_business_error_routes_to_handler() {
         .unwrap();
 
     // Assert: ErrorRouted event emitted
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_routed = events.iter().any(|(_, e)| {
             matches!(e, RuntimeEvent::ErrorRouted { error_code, .. } if error_code == "SANCTIONS_HIT")
         });
@@ -1618,7 +1947,14 @@ async fn t_err_1_business_error_routes_to_handler() {
     );
 
     // Assert: instance is still Running (not Failed)
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Running),
         "Instance should stay Running after error routing, got {:?}",
@@ -1626,7 +1962,13 @@ async fn t_err_1_business_error_routes_to_handler() {
     );
 
     // Assert: fiber was routed to error handler (pc=2)
-    let fibers = store.load_fibers(instance_id).await.unwrap();
+    let fibers = store
+        .load_fibers(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap();
     let routed_fiber = fibers.iter().find(|f| f.wait == WaitState::Running);
     assert!(
         routed_fiber.is_some(),
@@ -1641,7 +1983,7 @@ async fn t_err_1_business_error_routes_to_handler() {
         .dequeue_jobs(
             &["enhanced_review".to_string()],
             10,
-            "default",
+            &bpmn_lite_types::TenantId::default(),
             "test-worker",
             300_000,
         )
@@ -1660,7 +2002,7 @@ async fn t_err_2_unmatched_error_creates_incident() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Same program but error_route_map only catches SANCTIONS_HIT
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [51u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1670,7 +2012,7 @@ async fn t_err_2_unmatched_error_creates_incident() {
             },
             Instr::End,
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1679,10 +2021,10 @@ async fn t_err_2_unmatched_error_creates_incident() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 99, // doesn't matter, won't be used
+                resume_at: 99.into(), // doesn't matter, won't be used
                 boundary_element_id: "catch_sanctions".to_string(),
             }],
         )]),
@@ -1691,12 +2033,18 @@ async fn t_err_2_unmatched_error_creates_incident() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-2")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-2",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1714,7 +2062,14 @@ async fn t_err_2_unmatched_error_creates_incident() {
         .unwrap();
 
     // Assert: incident created
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_incident = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
@@ -1730,7 +2085,14 @@ async fn t_err_2_unmatched_error_creates_incident() {
     );
 
     // Assert: instance Failed
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(instance.state, ProcessState::Failed { .. }));
 }
 
@@ -1740,7 +2102,7 @@ async fn t_err_3_catch_all_routes_any_business_error() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [52u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1748,11 +2110,11 @@ async fn t_err_3_catch_all_routes_any_business_error() {
                 argc: 0,
                 retc: 0,
             }, // 0
-            Instr::Jump { target: 3 }, // 1
+            Instr::Jump { target: 3.into() }, // 1
             Instr::End,                // 2: error handler end
             Instr::End,                // 3: normal end
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1761,10 +2123,10 @@ async fn t_err_3_catch_all_routes_any_business_error() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: None, // catch-all
-                resume_at: 2,
+                resume_at: 2.into(),
                 boundary_element_id: "catch_all".to_string(),
             }],
         )]),
@@ -1773,12 +2135,18 @@ async fn t_err_3_catch_all_routes_any_business_error() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-3")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-3",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1796,13 +2164,27 @@ async fn t_err_3_catch_all_routes_any_business_error() {
         .unwrap();
 
     // Assert: routed, not incident
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_routed = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::ErrorRouted { .. }));
     assert!(has_routed, "Catch-all should route any BusinessRejection");
 
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(instance.state, ProcessState::Running));
 }
 
@@ -1812,7 +2194,7 @@ async fn t_err_4_transient_error_always_incident() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [53u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1823,7 +2205,7 @@ async fn t_err_4_transient_error_always_incident() {
             Instr::End,
             Instr::End, // error handler (won't be used)
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1832,10 +2214,10 @@ async fn t_err_4_transient_error_always_incident() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: None, // catch-all
-                resume_at: 2,
+                resume_at: 2.into(),
                 boundary_element_id: "catch_all".to_string(),
             }],
         )]),
@@ -1844,12 +2226,18 @@ async fn t_err_4_transient_error_always_incident() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-4")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-4",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1861,7 +2249,14 @@ async fn t_err_4_transient_error_always_incident() {
         .unwrap();
 
     // Assert: incident, NOT routed
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_incident = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
@@ -1883,7 +2278,7 @@ async fn t_err_5_fail_job_on_terminated_instance() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Single fiber: ExecNative → EndTerminate
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [54u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1893,7 +2288,7 @@ async fn t_err_5_fail_job_on_terminated_instance() {
             },
             Instr::EndTerminate,
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -1907,12 +2302,18 @@ async fn t_err_5_fail_job_on_terminated_instance() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-5")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-5",
+        )
         .await
         .unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -1929,7 +2330,10 @@ async fn t_err_5_fail_job_on_terminated_instance() {
 
     assert!(matches!(
         store
-            .load_instance(instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id
+            )
             .await
             .unwrap()
             .unwrap()
@@ -1953,7 +2357,14 @@ async fn t_err_5_fail_job_on_terminated_instance() {
     );
 
     // Assert: SignalIgnored event
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_ignored = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::SignalIgnored { .. }));
@@ -1978,7 +2389,7 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
     // 3: BrCounterLt(0, 3, 0)      — if counter<3, retry task_a
     // 4: End                        — counter exhausted, escalation end
     // 5: End                        — normal end
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [60u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -1986,17 +2397,17 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
                 argc: 0,
                 retc: 0,
             }, // 0
-            Instr::Jump { target: 5 },           // 1
+            Instr::Jump { target: 5.into() },           // 1
             Instr::IncCounter { counter_id: 0 }, // 2
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 3,
-                target: 0,
+                target: 0.into(),
             }, // 3
             Instr::End,                          // 4
             Instr::End,                          // 5
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -2005,10 +2416,10 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: Some("RETRY_ME".to_string()),
-                resume_at: 2,
+                resume_at: 2.into(),
                 boundary_element_id: "catch_retry".to_string(),
             }],
         )]),
@@ -2017,12 +2428,18 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-1")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-1",
+        )
         .await
         .unwrap();
 
@@ -2077,7 +2494,14 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: instance completed (via End, not stuck in loop)
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Completed { .. }),
         "Expected Completed after counter exhaustion, got {:?}",
@@ -2088,7 +2512,14 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
     assert_eq!(instance.counters.get(&0), Some(&3));
 
     // Assert: 3 ErrorRouted events
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let routed_count = events
         .iter()
         .filter(|(_, e)| matches!(e, RuntimeEvent::ErrorRouted { .. }))
@@ -2102,7 +2533,7 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [61u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -2110,17 +2541,17 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
                 argc: 0,
                 retc: 0,
             }, // 0
-            Instr::Jump { target: 5 },           // 1
+            Instr::Jump { target: 5.into() },           // 1
             Instr::IncCounter { counter_id: 0 }, // 2
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 2,
-                target: 0,
+                target: 0.into(),
             }, // 3
             Instr::End,                          // 4
             Instr::End,                          // 5
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -2129,10 +2560,10 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
         error_route_map: BTreeMap::from([(
-            0,
+            Addr::new(0),
             vec![ErrorRoute {
                 error_code: None, // catch-all
-                resume_at: 2,
+                resume_at: 2.into(),
                 boundary_element_id: "catch_all".to_string(),
             }],
         )]),
@@ -2141,12 +2572,18 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-2")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-2",
+        )
         .await
         .unwrap();
 
@@ -2192,21 +2629,14 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
 }
 
 /// T-LOOP-3: BrCounterLt with counter=0 (never incremented) → always branches if limit>0.
-#[tokio::test]
-async fn t_loop_3_counter_starts_at_zero() {
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
-    let vm = Vm::new(store.clone());
-
-    let program = CompiledProgram {
+#[test]
+fn t_loop_3_counter_starts_at_zero() {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [62u8; 32],
         program: vec![
-            Instr::BrCounterLt {
-                counter_id: 5,
-                limit: 1,
-                target: 2,
-            }, // 0: counter=0 < 1 → jump to 2
-            Instr::Fail { code: 99 }, // 1: unreachable
-            Instr::End,               // 2: landed here
+            Instr::BrCounterLt { counter_id: 5, limit: 1, target: 2.into() },
+            Instr::Fail { code: 99 },
+            Instr::End,
         ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
@@ -2221,15 +2651,16 @@ async fn t_loop_3_counter_starts_at_zero() {
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
     };
-    store
-        .store_program(program.bytecode_version, &program)
-        .await
-        .unwrap();
-
-    let mut instance = ProcessInstance {
-        instance_id: Uuid::now_v7(),
+    let artifact = ExecutableWorkflow::from_verified_envelope(
+        ArtifactEnvelope::from_legacy_program(program, "test").unwrap(),
+    )
+    .unwrap();
+    let instance_id = Uuid::from_u128(1);
+    let fiber_id = Uuid::from_u128(2);
+    let instance = ProcessInstance {
+        instance_id,
         process_key: "test".to_string(),
-        bytecode_version: program.bytecode_version,
+        bytecode_version: artifact.hash().into_bytes(),
         tenant_id: "default".to_string(),
         domain_payload: "{}".to_string().into(),
         domain_payload_hash: [0u8; 32],
@@ -2239,8 +2670,8 @@ async fn t_loop_3_counter_starts_at_zero() {
         join_expected: BTreeMap::new(),
         state: ProcessState::Running,
         correlation_id: "corr".to_string(),
-        entry_id: Uuid::new_v4(),
-        runbook_id: Uuid::new_v4(),
+        entry_id: Uuid::nil(),
+        runbook_id: Uuid::nil(),
         created_at: 0,
         integrity_hash: None,
         quarantine_state: None,
@@ -2248,32 +2679,27 @@ async fn t_loop_3_counter_starts_at_zero() {
         current_node_id: None,
         placeholder_values: None,
     };
-    store.save_instance("default", &instance).await.unwrap();
-
-    let mut fiber = Fiber::new(Uuid::now_v7(), 0);
-    store
-        .save_fiber(instance.instance_id, &fiber)
-        .await
-        .unwrap();
-
-    let mut tx_ctx = TransactionContext::new(instance.instance_id, instance.tenant_id.clone());
-    let outcome = vm
-        .run_fiber(&mut fiber, &mut instance, &program, 100, &mut tx_ctx)
-        .await
-        .unwrap();
-
-    // Should have jumped to 2 (End) and ended
-    assert!(
-        matches!(outcome, TickOutcome::Ended),
-        "Counter 5 starts at 0, 0 < 1 should branch to End. Got: {:?}",
-        outcome
-    );
+    let snapshot = Snapshot::new(instance, [Fiber::new(fiber_id, 0)]);
+    let transition = bpmn_lite_kernel::apply(
+        &artifact,
+        &snapshot,
+        &Command::Tick {
+            fiber_id: Some(fiber_id),
+        },
+        &bpmn_lite_kernel::DeterministicContext::new(10, Uuid::from_u128(3), 1),
+    )
+    .unwrap();
+    assert_eq!(transition.fibers_delete(), &[fiber_id]);
+    assert!(matches!(
+        transition.next_snapshot().state,
+        ProcessState::Completed { .. }
+    ));
 }
 
 /// T-LOOP-4: Bytecode verifier rejects unguarded backward Jump.
 #[tokio::test]
 async fn t_loop_4_verifier_rejects_backward_jump() {
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [63u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -2281,10 +2707,10 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
                 argc: 0,
                 retc: 0,
             }, // 0
-            Instr::Jump { target: 0 }, // 1: backward jump! infinite loop
+            Instr::Jump { target: 0.into() }, // 1: backward jump! infinite loop
             Instr::End,                // 2: unreachable
         ],
-        debug_map: BTreeMap::from([(0, "task_a".to_string())]),
+        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
@@ -2310,7 +2736,7 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
 /// T-LOOP-5: Bytecode verifier allows BrCounterLt backward jump.
 #[tokio::test]
 async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [64u8; 32],
         program: vec![
             Instr::ExecNative {
@@ -2322,7 +2748,7 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 3,
-                target: 0,
+                target: 0.into(),
             }, // 2: backward, but bounded
             Instr::End,                          // 3
         ],
@@ -2358,22 +2784,22 @@ async fn t_ig_1_all_branches_taken() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [70u8; 32],
         program: vec![
             Instr::ForkInclusive {
                 branches: Box::new([
                     InclusiveBranch {
                         condition_flag: None,
-                        target: 2,
+                        target: 2.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(0),
-                        target: 4,
+                        target: 4.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(1),
-                        target: 6,
+                        target: 6.into(),
                     },
                 ]),
                 join_id: 0,
@@ -2385,25 +2811,25 @@ async fn t_ig_1_all_branches_taken() {
                 argc: 0,
                 retc: 0,
             }, // 2: identity_check
-            Instr::JoinDynamic { id: 0, next: 8 }, // 3
+            Instr::JoinDynamic { id: 0, next: 8.into() }, // 3
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
             }, // 4: edd_check
-            Instr::JoinDynamic { id: 0, next: 8 }, // 5
+            Instr::JoinDynamic { id: 0, next: 8.into() }, // 5
             Instr::ExecNative {
                 task_type: 2,
                 argc: 0,
                 retc: 0,
             }, // 6: pep_screening
-            Instr::JoinDynamic { id: 0, next: 8 }, // 7
+            Instr::JoinDynamic { id: 0, next: 8.into() }, // 7
             Instr::End, // 8: done
         ],
         debug_map: BTreeMap::from([
-            (2, "identity_check".to_string()),
-            (4, "edd_check".to_string()),
-            (6, "pep_screening".to_string()),
+            (2.into(), "identity_check".to_string()),
+            (4.into(), "edd_check".to_string()),
+            (6.into(), "pep_screening".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
@@ -2422,34 +2848,63 @@ async fn t_ig_1_all_branches_taken() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     // Start with both flags true → all 3 branches taken
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-1")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-1",
+        )
         .await
         .unwrap();
 
     // Set flags before first tick
-    let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let mut inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     inst.flags.insert(0, Value::Bool(true)); // high_risk
     inst.flags.insert(1, Value::Bool(true)); // pep_flagged
-    store.save_instance("default", &inst).await.unwrap();
+    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+        .await
+        .unwrap();
 
     // Tick → ForkInclusive evaluates: all 3 taken → 3 fibers spawned
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: InclusiveForkTaken event with expected=3
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let fork_event = events
         .iter()
         .find(|(_, e)| matches!(e, RuntimeEvent::InclusiveForkTaken { .. }));
     assert!(fork_event.is_some(), "Should emit InclusiveForkTaken");
 
     // Assert: join_expected[0] = 3
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(inst.join_expected.get(&0), Some(&3));
 
     // Run → 3 jobs activated
@@ -2469,13 +2924,27 @@ async fn t_ig_1_all_branches_taken() {
     // Tick until complete
     for _ in 0..5 {
         engine.tick_instance(instance_id).await.unwrap();
-        let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+        let inst = store
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         if inst.state.is_terminal() {
             break;
         }
     }
 
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(inst.state, ProcessState::Completed { .. }),
         "Expected Completed, got {:?}",
@@ -2489,22 +2958,22 @@ async fn t_ig_2_single_branch_taken() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [71u8; 32],
         program: vec![
             Instr::ForkInclusive {
                 branches: Box::new([
                     InclusiveBranch {
                         condition_flag: None,
-                        target: 2,
+                        target: 2.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(0),
-                        target: 4,
+                        target: 4.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(1),
-                        target: 6,
+                        target: 6.into(),
                     },
                 ]),
                 join_id: 0,
@@ -2516,25 +2985,25 @@ async fn t_ig_2_single_branch_taken() {
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::ExecNative {
                 task_type: 2,
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::End,
         ],
         debug_map: BTreeMap::from([
-            (2, "identity_check".to_string()),
-            (4, "edd_check".to_string()),
-            (6, "pep_screening".to_string()),
+            (2.into(), "identity_check".to_string()),
+            (4.into(), "edd_check".to_string()),
+            (6.into(), "pep_screening".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
@@ -2553,13 +3022,19 @@ async fn t_ig_2_single_branch_taken() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     // Start with flags FALSE → only unconditional branch (A) taken
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-2")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-2",
+        )
         .await
         .unwrap();
 
@@ -2567,7 +3042,14 @@ async fn t_ig_2_single_branch_taken() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: join_expected[0] = 1
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(inst.join_expected.get(&0), Some(&1));
 
     // Run → 1 job
@@ -2584,13 +3066,27 @@ async fn t_ig_2_single_branch_taken() {
 
     for _ in 0..5 {
         engine.tick_instance(instance_id).await.unwrap();
-        let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+        let inst = store
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         if inst.state.is_terminal() {
             break;
         }
     }
 
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(inst.state, ProcessState::Completed { .. }));
 }
 
@@ -2601,18 +3097,18 @@ async fn t_ig_3_zero_match_no_default_incident() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // ALL branches conditional — no unconditional
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [72u8; 32],
         program: vec![
             Instr::ForkInclusive {
                 branches: Box::new([
                     InclusiveBranch {
                         condition_flag: Some(0),
-                        target: 2,
+                        target: 2.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(1),
-                        target: 4,
+                        target: 4.into(),
                     },
                 ]),
                 join_id: 0,
@@ -2624,13 +3120,13 @@ async fn t_ig_3_zero_match_no_default_incident() {
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 6 },
+            Instr::JoinDynamic { id: 0, next: 6.into() },
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 6 },
+            Instr::JoinDynamic { id: 0, next: 6.into() },
             Instr::End,
         ],
         debug_map: BTreeMap::new(),
@@ -2647,12 +3143,18 @@ async fn t_ig_3_zero_match_no_default_incident() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-3")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-3",
+        )
         .await
         .unwrap();
     // No flags set → all conditions false → zero match
@@ -2660,14 +3162,28 @@ async fn t_ig_3_zero_match_no_default_incident() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: instance Failed with incident
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(inst.state, ProcessState::Failed { .. }),
         "Zero match with no default should create incident, got {:?}",
         inst.state
     );
 
-    let events = store.read_events(instance_id, 0).await.unwrap();
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
     let has_incident = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
@@ -2680,16 +3196,16 @@ async fn t_ig_4_zero_match_with_default() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [73u8; 32],
         program: vec![
             Instr::ForkInclusive {
                 branches: Box::new([InclusiveBranch {
                     condition_flag: Some(0),
-                    target: 2,
+                    target: 2.into(),
                 }]),
                 join_id: 0,
-                default_target: Some(4), // default branch
+                default_target: Some(4.into()), // default branch
             },
             Instr::End,
             Instr::ExecNative {
@@ -2697,18 +3213,18 @@ async fn t_ig_4_zero_match_with_default() {
                 argc: 0,
                 retc: 0,
             }, // 2: conditional
-            Instr::JoinDynamic { id: 0, next: 6 },
+            Instr::JoinDynamic { id: 0, next: 6.into() },
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
             }, // 4: default
-            Instr::JoinDynamic { id: 0, next: 6 },
+            Instr::JoinDynamic { id: 0, next: 6.into() },
             Instr::End, // 6: done
         ],
         debug_map: BTreeMap::from([
-            (2, "conditional_task".to_string()),
-            (4, "default_task".to_string()),
+            (2.into(), "conditional_task".to_string()),
+            (4.into(), "default_task".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
@@ -2723,12 +3239,18 @@ async fn t_ig_4_zero_match_with_default() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-4")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-4",
+        )
         .await
         .unwrap();
     // No flags → condition false → default taken
@@ -2736,7 +3258,14 @@ async fn t_ig_4_zero_match_with_default() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Assert: join_expected = 1 (default branch only)
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(inst.join_expected.get(&0), Some(&1));
 
     // Run → should get default_task job
@@ -2752,13 +3281,27 @@ async fn t_ig_4_zero_match_with_default() {
         .unwrap();
     for _ in 0..5 {
         engine.tick_instance(instance_id).await.unwrap();
-        let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+        let inst = store
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         if inst.state.is_terminal() {
             break;
         }
     }
 
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(inst.state, ProcessState::Completed { .. }));
 }
 
@@ -2769,22 +3312,22 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     // 2 of 3 branches taken → join waits for exactly 2
-    let program = CompiledProgram {
+    let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [74u8; 32],
         program: vec![
             Instr::ForkInclusive {
                 branches: Box::new([
                     InclusiveBranch {
                         condition_flag: None,
-                        target: 2,
+                        target: 2.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(0),
-                        target: 4,
+                        target: 4.into(),
                     },
                     InclusiveBranch {
                         condition_flag: Some(1),
-                        target: 6,
+                        target: 6.into(),
                     },
                 ]),
                 join_id: 0,
@@ -2796,25 +3339,25 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::ExecNative {
                 task_type: 2,
                 argc: 0,
                 retc: 0,
             },
-            Instr::JoinDynamic { id: 0, next: 8 },
+            Instr::JoinDynamic { id: 0, next: 8.into() },
             Instr::End,
         ],
         debug_map: BTreeMap::from([
-            (2, "task_a".to_string()),
-            (4, "task_b".to_string()),
-            (6, "task_c".to_string()),
+            (2.into(), "task_a".to_string()),
+            (4.into(), "task_b".to_string()),
+            (6.into(), "task_c".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
@@ -2833,26 +3376,44 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
         ffi_task_decls: BTreeMap::new(),
     };
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
     let instance_id = engine
-        .start("test", program.bytecode_version, "{}", [0u8; 32], "corr-5")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-5",
+        )
         .await
         .unwrap();
 
     // Set flag_0=true, flag_1=false → 2 branches taken (unconditional + flag_0)
-    let mut inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let mut inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     inst.flags.insert(0, Value::Bool(true));
     // flag 1 not set = false
-    store.save_instance("default", &inst).await.unwrap();
+    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+        .await
+        .unwrap();
 
     engine.tick_instance(instance_id).await.unwrap();
 
     assert_eq!(
         store
-            .load_instance(instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id
+            )
             .await
             .unwrap()
             .unwrap()
@@ -2875,7 +3436,14 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
     engine.tick_instance(instance_id).await.unwrap();
 
     // Instance still Running (waiting for 2nd branch)
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(inst.state, ProcessState::Running),
         "Should still be Running, got {:?}",
@@ -2889,13 +3457,27 @@ async fn t_ig_5_join_waits_for_dynamic_count() {
         .unwrap();
     for _ in 0..5 {
         engine.tick_instance(instance_id).await.unwrap();
-        let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+        let inst = store
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         if inst.state.is_terminal() {
             break;
         }
     }
 
-    let inst = store.load_instance(instance_id).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(inst.state, ProcessState::Completed { .. }));
 }
 
@@ -2950,7 +3532,7 @@ async fn t_ig_6_parse_inclusive_gateway() {
 
     // Should contain ForkInclusive and JoinDynamic instructions
     let has_fork_inclusive = program
-        .program
+        .program()
         .iter()
         .any(|i| matches!(i, Instr::ForkInclusive { .. }));
     assert!(
@@ -2959,7 +3541,7 @@ async fn t_ig_6_parse_inclusive_gateway() {
     );
 
     let has_join_dynamic = program
-        .program
+        .program()
         .iter()
         .any(|i| matches!(i, Instr::JoinDynamic { .. }));
     assert!(has_join_dynamic, "Should contain JoinDynamic instruction");
@@ -2994,7 +3576,7 @@ edges:
   - from: task_b
     to: end
 "#;
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Compile from YAML
@@ -3184,7 +3766,7 @@ async fn t_auth_2_inclusive_gateway_yaml() {
         ],
     };
 
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
@@ -3208,10 +3790,16 @@ async fn t_auth_2_inclusive_gateway_yaml() {
     // flag_a is first interned → key 0, flag_b → key 1.
     // Set flag key 0 (flag_a) = true before tick
     {
-        let mut inst = store.load_instance(iid).await.unwrap().unwrap();
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+            .await
+            .unwrap()
+            .unwrap();
         inst.flags.insert(0, Value::Bool(true));
         // flag_b (key 1) not set = defaults to false
-        store.save_instance("default", &inst).await.unwrap();
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
     }
 
     // Tick — ForkInclusive should spawn 2 fibers (unconditional + flag_a)
@@ -3229,7 +3817,6 @@ async fn t_auth_2_inclusive_gateway_yaml() {
 
 /// T-AUTH-3: RaceWait deferred to Phase B.
 #[tokio::test]
-#[ignore = "RaceWait not supported in Phase A — deferred to Phase B"]
 async fn t_auth_3_race_wait() {
     // Placeholder — RaceWait DTO nodes are rejected by dto_to_ir in Phase A
 }
@@ -3266,7 +3853,7 @@ edges:
   - from: escalation
     to: end_error
 "#;
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
@@ -3308,14 +3895,21 @@ edges:
         .unwrap();
 
     // Verify error was routed (not incident)
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let has_routed = events.iter().any(|(_, e)| {
             matches!(e, RuntimeEvent::ErrorRouted { error_code, .. } if error_code == "BIZ_FAIL")
         });
     assert!(has_routed, "Should route error to escalation handler");
 
     // Instance should still be Running (not Failed)
-    let inst = store.load_instance(iid).await.unwrap().unwrap();
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(inst.state, ProcessState::Running),
         "Instance should be Running after error routing, got {:?}",
@@ -3369,7 +3963,7 @@ edges:
   - from: fallback_path
     to: end
 "#;
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
     let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
@@ -3434,9 +4028,65 @@ edges:
 
 /// T-AUTH-6: Boundary timer from YAML DTO.
 #[tokio::test]
-#[ignore = "BoundaryTimer time simulation requires deadline manipulation — covered by BPMN XML tests"]
 async fn t_auth_6_boundary_timer_yaml() {
-    // BoundaryTimer from DTO compiles correctly (verified in dto_to_ir tests).
-    // Runtime behavior (timer firing, race resolution) is covered by
-    // the existing BPMN XML boundary timer tests (T-NI-*).
+    let yaml = r#"
+id: yaml-boundary-timer
+nodes:
+  - kind: Start
+    id: start
+  - kind: ServiceTask
+    id: host
+    task_type: long_work
+  - kind: BoundaryTimer
+    id: timeout
+    host: host
+    duration_ms: 2000
+    interrupting: true
+  - kind: ServiceTask
+    id: escalate
+    task_type: escalate_work
+  - kind: End
+    id: normal_end
+  - kind: End
+    id: timeout_end
+edges:
+  - from: start
+    to: host
+  - from: host
+    to: normal_end
+  - from: timeout
+    to: escalate
+  - from: escalate
+    to: timeout_end
+"#;
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store);
+    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let compiled = engine.store_compiled_program(program).await.unwrap();
+    let instance_id = engine
+        .start(
+            "yaml-boundary-timer",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "yaml-boundary",
+        )
+        .await
+        .unwrap();
+
+    engine.tick_instance(instance_id).await.unwrap();
+    assert_eq!(
+        engine
+            .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+            .await
+            .unwrap(),
+        1
+    );
+    engine.tick_instance(instance_id).await.unwrap();
+    let escalations = engine
+        .activate_jobs(&["escalate_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert_eq!(escalations.len(), 1);
 }

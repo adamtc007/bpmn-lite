@@ -376,10 +376,7 @@ fn round_trip_preserves_every_top_level_field() {
     assert_eq!(m2.catalogue_version, m.catalogue_version);
     assert_eq!(m2.generated_at, m.generated_at);
     assert_eq!(m2.generated_from_snapshot, m.generated_from_snapshot);
-    assert_eq!(
-        m2.imported_pins,
-        m.imported_pins
-    );
+    assert_eq!(m2.imported_pins, m.imported_pins);
     assert_eq!(m2.breaking_changes_since, m.breaking_changes_since);
 }
 

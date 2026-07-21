@@ -10,7 +10,7 @@ use bpmn_lite_analysis;
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
-use bpmn_lite_types::{ErrorClass, Value};
+use bpmn_lite_types::{ErrorClass, TenantId, Value};
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
@@ -304,13 +304,14 @@ fn engine_err(e: anyhow::Error) -> Status {
 }
 
 #[allow(clippy::result_large_err)]
-fn request_tenant_id(limits: &RequestLimits, tenant_id: &str) -> Result<String, Status> {
+fn request_tenant_id(limits: &RequestLimits, tenant_id: &str) -> Result<TenantId, Status> {
     limits.check_string("tenant_id", tenant_id)?;
-    if tenant_id.is_empty() {
-        Ok("default".to_string())
+    let tenant_id = if tenant_id.is_empty() {
+        TenantId::default()
     } else {
-        Ok(tenant_id.to_string())
-    }
+        TenantId::new(tenant_id).map_err(|error| Status::invalid_argument(error.to_string()))?
+    };
+    Ok(tenant_id)
 }
 
 /// Extract the instance_id (UUID) from a job_key formatted as "instance_id:service_task_id:pc".
@@ -596,7 +597,7 @@ impl BpmnLite for BpmnLiteService {
                 let ws = format!("{:?}", f.wait_state);
                 FiberInfo {
                     fiber_id: f.fiber_id.to_string(),
-                    pc: f.pc,
+                    pc: f.pc.into(),
                     wait_state: ws,
                 }
             })
@@ -616,6 +617,9 @@ impl BpmnLite for BpmnLiteService {
                     }
                     bpmn_lite_types::WaitState::Job { job_key } => {
                         ("JOB".to_string(), job_key.clone())
+                    }
+                    bpmn_lite_types::WaitState::Effect { effect_id } => {
+                        ("EFFECT".to_string(), effect_id.as_uuid().to_string())
                     }
                     bpmn_lite_types::WaitState::Join { .. } => ("JOIN".to_string(), String::new()),
                     bpmn_lite_types::WaitState::Incident { incident_id } => {
@@ -966,7 +970,7 @@ impl BpmnLite for BpmnLiteService {
             input_schema,
             output_schema,
             Idempotency::Idempotent,
-            tenant_id.clone(),
+            tenant_id.to_string(),
             publisher,
         );
 
@@ -1055,7 +1059,7 @@ impl BpmnLite for BpmnLiteService {
                 idempotency,
                 input_schema,
                 output_schema,
-                tenant_id.clone(),
+                tenant_id.to_string(),
                 publisher,
             )
             .map_err(|e| Status::invalid_argument(format!("invalid HTTP template: {:#}", e)))?;
@@ -1121,7 +1125,7 @@ impl BpmnLite for BpmnLiteService {
                 input_schema,
                 output_schema,
                 idempotency,
-                tenant_id.clone(),
+                tenant_id.to_string(),
                 publisher,
             )
             .map_err(|e| Status::invalid_argument(format!("invalid gRPC template: {:#}", e)))?;

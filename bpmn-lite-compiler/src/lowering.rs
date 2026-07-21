@@ -35,7 +35,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     // For simplicity, we emit instructions in a single pass with placeholder fixups
 
     // Assign base address per node
-    let mut addr: Addr = 0;
+    let mut addr = Addr::new(0);
     for &node_idx in &order {
         node_addr.insert(node_idx, addr);
         addr += estimate_instr_count(graph, node_idx);
@@ -126,18 +126,22 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         let node = &graph[node_idx];
 
         // Pad instructions array to reach base address
-        while instructions.len() < base as usize {
+        while instructions.len() < base.index() {
             instructions.push(Instr::Jump { target: base });
         }
 
-        debug_map.insert(base, node.id().to_string());
+        // Structural-only IR nodes intentionally emit no instruction. Recording
+        // their shared/terminal address would create a dangling debug-map entry.
+        if estimate_instr_count(graph, node_idx) > 0 {
+            debug_map.insert(base, node.id().to_string());
+        }
 
         match node {
             IRNode::Start { .. } => {
                 // Start is a no-op — just a marker. Jump to next.
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(base + 1);
+                    let target = node_addr.get(next).copied().unwrap_or(base + 1u32);
                     instructions.push(Instr::Jump { target });
                 } else {
                     instructions.push(Instr::End);
@@ -154,7 +158,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
             IRNode::ServiceTask { id, task_type, .. } => {
                 let task_id = intern_task(&mut task_intern, &mut task_manifest, task_type);
-                let exec_addr = instructions.len() as Addr;
+                let exec_addr = Addr::new(instructions.len() as u32);
                 instructions.push(Instr::ExecNative {
                     task_type: task_id,
                     argc: 0,
@@ -164,11 +168,11 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // Normal path: jump to successor
                 let successors = get_successors(graph, node_idx);
                 let normal_resume = if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(base + 2);
+                    let target = node_addr.get(next).copied().unwrap_or(base + 2u32);
                     instructions.push(Instr::Jump { target });
                     target
                 } else {
-                    let next_addr = instructions.len() as Addr;
+                    let next_addr = Addr::new(instructions.len() as u32);
                     instructions.push(Instr::End);
                     next_addr
                 };
@@ -183,7 +187,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let escalation_addr = escalation_successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .unwrap_or(0);
+                        .unwrap_or(Addr::new(0));
 
                     let bt_interrupting =
                         if let IRNode::BoundaryTimer { interrupting, .. } = &graph[*bt_node_idx] {
@@ -248,7 +252,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 let mut default_target = None;
                 for edge in &outgoing {
                     let target_idx = edge.target();
-                    let target_addr = node_addr.get(&target_idx).copied().unwrap_or(0);
+                    let target_addr = node_addr.get(&target_idx).copied().unwrap_or(Addr::new(0));
 
                     if let Some(cond) = &edge.weight().condition {
                         let flag_key = intern_flag(&mut flag_intern, &cond.flag_name);
@@ -301,7 +305,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let successors = get_successors(graph, node_idx);
                     let targets: Box<[Addr]> = successors
                         .iter()
-                        .map(|s| node_addr.get(s).copied().unwrap_or(0))
+                        .map(|s| node_addr.get(s).copied().unwrap_or(Addr::new(0)))
                         .collect();
                     instructions.push(Instr::Fork { targets });
                 }
@@ -318,7 +322,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let next = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .unwrap_or(0);
+                        .unwrap_or(Addr::new(0));
 
                     join_plan.insert(
                         join_id,
@@ -348,7 +352,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                         .iter()
                         .map(|edge| {
                             let target_idx = edge.target();
-                            let target_addr = node_addr.get(&target_idx).copied().unwrap_or(0);
+                            let target_addr = node_addr.get(&target_idx).copied().unwrap_or(Addr::new(0));
                             let condition_flag = edge
                                 .weight()
                                 .condition
@@ -379,7 +383,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let next = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .unwrap_or(0);
+                        .unwrap_or(Addr::new(0));
 
                     instructions.push(Instr::JoinDynamic { id: join_id, next });
                 }
@@ -403,7 +407,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(0);
+                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -436,7 +440,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(0);
+                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -457,7 +461,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(0);
+                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -490,7 +494,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(0);
+                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -556,11 +560,11 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // Normal-path Jump to first successor.
                 let successors = get_successors(graph, node_idx);
                 let normal_resume = if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(base + 2);
+                    let target = node_addr.get(next).copied().unwrap_or(base + 2u32);
                     instructions.push(Instr::Jump { target });
                     target
                 } else {
-                    let next_addr = instructions.len() as Addr;
+                    let next_addr = Addr::new(instructions.len() as u32);
                     instructions.push(Instr::End);
                     next_addr
                 };
@@ -684,21 +688,21 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         .map(|(name, key)| (key, name))
         .collect();
 
-    Ok(CompiledProgram {
-        bytecode_version,
+    Ok(bpmn_lite_types::legacy_program! {
+        bytecode_version: bytecode_version,
         program: instructions,
-        debug_map,
-        join_plan,
-        wait_plan,
-        message_name_map,
-        race_plan,
-        boundary_map,
-        write_set,
-        task_manifest,
-        error_route_map,
-        flag_symbol_table,
-        data_objects,
-        ffi_task_decls,
+        debug_map: debug_map,
+        join_plan: join_plan,
+        wait_plan: wait_plan,
+        message_name_map: message_name_map,
+        race_plan: race_plan,
+        boundary_map: boundary_map,
+        write_set: write_set,
+        task_manifest: task_manifest,
+        error_route_map: error_route_map,
+        flag_symbol_table: flag_symbol_table,
+        data_objects: data_objects,
+        ffi_task_decls: ffi_task_decls,
     })
 }
 
@@ -741,7 +745,7 @@ fn get_successors(graph: &IRGraph, node: NodeIndex) -> Vec<NodeIndex> {
     graph.neighbors(node).collect()
 }
 
-fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> Addr {
+fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> u32 {
     match &graph[node] {
         IRNode::Start { .. } => 1,
         IRNode::End { .. } => 1,
@@ -751,7 +755,7 @@ fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> Addr {
                 .edges_directed(node, petgraph::Direction::Outgoing)
                 .count();
             // Each conditional edge: LoadFlag + BrIf, plus default Jump
-            (outgoing as Addr * 2).max(1) + 1
+            (outgoing as u32 * 2).max(1) + 1
         }
         IRNode::GatewayAnd { .. } => 1,       // Fork or Join
         IRNode::GatewayInclusive { .. } => 1, // ForkInclusive or JoinDynamic
@@ -936,16 +940,16 @@ mod tests {
         let program = lower(&graph).unwrap();
 
         // Should contain at least: Jump (start→task), ExecNative, Jump (task→end), End
-        assert!(program.program.len() >= 3);
-        assert_eq!(program.task_manifest, vec!["create_case"]);
+        assert!(program.program().len() >= 3);
+        assert_eq!(program.task_manifest(), &["create_case"]);
 
         // Last instruction should be End
-        let last = program.program.last().unwrap();
+        let last = program.program().last().unwrap();
         assert!(matches!(last, Instr::End));
 
         // Should have ExecNative somewhere
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::ExecNative { .. })));
     }
@@ -1025,11 +1029,11 @@ mod tests {
 
         // Should contain LoadFlag + BrIf for the conditional edge
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::LoadFlag { .. })));
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::BrIf { .. })));
     }
@@ -1118,11 +1122,11 @@ mod tests {
         let program = lower(&graph).unwrap();
 
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::Fork { .. })));
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::Join { .. })));
     }
@@ -1176,15 +1180,15 @@ mod tests {
         let program = lower(&graph).unwrap();
 
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::WaitFor { ms: 5000 })));
         assert!(program
-            .program
+            .program()
             .iter()
             .any(|i| matches!(i, Instr::WaitMsg { .. })));
         assert!(program
-            .message_name_map
+            .message_name_map()
             .values()
             .any(|name| name == "docs_received"));
     }
@@ -1201,13 +1205,13 @@ mod tests {
         let program = lower(&graph).unwrap();
 
         // Bytecode version should be non-zero
-        assert_ne!(program.bytecode_version, [0u8; 32]);
+        assert_ne!(program.bytecode_version(), [0u8; 32]);
 
         // Debug map should have entries
-        assert!(!program.debug_map.is_empty());
+        assert!(!program.debug_map().is_empty());
 
         // Task manifest should list task types
-        assert!(program.task_manifest.contains(&"create_case".to_string()));
+        assert!(program.task_manifest().contains(&"create_case".to_string()));
     }
 
     /// Δ8 — flag_symbol_table is preserved from the lowering intern map.
@@ -1290,24 +1294,27 @@ mod tests {
 
         // The symbol table must be non-empty and contain "approved".
         assert!(
-            !program.flag_symbol_table.is_empty(),
+            !program.flag_symbol_table().is_empty(),
             "flag_symbol_table should be non-empty when conditions reference named flags"
         );
         assert!(
-            program.flag_symbol_table.values().any(|n| n == "approved"),
+            program
+                .flag_symbol_table()
+                .values()
+                .any(|n| n == "approved"),
             "flag_symbol_table should contain the condition flag name 'approved'"
         );
 
         // The FlagKey stored in the table must be used as a LoadFlag operand.
         let table_key = *program
-            .flag_symbol_table
+            .flag_symbol_table()
             .iter()
             .find(|(_, n)| *n == "approved")
             .unwrap()
             .0;
         assert!(
             program
-                .program
+                .program()
                 .iter()
                 .any(|i| matches!(i, Instr::LoadFlag { key } if *key == table_key)),
             "the FlagKey from flag_symbol_table must appear as a LoadFlag operand"
@@ -1316,7 +1323,7 @@ mod tests {
         // Linear graph (no conditions) produces an empty symbol table.
         let linear = lower(&make_linear_graph()).unwrap();
         assert!(
-            linear.flag_symbol_table.is_empty(),
+            linear.flag_symbol_table().is_empty(),
             "flag_symbol_table should be empty when no conditions reference named flags"
         );
     }

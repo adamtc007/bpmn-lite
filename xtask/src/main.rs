@@ -42,9 +42,7 @@ fn main() -> Result<()> {
             }
             pack_build_command(&args[1])
         }
-        "run-pack" => {
-            run_pack_command()
-        }
+        "run-pack" => run_pack_command(),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -916,7 +914,7 @@ fn docker_up(workspace_root: &Path, parsed: &ParsedArgs) -> Result<DockerDeploym
         //   (includes migration 026 which creates bpmn_lite_app).
         // DATABASE_URL: runtime connection.
         //
-        // TODO(A18-store-rls): Once the ProcessStore trait threads tenant_id
+        // TODO(A18-store-rls): Once the WorkflowStore trait threads tenant_id
         // through load_instance/load_fibers/save_fiber so set_tenant_context
         // is called before every tenant-scoped query, revert DATABASE_URL to
         //   bpmn_lite_app (non-superuser, RLS active).
@@ -1227,15 +1225,23 @@ fn pack_build_command(domain: &str) -> Result<()> {
     let manifests_dir = workspace_root.join("manifests");
     let dag_path = manifests_dir.join(format!("{}.dag.yaml", domain));
     if !dag_path.exists() {
-        bail!("DAG file not found for domain '{}' at {}", domain, dag_path.display());
+        bail!(
+            "DAG file not found for domain '{}' at {}",
+            domain,
+            dag_path.display()
+        );
     }
 
-    println!("Loading DAG for domain '{}' from {}...", domain, dag_path.display());
+    println!(
+        "Loading DAG for domain '{}' from {}...",
+        domain,
+        dag_path.display()
+    );
     let dag_content = std::fs::read_to_string(&dag_path)
         .with_context(|| format!("read DAG at {}", dag_path.display()))?;
-    
-    let dag: bpmn_lite_compiler::dsl::pack_build::WorkflowPackDAG = serde_yaml::from_str(&dag_content)
-        .context("parse DAG yaml")?;
+
+    let dag: bpmn_lite_compiler::dsl::pack_build::WorkflowPackDAG =
+        serde_yaml::from_str(&dag_content).context("parse DAG yaml")?;
 
     println!("Generating manifest for domain '{}'...", domain);
     let mut manifest = bpmn_lite_compiler::dsl::pack_build::generate_manifest(&dag)
@@ -1253,7 +1259,9 @@ fn pack_build_command(domain: &str) -> Result<()> {
         .map_err(|errs| anyhow!("Validation failed: {:?}", errs))?;
 
     // Write manifest to disk at <domain>-v<dag.version>.yaml
-    let manifest_yaml = manifest.to_yaml().map_err(|e| anyhow!("serialize manifest error: {}", e))?;
+    let manifest_yaml = manifest
+        .to_yaml()
+        .map_err(|e| anyhow!("serialize manifest error: {}", e))?;
     let manifest_path = manifests_dir.join(format!("{}-{}.yaml", domain, dag.version));
     std::fs::write(&manifest_path, &manifest_yaml)
         .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
@@ -1273,14 +1281,11 @@ fn pack_build_command(domain: &str) -> Result<()> {
 fn run_pack_command() -> Result<()> {
     let workspace_root = workspace_root()?;
     let server_url = "http://127.0.0.1:8080";
-    
+
     // Spawn server
     println!("Starting bpmn-lite-server...");
-    let mut server_child = ChildGuard::new(spawn_server_for_run_pack(
-        &workspace_root,
-        server_url,
-    )?);
-    
+    let mut server_child = ChildGuard::new(spawn_server_for_run_pack(&workspace_root, server_url)?);
+
     wait_for_server(server_url, Duration::from_secs(20))?;
     println!("Server is up on {}", server_url);
 
@@ -1294,50 +1299,65 @@ fn run_pack_command() -> Result<()> {
 
     // ── Scenario 1: Fund (triggers Loop branch) ──
     println!("\n=== Executing Scenario 1: Fund (triggers Loop branch) ===");
-    run_scenario(&client, server_url, &dsl_content, "fund", vec![
-        // create-cbu -> advances to type-decision
-        serde_json::json!({}),
-        // type-decision -> DMN output is "fund" -> advances to type-gateway -> drive_forward walks past gateway to loop run-loop -> loop-step
-        serde_json::json!({ "@cbu-type": "fund" }),
-        // loop-step (Iteration 1) -> loop-step
-        serde_json::json!({}),
-        // loop-step (Iteration 2) -> ends
-        serde_json::json!({}),
-    ])?;
+    run_scenario(
+        &client,
+        server_url,
+        &dsl_content,
+        "fund",
+        vec![
+            // create-cbu -> advances to type-decision
+            serde_json::json!({}),
+            // type-decision -> DMN output is "fund" -> advances to type-gateway -> drive_forward walks past gateway to loop run-loop -> loop-step
+            serde_json::json!({ "@cbu-type": "fund" }),
+            // loop-step (Iteration 1) -> loop-step
+            serde_json::json!({}),
+            // loop-step (Iteration 2) -> ends
+            serde_json::json!({}),
+        ],
+    )?;
 
     // ── Scenario 2: Corporate (triggers Parallel branch) ──
     println!("\n=== Executing Scenario 2: Corporate (triggers Parallel branch) ===");
-    run_scenario(&client, server_url, &dsl_content, "corporate", vec![
-        // create-cbu -> type-decision
-        serde_json::json!({}),
-        // type-decision -> DMN output is "corporate" -> advances to parallel branch split -> task-p1 and task-p2
-        serde_json::json!({ "@cbu-type": "corporate" }),
-        // task-p1 -> parallel-join
-        serde_json::json!({}),
-        // task-p2 -> parallel-join -> join completes -> ends
-        serde_json::json!({}),
-    ])?;
+    run_scenario(
+        &client,
+        server_url,
+        &dsl_content,
+        "corporate",
+        vec![
+            // create-cbu -> type-decision
+            serde_json::json!({}),
+            // type-decision -> DMN output is "corporate" -> advances to parallel branch split -> task-p1 and task-p2
+            serde_json::json!({ "@cbu-type": "corporate" }),
+            // task-p1 -> parallel-join
+            serde_json::json!({}),
+            // task-p2 -> parallel-join -> join completes -> ends
+            serde_json::json!({}),
+        ],
+    )?;
 
     // ── Scenario 3: Trust (triggers Single branch) ──
     println!("\n=== Executing Scenario 3: Trust (triggers Single branch) ===");
-    run_scenario(&client, server_url, &dsl_content, "trust", vec![
-        // create-cbu -> type-decision
-        serde_json::json!({}),
-        // type-decision -> DMN output is "trust" -> advances to run-single
-        serde_json::json!({ "@cbu-type": "trust" }),
-        // run-single -> ends
-        serde_json::json!({}),
-    ])?;
+    run_scenario(
+        &client,
+        server_url,
+        &dsl_content,
+        "trust",
+        vec![
+            // create-cbu -> type-decision
+            serde_json::json!({}),
+            // type-decision -> DMN output is "trust" -> advances to run-single
+            serde_json::json!({ "@cbu-type": "trust" }),
+            // run-single -> ends
+            serde_json::json!({}),
+        ],
+    )?;
 
     println!("\nAll comprehensive DSL scenarios successfully executed!");
     server_child.stop();
     Ok(())
 }
 
-fn spawn_server_for_run_pack(
-    workspace_root: &Path,
-    _server_url: &str,
-) -> Result<Child> {
+fn spawn_server_for_run_pack(workspace_root: &Path, _server_url: &str) -> Result<Child> {
     let mut command = Command::new("cargo");
     command
         .arg("run")
@@ -1353,7 +1373,9 @@ fn spawn_server_for_run_pack(
         .arg("--bin")
         .arg("bpmn-lite-server");
 
-    let child = command.spawn().context("Failed to spawn bpmn-lite-server")?;
+    let child = command
+        .spawn()
+        .context("Failed to spawn bpmn-lite-server")?;
     Ok(child)
 }
 
@@ -1370,27 +1392,40 @@ fn run_scenario(
         "cbu_type": cbu_type,
         "bpmn_dsl": dsl_content
     });
-    
-    let res = client.post(&start_url)
+
+    let res = client
+        .post(&start_url)
         .json(&start_body)
         .send()
         .context("HTTP request failed starting instance")?;
-        
+
     if !res.status().is_success() {
         let status = res.status();
         let err_text = res.text().unwrap_or_default();
-        bail!("Failed to start instance: HTTP {}. Body: {}", status, err_text);
+        bail!(
+            "Failed to start instance: HTTP {}. Body: {}",
+            status,
+            err_text
+        );
     }
-    
+
     let res_json: serde_json::Value = res.json().context("Failed to parse start response JSON")?;
-    let instance_id = res_json["instance_id"].as_str().ok_or_else(|| anyhow!("Missing instance_id"))?;
-    println!("Started instance {} for cbu_type '{}'", instance_id, cbu_type);
+    let instance_id = res_json["instance_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing instance_id"))?;
+    println!(
+        "Started instance {} for cbu_type '{}'",
+        instance_id, cbu_type
+    );
 
     // Get detail
     let detail_url = format!("{}/bpmn/instances/{}", server_url, instance_id);
     let res = client.get(&detail_url).send()?;
     let detail: serde_json::Value = res.json()?;
-    println!("Initial state: node = {}, status = {}", detail["current_node"], detail["status"]);
+    println!(
+        "Initial state: node = {}, status = {}",
+        detail["current_node"], detail["status"]
+    );
 
     // Step through the process
     for (i, outputs) in step_outputs.into_iter().enumerate() {
@@ -1398,28 +1433,40 @@ fn run_scenario(
         let next_body = serde_json::json!({
             "outputs": outputs
         });
-        
+
         let res = client.post(&next_url).json(&next_body).send()?;
         if !res.status().is_success() {
             let status = res.status();
             let err_text = res.text().unwrap_or_default();
             bail!("Step {} failed: HTTP {}. Body: {}", i + 1, status, err_text);
         }
-        
+
         let step_res: serde_json::Value = res.json()?;
-        println!("Step {} response: node = {}, status = {}, message = {}", i + 1, step_res["node"], step_res["status"], step_res["message"]);
+        println!(
+            "Step {} response: node = {}, status = {}, message = {}",
+            i + 1,
+            step_res["node"],
+            step_res["status"],
+            step_res["message"]
+        );
     }
 
     // Load detail and check final status
     let res = client.get(&detail_url).send()?;
     let final_detail: serde_json::Value = res.json()?;
-    println!("Final state: node = {}, status = {}", final_detail["current_node"], final_detail["status"]);
-    
+    println!(
+        "Final state: node = {}, status = {}",
+        final_detail["current_node"], final_detail["status"]
+    );
+
     let status_str = final_detail["status"].as_str().unwrap_or_default();
     if !status_str.contains("Completed") {
-        bail!("Workflow did not reach Completed state! Current state: {}", status_str);
+        bail!(
+            "Workflow did not reach Completed state! Current state: {}",
+            status_str
+        );
     }
-    
+
     println!("Scenario for '{}' completed successfully!", cbu_type);
     Ok(())
 }

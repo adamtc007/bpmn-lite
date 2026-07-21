@@ -1,16 +1,20 @@
 use anyhow::{anyhow, Result};
-use std::collections::{HashMap, BTreeMap};
-use petgraph::graph::NodeIndex;
-use bpmn_lite_compiler::ir::{IRGraph, IRNode, GatewayDirection};
 use bpmn_lite_compiler::dsl::plan::{
-    WorkflowExecutionPlan, ExecutionNode, StartExecNode, EndExecNode, TaskExecNode,
-    SplitExecNode, JoinExecNode, SplitMode, JoinMode, SplitExecFlow, PlaceholderSchema, DeliveryMode
+    DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, PlaceholderSchema,
+    SplitExecFlow, SplitExecNode, SplitMode, StartExecNode, TaskExecNode, WorkflowExecutionPlan,
 };
 use bpmn_lite_compiler::dsl::rpst::verify_sese_nesting;
+use bpmn_lite_compiler::ir::{GatewayDirection, IRGraph, IRNode};
+use petgraph::graph::NodeIndex;
+use std::collections::{BTreeMap, HashMap};
 
 /// Import a Zeebe BPMN 2.0 XML string and convert it into a SESE-structured `WorkflowExecutionPlan`.
 /// Returns an error if the topology is non-SESE.
-pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Result<WorkflowExecutionPlan> {
+pub fn import_zeebe_bpmn(
+    xml: &str,
+    workflow_id: &str,
+    permissive: bool,
+) -> Result<WorkflowExecutionPlan> {
     // 1. Parse BPMN XML into IRGraph
     let ir = bpmn_lite_compiler::parser::parse_bpmn(xml)?;
 
@@ -22,11 +26,19 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
         let node = &ir[idx];
         let is_split = match node {
             IRNode::GatewayXor { .. } => {
-                let out_count = ir.neighbors_directed(idx, petgraph::Direction::Outgoing).count();
+                let out_count = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
+                    .count();
                 out_count > 1
             }
-            IRNode::GatewayAnd { direction: GatewayDirection::Diverging, .. } => true,
-            IRNode::GatewayInclusive { direction: GatewayDirection::Diverging, .. } => true,
+            IRNode::GatewayAnd {
+                direction: GatewayDirection::Diverging,
+                ..
+            } => true,
+            IRNode::GatewayInclusive {
+                direction: GatewayDirection::Diverging,
+                ..
+            } => true,
             _ => false,
         };
 
@@ -36,7 +48,10 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 join_split_pairs.insert(join_idx, idx);
             } else {
                 if !permissive {
-                    return Err(anyhow!("Non-SESE: Split node '{}' does not have a corresponding merge/join node", node.id()));
+                    return Err(anyhow!(
+                        "Non-SESE: Split node '{}' does not have a corresponding merge/join node",
+                        node.id()
+                    ));
                 }
             }
         }
@@ -53,7 +68,8 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
         let exec_node = match node {
             IRNode::Start { id } => {
                 start_node_id = Some(id.clone());
-                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                let next_idx = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("Start node has no outgoing edges"))?;
                 ExecutionNode::Start(StartExecNode {
@@ -62,15 +78,14 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     span: None,
                 })
             }
-            IRNode::End { id, .. } => {
-                ExecutionNode::End(EndExecNode {
-                    id: id.clone(),
-                    status: "completed".to_string(),
-                    span: None,
-                })
-            }
+            IRNode::End { id, .. } => ExecutionNode::End(EndExecNode {
+                id: id.clone(),
+                status: "completed".to_string(),
+                span: None,
+            }),
             IRNode::ServiceTask { id, task_type, .. } => {
-                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                let next_idx = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("ServiceTask node '{}' has no outgoing edges", id))?;
                 ExecutionNode::Task(TaskExecNode {
@@ -85,7 +100,8 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 })
             }
             IRNode::HumanWait { id, task_kind, .. } => {
-                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                let next_idx = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("HumanWait node '{}' has no outgoing edges", id))?;
                 ExecutionNode::Task(TaskExecNode {
@@ -100,11 +116,14 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 })
             }
             IRNode::TimerWait { id, spec } => {
-                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                let next_idx = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("TimerWait node '{}' has no outgoing edges", id))?;
                 let duration_str = match spec {
-                    bpmn_lite_compiler::ir::TimerSpec::Duration { ms } => format!("PT{}M", ms / 60000),
+                    bpmn_lite_compiler::ir::TimerSpec::Duration { ms } => {
+                        format!("PT{}M", ms / 60000)
+                    }
                     _ => "PT15M".to_string(),
                 };
                 let mut static_args = HashMap::new();
@@ -121,7 +140,8 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 })
             }
             IRNode::MessageWait { id, name, .. } => {
-                let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                let next_idx = ir
+                    .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("MessageWait node '{}' has no outgoing edges", id))?;
                 let mut static_args = HashMap::new();
@@ -154,7 +174,8 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 } else if join_split_pairs.contains_key(&idx) {
                     let split_idx = join_split_pairs[&idx];
                     let split_id = ir[split_idx].id().to_string();
-                    let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                    let next_idx = ir
+                        .neighbors_directed(idx, petgraph::Direction::Outgoing)
                         .next()
                         .ok_or_else(|| anyhow!("Join node '{}' has no outgoing edges", id))?;
                     ExecutionNode::Join(JoinExecNode {
@@ -167,7 +188,8 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                 } else {
                     if permissive {
                         // In permissive mode, let's bypass unpaired XOR gateway
-                        let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
+                        let next_idx = ir
+                            .neighbors_directed(idx, petgraph::Direction::Outgoing)
                             .next()
                             .map(|n| ir[n].id().to_string())
                             .unwrap_or_else(|| "end".to_string());
@@ -183,82 +205,93 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
                     }
                 }
             }
-            IRNode::GatewayAnd { id, direction, .. } => {
-                match direction {
-                    GatewayDirection::Diverging => {
-                        let join_idx = split_join_pairs.get(&idx)
-                            .ok_or_else(|| anyhow!("Diverging Parallel Gateway '{}' has no paired Join", id))?;
-                        let join_id = ir[*join_idx].id().to_string();
-                        let flows = build_split_flows(&ir, idx, permissive)?;
-                        ExecutionNode::Split(SplitExecNode {
-                            id: id.clone(),
-                            mode: SplitMode::Parallel,
-                            routing_socket: None,
-                            flows,
-                            join: join_id,
-                            produces_placeholder: None,
-                            span: None,
-                        })
-                    }
-                    GatewayDirection::Converging => {
-                        let split_idx = join_split_pairs.get(&idx)
-                            .ok_or_else(|| anyhow!("Converging Parallel Gateway '{}' has no paired Split", id))?;
-                        let split_id = ir[*split_idx].id().to_string();
-                        let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
-                            .next()
-                            .ok_or_else(|| anyhow!("Join node '{}' has no outgoing edges", id))?;
-                        ExecutionNode::Join(JoinExecNode {
-                            id: id.clone(),
-                            mode: JoinMode::Parallel,
-                            split: split_id,
-                            next: ir[next_idx].id().to_string(),
-                            span: None,
-                        })
-                    }
+            IRNode::GatewayAnd { id, direction, .. } => match direction {
+                GatewayDirection::Diverging => {
+                    let join_idx = split_join_pairs.get(&idx).ok_or_else(|| {
+                        anyhow!("Diverging Parallel Gateway '{}' has no paired Join", id)
+                    })?;
+                    let join_id = ir[*join_idx].id().to_string();
+                    let flows = build_split_flows(&ir, idx, permissive)?;
+                    ExecutionNode::Split(SplitExecNode {
+                        id: id.clone(),
+                        mode: SplitMode::Parallel,
+                        routing_socket: None,
+                        flows,
+                        join: join_id,
+                        produces_placeholder: None,
+                        span: None,
+                    })
                 }
-            }
-            IRNode::GatewayInclusive { id, direction, .. } => {
-                match direction {
-                    GatewayDirection::Diverging => {
-                        let join_idx = split_join_pairs.get(&idx)
-                            .ok_or_else(|| anyhow!("Diverging Inclusive Gateway '{}' has no paired Join", id))?;
-                        let join_id = ir[*join_idx].id().to_string();
-                        let flows = build_split_flows(&ir, idx, permissive)?;
-                        ExecutionNode::Split(SplitExecNode {
-                            id: id.clone(),
-                            mode: SplitMode::Inclusive,
-                            routing_socket: None,
-                            flows,
-                            join: join_id,
-                            produces_placeholder: None,
-                            span: None,
-                        })
-                    }
-                    GatewayDirection::Converging => {
-                        let split_idx = join_split_pairs.get(&idx)
-                            .ok_or_else(|| anyhow!("Converging Inclusive Gateway '{}' has no paired Split", id))?;
-                        let split_id = ir[*split_idx].id().to_string();
-                        let next_idx = ir.neighbors_directed(idx, petgraph::Direction::Outgoing)
-                            .next()
-                            .ok_or_else(|| anyhow!("Join node '{}' has no outgoing edges", id))?;
-                        ExecutionNode::Join(JoinExecNode {
-                            id: id.clone(),
-                            mode: JoinMode::Inclusive,
-                            split: split_id,
-                            next: ir[next_idx].id().to_string(),
-                            span: None,
-                        })
-                    }
+                GatewayDirection::Converging => {
+                    let split_idx = join_split_pairs.get(&idx).ok_or_else(|| {
+                        anyhow!("Converging Parallel Gateway '{}' has no paired Split", id)
+                    })?;
+                    let split_id = ir[*split_idx].id().to_string();
+                    let next_idx = ir
+                        .neighbors_directed(idx, petgraph::Direction::Outgoing)
+                        .next()
+                        .ok_or_else(|| anyhow!("Join node '{}' has no outgoing edges", id))?;
+                    ExecutionNode::Join(JoinExecNode {
+                        id: id.clone(),
+                        mode: JoinMode::Parallel,
+                        split: split_id,
+                        next: ir[next_idx].id().to_string(),
+                        span: None,
+                    })
                 }
-            }
+            },
+            IRNode::GatewayInclusive { id, direction, .. } => match direction {
+                GatewayDirection::Diverging => {
+                    let join_idx = split_join_pairs.get(&idx).ok_or_else(|| {
+                        anyhow!("Diverging Inclusive Gateway '{}' has no paired Join", id)
+                    })?;
+                    let join_id = ir[*join_idx].id().to_string();
+                    let flows = build_split_flows(&ir, idx, permissive)?;
+                    ExecutionNode::Split(SplitExecNode {
+                        id: id.clone(),
+                        mode: SplitMode::Inclusive,
+                        routing_socket: None,
+                        flows,
+                        join: join_id,
+                        produces_placeholder: None,
+                        span: None,
+                    })
+                }
+                GatewayDirection::Converging => {
+                    let split_idx = join_split_pairs.get(&idx).ok_or_else(|| {
+                        anyhow!("Converging Inclusive Gateway '{}' has no paired Split", id)
+                    })?;
+                    let split_id = ir[*split_idx].id().to_string();
+                    let next_idx = ir
+                        .neighbors_directed(idx, petgraph::Direction::Outgoing)
+                        .next()
+                        .ok_or_else(|| anyhow!("Join node '{}' has no outgoing edges", id))?;
+                    ExecutionNode::Join(JoinExecNode {
+                        id: id.clone(),
+                        mode: JoinMode::Inclusive,
+                        split: split_id,
+                        next: ir[next_idx].id().to_string(),
+                        span: None,
+                    })
+                }
+            },
             IRNode::BoundaryTimer { id, .. } => {
-                return Err(anyhow!("BoundaryTimer node '{}' is not supported in SESE compilation mode", id));
+                return Err(anyhow!(
+                    "BoundaryTimer node '{}' is not supported in SESE compilation mode",
+                    id
+                ));
             }
             IRNode::BoundaryError { id, .. } => {
-                return Err(anyhow!("BoundaryError node '{}' is not supported in SESE compilation mode", id));
+                return Err(anyhow!(
+                    "BoundaryError node '{}' is not supported in SESE compilation mode",
+                    id
+                ));
             }
             other => {
-                return Err(anyhow!("BPMN node type '{:?}' not supported by SESE importer", other));
+                return Err(anyhow!(
+                    "BPMN node type '{:?}' not supported by SESE importer",
+                    other
+                ));
             }
         };
 
@@ -271,7 +304,9 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
         workflow_id: workflow_id.to_string(),
         nodes,
         start_node,
-        placeholder_schema: PlaceholderSchema { slots: HashMap::new() },
+        placeholder_schema: PlaceholderSchema {
+            slots: HashMap::new(),
+        },
         closure_manifest: None,
         regime_version: std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
         mathematically_proved: true,
@@ -290,22 +325,28 @@ pub fn import_zeebe_bpmn(xml: &str, workflow_id: &str, permissive: bool) -> Resu
     Ok(plan)
 }
 
-fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex, permissive: bool) -> Result<Vec<SplitExecFlow>> {
+fn build_split_flows(
+    ir: &IRGraph,
+    split_idx: NodeIndex,
+    permissive: bool,
+) -> Result<Vec<SplitExecFlow>> {
     use petgraph::visit::EdgeRef;
     let mut flows = Vec::new();
-    
-    let mut outgoing_edges: Vec<_> = ir.edges_directed(split_idx, petgraph::Direction::Outgoing).collect();
+
+    let mut outgoing_edges: Vec<_> = ir
+        .edges_directed(split_idx, petgraph::Direction::Outgoing)
+        .collect();
     outgoing_edges.sort_by_key(|e| ir[e.target()].id());
-    
+
     let mut conditional_count = 0;
     for edge in &outgoing_edges {
         if edge.weight().condition.is_some() {
             conditional_count += 1;
         }
     }
-    
+
     let mut default_flow_assigned = false;
-    
+
     for edge in outgoing_edges {
         let target = edge.target();
         let target_id = ir[target].id().to_string();
@@ -315,7 +356,10 @@ fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex, permissive: bool) -> Re
                 bpmn_lite_compiler::ir::ConditionLiteral::Bool(b) => b.to_string(),
                 bpmn_lite_compiler::ir::ConditionLiteral::I64(i) => i.to_string(),
             };
-            (Some(format!("@{}", cond.flag_name.replace("_", "-"))), Some(val_str))
+            (
+                Some(format!("@{}", cond.flag_name.replace("_", "-"))),
+                Some(val_str),
+            )
         } else {
             if conditional_count == 0 {
                 (None, None)
@@ -347,8 +391,12 @@ fn build_split_flows(ir: &IRGraph, split_idx: NodeIndex, permissive: bool) -> Re
 }
 
 fn find_corresponding_join(graph: &IRGraph, split_idx: NodeIndex) -> Option<NodeIndex> {
-    let neighbors: Vec<NodeIndex> = graph.neighbors_directed(split_idx, petgraph::Direction::Outgoing).collect();
-    if neighbors.is_empty() { return None; }
+    let neighbors: Vec<NodeIndex> = graph
+        .neighbors_directed(split_idx, petgraph::Direction::Outgoing)
+        .collect();
+    if neighbors.is_empty() {
+        return None;
+    }
     let mut reachable_sets = Vec::new();
     for &nb in &neighbors {
         let mut visited = std::collections::HashSet::new();
@@ -360,7 +408,11 @@ fn find_corresponding_join(graph: &IRGraph, split_idx: NodeIndex) -> Option<Node
     }
     let mut intersection = reachable_sets[0].clone();
     for set in reachable_sets.iter().skip(1) {
-        intersection = intersection.iter().copied().filter(|x| set.contains(x)).collect();
+        intersection = intersection
+            .iter()
+            .copied()
+            .filter(|x| set.contains(x))
+            .collect();
     }
     let mut queue = std::collections::VecDeque::new();
     let mut visited = std::collections::HashSet::new();
@@ -371,10 +423,19 @@ fn find_corresponding_join(graph: &IRGraph, split_idx: NodeIndex) -> Option<Node
             let node = &graph[curr];
             let is_join = match node {
                 IRNode::GatewayXor { .. } => {
-                    graph.neighbors_directed(curr, petgraph::Direction::Incoming).count() > 1
+                    graph
+                        .neighbors_directed(curr, petgraph::Direction::Incoming)
+                        .count()
+                        > 1
                 }
-                IRNode::GatewayAnd { direction: GatewayDirection::Converging, .. } => true,
-                IRNode::GatewayInclusive { direction: GatewayDirection::Converging, .. } => true,
+                IRNode::GatewayAnd {
+                    direction: GatewayDirection::Converging,
+                    ..
+                } => true,
+                IRNode::GatewayInclusive {
+                    direction: GatewayDirection::Converging,
+                    ..
+                } => true,
                 _ => false,
             };
             if is_join {
@@ -465,7 +526,11 @@ mod tests {
     fn test_zeebe_import_rejections() {
         // 1. Green fixture (valid SESE) compiles successfully to an execution plan
         let res_green = import_zeebe_bpmn(VALID_SESE_XML, "green_wf", false);
-        assert!(res_green.is_ok(), "Expected valid SESE to compile, got {:?}", res_green);
+        assert!(
+            res_green.is_ok(),
+            "Expected valid SESE to compile, got {:?}",
+            res_green
+        );
         let plan = res_green.unwrap();
         assert_eq!(plan.workflow_id, "green_wf");
         assert_eq!(plan.start_node, "start");
@@ -474,19 +539,32 @@ mod tests {
 
         // 2. Red fixture (invalid non-SESE with crossing boundaries) is rejected with error
         let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf", false);
-        assert!(res_red.is_err(), "Expected invalid crossing gateways to be rejected");
+        assert!(
+            res_red.is_err(),
+            "Expected invalid crossing gateways to be rejected"
+        );
         let err_msg = res_red.unwrap_err().to_string();
-        assert!(err_msg.contains("verification failed") || err_msg.contains("Crossing split-join boundaries"), "Got message: {}", err_msg);
+        assert!(
+            err_msg.contains("verification failed")
+                || err_msg.contains("Crossing split-join boundaries"),
+            "Got message: {}",
+            err_msg
+        );
     }
 
     #[test]
     fn test_zeebe_permissive_import() {
         let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf_permissive", true);
 
-        assert!(res_red.is_ok(), "Expected invalid crossing gateways to be accepted in permissive mode");
+        assert!(
+            res_red.is_ok(),
+            "Expected invalid crossing gateways to be accepted in permissive mode"
+        );
         let plan = res_red.unwrap();
         assert!(!plan.mathematically_proved);
-        assert!(plan.unsafe_breeches.contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
+        assert!(plan
+            .unsafe_breeches
+            .contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
     }
 
     #[test]
@@ -507,15 +585,23 @@ mod tests {
 
         // 1. Valid SESE file passes SESE verification
         let res_valid = import_zeebe_bpmn(&xml_valid, "zeebe_valid", false);
-        assert!(res_valid.is_ok(), "Expected valid Zeebe SESE file to compile, got {:?}", res_valid);
+        assert!(
+            res_valid.is_ok(),
+            "Expected valid Zeebe SESE file to compile, got {:?}",
+            res_valid
+        );
 
         // 2. Invalid crossing boundaries file fails with SESE error
         let res_invalid = import_zeebe_bpmn(&xml_invalid, "zeebe_invalid", false);
-        assert!(res_invalid.is_err(), "Expected non-SESE Zeebe file to fail import");
+        assert!(
+            res_invalid.is_err(),
+            "Expected non-SESE Zeebe file to fail import"
+        );
         let err = res_invalid.unwrap_err().to_string();
         assert!(
             err.contains("Crossing split-join boundaries"),
-            "Expected crossing boundaries error, got: {}", err
+            "Expected crossing boundaries error, got: {}",
+            err
         );
     }
 }

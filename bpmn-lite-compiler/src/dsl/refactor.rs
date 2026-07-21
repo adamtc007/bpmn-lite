@@ -33,7 +33,12 @@ impl ToSexpr for NodeAst {
 
 impl ToSexpr for StartAst {
     fn to_sexpr(&self, indent: usize) -> String {
-        format!("{}(start-event :id {} :next {})", " ".repeat(indent), self.id, self.next)
+        format!(
+            "{}(start-event :id {} :next {})",
+            " ".repeat(indent),
+            self.id,
+            self.next
+        )
     }
 }
 
@@ -42,7 +47,12 @@ impl ToSexpr for EndAst {
         if self.status.is_empty() {
             format!("{}(end-event :id {})", " ".repeat(indent), self.id)
         } else {
-            format!("{}(end-event :id {} :status \"{}\")", " ".repeat(indent), self.id, self.status)
+            format!(
+                "{}(end-event :id {} :status \"{}\")",
+                " ".repeat(indent),
+                self.id,
+                self.status
+            )
         }
     }
 }
@@ -53,18 +63,25 @@ impl ToSexpr for TaskAst {
         let mut args_str = String::new();
         if !self.args.is_empty() {
             args_str.push_str(" :args (");
-            let pairs: Vec<String> = self.args.iter()
+            let pairs: Vec<String> = self
+                .args
+                .iter()
                 .map(|(k, v)| format!(":{} \"{}\"", k, v))
                 .collect();
             args_str.push_str(&pairs.join(" "));
             args_str.push(')');
         }
-        
-        let delivery_str = self.delivery_mode.as_ref()
+
+        let delivery_str = self
+            .delivery_mode
+            .as_ref()
             .map(|d| format!(" :delivery-mode \"{}\"", d))
             .unwrap_or_default();
 
-        format!("{}(service-task :id {} :verb {}{}{} :next {})", pad, self.id, self.plug, args_str, delivery_str, self.next)
+        format!(
+            "{}(service-task :id {} :verb {}{}{} :next {})",
+            pad, self.id, self.plug, args_str, delivery_str, self.next
+        )
     }
 }
 
@@ -72,25 +89,37 @@ impl ToSexpr for SplitAst {
     fn to_sexpr(&self, indent: usize) -> String {
         let pad = " ".repeat(indent);
         let inner_pad = " ".repeat(indent + 2);
-        
+
         let mode_str = match self.mode {
             SplitModeAst::Xor => "exclusive-gateway",
             SplitModeAst::Or => "inclusive-gateway",
             SplitModeAst::And => "parallel-gateway",
         };
-        
-        let plug_str = self.plug.as_ref()
+
+        let plug_str = self
+            .plug
+            .as_ref()
             .map(|p| format!(" :plug {}", p))
             .unwrap_or_default();
-            
-        let mut out = format!("{}({} :id {}{}{} :join {}\n", pad, mode_str, self.id, plug_str, "", self.join);
+
+        let mut out = format!(
+            "{}({} :id {}{}{} :join {}\n",
+            pad, mode_str, self.id, plug_str, "", self.join
+        );
         for flow in &self.flows {
-            let cond_str = flow.condition.as_ref()
+            let cond_str = flow
+                .condition
+                .as_ref()
                 .map(|c| match c {
-                    ConditionAst::Eq { placeholder, value } => format!(" :condition (= {} \"{}\")", placeholder, value),
+                    ConditionAst::Eq { placeholder, value } => {
+                        format!(" :condition (= {} \"{}\")", placeholder, value)
+                    }
                 })
                 .unwrap_or_default();
-            out.push_str(&format!("{}(flow{} :next {})\n", inner_pad, cond_str, flow.next));
+            out.push_str(&format!(
+                "{}(flow{} :next {})\n",
+                inner_pad, cond_str, flow.next
+            ));
         }
         out.push_str(&format!("{})", pad));
         out
@@ -104,7 +133,14 @@ impl ToSexpr for JoinAst {
             JoinModeAst::Or => "join-or",
             JoinModeAst::And => "join-and",
         };
-        format!("{}({} :id {} :split {} :next {})", " ".repeat(indent), mode_str, self.id, self.split, self.next)
+        format!(
+            "{}({} :id {} :split {} :next {})",
+            " ".repeat(indent),
+            mode_str,
+            self.id,
+            self.split,
+            self.next
+        )
     }
 }
 
@@ -112,7 +148,10 @@ impl ToSexpr for LoopAst {
     fn to_sexpr(&self, indent: usize) -> String {
         let pad = " ".repeat(indent);
         let inner_pad = " ".repeat(indent + 2);
-        let mut out = format!("{}(loop :id {} :ceiling {} :body (\n", pad, self.id, self.ceiling);
+        let mut out = format!(
+            "{}(loop :id {} :ceiling {} :body (\n",
+            pad, self.id, self.ceiling
+        );
         for node in &self.body {
             out.push_str(&node.to_sexpr(indent + 4));
             out.push('\n');
@@ -153,9 +192,10 @@ impl<'a> AstMutator<'a> {
 
     /// Rewires the execution path exiting node `from_id` to point to `to_id`.
     pub fn rewire_next(&mut self, from_id: &str, to_id: &str) -> Result<(), String> {
-        let node = self.find_node_mut(from_id)
+        let node = self
+            .find_node_mut(from_id)
             .ok_or_else(|| format!("Node '{}' not found", from_id))?;
-            
+
         match node {
             NodeAst::Start(st) => st.next = to_id.to_string(),
             NodeAst::Task(tk) => tk.next = to_id.to_string(),
@@ -170,18 +210,25 @@ impl<'a> AstMutator<'a> {
     }
 
     /// Inserts a new node directly after an existing node, rewiring connections automatically.
-    pub fn insert_after(&mut self, predecessor_id: &str, mut new_node: NodeAst) -> Result<(), String> {
+    pub fn insert_after(
+        &mut self,
+        predecessor_id: &str,
+        mut new_node: NodeAst,
+    ) -> Result<(), String> {
         // 1. Get next ID of predecessor
         let orig_next = {
-            let pred_node = self.find_node_mut(predecessor_id)
+            let pred_node = self
+                .find_node_mut(predecessor_id)
                 .ok_or_else(|| format!("Predecessor '{}' not found", predecessor_id))?;
-            
+
             match pred_node {
                 NodeAst::Start(st) => st.next.clone(),
                 NodeAst::Task(tk) => tk.next.clone(),
                 NodeAst::Join(jn) => jn.next.clone(),
                 NodeAst::Loop(lp) => lp.next.clone(),
-                NodeAst::Split(_) => return Err("Target is a Split node. Insert into branches instead.".into()),
+                NodeAst::Split(_) => {
+                    return Err("Target is a Split node. Insert into branches instead.".into())
+                }
                 NodeAst::End(_) => return Err("Cannot insert after an End event.".into()),
             }
         };
@@ -192,7 +239,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Task(tk) => tk.next = orig_next,
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
-            NodeAst::End(_) => {} 
+            NodeAst::End(_) => {}
             NodeAst::Split(_) => return Err("Cannot insert a Split node directly via insert_after; use specialized refactoring macros".into()),
         }
 
@@ -204,7 +251,11 @@ impl<'a> AstMutator<'a> {
         Ok(())
     }
 
-    fn inject_into_same_scope(&mut self, sibling_id: &str, node_to_insert: NodeAst) -> Result<(), String> {
+    fn inject_into_same_scope(
+        &mut self,
+        sibling_id: &str,
+        node_to_insert: NodeAst,
+    ) -> Result<(), String> {
         fn inject(nodes: &mut Vec<NodeAst>, sibling_id: &str, to_insert: NodeAst) -> bool {
             let mut pos = None;
             for (idx, node) in nodes.iter_mut().enumerate() {
@@ -225,7 +276,7 @@ impl<'a> AstMutator<'a> {
                 false
             }
         }
-        
+
         if inject(&mut self.workflow.nodes, sibling_id, node_to_insert) {
             Ok(())
         } else {
@@ -275,10 +326,10 @@ mod tests {
   (start-event :id start :next end)
   (end-event :id end :status "completed")
 )"#;
-        
+
         let mut workflow = parse_sexpr(input);
         let mut mutator = AstMutator::new(&mut workflow);
-        
+
         let new_task = NodeAst::Task(TaskAst {
             id: "new-task".to_string(),
             plug: "cbu.create".to_string(),
@@ -287,10 +338,10 @@ mod tests {
             delivery_mode: None,
             span: SourceSpan::new(0, 0),
         });
-        
+
         mutator.insert_after("start", new_task).unwrap();
         let output_code = workflow.to_sexpr(0);
-        
+
         assert!(output_code.contains("(start-event :id start :next new-task)"));
         assert!(output_code.contains("(service-task :id new-task :verb cbu.create :next end)"));
     }
@@ -305,27 +356,27 @@ mod tests {
 
         let mut workflow = parse_sexpr(input);
         let mut mutator = AstMutator::new(&mut workflow);
-        
+
         let target = match mutator.remove_node("charge-card").unwrap() {
             NodeAst::Task(t) => t,
             _ => panic!("Expected task"),
         };
         mutator.rewire_next("start", "end").unwrap();
-        
+
         let loop_node = NodeAst::Loop(create_bounded_retry_macro(
             target,
             3,
             "charge-retry-loop",
-            "end"
+            "end",
         ));
-        
+
         mutator.insert_after("start", loop_node).unwrap();
         let final_dsl = workflow.to_sexpr(0);
         println!("FINAL DSL:\n{}", final_dsl);
-        
+
         let mut registry = StubPlaceholderRegistry::new().with_demo_bindings();
         registry.register_verb("billing.charge", crate::dsl::linter::BindingDecl::default());
-        
+
         let plan = compile(&final_dsl, &registry).expect("Compilation failed");
         assert!(plan.mathematically_proved);
         assert!(plan.unsafe_breeches.is_empty());

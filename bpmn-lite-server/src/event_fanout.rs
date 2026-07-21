@@ -66,25 +66,38 @@ impl EventFanout {
             return Ok(stream_rx);
         }
 
+        let engine = self.engine.clone();
         tokio::spawn(async move {
-            while let Ok((seq, event)) = rx.recv().await {
-                if seq < next_seq {
-                    continue;
-                }
-
-                let terminal = is_terminal_event(&event);
-                next_seq = seq.saturating_add(1);
-
-                if tx
-                    .send(Ok(lifecycle_event(instance_id, seq, &event)))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-
-                if terminal {
-                    break;
+            loop {
+                match rx.recv().await {
+                    Ok((seq, event)) if seq == next_seq => {
+                        next_seq = seq.saturating_add(1);
+                        let terminal = is_terminal_event(&event);
+                        if tx
+                            .send(Ok(lifecycle_event(instance_id, seq, &event)))
+                            .await
+                            .is_err()
+                            || terminal
+                        {
+                            break;
+                        }
+                    }
+                    Ok((seq, _)) if seq < next_seq => {}
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        match deliver_backfill(&engine, &tx, instance_id, next_seq).await {
+                            Ok((cursor, terminal)) => {
+                                next_seq = cursor;
+                                if terminal {
+                                    break;
+                                }
+                            }
+                            Err(()) => break,
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        let _ = deliver_backfill(&engine, &tx, instance_id, next_seq).await;
+                        break;
+                    }
                 }
             }
         });
@@ -175,6 +188,30 @@ impl EventFanout {
 
         Ok(())
     }
+}
+
+async fn deliver_backfill(
+    engine: &BpmnLiteEngine,
+    tx: &mpsc::Sender<Result<LifecycleEvent, Status>>,
+    instance_id: Uuid,
+    mut next_seq: u64,
+) -> Result<(u64, bool), ()> {
+    let events = engine
+        .read_events(instance_id, next_seq)
+        .await
+        .map_err(|_| ())?;
+    let mut terminal = false;
+    for (seq, event) in events {
+        if seq < next_seq {
+            continue;
+        }
+        next_seq = seq.saturating_add(1);
+        terminal |= is_terminal_event(&event);
+        tx.send(Ok(lifecycle_event(instance_id, seq, &event)))
+            .await
+            .map_err(|_| ())?;
+    }
+    Ok((next_seq, terminal))
 }
 
 #[cfg(feature = "postgres")]
@@ -304,10 +341,37 @@ fn is_terminal_event(event: &RuntimeEvent) -> bool {
         RuntimeEvent::Completed { .. }
             | RuntimeEvent::Cancelled { .. }
             | RuntimeEvent::Terminated { .. }
-            | RuntimeEvent::IncidentCreated { .. }
     )
 }
 
 fn engine_err(error: anyhow::Error) -> Status {
     Status::internal(format!("{:#}", error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bpmn_lite_types::{ErrorClass, Incident};
+
+    #[test]
+    fn incident_creation_does_not_close_subscription() {
+        let incident = Incident {
+            incident_id: Uuid::from_u128(1),
+            process_instance_id: Uuid::from_u128(2),
+            fiber_id: Uuid::from_u128(3),
+            service_task_id: "task".to_string(),
+            bytecode_addr: 0.into(),
+            error_class: ErrorClass::ContractViolation,
+            message: "repairable".to_string(),
+            retry_count: 0,
+            created_at: 1,
+            resolved_at: None,
+            resolution: None,
+        };
+        assert!(!is_terminal_event(&RuntimeEvent::IncidentCreated {
+            incident_id: incident.incident_id,
+            service_task_id: incident.service_task_id,
+            job_key: None,
+        }));
+    }
 }

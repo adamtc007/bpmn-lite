@@ -19,6 +19,7 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
 tokio = { workspace = true, features = ["test-util", "macros"] }
 uuid = { workspace = true }
 

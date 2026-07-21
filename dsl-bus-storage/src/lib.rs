@@ -14,8 +14,8 @@
 //! - [`insert_outbox`] — writes a pending row; `idempotency_key` +
 //!   `target_endpoint` are unique, so re-enqueueing the same payload is
 //!   a no-op via [`InsertOutcome`].
-//! - [`select_pending_outbox`] — claims up to `limit` rows for dispatch
-//!   using `FOR UPDATE SKIP LOCKED`; **must run inside a transaction**.
+//! - [`claim_pending_outbox`] — leases up to `limit` rows using
+//!   `FOR UPDATE SKIP LOCKED`; the caller commits before network I/O.
 //! - [`mark_outbox_submitted`] — records the receiver's
 //!   `execution_id` and transitions `status → submitted`.
 //! - [`mark_outbox_retry`] — bumps `attempt_count`, schedules
@@ -37,7 +37,7 @@
 //!
 //! Most CRUD takes `impl sqlx::PgExecutor<'_>` — pass `&pool`,
 //! `&mut *tx`, or any other Postgres executor.
-//! [`select_pending_outbox`] is the exception: it requires
+//! [`claim_pending_outbox`] is the exception: it requires
 //! `&mut sqlx::PgConnection` because the `FOR UPDATE SKIP LOCKED`
 //! semantics only hold *inside a transaction*, and pinning the
 //! connection at the type level makes that obvious at the call site.
@@ -58,7 +58,7 @@ mod outbox;
 mod types;
 
 pub use inbox::{insert_inbox, lookup_inbox, mark_inbox_processed};
-pub use outbox::{insert_outbox, mark_outbox_retry, mark_outbox_submitted, select_pending_outbox};
+pub use outbox::{claim_pending_outbox, insert_outbox, mark_outbox_retry, mark_outbox_submitted};
 pub use types::{
     BusEndpoint, BusStorageError, InboxEntry, InboxStatus, InsertOutcome, OutboxEntry,
     OutboxStatus, Result,

@@ -1,6 +1,8 @@
 //! `BusClient` builder + public send-side API.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +18,18 @@ use uuid::Uuid;
 
 use crate::sender::{self, SenderConfig, SenderStats};
 use crate::uuid_convert::from_proto_opt;
+
+pub type SubmissionAckFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+
+/// Domain-owned atomic acknowledgement hook. Implementations commit the
+/// outbox acknowledgement together with their local workflow aggregate.
+pub trait SubmissionAckHandler: Send + Sync {
+    fn accepted<'a>(
+        &'a self,
+        entry: &'a OutboxEntry,
+        execution_id: Uuid,
+    ) -> SubmissionAckFuture<'a>;
+}
 
 /// Safety-net fallback timer for the outbox sender — runs unconditionally
 /// every 30 seconds **regardless of whether a notification arrived**.
@@ -60,6 +74,12 @@ pub enum BusClientError {
 
     #[error("transport error: {0}")]
     Transport(#[from] tonic::transport::Error),
+
+    #[error("bus client builder requires a PostgreSQL pool")]
+    MissingPool,
+
+    #[error("bus client builder requires a local domain")]
+    MissingLocalDomain,
 }
 
 /// Tunable knobs for the bus client. Built via [`BusClientBuilder`].
@@ -144,6 +164,7 @@ pub struct BusClient {
     /// Sender-side handle on the same `Arc<Notify>`. The sender task
     /// parks on this; writers wake it via the `notifier` clone.
     pub(crate) notify: Arc<Notify>,
+    pub(crate) submission_ack_handler: Option<Arc<dyn SubmissionAckHandler>>,
 }
 
 /// Handle returned by [`BusClient::start_sender`] — call
@@ -289,6 +310,8 @@ impl BusClient {
             notify: self.notify.clone(),
             stats: stats.clone(),
             shutdown: shutdown_rx,
+            submission_ack_handler: self.submission_ack_handler.clone(),
+            channels: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         };
         let join = tokio::spawn(sender::run(config));
         SenderHandle {
@@ -306,6 +329,7 @@ pub struct BusClientBuilder {
     peers: HashMap<String, String>,
     config: BusClientConfig,
     local_domain: Option<String>,
+    submission_ack_handler: Option<Arc<dyn SubmissionAckHandler>>,
 }
 
 impl BusClientBuilder {
@@ -337,11 +361,16 @@ impl BusClientBuilder {
         self
     }
 
+    pub fn submission_ack_handler(mut self, handler: Arc<dyn SubmissionAckHandler>) -> Self {
+        self.submission_ack_handler = Some(handler);
+        self
+    }
+
     pub async fn build(self) -> Result<BusClient, BusClientError> {
-        let pool = self.pool.expect("BusClientBuilder.pool is required");
+        let pool = self.pool.ok_or(BusClientError::MissingPool)?;
         let local_domain = self
             .local_domain
-            .expect("BusClientBuilder.local_domain is required");
+            .ok_or(BusClientError::MissingLocalDomain)?;
         let mut endpoints = HashMap::with_capacity(self.peers.len());
         for (domain, uri) in self.peers {
             let endpoint = Endpoint::from_shared(uri)?;
@@ -355,6 +384,7 @@ impl BusClientBuilder {
             local_domain: Arc::new(local_domain),
             notifier,
             notify,
+            submission_ack_handler: self.submission_ack_handler,
         })
     }
 }

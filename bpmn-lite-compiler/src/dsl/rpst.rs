@@ -1,5 +1,5 @@
+use super::plan::{ExecutionNode, WorkflowExecutionPlan};
 use std::collections::HashSet;
-use super::plan::{WorkflowExecutionPlan, ExecutionNode};
 
 /// Verify that the plan graph has a structured SESE topology using a DFS stack walk.
 /// Returns Ok(()) if the graph is SESE-structured, or an error message if not.
@@ -8,7 +8,13 @@ pub fn verify_sese_nesting(plan: &WorkflowExecutionPlan) -> Result<(), String> {
     let mut split_stack = Vec::new();
     let mut errors = Vec::new();
 
-    dfs_walk(&plan.start_node, plan, &mut visited, &mut split_stack, &mut errors);
+    dfs_walk(
+        &plan.start_node,
+        plan,
+        &mut visited,
+        &mut split_stack,
+        &mut errors,
+    );
 
     // Verify all splits in stack are closed
     if !split_stack.is_empty() {
@@ -102,63 +108,97 @@ fn dfs_walk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::dsl::plan::{
-        WorkflowExecutionPlan, ExecutionNode, StartExecNode, SplitExecNode,
-        JoinExecNode, EndExecNode, SplitMode, JoinMode, SplitExecFlow, PlaceholderSchema
+        EndExecNode, ExecutionNode, JoinExecNode, JoinMode, PlaceholderSchema, SplitExecFlow,
+        SplitExecNode, SplitMode, StartExecNode, WorkflowExecutionPlan,
     };
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_invalid_sese() {
         let mut nodes = BTreeMap::new();
-        nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
-            id: "start".to_string(),
-            next: "s1".to_string(),
-            span: None,
-        }));
-        nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
-            id: "s1".to_string(),
-            mode: SplitMode::Exclusive,
-            routing_socket: None,
-            flows: vec![
-                SplitExecFlow { placeholder: None, expected_value: None, next: "s2".to_string() },
-                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
-            ],
-            join: "j1".to_string(),
-            produces_placeholder: None,
-            span: None,
-        }));
-        nodes.insert("s2".to_string(), ExecutionNode::Split(SplitExecNode {
-            id: "s2".to_string(),
-            mode: SplitMode::Exclusive,
-            routing_socket: None,
-            flows: vec![
-                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
-                SplitExecFlow { placeholder: None, expected_value: None, next: "j2".to_string() },
-            ],
-            join: "j2".to_string(),
-            produces_placeholder: None,
-            span: None,
-        }));
-        nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
-            id: "j1".to_string(),
-            mode: JoinMode::Exclusive,
-            split: "s1".to_string(),
-            next: "j2".to_string(),
-            span: None,
-        }));
-        nodes.insert("j2".to_string(), ExecutionNode::Join(JoinExecNode {
-            id: "j2".to_string(),
-            mode: JoinMode::Exclusive,
-            split: "s2".to_string(),
-            next: "end".to_string(),
-            span: None,
-        }));
-        nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
-            id: "end".to_string(),
-            status: "Completed".to_string(),
-            span: None,
-        }));
+        nodes.insert(
+            "start".to_string(),
+            ExecutionNode::Start(StartExecNode {
+                id: "start".to_string(),
+                next: "s1".to_string(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "s1".to_string(),
+            ExecutionNode::Split(SplitExecNode {
+                id: "s1".to_string(),
+                mode: SplitMode::Exclusive,
+                routing_socket: None,
+                flows: vec![
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "s2".to_string(),
+                    },
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "j1".to_string(),
+                    },
+                ],
+                join: "j1".to_string(),
+                produces_placeholder: None,
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "s2".to_string(),
+            ExecutionNode::Split(SplitExecNode {
+                id: "s2".to_string(),
+                mode: SplitMode::Exclusive,
+                routing_socket: None,
+                flows: vec![
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "j1".to_string(),
+                    },
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "j2".to_string(),
+                    },
+                ],
+                join: "j2".to_string(),
+                produces_placeholder: None,
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "j1".to_string(),
+            ExecutionNode::Join(JoinExecNode {
+                id: "j1".to_string(),
+                mode: JoinMode::Exclusive,
+                split: "s1".to_string(),
+                next: "j2".to_string(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "j2".to_string(),
+            ExecutionNode::Join(JoinExecNode {
+                id: "j2".to_string(),
+                mode: JoinMode::Exclusive,
+                split: "s2".to_string(),
+                next: "end".to_string(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "end".to_string(),
+            ExecutionNode::End(EndExecNode {
+                id: "end".to_string(),
+                status: "Completed".to_string(),
+                span: None,
+            }),
+        );
 
         let plan = WorkflowExecutionPlan {
             workflow_id: "crossing-splits".to_string(),
@@ -181,35 +221,55 @@ mod tests {
     #[test]
     fn test_valid_sese() {
         let mut nodes = BTreeMap::new();
-        nodes.insert("start".to_string(), ExecutionNode::Start(StartExecNode {
-            id: "start".to_string(),
-            next: "s1".to_string(),
-            span: None,
-        }));
-        nodes.insert("s1".to_string(), ExecutionNode::Split(SplitExecNode {
-            id: "s1".to_string(),
-            mode: SplitMode::Exclusive,
-            routing_socket: None,
-            flows: vec![
-                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
-                SplitExecFlow { placeholder: None, expected_value: None, next: "j1".to_string() },
-            ],
-            join: "j1".to_string(),
-            produces_placeholder: None,
-            span: None,
-        }));
-        nodes.insert("j1".to_string(), ExecutionNode::Join(JoinExecNode {
-            id: "j1".to_string(),
-            mode: JoinMode::Exclusive,
-            split: "s1".to_string(),
-            next: "end".to_string(),
-            span: None,
-        }));
-        nodes.insert("end".to_string(), ExecutionNode::End(EndExecNode {
-            id: "end".to_string(),
-            status: "Completed".to_string(),
-            span: None,
-        }));
+        nodes.insert(
+            "start".to_string(),
+            ExecutionNode::Start(StartExecNode {
+                id: "start".to_string(),
+                next: "s1".to_string(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "s1".to_string(),
+            ExecutionNode::Split(SplitExecNode {
+                id: "s1".to_string(),
+                mode: SplitMode::Exclusive,
+                routing_socket: None,
+                flows: vec![
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "j1".to_string(),
+                    },
+                    SplitExecFlow {
+                        placeholder: None,
+                        expected_value: None,
+                        next: "j1".to_string(),
+                    },
+                ],
+                join: "j1".to_string(),
+                produces_placeholder: None,
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "j1".to_string(),
+            ExecutionNode::Join(JoinExecNode {
+                id: "j1".to_string(),
+                mode: JoinMode::Exclusive,
+                split: "s1".to_string(),
+                next: "end".to_string(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "end".to_string(),
+            ExecutionNode::End(EndExecNode {
+                id: "end".to_string(),
+                status: "Completed".to_string(),
+                span: None,
+            }),
+        );
 
         let plan = WorkflowExecutionPlan {
             workflow_id: "valid-sese".to_string(),

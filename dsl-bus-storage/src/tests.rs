@@ -1,7 +1,6 @@
 //! Integration tests for outbox / inbox CRUD.
 //!
-//! All tests are `#[ignore]` because they touch a real Postgres. Run
-//! them via:
+//! Tests serialize schema recreation with a process-global lock. Run them via:
 //!
 //! ```text
 //! BPMN_LITE_TEST_DATABASE_URL=postgresql://localhost/bpmn_lite_test \
@@ -12,17 +11,23 @@
 //! two tables, and exercises one slice of the CRUD surface.
 
 use sqlx::PgPool;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::{
-    BusEndpoint, InboxEntry, InboxStatus, InsertOutcome, OutboxEntry, OutboxStatus, insert_inbox,
-    insert_outbox, lookup_inbox, mark_inbox_processed, mark_outbox_retry, mark_outbox_submitted,
-    select_pending_outbox,
+    BusEndpoint, InboxEntry, InboxStatus, InsertOutcome, OutboxEntry, OutboxStatus,
+    claim_pending_outbox, insert_inbox, insert_outbox, lookup_inbox, mark_inbox_processed,
+    mark_outbox_retry, mark_outbox_submitted,
 };
 
 const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/bpmn_lite_test";
 
-async fn setup() -> PgPool {
+async fn setup() -> (PgPool, tokio::sync::MutexGuard<'static, ()>) {
+    static TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let guard = TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
@@ -34,13 +39,17 @@ async fn setup() -> PgPool {
     let pool = PgPool::connect(&url).await.expect("connect to db");
 
     // Clean drop/recreation of dsl_bus to isolate migrations in tests
-    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
-    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("CREATE SCHEMA dsl_bus")
+        .execute(&pool)
+        .await
+        .ok();
 
     let migrator = sqlx::migrate!("./migrations");
-    migrator.run(&pool)
-        .await
-        .expect("run migrations");
+    migrator.run(&pool).await.expect("run migrations");
 
     sqlx::query("TRUNCATE dsl_bus.outbox")
         .execute(&pool)
@@ -50,7 +59,7 @@ async fn setup() -> PgPool {
         .execute(&pool)
         .await
         .unwrap();
-    pool
+    (pool, guard)
 }
 
 fn sample_outbox(idempotency_key: Uuid) -> OutboxEntry {
@@ -77,33 +86,46 @@ fn sample_inbox(idempotency_key: Uuid) -> InboxEntry {
     )
 }
 
+async fn claim_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    limit: i64,
+) -> Vec<OutboxEntry> {
+    claim_pending_outbox(
+        tx,
+        limit,
+        "test-sender",
+        Uuid::now_v7(),
+        chrono::Utc::now() + chrono::Duration::seconds(30),
+    )
+    .await
+    .unwrap()
+}
+
 // ── Outbox ───────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn outbox_insert_then_select_pending_returns_row() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let entry = sample_outbox(Uuid::now_v7());
 
     let outcome = insert_outbox(&pool, &entry).await.unwrap();
     assert_eq!(outcome, InsertOutcome::Inserted);
 
     let mut tx = pool.begin().await.unwrap();
-    let rows = select_pending_outbox(&mut tx, 10).await.unwrap();
+    let rows = claim_rows(&mut tx, 10).await;
     tx.commit().await.unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, entry.id);
     assert_eq!(rows[0].target_domain, "ob-poc");
     assert_eq!(rows[0].target_endpoint, BusEndpoint::Invocation);
-    assert_eq!(rows[0].status, OutboxStatus::Pending);
+    assert_eq!(rows[0].status, OutboxStatus::Dispatching);
     assert_eq!(rows[0].attempt_count, 0);
 }
 
 #[tokio::test]
-#[ignore]
 async fn outbox_insert_is_idempotent_on_key_plus_endpoint() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let key = Uuid::now_v7();
 
     let first = insert_outbox(&pool, &sample_outbox(key)).await.unwrap();
@@ -113,15 +135,14 @@ async fn outbox_insert_is_idempotent_on_key_plus_endpoint() {
     assert_eq!(second, InsertOutcome::Duplicate);
 
     let mut tx = pool.begin().await.unwrap();
-    let rows = select_pending_outbox(&mut tx, 10).await.unwrap();
+    let rows = claim_rows(&mut tx, 10).await;
     tx.commit().await.unwrap();
     assert_eq!(rows.len(), 1, "duplicate insert must not multiply rows");
 }
 
 #[tokio::test]
-#[ignore]
 async fn outbox_same_key_different_endpoint_is_a_distinct_row() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let key = Uuid::now_v7();
 
     let invocation = sample_outbox(key);
@@ -139,25 +160,27 @@ async fn outbox_same_key_different_endpoint_is_a_distinct_row() {
     );
 
     let mut tx = pool.begin().await.unwrap();
-    let rows = select_pending_outbox(&mut tx, 10).await.unwrap();
+    let rows = claim_rows(&mut tx, 10).await;
     tx.commit().await.unwrap();
     assert_eq!(rows.len(), 2);
 }
 
 #[tokio::test]
-#[ignore]
 async fn outbox_mark_submitted_records_execution_id_and_transitions_status() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let entry = sample_outbox(Uuid::now_v7());
     insert_outbox(&pool, &entry).await.unwrap();
 
     let exec_id = Uuid::now_v7();
-    mark_outbox_submitted(&pool, entry.id, exec_id)
+    let mut claim_tx = pool.begin().await.unwrap();
+    let claimed = claim_rows(&mut claim_tx, 1).await;
+    claim_tx.commit().await.unwrap();
+    mark_outbox_submitted(&pool, entry.id, claimed[0].claim_token.unwrap(), exec_id)
         .await
         .unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    let rows = select_pending_outbox(&mut tx, 10).await.unwrap();
+    let rows = claim_rows(&mut tx, 10).await;
     tx.commit().await.unwrap();
     assert!(
         rows.is_empty(),
@@ -171,19 +194,27 @@ async fn outbox_mark_submitted_records_execution_id_and_transitions_status() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn outbox_mark_retry_bumps_attempt_count_and_defers_next_attempt() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let entry = sample_outbox(Uuid::now_v7());
     insert_outbox(&pool, &entry).await.unwrap();
 
-    mark_outbox_retry(&pool, entry.id, 60, "connection refused")
-        .await
-        .unwrap();
+    let mut claim_tx = pool.begin().await.unwrap();
+    let claimed = claim_rows(&mut claim_tx, 1).await;
+    claim_tx.commit().await.unwrap();
+    mark_outbox_retry(
+        &pool,
+        entry.id,
+        claimed[0].claim_token.unwrap(),
+        60,
+        "connection refused",
+    )
+    .await
+    .unwrap();
 
     // Immediate sweep must not see the row: next_attempt_at is in the future.
     let mut tx = pool.begin().await.unwrap();
-    let immediate = select_pending_outbox(&mut tx, 10).await.unwrap();
+    let immediate = claim_rows(&mut tx, 10).await;
     tx.commit().await.unwrap();
     assert!(
         immediate.is_empty(),
@@ -198,9 +229,8 @@ async fn outbox_mark_retry_bumps_attempt_count_and_defers_next_attempt() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn outbox_concurrent_select_uses_skip_locked() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let mut keys: Vec<Uuid> = Vec::new();
     for _ in 0..4 {
         let e = sample_outbox(Uuid::now_v7());
@@ -209,10 +239,10 @@ async fn outbox_concurrent_select_uses_skip_locked() {
     }
 
     let mut tx_a = pool.begin().await.unwrap();
-    let rows_a = select_pending_outbox(&mut tx_a, 4).await.unwrap();
+    let rows_a = claim_rows(&mut tx_a, 4).await;
     // Sibling tx claims any rows tx_a hasn't locked.
     let mut tx_b = pool.begin().await.unwrap();
-    let rows_b = select_pending_outbox(&mut tx_b, 4).await.unwrap();
+    let rows_b = claim_rows(&mut tx_b, 4).await;
 
     tx_a.commit().await.unwrap();
     tx_b.commit().await.unwrap();
@@ -225,12 +255,38 @@ async fn outbox_concurrent_select_uses_skip_locked() {
     );
 }
 
+#[tokio::test]
+async fn committed_dispatch_lease_holds_no_row_lock_during_slow_peer_wait() {
+    let (pool, _guard) = setup().await;
+    let entry = sample_outbox(Uuid::now_v7());
+    insert_outbox(&pool, &entry).await.unwrap();
+
+    let mut claim_tx = pool.begin().await.unwrap();
+    let claimed = claim_rows(&mut claim_tx, 1).await;
+    assert_eq!(claimed.len(), 1);
+    claim_tx.commit().await.unwrap();
+
+    let slow_peer = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    });
+    let started = std::time::Instant::now();
+    sqlx::query("UPDATE dsl_bus.outbox SET last_error = 'probe' WHERE id = $1")
+        .bind(entry.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(100),
+        "row lock survived the claim transaction"
+    );
+    slow_peer.await.unwrap();
+}
+
 // ── Inbox ────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn inbox_insert_reports_inserted_then_duplicate_for_same_key() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let key = Uuid::now_v7();
 
     let first = insert_inbox(&pool, &sample_inbox(key)).await.unwrap();
@@ -241,9 +297,8 @@ async fn inbox_insert_reports_inserted_then_duplicate_for_same_key() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn inbox_lookup_returns_some_for_existing_none_for_missing() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let key = Uuid::now_v7();
     let entry = sample_inbox(key);
     insert_inbox(&pool, &entry).await.unwrap();
@@ -261,9 +316,8 @@ async fn inbox_lookup_returns_some_for_existing_none_for_missing() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn inbox_mark_processed_sets_processed_at_and_status() {
-    let pool = setup().await;
+    let (pool, _guard) = setup().await;
     let key = Uuid::now_v7();
     insert_inbox(&pool, &sample_inbox(key)).await.unwrap();
 
@@ -285,7 +339,7 @@ async fn fetch_row_by_id(pool: &PgPool, id: Uuid) -> OutboxEntry {
         r#"
         SELECT id, target_domain, target_endpoint, payload, idempotency_key,
                execution_id, callout_id, status, attempt_count, next_attempt_at,
-               last_error, created_at, submitted_at, tenant_id
+               last_error, created_at, submitted_at, tenant_id, claim_token
           FROM outbox
          WHERE id = $1
         "#,
@@ -312,6 +366,7 @@ async fn fetch_row_by_id(pool: &PgPool, id: Uuid) -> OutboxEntry {
             created_at: row.get("created_at"),
             submitted_at: row.get("submitted_at"),
             tenant_id: row.get("tenant_id"),
+            claim_token: row.get("claim_token"),
         }
     })
     .unwrap()

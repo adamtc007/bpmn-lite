@@ -42,7 +42,9 @@ impl ContractRegistry {
             let mut writes_flags = HashSet::new();
 
             for input in &verb.signature.inputs {
-                if input.type_name.to_lowercase() == "bool" || input.type_name.to_lowercase() == "boolean" {
+                if input.type_name.to_lowercase() == "bool"
+                    || input.type_name.to_lowercase() == "boolean"
+                {
                     reads_flags.insert(input.name.clone());
                 }
             }
@@ -87,7 +89,6 @@ impl ContractRegistry {
     pub fn add_known_input(&mut self, flag: impl Into<String>) {
         self.known_workflow_inputs.insert(flag.into());
     }
-
 
     /// Iterate over all registered contracts.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &VerbContract)> {

@@ -36,6 +36,7 @@ mod uuid_convert;
 
 pub use client::{
     BusClient, BusClientBuilder, BusClientConfig, BusClientError, OutboxNotifier, SenderHandle,
+    SubmissionAckFuture, SubmissionAckHandler,
 };
 pub use sender::SenderStats;
 

@@ -6,9 +6,20 @@
 //! `bpmn-lite-store-postgres`.
 
 use async_trait::async_trait;
+use bpmn_lite_types::TenantId;
 use ffi_types::FfiTemplate;
 use std::collections::HashMap;
 use std::sync::RwLock;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FfiTemplateStoreError {
+    #[error("FFI template integrity failure: {0}")]
+    Integrity(String),
+    #[error("FFI template store unavailable: {0}")]
+    Unavailable(String),
+}
+
+pub type FfiTemplateStoreResult<T> = Result<T, FfiTemplateStoreError>;
 
 /// Persistence trait for FFI templates.
 ///
@@ -21,21 +32,24 @@ pub trait FfiTemplateStore: Send + Sync {
     /// Fails if `template.template_id` already exists with **different**
     /// content (immutability guard). Identical content is idempotent
     /// (no-op success).
-    async fn publish(&self, template: &FfiTemplate) -> anyhow::Result<()>;
+    async fn publish(&self, template: &FfiTemplate) -> FfiTemplateStoreResult<()>;
 
-    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>>;
+    async fn lookup(&self, template_id: &[u8; 32]) -> FfiTemplateStoreResult<Option<FfiTemplate>>;
 
     /// List all templates for the given tenant. Includes the GLOBAL tenant
     /// implicitly only if the caller passes [`ffi_types::GLOBAL_TENANT_ID`].
     /// Callers wanting tenant+GLOBAL union must merge two calls.
-    async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>>;
+    async fn list_by_tenant(
+        &self,
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>>;
 
     /// List all templates for the given (owner_type, tenant) pair.
     async fn list_by_owner(
         &self,
         owner_type: &str,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<FfiTemplate>>;
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>>;
 }
 
 /// In-memory `FfiTemplateStore`. Suitable for tests and bootstrapping;
@@ -69,17 +83,17 @@ impl Default for MemoryFfiTemplateStore {
 
 #[async_trait]
 impl FfiTemplateStore for MemoryFfiTemplateStore {
-    async fn publish(&self, template: &FfiTemplate) -> anyhow::Result<()> {
+    async fn publish(&self, template: &FfiTemplate) -> FfiTemplateStoreResult<()> {
         let mut guard = self
             .inner
             .write()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            .map_err(|e| FfiTemplateStoreError::Unavailable(format!("lock poisoned: {e}")))?;
         if let Some(existing) = guard.get(&template.template_id) {
             if existing != template {
-                anyhow::bail!(
+                return Err(FfiTemplateStoreError::Integrity(format!(
                     "FFI template {} already published with different content (immutability guard)",
                     hex(&template.template_id)
-                );
+                )));
             }
             // Identical content → idempotent no-op.
             return Ok(());
@@ -88,22 +102,25 @@ impl FfiTemplateStore for MemoryFfiTemplateStore {
         Ok(())
     }
 
-    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>> {
+    async fn lookup(&self, template_id: &[u8; 32]) -> FfiTemplateStoreResult<Option<FfiTemplate>> {
         let guard = self
             .inner
             .read()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            .map_err(|e| FfiTemplateStoreError::Unavailable(format!("lock poisoned: {e}")))?;
         Ok(guard.get(template_id).cloned())
     }
 
-    async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>> {
+    async fn list_by_tenant(
+        &self,
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>> {
         let guard = self
             .inner
             .read()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            .map_err(|e| FfiTemplateStoreError::Unavailable(format!("lock poisoned: {e}")))?;
         Ok(guard
             .values()
-            .filter(|t| t.tenant_id == tenant_id)
+            .filter(|t| t.tenant_id == tenant_id.as_str())
             .cloned()
             .collect())
     }
@@ -111,15 +128,15 @@ impl FfiTemplateStore for MemoryFfiTemplateStore {
     async fn list_by_owner(
         &self,
         owner_type: &str,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<FfiTemplate>> {
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>> {
         let guard = self
             .inner
             .read()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            .map_err(|e| FfiTemplateStoreError::Unavailable(format!("lock poisoned: {e}")))?;
         Ok(guard
             .values()
-            .filter(|t| t.owner_type == owner_type && t.tenant_id == tenant_id)
+            .filter(|t| t.owner_type == owner_type && t.tenant_id == tenant_id.as_str())
             .cloned()
             .collect())
     }
@@ -212,9 +229,15 @@ mod tests {
         store.publish(&a2).await.unwrap();
         store.publish(&b1).await.unwrap();
 
-        let a_set = store.list_by_tenant("tenant-a").await.unwrap();
+        let a_set = store
+            .list_by_tenant(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(a_set.len(), 2);
-        let b_set = store.list_by_tenant("tenant-b").await.unwrap();
+        let b_set = store
+            .list_by_tenant(&TenantId::new("tenant-b").unwrap())
+            .await
+            .unwrap();
         assert_eq!(b_set.len(), 1);
     }
 
@@ -234,7 +257,10 @@ mod tests {
             .await
             .unwrap();
 
-        let dmn = store.list_by_owner("dmn-lite", "tenant-a").await.unwrap();
+        let dmn = store
+            .list_by_owner("dmn-lite", &TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(dmn.len(), 1);
         assert_eq!(dmn[0].owner_type, "dmn-lite");
         assert_eq!(dmn[0].tenant_id, "tenant-a");
@@ -253,7 +279,10 @@ mod tests {
             .publish(&make_template("dmn-lite", GLOBAL_TENANT_ID, 2))
             .await
             .unwrap();
-        let a = store.list_by_tenant("tenant-a").await.unwrap();
+        let a = store
+            .list_by_tenant(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].tenant_id, "tenant-a");
     }

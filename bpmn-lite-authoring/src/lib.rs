@@ -25,18 +25,18 @@
 //! validate, yaml) from `bpmn-lite-core/src/authoring/`.
 
 pub mod contracts;
+pub mod diagnostics_executor;
 pub mod dto;
 pub mod dto_to_ir;
 pub mod export_bpmn;
+pub mod importer;
 pub mod ir_to_dto;
 pub mod lints;
 pub mod publish;
 pub mod registry;
 #[cfg(feature = "postgres")]
 pub mod store_postgres_templates;
-pub mod importer;
 pub mod validate;
 pub mod yaml;
-pub mod diagnostics_executor;
 
 pub use importer::import_zeebe_bpmn;

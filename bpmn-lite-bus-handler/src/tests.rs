@@ -17,6 +17,7 @@ impl ProcessAdvancer for RecordingAdvancer {
 
 fn ctx(execution_id: Uuid) -> ResultContext {
     ResultContext {
+        tenant_id: "default".to_string(),
         idempotency_key: Uuid::now_v7(),
         execution_id,
         source_domain: "ob-poc".into(),
@@ -49,7 +50,9 @@ async fn dispatch_records_input_via_concrete_arc() {
     let advancer = Arc::new(RecordingAdvancer::default());
     let handler = BpmnLiteBusHandler::from_arc(advancer.clone());
     let exec_id = Uuid::now_v7();
-    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome_with_bindings()).await.unwrap();
+    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome_with_bindings())
+        .await
+        .unwrap();
     let calls = advancer.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].execution_id, exec_id);
@@ -131,7 +134,9 @@ async fn outcome_kind_unspecified_when_proto_value_unknown() {
         detail: String::new(),
         bindings: vec![],
     };
-    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome).await.unwrap();
+    ResultDispatcher::dispatch(&handler, ctx(exec_id), outcome)
+        .await
+        .unwrap();
     let calls = advancer.calls.lock().unwrap();
     assert_eq!(
         calls[0].outcome_kind,

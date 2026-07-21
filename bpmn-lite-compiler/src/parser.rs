@@ -1335,7 +1335,7 @@ mod tests {
 
         // Bytecode should have ExecNative instructions for 3 service tasks
         let exec_native_count = program
-            .program
+            .program()
             .iter()
             .filter(|i| matches!(i, bpmn_lite_types::Instr::ExecNative { .. }))
             .count();
@@ -1343,7 +1343,7 @@ mod tests {
 
         // Should have WaitMsg for the message wait and human wait
         let wait_msg_count = program
-            .program
+            .program()
             .iter()
             .filter(|i| matches!(i, bpmn_lite_types::Instr::WaitMsg { .. }))
             .count();
@@ -1351,17 +1351,17 @@ mod tests {
 
         // Task manifest should include the task types
         assert!(program
-            .task_manifest
+            .task_manifest()
             .contains(&"create_case_record".to_string()));
         assert!(program
-            .task_manifest
+            .task_manifest()
             .contains(&"request_documents".to_string()));
         assert!(program
-            .task_manifest
+            .task_manifest()
             .contains(&"record_decision".to_string()));
 
         // Bytecode version should be non-zero
-        assert_ne!(program.bytecode_version, [0u8; 32]);
+        assert_ne!(program.bytecode_version(), [0u8; 32]);
     }
 
     #[test]
@@ -1504,13 +1504,13 @@ mod tests {
         let program = lowering::lower(&graph).unwrap();
 
         assert_eq!(
-            program.boundary_map.len(),
+            program.boundary_map().len(),
             1,
             "Expected 1 boundary_map entry"
         );
-        assert_eq!(program.race_plan.len(), 1, "Expected 1 race_plan entry");
+        assert_eq!(program.race_plan().len(), 1, "Expected 1 race_plan entry");
 
-        let (_, race_entry) = program.race_plan.iter().next().unwrap();
+        let (_, race_entry) = program.race_plan().iter().next().unwrap();
         assert_eq!(
             race_entry.arms.len(),
             2,
@@ -1534,9 +1534,9 @@ mod tests {
                 assert!(*interrupting, "Default boundary should be interrupting");
                 assert!(cycle.is_none(), "No cycle spec for simple duration timer");
                 assert_eq!(*duration_ms, 259_200_000, "3 days = 259200000ms");
-                assert!(*resume_at > 0, "resume_at should be valid");
+                assert!(resume_at.get() > 0, "resume_at should be valid");
                 // resume_at should point to escalation task code, not boundary node
-                let instr = &program.program[*resume_at as usize];
+                let instr = &program.program()[resume_at.index()];
                 assert!(
                     matches!(
                         instr,

@@ -3,6 +3,7 @@ members = [
     "bpmn-lite-authoring",
     "bpmn-lite-compiler",
     "bpmn-lite-engine",
+    "bpmn-lite-kernel",
     "bpmn-lite-server",
     "bpmn-lite-store",
     "bpmn-lite-store-postgres",

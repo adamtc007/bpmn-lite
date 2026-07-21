@@ -1,4 +1,5 @@
 use crate::types::*;
+use crate::EffectId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -103,6 +104,11 @@ pub enum RuntimeEvent {
         fiber_id: Uuid,
         deadline_ms: u64,
     },
+    TimerFired {
+        timer_id: EffectId,
+        fiber_id: Uuid,
+        fired_at: u64,
+    },
     WaitMsgSubscribed {
         fiber_id: Uuid,
         name: u32,
@@ -134,6 +140,19 @@ pub enum RuntimeEvent {
         incident_id: Uuid,
         service_task_id: String,
         job_key: Option<String>,
+    },
+    IncidentResolved {
+        incident_id: Uuid,
+        resolution: String,
+    },
+    ChildStartAccepted {
+        idempotency_key: String,
+        child_instance_id: Uuid,
+    },
+    ChildStartRejected {
+        idempotency_key: String,
+        child_instance_id: Uuid,
+        incident_id: Uuid,
     },
     RaceRegistered {
         race_id: RaceId,

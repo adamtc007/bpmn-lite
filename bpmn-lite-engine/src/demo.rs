@@ -2,7 +2,7 @@
 //!
 //! One function call (`build_demo_plan`) compiles the §10 bpmn-dsl source
 //! against the real ob-poc + dmn-lite manifests (produced by T2B.3/T2B.4)
-//! and returns a `WorkflowExecutionPlan` ready for `PlanWalker::start_process`.
+//! and returns a `WorkflowExecutionPlan` ready to start via the kernel engine.
 //!
 //! `demo_initial_vars(client_type)` builds the initial placeholder map for
 //! each of the three demo paths: `"fund"`, `"corporate"`, `"trust"`.
@@ -22,7 +22,7 @@ use dsl_manifest::Manifest;
 /// pipeline resolves them against imported `dsl_manifest::Manifest` objects.
 ///
 /// Initial caller data (client name, client type) is passed as
-/// `initial_variables` to `PlanWalker::start_process` and forwarded to each
+/// `initial_variables` to the engine's start path and forwarded to each
 /// callout automatically via `placeholder_values`.
 pub const DEMO_SOURCE: &str = r#"(workflow custody-cbu-onboarding
   (start-event :id start :next create-cbu)
@@ -54,7 +54,7 @@ const DMN_LITE_MANIFEST_YAML: &str = include_str!(concat!(
 /// Compile the §10 demo workflow against the real ob-poc + dmn-lite manifests.
 ///
 /// Returns a validated `WorkflowExecutionPlan` with namespaced verb FQNs
-/// preserved on all nodes. The plan is ready for `PlanWalker::start_process`.
+/// preserved on all nodes, ready to start via the kernel engine.
 pub fn build_demo_plan() -> Result<WorkflowExecutionPlan, CompileError> {
     let ob_poc = Manifest::load_from_yaml(OB_POC_MANIFEST_YAML)
         .expect("ob-poc manifest must load — check manifests/ob-poc-v1.0.0.yaml");
@@ -88,7 +88,6 @@ pub fn demo_initial_vars(
     );
     vars
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -154,7 +153,11 @@ mod tests {
             _ => panic!("expected split"),
         };
         assert_eq!(gw.flows.len(), 3);
-        let targets: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_ref().unwrap().as_str()).collect();
+        let targets: Vec<&str> = gw
+            .flows
+            .iter()
+            .map(|f| f.expected_value.as_ref().unwrap().as_str())
+            .collect();
         assert!(targets.contains(&"fund"));
         assert!(targets.contains(&"corporate"));
         assert!(targets.contains(&"trust"));
@@ -177,7 +180,10 @@ mod tests {
                 Some(expected_product),
                 "{id} product arg wrong"
             );
-            assert_eq!(&task.next, "type-gateway-join", "{id} should point to type-gateway-join");
+            assert_eq!(
+                &task.next, "type-gateway-join",
+                "{id} should point to type-gateway-join"
+            );
         }
     }
     #[test]

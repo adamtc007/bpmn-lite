@@ -1,0 +1,8 @@
+PHASE 1 Report:
+- dedupe_get: runs under bare &self.pool
+- dedupe_put: runs under bare &self.pool
+- atomic_complete (dedupe INSERT): already inside execute_tenant_scoped
+
+For STEP 2:
+dedupe_put callers lack tenant context. The trait method signature does not take tenant_id, and the callers are test cases in bpmn-lite-vm/src/vm.rs (line 1406) and bpmn-lite-store-postgres/src/store_postgres.rs (line 3336, 3343), and bpmn-lite-store/src/store_memory.rs (line 1348). None of them have tenant context passed to dedupe_put.
+

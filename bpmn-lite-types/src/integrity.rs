@@ -27,7 +27,6 @@
 //! deployment epoch, not a long-lived stable identifier.
 
 use crate::types::ProcessInstance;
-use anyhow::{anyhow, Result};
 
 /// Compute the BLAKE3 integrity hash for a process instance's immutable fields.
 pub fn compute_instance_integrity_hash(instance: &ProcessInstance) -> [u8; 32] {
@@ -57,33 +56,6 @@ pub fn compute_instance_integrity_hash(instance: &ProcessInstance) -> [u8; 32] {
     }
 
     hasher.finalize().into()
-}
-
-/// Verify that a loaded instance's integrity hash matches its immutable fields.
-///
-/// Returns `Ok(())` if:
-/// - The stored hash matches the recomputed hash, OR
-/// - No hash is stored (pre-A19 row) — verification is skipped with a WARN.
-///
-/// Returns `Err` if the stored hash is present but does not match.
-pub fn verify_instance_integrity(instance: &ProcessInstance) -> Result<()> {
-    let Some(stored) = instance.integrity_hash else {
-        tracing::warn!(
-            instance_id = %instance.instance_id,
-            "A19: skipping integrity verification (no hash stored — pre-A19 row)"
-        );
-        return Ok(());
-    };
-    let computed = compute_instance_integrity_hash(instance);
-    if computed != stored {
-        return Err(anyhow!(
-            "A19 integrity hash mismatch for instance {} (tenant {}); \
-             instance may have been tampered with at the database level",
-            instance.instance_id,
-            instance.tenant_id
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -176,43 +148,6 @@ mod tests {
         );
     }
 
-    /// T-A19-VERIFY-1: verify passes when hash matches.
-    #[test]
-    fn test_verify_passes_on_correct_hash() {
-        let mut instance = make_test_instance();
-        instance.integrity_hash = Some(compute_instance_integrity_hash(&instance));
-        assert!(verify_instance_integrity(&instance).is_ok());
-    }
-
-    /// T-A19-VERIFY-2: verify passes (with WARN) when hash is None (pre-A19 row).
-    #[test]
-    fn test_verify_passes_on_missing_hash() {
-        let instance = make_test_instance(); // integrity_hash: None
-        assert!(verify_instance_integrity(&instance).is_ok());
-    }
-
-    /// T-A19-VERIFY-3: verify fails when stored hash doesn't match.
-    #[test]
-    fn test_verify_fails_on_tampered_tenant_id() {
-        let mut instance = make_test_instance();
-        instance.integrity_hash = Some(compute_instance_integrity_hash(&instance));
-        // Simulate DB-level tamper of tenant_id after hash was stored.
-        instance.tenant_id = "evil-tenant".to_string();
-        let result = verify_instance_integrity(&instance);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("integrity hash mismatch"), "got: {msg}");
-    }
-
-    /// T-A19-VERIFY-4: verify fails when bytecode_version tampered.
-    #[test]
-    fn test_verify_fails_on_tampered_bytecode_version() {
-        let mut instance = make_test_instance();
-        instance.integrity_hash = Some(compute_instance_integrity_hash(&instance));
-        instance.bytecode_version = [0xffu8; 32];
-        assert!(verify_instance_integrity(&instance).is_err());
-    }
-
     /// T-A19-PERF-1: 1000 hash computations complete well under 1ms total.
     #[test]
     fn test_hash_performance_sanity() {
@@ -238,4 +173,3 @@ pub struct IntegrityViolation {
     pub tenant_id: String,
     pub detection_point: String,
 }
-

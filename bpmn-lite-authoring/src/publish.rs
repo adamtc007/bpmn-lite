@@ -6,7 +6,7 @@ use crate::registry::{SourceFormat, TemplateState, TemplateStore, WorkflowTempla
 use crate::{dto_to_ir, validate, yaml};
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{lowering, verifier};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_types::CompiledProgram;
 use std::fmt::Write;
 
@@ -17,7 +17,7 @@ use std::fmt::Write;
 /// returns the program **without** persisting. Caller (engine
 /// test, future gRPC RPC) hands the result to
 /// `engine.store_compiled_program(program)` to land it in
-/// `ProcessStore`.
+/// `WorkflowStore`.
 pub fn compile_program_from_dto(dto: &WorkflowGraphDto) -> Result<CompiledProgram> {
     let errors = validate::validate_dto(dto);
     if !errors.is_empty() {
@@ -50,13 +50,11 @@ pub fn compile_program_from_dto(dto: &WorkflowGraphDto) -> Result<CompiledProgra
     Ok(program)
 }
 
-
-
 /// Phase 2.7 inversion entrypoint: YAML → publish (atomic).
 ///
 /// Runs the full publish pipeline (parse → validate → lint →
 /// compile → hash), then persists the compiled program to
-/// `ProcessStore` and the template to `TemplateStore`. The two
+/// `WorkflowStore` and the template to `TemplateStore`. The two
 /// writes are sequential — if the template write fails, no Draft
 /// row is left behind. Program writes are idempotent (keyed by
 /// bytecode hash) so retries are safe.
@@ -67,12 +65,12 @@ pub async fn compile_and_publish(
     yaml_str: &str,
     options: PublishOptions,
     template_store: &dyn TemplateStore,
-    process_store: &dyn ProcessStore,
+    process_store: &dyn WorkflowStore,
 ) -> Result<PublishResult> {
     let result = publish_workflow(yaml_str, options)?;
 
     process_store
-        .store_program(result.program.bytecode_version, &result.program)
+        .store_program(result.program.bytecode_version(), &result.program)
         .await?;
 
     template_store.save(&result.template).await?;
@@ -122,7 +120,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// 10. Build WorkflowTemplate with `state=Published, published_at=now`
 ///
 /// Steps 1-10 are pure/sync (no persistence). The caller (`compile_and_publish`)
-/// persists: (a) program to ProcessStore, (b) template to TemplateStore.
+/// persists: (a) program to WorkflowStore, (b) template to TemplateStore.
 pub fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<PublishResult> {
     // 1. Parse YAML → DTO
     let dto = yaml::parse_workflow_yaml(yaml_str)?;
@@ -185,7 +183,7 @@ pub fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<Publi
     let bytecode_version = compute_bytecode_hash(&program);
 
     // 9. Extract task_manifest
-    let task_manifest = program.task_manifest.clone();
+    let task_manifest = program.task_manifest().clone();
 
     // 10. Optional BPMN XML export
     let bpmn_xml = if options.generate_bpmn {
@@ -223,7 +221,7 @@ pub fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<Publi
 /// Excludes debug_map and task_manifest from the hash for stability.
 fn compute_bytecode_hash(program: &bpmn_lite_types::CompiledProgram) -> String {
     let mut hasher = blake3::Hasher::new();
-    for instr in &program.program {
+    for instr in program.program() {
         hasher.update(format!("{:?}", instr).as_bytes());
     }
     hex_encode(hasher.finalize().as_bytes())

@@ -2,10 +2,10 @@
 name = "bpmn-lite-store"
 version = "0.1.0"
 edition = "2021"
-description = "BPMN-Lite persistence boundary — ProcessStore trait + MemoryStore impl. PostgreSQL impl lives in sibling bpmn-lite-store-postgres crate."
+description = "BPMN-Lite typed persistence capabilities and in-memory backend."
 
 # Capability discipline (Sage ACP / bpmn-lite restructure Phase 1):
-#   IN-SCOPE  : `ProcessStore` async trait + `MemoryProcessStore`
+#   IN-SCOPE  : typed store capability traits + `MemoryStore`
 #               (in-process implementation used by tests and dev).
 #   OUT-OF-SCOPE: PostgreSQL impl (bpmn-lite-store-postgres),
 #                 schema migrations (also in -store-postgres),
@@ -15,7 +15,6 @@ description = "BPMN-Lite persistence boundary — ProcessStore trait + MemorySto
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 async-trait = { workspace = true }
-anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }

@@ -7,7 +7,7 @@
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient;
@@ -29,7 +29,12 @@ const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://localhost/dsl_bus_test";
 
 // ── Test harness ─────────────────────────────────────────────────────
 
-async fn setup_pool() -> PgPool {
+async fn setup_pool() -> (PgPool, tokio::sync::MutexGuard<'static, ()>) {
+    static TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let guard = TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let mut url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
@@ -41,16 +46,20 @@ async fn setup_pool() -> PgPool {
     let pool = PgPool::connect(&url).await.expect("connect");
 
     // Clean drop/recreation of dsl_bus to isolate migrations in tests
-    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
-    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("CREATE SCHEMA dsl_bus")
+        .execute(&pool)
+        .await
+        .ok();
 
     let migrator = sqlx::migrate!("../dsl-bus-storage/migrations");
-    migrator.run(&pool)
-        .await
-        .expect("migrations");
+    migrator.run(&pool).await.expect("migrations");
     sqlx::query("TRUNCATE outbox").execute(&pool).await.unwrap();
     sqlx::query("TRUNCATE inbox").execute(&pool).await.unwrap();
-    pool
+    (pool, guard)
 }
 
 fn ephemeral_addr() -> SocketAddr {
@@ -231,9 +240,8 @@ impl ResultDispatcher for RecordingResultDispatcher {
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn invocation_round_trip_inserts_inbox_and_enqueues_result_outbox() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let inv_calls = inv.calls.clone();
     let seen = inv.seen_contexts.clone();
@@ -291,9 +299,8 @@ async fn invocation_round_trip_inserts_inbox_and_enqueues_result_outbox() {
 /// the receiver domain's own admission mechanism decides what (if
 /// anything) it means; this crate only has to carry it faithfully.
 #[tokio::test]
-#[ignore]
 async fn snapshot_pin_flows_from_wire_into_invocation_context() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let seen = inv.seen_contexts.clone();
     let res = RecordingResultDispatcher::new();
@@ -334,9 +341,8 @@ async fn snapshot_pin_flows_from_wire_into_invocation_context() {
 /// and bpmn-lite itself before this tranche, has always sent) must still
 /// carry `None` through cleanly, not error or default to something else.
 #[tokio::test]
-#[ignore]
 async fn absent_snapshot_pin_flows_through_as_none() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let seen = inv.seen_contexts.clone();
     let res = RecordingResultDispatcher::new();
@@ -368,9 +374,8 @@ async fn absent_snapshot_pin_flows_through_as_none() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn duplicate_invocation_returns_cached_execution_id_without_redispatch() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let inv_calls = inv.calls.clone();
     let res = RecordingResultDispatcher::new();
@@ -411,9 +416,8 @@ async fn duplicate_invocation_returns_cached_execution_id_without_redispatch() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn unknown_verb_returns_rejected_verb_unknown() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     *inv.next_error.lock().unwrap() = Some(BusServerError::UnknownVerb("no such verb".into()));
     let res = RecordingResultDispatcher::new();
@@ -441,9 +445,8 @@ async fn unknown_verb_returns_rejected_verb_unknown() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn version_mismatch_returns_rejected_version_incompatible() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let mut inv = AcceptingInvocationDispatcher::new();
     inv.require_version = Some("v9.9.9".into());
     let res = RecordingResultDispatcher::new();
@@ -473,9 +476,8 @@ async fn version_mismatch_returns_rejected_version_incompatible() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn missing_idempotency_key_returns_rejected_malformed() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let res = RecordingResultDispatcher::new();
 
@@ -500,9 +502,8 @@ async fn missing_idempotency_key_returns_rejected_malformed() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn deliver_result_invokes_dispatcher_and_records_inbox() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let res = RecordingResultDispatcher::new();
     let res_calls = res.calls.clone();
@@ -546,9 +547,8 @@ async fn deliver_result_invokes_dispatcher_and_records_inbox() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn duplicate_deliver_result_returns_duplicate_ignored() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let inv = AcceptingInvocationDispatcher::new();
     let res = RecordingResultDispatcher::new();
     let res_calls = res.calls.clone();
@@ -664,12 +664,11 @@ async fn spawn_bus_server(
 }
 
 #[tokio::test]
-#[ignore]
 async fn validate_stub_returns_not_implemented() {
     // A3 §3.7 — Validate ships as a wire-only stub in v0.6. The
     // discipline rule (A3 §6 #1) is "stubs return NOT_IMPLEMENTED
     // consistently" — no conditional real-vs-stub paths.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let handle = spawn_bus_server(pool, false, false).await;
 
     let mut client = connect_invocation_client(handle.local_addr()).await;
@@ -691,12 +690,11 @@ async fn validate_stub_returns_not_implemented() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn entity_resolve_stub_returns_not_implemented() {
     // A3 §3.7 — When EntityService is REGISTERED (enable_entity_service
     // was called), the stub returns RESOLUTION_NOT_IMPLEMENTED. This is
     // distinct from the route being absent.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let handle = spawn_bus_server(pool, true, false).await;
 
     let mut client = connect_entity_client(handle.local_addr()).await;
@@ -728,9 +726,8 @@ async fn entity_resolve_stub_returns_not_implemented() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sem_os_fetch_dag_packs_stub_returns_not_implemented() {
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let handle = spawn_bus_server(pool, false, true).await;
 
     let mut client = connect_sem_os_client(handle.local_addr()).await;
@@ -759,13 +756,12 @@ async fn sem_os_fetch_dag_packs_stub_returns_not_implemented() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn server_without_entity_service_returns_grpc_unimplemented() {
     // A3 §3.7 + §6 discipline #4 — A domain that does NOT declare
     // EntityService (e.g. dmn-lite) leaves the route absent. The gRPC
     // server returns `UNIMPLEMENTED` natively; callers see a Status
     // error rather than a structured NOT_IMPLEMENTED response.
-    let pool = setup_pool().await;
+    let (pool, _lock) = setup_pool().await;
     let handle = spawn_bus_server(pool, false, false).await;
 
     let mut client = connect_entity_client(handle.local_addr()).await;

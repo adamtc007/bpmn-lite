@@ -8,15 +8,19 @@ use dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient;
 use dsl_bus_protocol::v1::result_service_client::ResultServiceClient;
 use dsl_bus_protocol::v1::{InvocationRequest, InvocationResult};
 use dsl_bus_storage::{
-    BusEndpoint, OutboxEntry, mark_outbox_retry, mark_outbox_submitted, select_pending_outbox,
+    BusEndpoint, OutboxEntry, claim_pending_outbox, mark_outbox_retry, mark_outbox_submitted,
 };
+use futures::{StreamExt, stream};
 use prost::Message;
 use sqlx::PgPool;
 use tokio::sync::{Notify, watch};
+use tonic::transport::Channel;
 use tracing::{debug, warn};
 
 use crate::client::PeerRegistry;
 use crate::uuid_convert::from_proto_opt;
+
+const MAX_IN_FLIGHT: usize = 32;
 
 /// Shape of the §8.5 sender loop, post-A2.
 ///
@@ -36,6 +40,8 @@ pub(crate) struct SenderConfig {
     pub notify: Arc<Notify>,
     pub stats: Arc<SenderStats>,
     pub shutdown: watch::Receiver<bool>,
+    pub submission_ack_handler: Option<Arc<dyn crate::SubmissionAckHandler>>,
+    pub channels: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Channel>>>,
 }
 
 /// Atomic counters covering the sender's behaviour. Cheap to read; the
@@ -119,9 +125,10 @@ pub(crate) async fn run(mut cfg: SenderConfig) {
 /// wake-up; this loop ensures the wake-up drains all the rows they
 /// committed, not just the first batch.
 async fn drain_until_empty(cfg: &SenderConfig) -> Result<(), sqlx::Error> {
-    let tenants: Vec<String> = sqlx::query_scalar("SELECT tenant_id FROM dsl_bus.list_pending_outbox_tenants()")
-        .fetch_all(&cfg.pool)
-        .await?;
+    let tenants: Vec<String> =
+        sqlx::query_scalar("SELECT tenant_id FROM dsl_bus.list_pending_outbox_tenants()")
+            .fetch_all(&cfg.pool)
+            .await?;
 
     for tenant_id in tenants {
         loop {
@@ -144,56 +151,52 @@ async fn drain_once_for_tenant(cfg: &SenderConfig, tenant_id: &str) -> Result<us
         .execute(&mut *tx)
         .await?;
 
-    let entries = select_pending_outbox(&mut tx, cfg.batch_size)
-        .await
-        .map_err(|e| match e {
-            dsl_bus_storage::BusStorageError::Sqlx(err) => err,
-            other => sqlx::Error::Configuration(other.to_string().into()),
-        })?;
+    let claim_token = uuid::Uuid::now_v7();
+    let claim_until = chrono::Utc::now() + chrono::Duration::seconds(30);
+    let entries = claim_pending_outbox(
+        &mut tx,
+        cfg.batch_size,
+        "dsl-bus-sender",
+        claim_token,
+        claim_until,
+    )
+    .await
+    .map_err(|e| match e {
+        dsl_bus_storage::BusStorageError::Sqlx(err) => err,
+        other => sqlx::Error::Configuration(other.to_string().into()),
+    })?;
     let claimed = entries.len();
-
-    for entry in entries {
-        dispatch_entry(cfg, &mut tx, entry).await?;
-    }
-
     tx.commit().await?;
+
+    let results = stream::iter(entries.into_iter().map(|entry| dispatch_entry(cfg, entry)))
+        .buffer_unordered(MAX_IN_FLIGHT)
+        .collect::<Vec<_>>()
+        .await;
+    for result in results {
+        result?;
+    }
     Ok(claimed)
 }
 
-async fn dispatch_entry(
-    cfg: &SenderConfig,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    entry: OutboxEntry,
-) -> Result<(), sqlx::Error> {
+async fn dispatch_entry(cfg: &SenderConfig, entry: OutboxEntry) -> Result<(), sqlx::Error> {
     match entry.target_endpoint {
-        BusEndpoint::Invocation => dispatch_invocation(cfg, tx, entry).await,
-        BusEndpoint::Result => dispatch_result(cfg, tx, entry).await,
+        BusEndpoint::Invocation => dispatch_invocation(cfg, entry).await,
+        BusEndpoint::Result => dispatch_result(cfg, entry).await,
     }
 }
 
-async fn dispatch_invocation(
-    cfg: &SenderConfig,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    entry: OutboxEntry,
-) -> Result<(), sqlx::Error> {
-    let endpoint = match cfg.peers.endpoint(&entry.target_domain) {
-        Ok(e) => e.clone(),
-        Err(err) => {
-            return record_retry(cfg, tx, &entry, &err.to_string()).await;
-        }
-    };
-
-    let channel = match endpoint.connect().await {
+async fn dispatch_invocation(cfg: &SenderConfig, entry: OutboxEntry) -> Result<(), sqlx::Error> {
+    let channel = match peer_channel(cfg, &entry.target_domain).await {
         Ok(c) => c,
         Err(err) => {
-            return record_retry(cfg, tx, &entry, &format!("connect: {err}")).await;
+            return record_retry(cfg, &entry, &err).await;
         }
     };
 
     let req = match InvocationRequest::decode(&entry.payload[..]) {
         Ok(r) => r,
         Err(err) => {
-            return record_retry(cfg, tx, &entry, &format!("decode: {err}")).await;
+            return record_retry(cfg, &entry, &format!("decode: {err}")).await;
         }
     };
 
@@ -203,9 +206,14 @@ async fn dispatch_invocation(
             let ack = resp.into_inner();
             match from_proto_opt(&ack.execution_id) {
                 Ok(Some(exec_id)) => {
-                    mark_outbox_submitted(&mut **tx, entry.id, exec_id)
-                        .await
-                        .map_err(map_storage_err)?;
+                    if let Some(handler) = &cfg.submission_ack_handler {
+                        handler
+                            .accepted(&entry, exec_id)
+                            .await
+                            .map_err(|error| sqlx::Error::Configuration(error.into()))?;
+                    } else {
+                        record_submitted(cfg, &entry, exec_id).await?;
+                    }
                     cfg.stats.submitted.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(None) => {
@@ -220,15 +228,15 @@ async fn dispatch_invocation(
                     } else {
                         format!("{label}: {}", ack.detail)
                     };
-                    record_retry(cfg, tx, &entry, &detail).await?;
+                    record_retry(cfg, &entry, &detail).await?;
                 }
                 Err(err) => {
-                    record_retry(cfg, tx, &entry, &err.to_string()).await?;
+                    record_retry(cfg, &entry, &err.to_string()).await?;
                 }
             }
         }
         Err(status) => {
-            record_retry(cfg, tx, &entry, &format!("status: {}", status.message())).await?;
+            record_retry(cfg, &entry, &format!("status: {}", status.message())).await?;
         }
     }
     Ok(())
@@ -247,29 +255,18 @@ fn submission_status_label(status: i32) -> &'static str {
     }
 }
 
-async fn dispatch_result(
-    cfg: &SenderConfig,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    entry: OutboxEntry,
-) -> Result<(), sqlx::Error> {
-    let endpoint = match cfg.peers.endpoint(&entry.target_domain) {
-        Ok(e) => e.clone(),
-        Err(err) => {
-            return record_retry(cfg, tx, &entry, &err.to_string()).await;
-        }
-    };
-
-    let channel = match endpoint.connect().await {
+async fn dispatch_result(cfg: &SenderConfig, entry: OutboxEntry) -> Result<(), sqlx::Error> {
+    let channel = match peer_channel(cfg, &entry.target_domain).await {
         Ok(c) => c,
         Err(err) => {
-            return record_retry(cfg, tx, &entry, &format!("connect: {err}")).await;
+            return record_retry(cfg, &entry, &err).await;
         }
     };
 
     let msg = match InvocationResult::decode(&entry.payload[..]) {
         Ok(r) => r,
         Err(err) => {
-            return record_retry(cfg, tx, &entry, &format!("decode: {err}")).await;
+            return record_retry(cfg, &entry, &format!("decode: {err}")).await;
         }
     };
 
@@ -283,29 +280,75 @@ async fn dispatch_result(
         Ok(_resp) => {
             // Result deliveries don't return a fresh execution_id — re-use
             // the one we sent so the outbox row carries something useful.
-            mark_outbox_submitted(&mut **tx, entry.id, exec_id)
-                .await
-                .map_err(map_storage_err)?;
+            record_submitted(cfg, &entry, exec_id).await?;
             cfg.stats.submitted.fetch_add(1, Ordering::Relaxed);
         }
         Err(status) => {
-            record_retry(cfg, tx, &entry, &format!("status: {}", status.message())).await?;
+            record_retry(cfg, &entry, &format!("status: {}", status.message())).await?;
         }
     }
     Ok(())
 }
 
+async fn peer_channel(cfg: &SenderConfig, domain: &str) -> Result<Channel, String> {
+    if let Some(channel) = cfg.channels.read().await.get(domain).cloned() {
+        return Ok(channel);
+    }
+    let endpoint = cfg
+        .peers
+        .endpoint(domain)
+        .map_err(|error| error.to_string())?
+        .clone();
+    let channel = endpoint
+        .connect()
+        .await
+        .map_err(|error| format!("connect: {error}"))?;
+    cfg.channels
+        .write()
+        .await
+        .insert(domain.to_string(), channel.clone());
+    Ok(channel)
+}
+
 async fn record_retry(
     cfg: &SenderConfig,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     entry: &OutboxEntry,
     message: &str,
 ) -> Result<(), sqlx::Error> {
     let backoff = exp_backoff_secs(entry.attempt_count, cfg.max_backoff_secs);
-    mark_outbox_retry(&mut **tx, entry.id, backoff, message)
+    let claim_token = entry.claim_token.ok_or_else(|| {
+        sqlx::Error::Protocol("claimed outbox row has no claim token".to_string())
+    })?;
+    let mut tx = cfg.pool.begin().await?;
+    sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+        .bind(&entry.tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    mark_outbox_retry(&mut *tx, entry.id, claim_token, backoff, message)
         .await
         .map_err(map_storage_err)?;
+    tx.commit().await?;
     cfg.stats.retried.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+async fn record_submitted(
+    cfg: &SenderConfig,
+    entry: &OutboxEntry,
+    execution_id: uuid::Uuid,
+) -> Result<(), sqlx::Error> {
+    let claim_token = entry.claim_token.ok_or_else(|| {
+        sqlx::Error::Protocol("claimed outbox row has no claim token".to_string())
+    })?;
+    let mut tx = cfg.pool.begin().await?;
+    sqlx::query("SELECT set_config('app.current_tenant', $1, true)")
+        .bind(&entry.tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    mark_outbox_submitted(&mut *tx, entry.id, claim_token, execution_id)
+        .await
+        .map_err(map_storage_err)?;
+    tx.commit().await?;
     Ok(())
 }
 

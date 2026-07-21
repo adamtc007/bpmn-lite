@@ -1,9 +1,7 @@
 //! End-to-end tests for [`BusClient`] against an in-process mock gRPC
 //! server.
 //!
-//! All tests are `#[ignore]` because they touch a real Postgres
-//! (`BPMN_LITE_TEST_DATABASE_URL=postgresql://localhost/dsl_bus_test`)
-//! and bind ephemeral TCP sockets.
+//! Tests serialize PostgreSQL schema setup and bind ephemeral TCP sockets.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -174,13 +172,17 @@ async fn setup_pool() -> (PgPool, tokio::sync::MutexGuard<'static, ()>) {
     let pool = PgPool::connect(&url).await.expect("connect");
 
     // Clean drop/recreation of dsl_bus to isolate migrations in tests
-    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE").execute(&pool).await.ok();
-    sqlx::query("CREATE SCHEMA dsl_bus").execute(&pool).await.ok();
+    sqlx::query("DROP SCHEMA IF EXISTS dsl_bus CASCADE")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("CREATE SCHEMA dsl_bus")
+        .execute(&pool)
+        .await
+        .ok();
 
     let migrator = sqlx::migrate!("../dsl-bus-storage/migrations");
-    migrator.run(&pool)
-        .await
-        .expect("migrations");
+    migrator.run(&pool).await.expect("migrations");
     sqlx::query("TRUNCATE outbox").execute(&pool).await.unwrap();
     sqlx::query("TRUNCATE inbox").execute(&pool).await.unwrap();
     (pool, guard)
@@ -225,7 +227,6 @@ async fn fetch_outbox_status(pool: &PgPool, id: Uuid) -> (String, i32, Option<St
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn submit_invocation_writes_outbox_row() {
     let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
@@ -250,7 +251,6 @@ async fn submit_invocation_writes_outbox_row() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn submit_invocation_is_idempotent_on_repeat_keys() {
     let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
@@ -276,7 +276,6 @@ async fn submit_invocation_is_idempotent_on_repeat_keys() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn submit_invocation_rejects_unknown_peer() {
     let (pool, _lock) = setup_pool().await;
     let client = BusClient::builder()
@@ -298,7 +297,6 @@ async fn submit_invocation_rejects_unknown_peer() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sender_dispatches_pending_row_to_mock_server() {
     // Retrofit per A2: no `sender_interval(...)` knob. `submit_invocation`
     // notifies internally, so the sender drains within microseconds of
@@ -343,7 +341,6 @@ async fn sender_dispatches_pending_row_to_mock_server() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sender_retries_on_transport_failure_then_succeeds() {
     let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
@@ -396,7 +393,6 @@ async fn sender_retries_on_transport_failure_then_succeeds() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sender_dispatches_result_rows() {
     let (pool, _lock) = setup_pool().await;
     let server = MockServer::start().await;
@@ -418,7 +414,10 @@ async fn sender_dispatches_result_rows() {
         plan_id: None,
         audit_reference: String::new(),
     };
-    client.send_result("bpmn-lite", result, "default".to_string()).await.unwrap();
+    client
+        .send_result("bpmn-lite", result, "default".to_string())
+        .await
+        .unwrap();
 
     let handle = client.start_sender();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -460,7 +459,6 @@ fn backoff_grows_exponentially_and_caps() {
 use dsl_bus_storage::{BusEndpoint, OutboxEntry, insert_outbox};
 
 #[tokio::test]
-#[ignore]
 async fn notification_drives_drain() {
     // submit_invocation commits then calls notify_one(); the sender
     // must drain within tens of milliseconds — well under the
@@ -509,7 +507,6 @@ async fn notification_drives_drain() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn fallback_timer_drains_missed_signal() {
     // Simulate a "writer crashed between commit and notify" by writing
     // the outbox row directly via dsl-bus-storage, bypassing
@@ -563,7 +560,6 @@ async fn fallback_timer_drains_missed_signal() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn burst_coalescing() {
     // 20 rapid submits (each with its own idempotency key + notify
     // call). Notify coalesces — a single wake-up may serve multiple
@@ -617,7 +613,6 @@ async fn burst_coalescing() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sender_isolation_from_writer_failure() {
     // Writer "panics" after commit but before notify (we simulate by
     // inserting via dsl-bus-storage directly — same effect as a real

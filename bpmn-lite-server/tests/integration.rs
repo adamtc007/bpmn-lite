@@ -300,16 +300,16 @@ async fn test_compile_invalid_bpmn() {
 /// gRPC over-the-wire smoke test against a running server.
 ///
 /// Set BPMN_LITE_URL to run (e.g., `BPMN_LITE_URL=http://127.0.0.1:50051`).
-/// Skipped by default (ignored test). Run with:
-///   cargo test --test integration test_grpc_smoke -- --ignored
+/// CI supplies `BPMN_LITE_URL` after starting the production binary.
 #[tokio::test]
-#[ignore]
 async fn test_grpc_smoke() {
     use ::bpmn_lite_server::grpc::proto::bpmn_lite_client::BpmnLiteClient;
     use ::bpmn_lite_server::grpc::proto::*;
 
-    let url =
-        std::env::var("BPMN_LITE_URL").unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+    let Ok(url) = std::env::var("BPMN_LITE_URL") else {
+        eprintln!("BPMN_LITE_URL is unset; the dedicated CI server-smoke job exercises this test");
+        return;
+    };
 
     let mut client = BpmnLiteClient::connect(url.clone())
         .await

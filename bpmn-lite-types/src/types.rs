@@ -6,8 +6,68 @@ use uuid::Uuid;
 
 // ─── Scalar aliases ───────────────────────────────────────────
 
-/// Bytecode address (instruction pointer).
-pub type Addr = u32;
+/// Bytecode address (instruction pointer) — a static artifact coordinate.
+///
+/// Distinct from `crate::concurrency::RecordId` (a runtime handle) by the
+/// D1 static-structure/dynamic-activation law (V&S §4): "Artifact addresses
+/// never appear in runtime state; runtime handles never appear in
+/// artifacts." `Addr` wraps `u32`, `RecordId` wraps `Uuid`; there is no
+/// `From`/`Into` between them, so mixing the two is a compile error. See
+/// `bpmn_lite_types::concurrency`'s compile-fail doctest for the proof.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Addr(u32);
+
+impl Addr {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// The raw instruction offset, for indexing into the compiled program.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw `u32` value, e.g. for hashing/debug formatting.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    pub const fn saturating_add(self, rhs: u32) -> Self {
+        Self(self.0.saturating_add(rhs))
+    }
+}
+
+impl From<u32> for Addr {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Addr> for u32 {
+    fn from(addr: Addr) -> Self {
+        addr.0
+    }
+}
+
+impl std::fmt::Display for Addr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::ops::Add<u32> for Addr {
+    type Output = Addr;
+    fn add(self, rhs: u32) -> Addr {
+        Addr(self.0 + rhs)
+    }
+}
+
+impl std::ops::AddAssign<u32> for Addr {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
+    }
+}
 
 /// Join barrier identifier.
 pub type JoinId = u32;
@@ -115,6 +175,16 @@ pub struct InclusiveBranch {
     pub target: Addr,
 }
 
+/// One deterministic branch in a DSL payload router.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadRouteBranch {
+    /// Placeholder key in `ProcessInstance::placeholder_values`.
+    pub placeholder: String,
+    /// Canonical scalar spelling required by this branch.
+    pub expected_value: String,
+    pub target: Addr,
+}
+
 // ─── Bytecode instructions ────────────────────────────────────
 
 /// The 18-opcode ISA for the BPMN-Lite VM.
@@ -149,6 +219,30 @@ pub enum Instr {
         task_type: u32,
         argc: u16,
         retc: u16,
+    },
+
+    /// A task produced by the DSL frontend. Static arguments and output
+    /// lineage are embedded in the canonical artifact rather than interpreted
+    /// by a second runtime.
+    ExecDslTask {
+        task_type: u32,
+        static_args: BTreeMap<String, String>,
+        produces_placeholder: Option<String>,
+    },
+
+    /// Route on canonical placeholder state. This replaces PlanWalker domain
+    /// string special-cases with data carried by the executable artifact.
+    RoutePayload {
+        branches: Box<[PayloadRouteBranch]>,
+        default_target: Option<Addr>,
+    },
+
+    /// Inclusive DSL split driven by placeholder state. Every matching branch
+    /// becomes a real fiber and the selected cardinality feeds `JoinDynamic`.
+    ForkPayload {
+        branches: Box<[PayloadRouteBranch]>,
+        join_id: JoinId,
+        default_target: Option<Addr>,
     },
 
     // In-process FFI invocation (A2 dispatch model / A5 lowering target)
@@ -256,6 +350,9 @@ pub enum WaitState {
     Job {
         job_key: String,
     },
+    Effect {
+        effect_id: crate::EffectId,
+    },
     Join {
         join_id: JoinId,
     },
@@ -290,17 +387,22 @@ pub struct Fiber {
     pub wait: WaitState,
     /// Monotonic counter incremented by IncCounter. Used in job_key derivation.
     pub loop_epoch: u32,
+    /// D1 control stack: ordered handles into the snapshot's concurrency
+    /// table for the scopes this fibre is currently inside (V&S §2, §4).
+    /// Populated by V4's words; empty for every v2-pre-V4 fibre.
+    pub control_stack: Vec<crate::concurrency::Handle>,
 }
 
 impl Fiber {
-    pub fn new(fiber_id: Uuid, pc: Addr) -> Self {
+    pub fn new(fiber_id: Uuid, pc: impl Into<Addr>) -> Self {
         Self {
             fiber_id,
-            pc,
+            pc: pc.into(),
             stack: Vec::new(),
             regs: std::array::from_fn(|_| Value::Bool(false)),
             wait: WaitState::Running,
             loop_epoch: 0,
+            control_stack: Vec::new(),
         }
     }
 }
@@ -395,6 +497,51 @@ pub struct ProcessInstance {
     pub placeholder_values: Option<serde_json::Value>,
 }
 
+impl ProcessInstance {
+    /// Bind a DSL task output from the canonical domain payload. The accepted
+    /// key spellings are explicit frontend aliases; absence or malformed JSON
+    /// is an error and never becomes `null` or a default value.
+    pub fn bind_placeholder_from_payload(&mut self, placeholder: &str) -> Result<(), &'static str> {
+        let payload: serde_json::Value =
+            serde_json::from_str(&self.domain_payload).map_err(|_| "domain payload is not JSON")?;
+        let object = payload
+            .as_object()
+            .ok_or("domain payload is not a JSON object")?;
+        let plain = placeholder.trim_start_matches('@');
+        let snake = plain.replace('-', "_");
+        let value = object
+            .get(placeholder)
+            .or_else(|| object.get(plain))
+            .or_else(|| object.get(&snake))
+            .cloned()
+            .ok_or("declared DSL output is absent from domain payload")?;
+        let placeholders = self
+            .placeholder_values
+            .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        let placeholders = placeholders
+            .as_object_mut()
+            .ok_or("placeholder state is not a JSON object")?;
+        placeholders.insert(placeholder.to_string(), value);
+        Ok(())
+    }
+
+    pub fn placeholder_matches(&self, placeholder: &str, expected: &str) -> bool {
+        self.placeholder_values
+            .as_ref()
+            .and_then(|values| values.get(placeholder))
+            .is_some_and(|value| canonical_json_scalar(value) == Some(expected))
+    }
+}
+
+fn canonical_json_scalar(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::String(value) => Some(value.as_str()),
+        serde_json::Value::Bool(true) => Some("true"),
+        serde_json::Value::Bool(false) => Some("false"),
+        _ => None,
+    }
+}
+
 // ─── Job activation/completion (the wire types) ───────────────
 
 /// Delivered to ob-poc worker when EXEC_NATIVE fires.
@@ -421,7 +568,7 @@ pub struct JobActivation {
 }
 
 /// Returned by ob-poc worker after verb execution.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct JobCompletion {
     pub job_key: String,
     pub domain_payload: String,
@@ -486,34 +633,176 @@ pub struct PayloadUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledProgram {
     /// BLAKE3 of the serialized program — version key.
-    pub bytecode_version: [u8; 32],
-    pub program: Vec<Instr>,
+    pub(crate) bytecode_version: [u8; 32],
+    pub(crate) program: Vec<Instr>,
     /// Bytecode address → BPMN element id (for diagnostics).
-    pub debug_map: BTreeMap<Addr, String>,
-    pub join_plan: BTreeMap<JoinId, JoinPlanEntry>,
-    pub wait_plan: BTreeMap<WaitId, WaitPlanEntry>,
-    pub message_name_map: BTreeMap<u32, String>,
-    pub race_plan: BTreeMap<RaceId, RacePlanEntry>,
+    pub(crate) debug_map: BTreeMap<Addr, String>,
+    pub(crate) join_plan: BTreeMap<JoinId, JoinPlanEntry>,
+    pub(crate) wait_plan: BTreeMap<WaitId, WaitPlanEntry>,
+    pub(crate) message_name_map: BTreeMap<u32, String>,
+    pub(crate) race_plan: BTreeMap<RaceId, RacePlanEntry>,
     /// ExecNative bytecode addr → RaceId for tasks with boundary timers.
-    pub boundary_map: BTreeMap<Addr, RaceId>,
+    pub(crate) boundary_map: BTreeMap<Addr, RaceId>,
     /// task_type → set of flags it may write.
-    pub write_set: BTreeMap<String, HashSet<FlagKey>>,
+    pub(crate) write_set: BTreeMap<String, HashSet<FlagKey>>,
     /// All task_type references in the program.
-    pub task_manifest: Vec<String>,
+    pub(crate) task_manifest: Vec<String>,
     /// ExecNative bytecode addr → ordered error routes (specific codes first, catch-all last).
-    pub error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
+    pub(crate) error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
     /// Compile-time flag name → FlagKey mapping. Inverted from the lowering intern table;
     /// preserved so the FFI binding layer can resolve symbolic variable names to storage keys.
-    pub flag_symbol_table: BTreeMap<FlagKey, String>,
+    pub(crate) flag_symbol_table: BTreeMap<FlagKey, String>,
     /// Resolved data-object declarations keyed by data-object id attribute.
     /// Populated by the A5 lowering pass; empty for processes with no
     /// `<bpmn:dataObject>` declarations.
-    pub data_objects: BTreeMap<String, crate::ffi_bindings::DataObjectDecl>,
+    pub(crate) data_objects: BTreeMap<String, crate::ffi_bindings::DataObjectDecl>,
     /// Compiled FFI task declarations indexed by the bytecode address of
     /// the corresponding `Instr::ExecFfi` instruction.
     /// Populated by the A5 lowering pass; empty for processes with no
     /// `<bpmn:taskDefinition implementation="...">` annotations.
-    pub ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    pub(crate) ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+}
+
+/// Field-less compatibility tuple used only while pre-T7 callers migrate.
+/// It cannot become executable without admission by the envelope verifier.
+#[doc(hidden)]
+pub type LegacyProgramParts = (
+    [u8; 32],
+    Vec<Instr>,
+    BTreeMap<Addr, String>,
+    BTreeMap<JoinId, JoinPlanEntry>,
+    BTreeMap<WaitId, WaitPlanEntry>,
+    BTreeMap<u32, String>,
+    BTreeMap<RaceId, RacePlanEntry>,
+    BTreeMap<Addr, RaceId>,
+    BTreeMap<String, HashSet<FlagKey>>,
+    Vec<String>,
+    BTreeMap<Addr, Vec<ErrorRoute>>,
+    BTreeMap<FlagKey, String>,
+    BTreeMap<String, crate::ffi_bindings::DataObjectDecl>,
+    BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+);
+
+impl CompiledProgram {
+    #[doc(hidden)]
+    pub fn from_legacy_parts(parts: LegacyProgramParts) -> Self {
+        let (
+            bytecode_version,
+            program,
+            debug_map,
+            join_plan,
+            wait_plan,
+            message_name_map,
+            race_plan,
+            boundary_map,
+            write_set,
+            task_manifest,
+            error_route_map,
+            flag_symbol_table,
+            data_objects,
+            ffi_task_decls,
+        ) = parts;
+        Self {
+            bytecode_version,
+            program,
+            debug_map,
+            join_plan,
+            wait_plan,
+            message_name_map,
+            race_plan,
+            boundary_map,
+            write_set,
+            task_manifest,
+            error_route_map,
+            flag_symbol_table,
+            data_objects,
+            ffi_task_decls,
+        }
+    }
+
+    pub fn bytecode_version(&self) -> [u8; 32] {
+        self.bytecode_version
+    }
+    pub fn program(&self) -> &Vec<Instr> {
+        &self.program
+    }
+    #[doc(hidden)]
+    pub fn program_mut(&mut self) -> &mut Vec<Instr> {
+        &mut self.program
+    }
+    pub fn debug_map(&self) -> &BTreeMap<Addr, String> {
+        &self.debug_map
+    }
+    pub fn join_plan(&self) -> &BTreeMap<JoinId, JoinPlanEntry> {
+        &self.join_plan
+    }
+    pub fn wait_plan(&self) -> &BTreeMap<WaitId, WaitPlanEntry> {
+        &self.wait_plan
+    }
+    pub fn message_name_map(&self) -> &BTreeMap<u32, String> {
+        &self.message_name_map
+    }
+    pub fn race_plan(&self) -> &BTreeMap<RaceId, RacePlanEntry> {
+        &self.race_plan
+    }
+    pub fn boundary_map(&self) -> &BTreeMap<Addr, RaceId> {
+        &self.boundary_map
+    }
+    pub fn write_set(&self) -> &BTreeMap<String, HashSet<FlagKey>> {
+        &self.write_set
+    }
+    pub fn task_manifest(&self) -> &Vec<String> {
+        &self.task_manifest
+    }
+    pub fn error_route_map(&self) -> &BTreeMap<Addr, Vec<ErrorRoute>> {
+        &self.error_route_map
+    }
+    pub fn flag_symbol_table(&self) -> &BTreeMap<FlagKey, String> {
+        &self.flag_symbol_table
+    }
+    pub fn data_objects(&self) -> &BTreeMap<String, crate::ffi_bindings::DataObjectDecl> {
+        &self.data_objects
+    }
+    pub fn ffi_task_decls(&self) -> &BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl> {
+        &self.ffi_task_decls
+    }
+}
+
+#[macro_export]
+macro_rules! legacy_program {
+    (
+        bytecode_version: $bytecode_version:expr,
+        program: $program:expr,
+        debug_map: $debug_map:expr,
+        join_plan: $join_plan:expr,
+        wait_plan: $wait_plan:expr,
+        message_name_map: $message_name_map:expr,
+        race_plan: $race_plan:expr,
+        boundary_map: $boundary_map:expr,
+        write_set: $write_set:expr,
+        task_manifest: $task_manifest:expr,
+        error_route_map: $error_route_map:expr,
+        flag_symbol_table: $flag_symbol_table:expr,
+        data_objects: $data_objects:expr,
+        ffi_task_decls: $ffi_task_decls:expr $(,)?
+    ) => {
+        $crate::CompiledProgram::from_legacy_parts((
+            $bytecode_version,
+            $program,
+            $debug_map,
+            $join_plan,
+            $wait_plan,
+            $message_name_map,
+            $race_plan,
+            $boundary_map,
+            $write_set,
+            $task_manifest,
+            $error_route_map,
+            $flag_symbol_table,
+            $data_objects,
+            $ffi_task_decls,
+        ))
+    };
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

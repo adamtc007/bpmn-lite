@@ -14,6 +14,9 @@ pub enum BusStorageError {
 
     #[error("invalid bus column '{column}' value '{value}'")]
     InvalidColumn { column: &'static str, value: String },
+
+    #[error("outbox dispatch lease was lost for row {0}")]
+    LostClaim(Uuid),
 }
 
 /// Outbox / inbox endpoint discriminator. Both tables store these as
@@ -53,6 +56,7 @@ impl BusEndpoint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutboxStatus {
     Pending,
+    Dispatching,
     Submitted,
     Retrying,
     Failed,
@@ -62,6 +66,7 @@ impl OutboxStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Dispatching => "dispatching",
             Self::Submitted => "submitted",
             Self::Retrying => "retrying",
             Self::Failed => "failed",
@@ -71,6 +76,7 @@ impl OutboxStatus {
     pub(crate) fn parse(s: &str) -> Result<Self> {
         match s {
             "pending" => Ok(Self::Pending),
+            "dispatching" => Ok(Self::Dispatching),
             "submitted" => Ok(Self::Submitted),
             "retrying" => Ok(Self::Retrying),
             "failed" => Ok(Self::Failed),
@@ -101,6 +107,7 @@ pub struct OutboxEntry {
     pub created_at: DateTime<Utc>,
     pub submitted_at: Option<DateTime<Utc>>,
     pub tenant_id: String,
+    pub claim_token: Option<Uuid>,
 }
 
 impl OutboxEntry {
@@ -134,6 +141,7 @@ impl OutboxEntry {
             created_at: now,
             submitted_at: None,
             tenant_id,
+            claim_token: None,
         }
     }
 

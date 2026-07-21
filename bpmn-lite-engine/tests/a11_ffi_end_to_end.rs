@@ -25,7 +25,7 @@
 //! process, then asserts `do_eligible == 1` and process state == Completed.
 
 use bpmn_lite_engine::BpmnLiteEngine;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::compute_hash;
@@ -99,7 +99,7 @@ async fn setup_ffi() -> (String, Arc<DmnLiteOwner>, Arc<FfiCatalogue>) {
         .expect("publish template");
     let ffi_cat = Arc::new(FfiCatalogue::new(ffi_store));
     ffi_cat
-        .load_into_cache("tenant-a")
+        .load_into_cache(&bpmn_lite_types::TenantId::new("tenant-a").unwrap())
         .await
         .expect("load cache");
 
@@ -155,7 +155,7 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
     let dispatcher = Arc::new(dispatcher);
 
     // Set up engine.
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(dispatcher);
 
     // Compile the BPMN process.
@@ -172,13 +172,13 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
 
     // Find FlagKey for "do_score" and "do_eligible" from the symbol table.
     let score_key = *program
-        .flag_symbol_table
+        .flag_symbol_table()
         .iter()
         .find(|(_, name)| *name == "do_score")
         .expect("do_score must be in flag_symbol_table")
         .0;
     let eligible_key = *program
-        .flag_symbol_table
+        .flag_symbol_table()
         .iter()
         .find(|(_, name)| *name == "do_eligible")
         .expect("do_eligible must be in flag_symbol_table")
@@ -194,12 +194,17 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
 
     // Pre-initialise do_score = 100 in instance flags.
     let mut instance = store
-        .load_instance(instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .expect("load instance")
         .expect("instance must exist");
     instance.flags.insert(score_key, Value::I64(100));
-    store.save_instance("default", &instance).await.expect("save instance");
+    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", instance)
+        .await
+        .expect("save instance");
 
     // Run the instance — ExecFfi fires, decision evaluates, do_eligible = 1.
     engine
@@ -209,7 +214,10 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
 
     // Reload and verify.
     let instance = store
-        .load_instance(instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .expect("load instance after run")
         .expect("instance must exist");
@@ -238,7 +246,7 @@ async fn a11_no_match_score_produces_tier_zero() {
     let mut dispatcher = FfiDispatcher::new(ffi_cat);
     dispatcher.register_owner(owner).expect("register owner");
 
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(Arc::new(dispatcher));
 
     let bpmn_xml = build_bpmn_xml(&template_id_hex);
@@ -251,13 +259,13 @@ async fn a11_no_match_score_produces_tier_zero() {
         .expect("load program")
         .unwrap();
     let score_key = *program
-        .flag_symbol_table
+        .flag_symbol_table()
         .iter()
         .find(|(_, n)| *n == "do_score")
         .unwrap()
         .0;
     let eligible_key = *program
-        .flag_symbol_table
+        .flag_symbol_table()
         .iter()
         .find(|(_, n)| *n == "do_eligible")
         .unwrap()
@@ -271,13 +279,29 @@ async fn a11_no_match_score_produces_tier_zero() {
         .expect("start");
 
     // Score = 99 → catch-all fires → tier = 0.
-    let mut instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let mut instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     instance.flags.insert(score_key, Value::I64(99));
-    store.save_instance("default", &instance).await.unwrap();
+    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", instance)
+        .await
+        .unwrap();
 
     engine.run_instance(instance_id).await.expect("run");
 
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Completed { .. }),
         "expected Completed, got {:?}",
@@ -295,7 +319,7 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
     let (template_id_hex, _owner, _ffi_cat) = setup_ffi().await;
 
     // Intentionally do NOT attach a dispatcher.
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone()); // no with_ffi_dispatcher
 
     let bpmn_xml = build_bpmn_xml(&template_id_hex);
@@ -304,7 +328,7 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
 
     let program = store.load_program(bytecode_version).await.unwrap().unwrap();
     let score_key = *program
-        .flag_symbol_table
+        .flag_symbol_table()
         .iter()
         .find(|(_, n)| *n == "do_score")
         .unwrap()
@@ -323,13 +347,29 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
         .await
         .expect("start");
 
-    let mut instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let mut instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     instance.flags.insert(score_key, Value::I64(100));
-    store.save_instance("default", &instance).await.unwrap();
+    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", instance)
+        .await
+        .unwrap();
 
     engine.run_instance(instance_id).await.expect("run");
 
-    let instance = store.load_instance(instance_id).await.unwrap().unwrap();
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         matches!(instance.state, ProcessState::Failed { .. }),
         "expected Failed (no dispatcher = incident), got {:?}",

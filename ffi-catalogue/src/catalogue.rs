@@ -14,6 +14,7 @@
 //!   async and may hit Postgres, so it is NOT for the hot dispatch path.
 
 use crate::store::FfiTemplateStore;
+use bpmn_lite_types::TenantId;
 use ffi_types::{FfiCatalogueSnapshot, FfiTemplate, GLOBAL_TENANT_ID};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,10 +44,11 @@ impl FfiCatalogue {
     /// Load all templates visible to `tenant_id` (tenant-specific + GLOBAL)
     /// into the in-memory cache. Returns the count of distinct templates
     /// loaded.
-    pub async fn load_into_cache(&self, tenant_id: &str) -> anyhow::Result<usize> {
+    pub async fn load_into_cache(&self, tenant_id: &TenantId) -> anyhow::Result<usize> {
         let mut tenant_templates = self.store.list_by_tenant(tenant_id).await?;
-        if tenant_id != GLOBAL_TENANT_ID {
-            let mut global_templates = self.store.list_by_tenant(GLOBAL_TENANT_ID).await?;
+        if tenant_id.as_str() != GLOBAL_TENANT_ID {
+            let global_tenant = TenantId::new(GLOBAL_TENANT_ID)?;
+            let mut global_templates = self.store.list_by_tenant(&global_tenant).await?;
             tenant_templates.append(&mut global_templates);
         }
 
@@ -183,7 +185,10 @@ mod tests {
         store.publish(&t).await.unwrap();
 
         let cat = FfiCatalogue::new(store);
-        let count = cat.load_into_cache("tenant-a").await.unwrap();
+        let count = cat
+            .load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(count, 1);
 
         let got = cat.lookup_cached(&t.template_id).await.unwrap();
@@ -199,7 +204,10 @@ mod tests {
         store.publish(&global_t).await.unwrap();
 
         let cat = FfiCatalogue::new(store);
-        let count = cat.load_into_cache("tenant-a").await.unwrap();
+        let count = cat
+            .load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(count, 2);
         assert!(cat.lookup_cached(&tenant_t.template_id).await.is_some());
         assert!(cat.lookup_cached(&global_t.template_id).await.is_some());
@@ -212,7 +220,10 @@ mod tests {
         store.publish(&g).await.unwrap();
 
         let cat = FfiCatalogue::new(store);
-        let count = cat.load_into_cache(GLOBAL_TENANT_ID).await.unwrap();
+        let count = cat
+            .load_into_cache(&TenantId::new(GLOBAL_TENANT_ID).unwrap())
+            .await
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -248,7 +259,9 @@ mod tests {
         store.publish(&t).await.unwrap();
 
         let cat = FfiCatalogue::new(store);
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
 
         let snap = cat.snapshot();
         let found: Option<&FfiTemplate> = snap.lookup(&t.template_id);
@@ -285,13 +298,17 @@ mod tests {
         store.publish(&t1).await.unwrap();
 
         let cat = FfiCatalogue::new(store.clone());
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(cat.cache_len().await, 1);
 
         let t2 = make_template("http", "tenant-a", 2);
         store.publish(&t2).await.unwrap();
 
-        cat.load_into_cache("tenant-a").await.unwrap();
+        cat.load_into_cache(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(cat.cache_len().await, 2);
         assert!(cat.lookup_cached(&t1.template_id).await.is_some());
         assert!(cat.lookup_cached(&t2.template_id).await.is_some());

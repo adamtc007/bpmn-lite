@@ -6,9 +6,10 @@
 //! SQL layer via `ON CONFLICT DO NOTHING` on the BYTEA primary key,
 //! followed by a content equality check.
 
-#![allow(clippy::redundant_pattern_matching, clippy::needless_borrow)]
 use async_trait::async_trait;
-use ffi_catalogue::FfiTemplateStore;
+use bpmn_lite_store::{StoreError, StoreResult};
+use bpmn_lite_types::TenantId;
+use ffi_catalogue::{FfiTemplateStore, FfiTemplateStoreError, FfiTemplateStoreResult};
 use ffi_types::{FfiTemplate, FieldSchema, Idempotency};
 use sqlx::PgPool;
 use sqlx::Row;
@@ -29,14 +30,17 @@ impl PostgresFfiTemplateStore {
 
 #[async_trait]
 impl FfiTemplateStore for PostgresFfiTemplateStore {
-    async fn publish(&self, template: &FfiTemplate) -> anyhow::Result<()> {
+    async fn publish(&self, template: &FfiTemplate) -> FfiTemplateStoreResult<()> {
         // Two-step write: try INSERT; if there's already a row with the same
         // template_id, compare content and accept identical content as
         // idempotent (per A2 §6) or reject differing content.
 
-        let input_schema_json = serde_json::to_value(&template.input_schema)?;
-        let output_schema_json = serde_json::to_value(&template.output_schema)?;
-        let idempotency_json = serde_json::to_value(&template.idempotency)?;
+        let input_schema_json = serde_json::to_value(&template.input_schema)
+            .map_err(|error| FfiTemplateStoreError::Integrity(error.to_string()))?;
+        let output_schema_json = serde_json::to_value(&template.output_schema)
+            .map_err(|error| FfiTemplateStoreError::Integrity(error.to_string()))?;
+        let idempotency_json = serde_json::to_value(&template.idempotency)
+            .map_err(|error| FfiTemplateStoreError::Integrity(error.to_string()))?;
         let published_at =
             chrono::DateTime::<chrono::Utc>::from_timestamp_millis(template.published_at)
                 .unwrap_or_else(chrono::Utc::now);
@@ -53,10 +57,11 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         let inserted = crate::store_postgres::execute_tenant_scoped_on_pool(
             &self.pool,
             &tenant_id,
-            &lease_owner,
-            |tx| Box::pin(async move {
-                sqlx::query(
-                    r#"
+            lease_owner,
+            |tx| {
+                Box::pin(async move {
+                    sqlx::query(
+                        r#"
                     INSERT INTO ffi_template (
                         template_id, template_uuidv7, owner_type, owner_metadata,
                         input_schema_json, output_schema_json, idempotency_json,
@@ -65,23 +70,25 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     ON CONFLICT (template_id) DO NOTHING
                     "#,
-                )
-                .bind(template_id.as_slice())
-                .bind(row_uuid)
-                .bind(&owner_type)
-                .bind(&owner_metadata)
-                .bind(&input_schema_json)
-                .bind(&output_schema_json)
-                .bind(&idempotency_json)
-                .bind(&tenant_id_for_query)
-                .bind(published_at)
-                .bind(&publisher)
-                .execute(&mut *tx.tx)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))
-            })
+                    )
+                    .bind(template_id.as_slice())
+                    .bind(row_uuid)
+                    .bind(&owner_type)
+                    .bind(&owner_metadata)
+                    .bind(&input_schema_json)
+                    .bind(&output_schema_json)
+                    .bind(&idempotency_json)
+                    .bind(&tenant_id_for_query)
+                    .bind(published_at)
+                    .bind(&publisher)
+                    .execute(&mut *tx.tx)
+                    .await
+                    .map_err(StoreError::unavailable)
+                })
+            },
         )
-        .await?;
+        .await
+        .map_err(|error| FfiTemplateStoreError::Unavailable(error.to_string()))?;
 
         if inserted.rows_affected() == 1 {
             return Ok(());
@@ -92,118 +99,171 @@ impl FfiTemplateStore for PostgresFfiTemplateStore {
         let existing = self.lookup(&template.template_id).await?;
         match existing {
             Some(t) if &t == template => Ok(()),
-            Some(_) => anyhow::bail!(
-                "FFI template {} already published with different content (immutability guard)",
-                hex(&template.template_id)
-            ),
-            None => anyhow::bail!(
-                "INSERT reported conflict but lookup found no row for template {}",
-                hex(&template.template_id)
-            ),
+            Some(_) => {
+                return Err(FfiTemplateStoreError::Integrity(format!(
+                    "FFI template {} already published with different content (immutability guard)",
+                    hex(&template.template_id)
+                )))
+            }
+            None => {
+                return Err(FfiTemplateStoreError::Integrity(format!(
+                    "INSERT reported conflict but lookup found no row for template {}",
+                    hex(&template.template_id)
+                )))
+            }
         }
     }
 
-    async fn lookup(&self, template_id: &[u8; 32]) -> anyhow::Result<Option<FfiTemplate>> {
+    async fn lookup(&self, template_id: &[u8; 32]) -> FfiTemplateStoreResult<Option<FfiTemplate>> {
         let row: (Option<String>,) = sqlx::query_as("SELECT resolve_template_tenant_id($1)")
             .bind(template_id.as_slice())
             .fetch_one(&self.pool)
-            .await?;
+            .await
+            .map_err(|error| FfiTemplateStoreError::Unavailable(error.to_string()))?;
         let tenant_id = match row.0 {
             Some(t) => t,
             None => return Ok(None),
         };
         let lease_owner = "unused";
         let template_id_owned = *template_id;
-        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id, &lease_owner, |tx| Box::pin(async move {
-            let row = sqlx::query(
-                r#"
+        crate::store_postgres::execute_tenant_scoped_on_pool(
+            &self.pool,
+            &tenant_id,
+            lease_owner,
+            |tx| {
+                Box::pin(async move {
+                    let row = sqlx::query(
+                        r#"
                 SELECT template_id, owner_type, owner_metadata,
                        input_schema_json, output_schema_json, idempotency_json,
                        tenant_id, published_at, publisher
                 FROM ffi_template
                 WHERE template_id = $1
                 "#,
-            )
-            .bind(template_id_owned.as_slice())
-            .fetch_optional(&mut *tx.tx)
-            .await?;
+                    )
+                    .bind(template_id_owned.as_slice())
+                    .fetch_optional(&mut *tx.tx)
+                    .await
+                    .map_err(StoreError::unavailable)?;
 
-            match row {
-                None => Ok(None),
-                Some(r) => Ok(Some(row_to_template(r)?)),
-            }
-        })).await
+                    match row {
+                        None => Ok(None),
+                        Some(r) => Ok(Some(row_to_template(r)?)),
+                    }
+                })
+            },
+        )
+        .await
+        .map_err(|error| FfiTemplateStoreError::Unavailable(error.to_string()))
     }
 
-    async fn list_by_tenant(&self, tenant_id: &str) -> anyhow::Result<Vec<FfiTemplate>> {
+    async fn list_by_tenant(
+        &self,
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>> {
         let tenant_id_str = tenant_id.to_string();
         let tenant_id_query = tenant_id.to_string();
         let lease_owner = "unused";
-        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id_str, &lease_owner, |tx| Box::pin(async move {
-            let rows = sqlx::query(
-                r#"
+        crate::store_postgres::execute_tenant_scoped_on_pool(
+            &self.pool,
+            &tenant_id_str,
+            lease_owner,
+            |tx| {
+                Box::pin(async move {
+                    let rows = sqlx::query(
+                        r#"
                 SELECT template_id, owner_type, owner_metadata,
                        input_schema_json, output_schema_json, idempotency_json,
                        tenant_id, published_at, publisher
                 FROM ffi_template
                 WHERE tenant_id = $1
                 "#,
-            )
-            .bind(&tenant_id_query)
-            .fetch_all(&mut *tx.tx)
-            .await?;
+                    )
+                    .bind(&tenant_id_query)
+                    .fetch_all(&mut *tx.tx)
+                    .await
+                    .map_err(StoreError::unavailable)?;
 
-            rows.into_iter().map(row_to_template).collect()
-        })).await
+                    rows.into_iter().map(row_to_template).collect()
+                })
+            },
+        )
+        .await
+        .map_err(|error| FfiTemplateStoreError::Unavailable(error.to_string()))
     }
 
     async fn list_by_owner(
         &self,
         owner_type: &str,
-        tenant_id: &str,
-    ) -> anyhow::Result<Vec<FfiTemplate>> {
+        tenant_id: &TenantId,
+    ) -> FfiTemplateStoreResult<Vec<FfiTemplate>> {
         let owner_type = owner_type.to_string();
         let tenant_id_str = tenant_id.to_string();
         let tenant_id_query = tenant_id.to_string();
         let lease_owner = "unused";
-        crate::store_postgres::execute_tenant_scoped_on_pool(&self.pool, &tenant_id_str, &lease_owner, |tx| Box::pin(async move {
-            let rows = sqlx::query(
-                r#"
+        crate::store_postgres::execute_tenant_scoped_on_pool(
+            &self.pool,
+            &tenant_id_str,
+            lease_owner,
+            |tx| {
+                Box::pin(async move {
+                    let rows = sqlx::query(
+                        r#"
                 SELECT template_id, owner_type, owner_metadata,
                        input_schema_json, output_schema_json, idempotency_json,
                        tenant_id, published_at, publisher
                 FROM ffi_template
                 WHERE owner_type = $1 AND tenant_id = $2
                 "#,
-            )
-            .bind(&owner_type)
-            .bind(&tenant_id_query)
-            .fetch_all(&mut *tx.tx)
-            .await?;
+                    )
+                    .bind(&owner_type)
+                    .bind(&tenant_id_query)
+                    .fetch_all(&mut *tx.tx)
+                    .await
+                    .map_err(StoreError::unavailable)?;
 
-            rows.into_iter().map(row_to_template).collect()
-        })).await
+                    rows.into_iter().map(row_to_template).collect()
+                })
+            },
+        )
+        .await
+        .map_err(|error| FfiTemplateStoreError::Unavailable(error.to_string()))
     }
 }
 
-fn row_to_template(row: sqlx::postgres::PgRow) -> anyhow::Result<FfiTemplate> {
-    let template_id_bytes: Vec<u8> = row.try_get("template_id")?;
+fn row_to_template(row: sqlx::postgres::PgRow) -> StoreResult<FfiTemplate> {
+    let template_id_bytes: Vec<u8> = row
+        .try_get("template_id")
+        .map_err(StoreError::unavailable)?;
     let template_id: [u8; 32] = template_id_bytes
         .as_slice()
         .try_into()
-        .map_err(|_| anyhow::anyhow!("template_id must be 32 bytes"))?;
-    let owner_type: String = row.try_get("owner_type")?;
-    let owner_metadata: Vec<u8> = row.try_get("owner_metadata")?;
-    let input_schema_json: serde_json::Value = row.try_get("input_schema_json")?;
-    let output_schema_json: serde_json::Value = row.try_get("output_schema_json")?;
-    let idempotency_json: serde_json::Value = row.try_get("idempotency_json")?;
-    let tenant_id: String = row.try_get("tenant_id")?;
-    let published_at: chrono::DateTime<chrono::Utc> = row.try_get("published_at")?;
-    let publisher: String = row.try_get("publisher")?;
+        .map_err(|_| StoreError::Integrity("template_id must be 32 bytes".into()))?;
+    let owner_type: String = row.try_get("owner_type").map_err(StoreError::unavailable)?;
+    let owner_metadata: Vec<u8> = row
+        .try_get("owner_metadata")
+        .map_err(StoreError::unavailable)?;
+    let input_schema_json: serde_json::Value = row
+        .try_get("input_schema_json")
+        .map_err(StoreError::unavailable)?;
+    let output_schema_json: serde_json::Value = row
+        .try_get("output_schema_json")
+        .map_err(StoreError::unavailable)?;
+    let idempotency_json: serde_json::Value = row
+        .try_get("idempotency_json")
+        .map_err(StoreError::unavailable)?;
+    let tenant_id: String = row.try_get("tenant_id").map_err(StoreError::unavailable)?;
+    let published_at: chrono::DateTime<chrono::Utc> = row
+        .try_get("published_at")
+        .map_err(StoreError::unavailable)?;
+    let publisher: String = row.try_get("publisher").map_err(StoreError::unavailable)?;
 
-    let input_schema: Vec<FieldSchema> = serde_json::from_value(input_schema_json)?;
-    let output_schema: Vec<FieldSchema> = serde_json::from_value(output_schema_json)?;
-    let idempotency: Idempotency = serde_json::from_value(idempotency_json)?;
+    let input_schema: Vec<FieldSchema> =
+        serde_json::from_value(input_schema_json).map_err(StoreError::integrity)?;
+    let output_schema: Vec<FieldSchema> =
+        serde_json::from_value(output_schema_json).map_err(StoreError::integrity)?;
+    let idempotency: Idempotency =
+        serde_json::from_value(idempotency_json).map_err(StoreError::integrity)?;
 
     Ok(FfiTemplate {
         template_id,
@@ -268,13 +328,14 @@ mod tests {
 
         use std::str::FromStr;
         let mut options = sqlx::postgres::PgConnectOptions::from_str(&url).ok()?;
-        options = options.username("bpmn_lite_app").password("bpmn_lite_app_dev_password");
+        options = options
+            .username("bpmn_lite_app")
+            .password("bpmn_lite_app_dev_password");
         let app_pool = PgPool::connect_with(options).await.ok()?;
         Some(app_pool)
     }
 
     #[tokio::test]
-    #[ignore = "requires BPMN_LITE_TEST_DATABASE_URL"]
     async fn pg_publish_then_lookup_roundtrip() {
         let pool = match setup_pool().await {
             Some(p) => p,
@@ -292,7 +353,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires BPMN_LITE_TEST_DATABASE_URL"]
     async fn pg_publish_idempotent_for_identical_content() {
         let pool = match setup_pool().await {
             Some(p) => p,
@@ -306,7 +366,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires BPMN_LITE_TEST_DATABASE_URL"]
     async fn pg_list_by_tenant_isolates() {
         let pool = match setup_pool().await {
             Some(p) => p,
@@ -322,7 +381,10 @@ mod tests {
             .await
             .unwrap();
 
-        let a = store.list_by_tenant("tenant-a").await.unwrap();
+        let a = store
+            .list_by_tenant(&TenantId::new("tenant-a").unwrap())
+            .await
+            .unwrap();
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].tenant_id, "tenant-a");
     }

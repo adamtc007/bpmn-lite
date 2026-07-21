@@ -16,4 +16,6 @@ pub mod catalogue;
 pub mod store;
 
 pub use catalogue::FfiCatalogue;
-pub use store::{FfiTemplateStore, MemoryFfiTemplateStore};
+pub use store::{
+    FfiTemplateStore, FfiTemplateStoreError, FfiTemplateStoreResult, MemoryFfiTemplateStore,
+};

@@ -19,7 +19,7 @@
 
 use bpmn_lite_compiler::{lower, parse_bpmn};
 use bpmn_lite_engine::BpmnLiteEngine;
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::*;
@@ -44,21 +44,22 @@ async fn send_task_publishes_message_and_advances() {
     let graph = parse_bpmn(SEND_TASK_XML).expect("parse_bpmn");
     let program = lower(&graph).expect("lower");
     let publish_count = program
-        .program
+        .program()
         .iter()
         .filter(|i| matches!(i, Instr::PublishMessage { .. }))
         .count();
     assert_eq!(
-        publish_count, 1,
+        publish_count,
+        1,
         "expected exactly one PublishMessage in bytecode; got program={:?}",
-        program.program
+        program.program()
     );
 
     // ── Engine setup
-    let store: Arc<dyn ProcessStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
     store
-        .store_program(program.bytecode_version, &program)
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
 
@@ -68,7 +69,7 @@ async fn send_task_publishes_message_and_advances() {
     let iid = engine
         .start(
             "send_proc",
-            program.bytecode_version,
+            program.bytecode_version(),
             payload,
             hash,
             "cal-1",
@@ -86,7 +87,10 @@ async fn send_task_publishes_message_and_advances() {
     );
 
     // ── 4: no fibers remain
-    let fibers = store.load_fibers(iid).await.unwrap();
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
     assert!(
         fibers.is_empty(),
         "expected no surviving fibers; got {}",
@@ -96,7 +100,12 @@ async fn send_task_publishes_message_and_advances() {
     // ── 5: message actually buffered (correlation key = "b:false" because
     //      register 0 is uninitialised → Value::Bool(false) at publish time)
     let claimed = store
-        .claim_buffered_message("default", "payment_requested", "b:false", 60_000)
+        .claim_buffered_message(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            "payment_requested",
+            "b:false",
+            60_000,
+        )
         .await
         .unwrap();
     assert!(
@@ -105,7 +114,10 @@ async fn send_task_publishes_message_and_advances() {
     );
 
     // ── 6: MessageBuffered event in event log
-    let events = store.read_events(iid, 0).await.unwrap();
+    let events = store
+        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+        .await
+        .unwrap();
     let saw_buffered = events.iter().any(|(_, e)| {
         matches!(
             e,

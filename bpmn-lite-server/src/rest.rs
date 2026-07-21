@@ -33,40 +33,46 @@ use uuid::Uuid;
 
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_engine::demo::{build_demo_plan, demo_initial_vars};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::{AdminProjectionStore, ArtifactRepository, RuntimeStore};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::types::{ProcessInstance, ProcessState};
+use bpmn_lite_types::TenantId;
 
 // ── Demo state ─────────────────────────────────────────────────────────
 
-pub(crate) struct DemoState {
+pub struct DemoState {
     store: Arc<MemoryStore>,
+    tenant_id: TenantId,
     plan: Arc<WorkflowExecutionPlan>,
     cbu_types: Mutex<HashMap<Uuid, String>>,
 }
 
 impl DemoState {
-    pub(crate) fn new() -> Arc<Self> {
-        let plan = build_demo_plan().expect("§10 demo plan must compile");
-        Arc::new(Self {
+    pub fn try_new() -> Result<Arc<Self>, anyhow::Error> {
+        let plan = build_demo_plan()?;
+        Ok(Arc::new(Self {
             store: Arc::new(MemoryStore::new()),
+            tenant_id: TenantId::new("demo")?,
             plan: Arc::new(plan),
             cbu_types: Mutex::new(HashMap::new()),
-        })
+        }))
     }
 
     fn cbu_type(&self, id: Uuid) -> String {
         self.cbu_types
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&id)
             .cloned()
             .unwrap_or_default()
     }
 
     fn set_cbu_type(&self, id: Uuid, t: String) {
-        self.cbu_types.lock().unwrap().insert(id, t);
+        self.cbu_types
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, t);
     }
 }
 
@@ -152,7 +158,7 @@ pub(crate) struct NextStepBody {
 
 // ── Router ──────────────────────────────────────────────────────────────
 
-pub(crate) fn demo_router(state: Arc<DemoState>) -> Router {
+pub fn demo_router(state: Arc<DemoState>) -> Router {
     Router::new()
         .route("/bpmn/health", get(health))
         .route(
@@ -170,10 +176,19 @@ pub(crate) fn demo_router(state: Arc<DemoState>) -> Router {
         .route("/dmn/compile/preview", post(compile_dmn_preview))
         .route("/dmn/decisions/:id", get(get_dmn_decision))
         .route("/api/dsl/macro/apply", post(apply_dsl_macro))
-        .route("/api/dsl/diagnostics/resolve", post(resolve_dsl_diagnostics))
+        .route(
+            "/api/dsl/diagnostics/resolve",
+            post(resolve_dsl_diagnostics),
+        )
         .route("/api/dsl/sage/utter", post(sage_utterance_gate))
-        .route("/bpmn/templates", get(list_templates_endpoint).post(define_template_endpoint))
-        .route("/bpmn/templates/:name/versions/:version", get(get_template_version_endpoint))
+        .route(
+            "/bpmn/templates",
+            get(list_templates_endpoint).post(define_template_endpoint),
+        )
+        .route(
+            "/bpmn/templates/:name/versions/:version",
+            get(get_template_version_endpoint),
+        )
         .with_state(state)
 }
 
@@ -186,12 +201,12 @@ async fn health() -> impl IntoResponse {
 async fn list_instances(State(demo): State<Arc<DemoState>>) -> impl IntoResponse {
     let ids = demo
         .store
-        .list_running_instances("demo")
+        .list_running_instances(&demo.tenant_id)
         .await
         .unwrap_or_default();
     let mut result: Vec<WorkflowInstanceSummary> = Vec::new();
     for id in ids {
-        if let Ok(Some(inst)) = demo.store.load_instance(id).await {
+        if let Ok(Some(inst)) = demo.store.load_instance(&demo.tenant_id, id).await {
             result.push(WorkflowInstanceSummary {
                 id: id.to_string(),
                 workflow_id: inst.process_key.clone(),
@@ -208,25 +223,17 @@ async fn get_instance(
     State(demo): State<Arc<DemoState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let inst = match demo.store.load_instance(id).await {
+    let inst = match demo.store.load_instance(&demo.tenant_id, id).await {
         Ok(Some(i)) => i,
         _ => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": "not found"})),
             )
-                .into_response()
+                .into_response();
         }
     };
-    let plan = if let Some(plan_hash) = inst.plan_hash {
-        if let Ok(Some(plan_json)) = demo.store.load_plan(plan_hash).await {
-            serde_json::from_str::<WorkflowExecutionPlan>(&plan_json).ok().map(Arc::new)
-        } else {
-            None
-        }
-    } else {
-        None
-    }.unwrap_or_else(|| demo.plan.clone());
+    let plan = demo.plan.clone();
 
     let variables = inst
         .placeholder_values
@@ -259,8 +266,9 @@ async fn start_instance(
                     Json(serde_json::json!({
                         "error": format!("Compilation failed: {}", e),
                         "diagnostics": vec![format!("{}", e)]
-                    }))
-                ).into_response();
+                    })),
+                )
+                    .into_response();
             }
         }
     } else {
@@ -273,7 +281,7 @@ async fn start_instance(
         "trust" => "TRUST",
         other => other,
     };
-    
+
     let mut vars = demo_initial_vars("Demo Client", client_type_input);
     if let Some(ref custom_vars) = body.variables {
         for (k, v) in custom_vars {
@@ -285,7 +293,7 @@ async fn start_instance(
         Ok(id) => {
             demo.set_cbu_type(id, body.cbu_type.clone());
             // Walk past StartEvent to the first callout node.
-            drive_forward(&demo.store, &plan, id).await;
+            drive_forward(&demo.store, &demo.tenant_id, &plan, id).await;
             Json(serde_json::json!({ "instance_id": id.to_string() })).into_response()
         }
         Err(e) => (
@@ -301,26 +309,18 @@ async fn next_step(
     Path(id): Path<Uuid>,
     body: Option<Json<NextStepBody>>,
 ) -> impl IntoResponse {
-    let inst = match demo.store.load_instance(id).await {
+    let inst = match demo.store.load_instance(&demo.tenant_id, id).await {
         Ok(Some(i)) => i,
         _ => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": "not found"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    let plan = if let Some(plan_hash) = inst.plan_hash {
-        if let Ok(Some(plan_json)) = demo.store.load_plan(plan_hash).await {
-            serde_json::from_str::<WorkflowExecutionPlan>(&plan_json).ok().map(Arc::new)
-        } else {
-            None
-        }
-    } else {
-        None
-    }.unwrap_or_else(|| demo.plan.clone());
+    let plan = demo.plan.clone();
 
     let node_id = inst.current_node_id.clone().unwrap_or_default();
     let cbu_type = demo.cbu_type(id);
@@ -335,7 +335,7 @@ async fn next_step(
             } else {
                 None
             };
-            
+
             let placeholder = val.map(|v| (placeholder_name.as_str(), v)).or_else(|| {
                 // Default fallback logic
                 if t.plug.starts_with("dmn-lite:") {
@@ -345,7 +345,10 @@ async fn next_step(
                         "trust" => "trust",
                         _ => "fund",
                     };
-                    Some((placeholder_name.as_str(), serde_json::Value::String(cbu_type_val.to_owned())))
+                    Some((
+                        placeholder_name.as_str(),
+                        serde_json::Value::String(cbu_type_val.to_owned()),
+                    ))
                 } else {
                     let default_val = if node_id == "create-cbu" {
                         serde_json::Value::String(Uuid::now_v7().to_string())
@@ -355,17 +358,29 @@ async fn next_step(
                     Some((placeholder_name.as_str(), default_val))
                 }
             });
-            
-            apply_step(&demo.store, id, t.next.clone(), placeholder).await;
+
+            apply_step(
+                &demo.store,
+                &demo.tenant_id,
+                id,
+                t.next.clone(),
+                placeholder,
+            )
+            .await;
         } else {
-            apply_step(&demo.store, id, t.next.clone(), None).await;
+            apply_step(&demo.store, &demo.tenant_id, id, t.next.clone(), None).await;
         }
     }
 
     // Drive forward through gateways and end events without the bus.
-    drive_forward(&demo.store, &plan, id).await;
+    drive_forward(&demo.store, &demo.tenant_id, &plan, id).await;
 
-    let updated = demo.store.load_instance(id).await.ok().flatten();
+    let updated = demo
+        .store
+        .load_instance(&demo.tenant_id, id)
+        .await
+        .ok()
+        .flatten();
     let (current, status) = updated
         .map(|i| {
             (
@@ -403,7 +418,10 @@ async fn events_stub(Path(_id): Path<Uuid>) -> impl IntoResponse {
 }
 
 async fn reset_instances(State(demo): State<Arc<DemoState>>) -> impl IntoResponse {
-    demo.cbu_types.lock().unwrap().clear();
+    demo.cbu_types
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
     tracing::info!("Demo state reset (in-memory)");
     StatusCode::NO_CONTENT
 }
@@ -467,17 +485,62 @@ async fn create_instance(
         current_node_id: Some(plan.start_node.clone()),
         placeholder_values,
     };
-    store.save_instance("default", &instance).await?;
+    let claim = bpmn_lite_types::Claim::new(
+        bpmn_lite_types::TenantId::new(tenant_id.to_owned())?,
+        instance_id,
+        0,
+        0,
+    );
+    let transition = bpmn_lite_types::TransitionBuilder::new(instance)
+        .event(bpmn_lite_types::RuntimeEvent::InstanceStarted {
+            instance_id,
+            bytecode_version: [0u8; 32],
+        })
+        .build();
+    store.commit_transition(&claim, &transition).await?;
     Ok(instance_id)
+}
+
+async fn commit_demo_instance(
+    store: &MemoryStore,
+    instance: &ProcessInstance,
+) -> anyhow::Result<()> {
+    let owner = "demo-rest";
+    let claim = store
+        .claim_instance_for_transition(
+            &TenantId::new(instance.tenant_id.clone())?,
+            instance.instance_id,
+            owner,
+            5_000,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("demo instance is leased"))?;
+    let transition = bpmn_lite_types::TransitionBuilder::new(instance.clone()).build();
+    let result = store.commit_transition(&claim, &transition).await;
+    let release = store
+        .release_instance_transition(
+            &TenantId::new(instance.tenant_id.clone())?,
+            instance.instance_id,
+            owner,
+        )
+        .await;
+    result?;
+    release?;
+    Ok(())
 }
 
 /// Walk forward through non-callout nodes (Start, Split,
 /// End) without touching the bus. Stops at the first Task
 /// so the user can click "Next Step" there.
-async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uuid) {
+async fn drive_forward(
+    store: &MemoryStore,
+    tenant_id: &TenantId,
+    plan: &WorkflowExecutionPlan,
+    id: Uuid,
+) {
     use bpmn_lite_compiler::dsl::plan::SplitMode;
     loop {
-        let Ok(Some(mut inst)) = store.load_instance(id).await else {
+        let Ok(Some(mut inst)) = store.load_instance(tenant_id, id).await else {
             break;
         };
         if !matches!(inst.state, ProcessState::Running) {
@@ -496,99 +559,106 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
         match plan.nodes.get(&node_id) {
             Some(ExecutionNode::Start(n)) => {
                 inst.current_node_id = Some(n.next.clone());
-                let _ = store.save_instance("default", &inst).await;
+                let _ = commit_demo_instance(store, &inst).await;
             }
-            Some(ExecutionNode::Split(gw)) => {
-                match gw.mode {
-                    SplitMode::Exclusive => {
-                        let chosen = gw.flows.iter().find(|f| {
-                            if let (Some(ph), Some(exp)) = (&f.placeholder, &f.expected_value) {
-                                pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
-                            } else {
-                                false
-                            }
-                        });
-                        if let Some(flow) = chosen {
-                            inst.current_node_id = Some(flow.next.clone());
-                            let _ = store.save_instance("default", &inst).await;
+            Some(ExecutionNode::Split(gw)) => match gw.mode {
+                SplitMode::Exclusive => {
+                    let chosen = gw.flows.iter().find(|f| {
+                        if let (Some(ph), Some(exp)) = (&f.placeholder, &f.expected_value) {
+                            pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
                         } else {
-                            break;
+                            false
                         }
-                    }
-                    SplitMode::Parallel | SplitMode::Inclusive => {
-                        let mut targets = Vec::new();
-                        for flow in &gw.flows {
-                            if gw.mode == SplitMode::Parallel {
-                                targets.push(flow.next.clone());
-                            } else {
-                                let condition_matches = if let (Some(ph), Some(exp)) = (&flow.placeholder, &flow.expected_value) {
-                                    pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
-                                } else {
-                                    true
-                                };
-                                if condition_matches {
-                                    targets.push(flow.next.clone());
-                                }
-                            }
-                        }
-
-                        if targets.is_empty() {
-                            break;
-                        }
-
-                        let first = targets[0].clone();
-                        let rest = &targets[1..];
-                        
-                        let mut updated_pv = pv.clone();
-                        if !rest.is_empty() {
-                            let rest_vals: Vec<serde_json::Value> = rest.iter().map(|s| serde_json::Value::String(s.clone())).collect();
-                            updated_pv.insert("__pending_branches".to_string(), serde_json::Value::Array(rest_vals));
-                        } else {
-                            updated_pv.remove("__pending_branches");
-                        }
-                        
-                        inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
-                        inst.current_node_id = Some(first);
-                        let _ = store.save_instance("default", &inst).await;
+                    });
+                    if let Some(flow) = chosen {
+                        inst.current_node_id = Some(flow.next.clone());
+                        let _ = commit_demo_instance(store, &inst).await;
+                    } else {
+                        break;
                     }
                 }
-            }
+                SplitMode::Parallel | SplitMode::Inclusive => {
+                    let mut targets = Vec::new();
+                    for flow in &gw.flows {
+                        if gw.mode == SplitMode::Parallel {
+                            targets.push(flow.next.clone());
+                        } else {
+                            let condition_matches = if let (Some(ph), Some(exp)) =
+                                (&flow.placeholder, &flow.expected_value)
+                            {
+                                pv.get(ph).and_then(|v| v.as_str()) == Some(exp.as_str())
+                            } else {
+                                true
+                            };
+                            if condition_matches {
+                                targets.push(flow.next.clone());
+                            }
+                        }
+                    }
+
+                    if targets.is_empty() {
+                        break;
+                    }
+
+                    let first = targets[0].clone();
+                    let rest = &targets[1..];
+
+                    let mut updated_pv = pv.clone();
+                    if !rest.is_empty() {
+                        let rest_vals: Vec<serde_json::Value> = rest
+                            .iter()
+                            .map(|s| serde_json::Value::String(s.clone()))
+                            .collect();
+                        updated_pv.insert(
+                            "__pending_branches".to_string(),
+                            serde_json::Value::Array(rest_vals),
+                        );
+                    } else {
+                        updated_pv.remove("__pending_branches");
+                    }
+
+                    inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
+                    inst.current_node_id = Some(first);
+                    let _ = commit_demo_instance(store, &inst).await;
+                }
+            },
             Some(ExecutionNode::Join(j)) => {
-                let pending = pv.get("__pending_branches")
-                    .and_then(|v| v.as_array());
-                
+                let pending = pv.get("__pending_branches").and_then(|v| v.as_array());
+
                 if let Some(branches) = pending {
                     if !branches.is_empty() {
                         let next_branch = branches[0].as_str().unwrap_or_default().to_string();
                         let rest = &branches[1..];
-                        
+
                         let mut updated_pv = pv.clone();
                         if !rest.is_empty() {
-                            updated_pv.insert("__pending_branches".to_string(), serde_json::Value::Array(rest.to_vec()));
+                            updated_pv.insert(
+                                "__pending_branches".to_string(),
+                                serde_json::Value::Array(rest.to_vec()),
+                            );
                         } else {
                             updated_pv.remove("__pending_branches");
                         }
-                        
+
                         inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
                         inst.current_node_id = Some(next_branch);
-                        let _ = store.save_instance("default", &inst).await;
+                        let _ = commit_demo_instance(store, &inst).await;
                     } else {
                         let mut updated_pv = pv.clone();
                         updated_pv.remove("__pending_branches");
                         inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
                         inst.current_node_id = Some(j.next.clone());
-                        let _ = store.save_instance("default", &inst).await;
+                        let _ = commit_demo_instance(store, &inst).await;
                     }
                 } else {
                     inst.current_node_id = Some(j.next.clone());
-                    let _ = store.save_instance("default", &inst).await;
+                    let _ = commit_demo_instance(store, &inst).await;
                 }
             }
             Some(ExecutionNode::Loop(l)) => {
                 let counter_key = format!("__loop_count_{}", l.id);
-                let current_count = pv.get(&counter_key)
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+                let current_count =
+                    pv.get(&counter_key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
                 if current_count < l.ceiling {
                     let next_node = if let Some(first_body) = l.body.first() {
@@ -596,18 +666,21 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                     } else {
                         l.next.clone()
                     };
-                    
+
                     let mut updated_pv = pv.clone();
-                    updated_pv.insert(counter_key, serde_json::Value::Number((current_count + 1).into()));
+                    updated_pv.insert(
+                        counter_key,
+                        serde_json::Value::Number((current_count + 1).into()),
+                    );
                     inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
                     inst.current_node_id = Some(next_node);
-                    let _ = store.save_instance("default", &inst).await;
+                    let _ = commit_demo_instance(store, &inst).await;
                 } else {
                     let mut updated_pv = pv.clone();
                     updated_pv.remove(&counter_key);
                     inst.placeholder_values = serde_json::to_value(&updated_pv).ok();
                     inst.current_node_id = Some(l.next.clone());
-                    let _ = store.save_instance("default", &inst).await;
+                    let _ = commit_demo_instance(store, &inst).await;
                 }
             }
             Some(ExecutionNode::End(end)) => {
@@ -615,7 +688,7 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
                     at: chrono::Utc::now().timestamp_millis(),
                 };
                 inst.current_node_id = Some(end.id.clone());
-                let _ = store.save_instance("default", &inst).await;
+                let _ = commit_demo_instance(store, &inst).await;
                 break;
             }
             _ => break,
@@ -624,8 +697,8 @@ async fn drive_forward(store: &MemoryStore, plan: &WorkflowExecutionPlan, id: Uu
 }
 
 fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
-    use bpmn_lite_compiler::dsl::plan::SplitMode;
     use bpmn_lite_compiler::dsl::plan::JoinMode;
+    use bpmn_lite_compiler::dsl::plan::SplitMode;
     let mut ordered = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
@@ -637,14 +710,20 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
         ordered.push(curr.clone());
         if let Some(node) = plan.nodes.get(&curr) {
             match node {
-                ExecutionNode::Start(n) => { queue.push_back(n.next.clone()); }
-                ExecutionNode::Task(t) => { queue.push_back(t.next.clone()); }
+                ExecutionNode::Start(n) => {
+                    queue.push_back(n.next.clone());
+                }
+                ExecutionNode::Task(t) => {
+                    queue.push_back(t.next.clone());
+                }
                 ExecutionNode::Split(s) => {
                     for flow in &s.flows {
                         queue.push_back(flow.next.clone());
                     }
                 }
-                ExecutionNode::Join(j) => { queue.push_back(j.next.clone()); }
+                ExecutionNode::Join(j) => {
+                    queue.push_back(j.next.clone());
+                }
                 ExecutionNode::Loop(l) => {
                     for body_node in &l.body {
                         queue.push_back(body_node.clone());
@@ -748,11 +827,12 @@ fn split_fqn(fqn: &str) -> (&str, &str) {
 
 async fn apply_step(
     store: &MemoryStore,
+    tenant_id: &TenantId,
     id: Uuid,
     next_node: String,
     placeholder: Option<(&str, serde_json::Value)>,
 ) {
-    let Ok(Some(mut inst)) = store.load_instance(id).await else {
+    let Ok(Some(mut inst)) = store.load_instance(tenant_id, id).await else {
         return;
     };
     inst.state = ProcessState::Running;
@@ -768,31 +848,24 @@ async fn apply_step(
         pv.insert(name.to_owned(), val);
     }
     inst.placeholder_values = serde_json::to_value(&pv).ok();
-    let _ = store.save_instance("default", &inst).await;
+    let _ = commit_demo_instance(store, &inst).await;
 }
 
 async fn get_instance_graph(
     State(demo): State<Arc<DemoState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let inst = match demo.store.load_instance(id).await {
+    let _instance = match demo.store.load_instance(&demo.tenant_id, id).await {
         Ok(Some(i)) => i,
-        _ => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "instance not found"}))).into_response()
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "instance not found"})),
+            )
+                .into_response();
+        }
     };
-    let plan_hash = match inst.plan_hash {
-        Some(h) => h,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "plan not found"}))).into_response()
-    };
-    let plan_json = match demo.store.load_plan(plan_hash).await {
-        Ok(Some(p)) => p,
-        _ => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "plan not found"}))).into_response()
-    };
-    let plan: WorkflowExecutionPlan = match serde_json::from_str(&plan_json) {
-        Ok(p) => p,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "invalid plan"}))).into_response()
-    };
-
-    let graph = plan_to_visual_graph(&plan);
+    let graph = plan_to_visual_graph(&demo.plan);
     Json(graph).into_response()
 }
 
@@ -800,9 +873,15 @@ async fn get_instance_stack(
     State(demo): State<Arc<DemoState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let mut current = match demo.store.load_instance(id).await {
+    let mut current = match demo.store.load_instance(&demo.tenant_id, id).await {
         Ok(Some(i)) => i,
-        _ => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "instance not found"}))).into_response()
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "instance not found"})),
+            )
+                .into_response();
+        }
     };
 
     let mut frames = Vec::new();
@@ -811,25 +890,19 @@ async fn get_instance_stack(
     loop {
         let mut span = None;
         let mut plug = None;
-        
-        if let Some(plan_hash) = current.plan_hash {
-            if let Ok(Some(plan_json)) = demo.store.load_plan(plan_hash).await {
-                if let Ok(plan) = serde_json::from_str::<WorkflowExecutionPlan>(&plan_json) {
-                    if let Some(node_id) = &current.current_node_id {
-                        if let Some(node) = plan.nodes.get(node_id) {
-                            match node {
-                                ExecutionNode::Task(t) => {
-                                    span = t.span;
-                                    plug = Some(t.plug.clone());
-                                }
-                                ExecutionNode::Start(st) => span = st.span,
-                                ExecutionNode::End(e) => span = e.span,
-                                ExecutionNode::Split(sp) => span = sp.span,
-                                ExecutionNode::Join(j) => span = j.span,
-                                ExecutionNode::Loop(l) => span = l.span,
-                            }
-                        }
+
+        if let Some(node_id) = &current.current_node_id {
+            if let Some(node) = demo.plan.nodes.get(node_id) {
+                match node {
+                    ExecutionNode::Task(t) => {
+                        span = t.span;
+                        plug = Some(t.plug.clone());
                     }
+                    ExecutionNode::Start(st) => span = st.span,
+                    ExecutionNode::End(e) => span = e.span,
+                    ExecutionNode::Split(sp) => span = sp.span,
+                    ExecutionNode::Join(j) => span = j.span,
+                    ExecutionNode::Loop(l) => span = l.span,
                 }
             }
         }
@@ -851,7 +924,9 @@ async fn get_instance_stack(
         if let Some((parent_id_str, _)) = correlation.split_once(':') {
             if let Ok(parent_id) = uuid::Uuid::parse_str(parent_id_str) {
                 if visited.insert(parent_id) {
-                    if let Ok(Some(parent)) = demo.store.load_instance(parent_id).await {
+                    if let Ok(Some(parent)) =
+                        demo.store.load_instance(&demo.tenant_id, parent_id).await
+                    {
                         current = parent;
                         continue;
                     }
@@ -860,21 +935,26 @@ async fn get_instance_stack(
         }
         break;
     }
-    
+
     frames.reverse();
     Json(frames).into_response()
 }
 
 fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
-    use bpmn_lite_compiler::dsl::plan::SplitMode;
     use bpmn_lite_compiler::dsl::plan::JoinMode;
+    use bpmn_lite_compiler::dsl::plan::SplitMode;
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
     for (id, node) in &plan.nodes {
         let (kind, label, plug, span) = match node {
             ExecutionNode::Start(st) => ("start".to_owned(), "Start".to_owned(), None, st.span),
-            ExecutionNode::End(e) => ("end".to_owned(), format!("End ({})", e.status), None, e.span),
+            ExecutionNode::End(e) => (
+                "end".to_owned(),
+                format!("End ({})", e.status),
+                None,
+                e.span,
+            ),
             ExecutionNode::Task(t) => {
                 let plug_name = t.plug.clone();
                 let display_label = if plug_name.starts_with("dmn-lite:") {
@@ -900,9 +980,12 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 };
                 ("join".to_owned(), mode_str.to_owned(), None, j.span)
             }
-            ExecutionNode::Loop(l) => {
-                ("loop".to_owned(), format!("Loop (Max {})", l.ceiling), None, l.span)
-            }
+            ExecutionNode::Loop(l) => (
+                "loop".to_owned(),
+                format!("Loop (Max {})", l.ceiling),
+                None,
+                l.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -916,29 +999,54 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
         // Outgoing edge extraction
         match node {
             ExecutionNode::Start(n) => {
-                edges.push(VisualEdgeDto { from: id.clone(), to: n.next.clone(), condition: None });
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: n.next.clone(),
+                    condition: None,
+                });
             }
             ExecutionNode::Task(t) => {
-                edges.push(VisualEdgeDto { from: id.clone(), to: t.next.clone(), condition: None });
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: t.next.clone(),
+                    condition: None,
+                });
             }
             ExecutionNode::Split(s) => {
                 for flow in &s.flows {
-                    let cond_str = if let (Some(ph), Some(val)) = (&flow.placeholder, &flow.expected_value) {
-                        Some(format!("{} == {:?}", ph, val))
-                    } else {
-                        None
-                    };
-                    edges.push(VisualEdgeDto { from: id.clone(), to: flow.next.clone(), condition: cond_str });
+                    let cond_str =
+                        if let (Some(ph), Some(val)) = (&flow.placeholder, &flow.expected_value) {
+                            Some(format!("{} == {:?}", ph, val))
+                        } else {
+                            None
+                        };
+                    edges.push(VisualEdgeDto {
+                        from: id.clone(),
+                        to: flow.next.clone(),
+                        condition: cond_str,
+                    });
                 }
             }
             ExecutionNode::Join(j) => {
-                edges.push(VisualEdgeDto { from: id.clone(), to: j.next.clone(), condition: None });
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: j.next.clone(),
+                    condition: None,
+                });
             }
             ExecutionNode::Loop(l) => {
                 if let Some(first_body) = l.body.first() {
-                    edges.push(VisualEdgeDto { from: id.clone(), to: first_body.clone(), condition: Some("Loop Body".into()) });
+                    edges.push(VisualEdgeDto {
+                        from: id.clone(),
+                        to: first_body.clone(),
+                        condition: Some("Loop Body".into()),
+                    });
                 }
-                edges.push(VisualEdgeDto { from: id.clone(), to: l.next.clone(), condition: Some("Loop Exit".into()) });
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: l.next.clone(),
+                    condition: Some("Loop Exit".into()),
+                });
             }
             ExecutionNode::End(_) => {}
         }
@@ -953,28 +1061,32 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
 
 // ── Preview Compilation and DMN handlers ──────────────────────────────────
 
-const OB_POC_MANIFEST_YAML: &str = include_str!(
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/ob-poc-v1.0.0.yaml")
-);
-const DMN_LITE_MANIFEST_YAML: &str = include_str!(
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/dmn-lite-v1.0.0.yaml")
-);
-const BPMN_MANIFEST_YAML: &str = include_str!(
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../manifests/bpmn-v1.0.0.yaml")
-);
+const OB_POC_MANIFEST_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifests/ob-poc-v1.0.0.yaml"
+));
+const DMN_LITE_MANIFEST_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifests/dmn-lite-v1.0.0.yaml"
+));
+const BPMN_MANIFEST_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../manifests/bpmn-v1.0.0.yaml"
+));
 
-fn get_preview_registry() -> bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<bpmn_lite_compiler::dsl::StubPlaceholderRegistry> {
-    use dsl_manifest::Manifest;
+fn get_preview_registry() -> bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<
+    bpmn_lite_compiler::dsl::StubPlaceholderRegistry,
+> {
     use bpmn_lite_compiler::dsl::{ManifestPlaceholderRegistry, StubPlaceholderRegistry};
+    use dsl_manifest::Manifest;
 
-    let ob_poc = Manifest::load_from_yaml(OB_POC_MANIFEST_YAML)
-        .expect("ob-poc manifest must load");
-    let dmn_lite = Manifest::load_from_yaml(DMN_LITE_MANIFEST_YAML)
-        .expect("dmn-lite manifest must load");
-    let bpmn = Manifest::load_from_yaml(BPMN_MANIFEST_YAML)
-        .expect("bpmn manifest must load");
+    let ob_poc = Manifest::load_from_yaml(OB_POC_MANIFEST_YAML).expect("ob-poc manifest must load");
+    let dmn_lite =
+        Manifest::load_from_yaml(DMN_LITE_MANIFEST_YAML).expect("dmn-lite manifest must load");
+    let bpmn = Manifest::load_from_yaml(BPMN_MANIFEST_YAML).expect("bpmn manifest must load");
 
-    let mut registry = ManifestPlaceholderRegistry::new(StubPlaceholderRegistry::new().with_demo_bindings());
+    let mut registry =
+        ManifestPlaceholderRegistry::new(StubPlaceholderRegistry::new().with_demo_bindings());
     registry.import(ob_poc);
     registry.import(dmn_lite);
     registry.import(bpmn);
@@ -1051,9 +1163,7 @@ pub(crate) struct DmnPreviewResponse {
     diagnostics: Vec<String>,
 }
 
-async fn compile_bpmn_preview(
-    Json(body): Json<CompilePreviewBody>,
-) -> impl IntoResponse {
+async fn compile_bpmn_preview(Json(body): Json<CompilePreviewBody>) -> impl IntoResponse {
     use bpmn_lite_compiler::dsl::compile;
     let registry = get_preview_registry();
     match compile(&body.bpmn_dsl, &registry) {
@@ -1078,8 +1188,14 @@ async fn compile_bpmn_preview(
                     for e in errs {
                         let msg = format!("{}", e);
                         formatted.push(msg);
-                        let symbol = if e.message.starts_with("unresolved symbol '") && e.message.ends_with("'") {
-                            Some(e.message.trim_start_matches("unresolved symbol '").trim_end_matches("'"))
+                        let symbol = if e.message.starts_with("unresolved symbol '")
+                            && e.message.ends_with("'")
+                        {
+                            Some(
+                                e.message
+                                    .trim_start_matches("unresolved symbol '")
+                                    .trim_end_matches("'"),
+                            )
                         } else if e.message.starts_with("verb '") {
                             let remaining = e.message.trim_start_matches("verb '");
                             remaining.find('\'').map(|idx| &remaining[..idx])
@@ -1125,9 +1241,7 @@ async fn compile_bpmn_preview(
     }
 }
 
-async fn compile_dmn_preview(
-    Json(body): Json<DmnPreviewRequest>,
-) -> impl IntoResponse {
+async fn compile_dmn_preview(Json(body): Json<DmnPreviewRequest>) -> impl IntoResponse {
     match parse_dmn_to_dto(&body.dmn_dsl) {
         Ok(schema) => {
             let resp = DmnPreviewResponse {
@@ -1148,12 +1262,17 @@ async fn compile_dmn_preview(
     }
 }
 
-async fn get_dmn_decision(
-    Path(decision_id): Path<String>,
-) -> impl IntoResponse {
+async fn get_dmn_decision(Path(decision_id): Path<String>) -> impl IntoResponse {
     // Sanitize path parameter to prevent path traversal
-    if !decision_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid decision ID format" }))).into_response();
+    if !decision_id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid decision ID format" })),
+        )
+            .into_response();
     }
 
     use std::path::PathBuf;
@@ -1162,17 +1281,19 @@ async fn get_dmn_decision(
     let path = PathBuf::from(decisions_dir).join(format!("{}.dmn-lite", decision_id));
 
     match std::fs::read_to_string(&path) {
-        Ok(source_text) => {
-            match parse_dmn_to_dto(&source_text) {
-                Ok(schema) => (StatusCode::OK, Json(schema)).into_response(),
-                Err(err_msg) => {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg }))).into_response()
-                }
-            }
-        }
-        Err(err) => {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("Decision not found: {}", err) }))).into_response()
-        }
+        Ok(source_text) => match parse_dmn_to_dto(&source_text) {
+            Ok(schema) => (StatusCode::OK, Json(schema)).into_response(),
+            Err(err_msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": err_msg })),
+            )
+                .into_response(),
+        },
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Decision not found: {}", err) })),
+        )
+            .into_response(),
     }
 }
 
@@ -1180,7 +1301,10 @@ fn parse_dmn_to_dto(source_text: &str) -> Result<DmnSchemaDto, String> {
     use dmn_lite_parser::{parse, HitPolicyAst, TypeRefAst, WhenAst};
 
     let source = parse(source_text).map_err(|e| format!("{}", e))?;
-    let decision = source.decisions.first().ok_or_else(|| "No decision defined in DSL".to_owned())?;
+    let decision = source
+        .decisions
+        .first()
+        .ok_or_else(|| "No decision defined in DSL".to_owned())?;
 
     let decision_name = decision.name.name.clone();
     let hit_policy = match &decision.hit_policy {
@@ -1188,73 +1312,91 @@ fn parse_dmn_to_dto(source_text: &str) -> Result<DmnSchemaDto, String> {
         HitPolicyAst::First(_) => "first".to_owned(),
     };
 
-    let inputs: Vec<DmnInputSchema> = decision.inputs.iter().map(|input| {
-        let type_ref = match &input.type_ref {
-            TypeRefAst::Enum(_) => "enum",
-            TypeRefAst::Bool(_) => "bool",
-            TypeRefAst::Integer(_) => "integer",
-            TypeRefAst::Decimal(_) => "decimal",
-            TypeRefAst::String(_) => "string",
-        }.to_owned();
-        DmnInputSchema {
-            name: input.name.name.clone(),
-            type_ref,
-            domain: input.domain_ref.name.clone(),
-        }
-    }).collect();
+    let inputs: Vec<DmnInputSchema> = decision
+        .inputs
+        .iter()
+        .map(|input| {
+            let type_ref = match &input.type_ref {
+                TypeRefAst::Enum(_) => "enum",
+                TypeRefAst::Bool(_) => "bool",
+                TypeRefAst::Integer(_) => "integer",
+                TypeRefAst::Decimal(_) => "decimal",
+                TypeRefAst::String(_) => "string",
+            }
+            .to_owned();
+            DmnInputSchema {
+                name: input.name.name.clone(),
+                type_ref,
+                domain: input.domain_ref.name.clone(),
+            }
+        })
+        .collect();
 
-    let outputs: Vec<DmnOutputSchema> = decision.outputs.iter().map(|output| {
-        let type_ref = match &output.type_ref {
-            TypeRefAst::Enum(_) => "enum",
-            TypeRefAst::Bool(_) => "bool",
-            TypeRefAst::Integer(_) => "integer",
-            TypeRefAst::Decimal(_) => "decimal",
-            TypeRefAst::String(_) => "string",
-        }.to_owned();
-        DmnOutputSchema {
-            name: output.name.name.clone(),
-            type_ref,
-            domain: output.domain_ref.name.clone(),
-        }
-    }).collect();
+    let outputs: Vec<DmnOutputSchema> = decision
+        .outputs
+        .iter()
+        .map(|output| {
+            let type_ref = match &output.type_ref {
+                TypeRefAst::Enum(_) => "enum",
+                TypeRefAst::Bool(_) => "bool",
+                TypeRefAst::Integer(_) => "integer",
+                TypeRefAst::Decimal(_) => "decimal",
+                TypeRefAst::String(_) => "string",
+            }
+            .to_owned();
+            DmnOutputSchema {
+                name: output.name.name.clone(),
+                type_ref,
+                domain: output.domain_ref.name.clone(),
+            }
+        })
+        .collect();
 
-    let rules: Vec<DmnRuleDto> = decision.rules.iter().map(|rule| {
-        // Build inputs array in same order as inputs list
-        let mut rule_inputs = Vec::new();
-        for input_schema in &inputs {
-            let mut matched_cell = DmnRuleInputCell {
-                op: "-".to_owned(),
-                value: "-".to_owned(),
-            };
+    let rules: Vec<DmnRuleDto> = decision
+        .rules
+        .iter()
+        .map(|rule| {
+            // Build inputs array in same order as inputs list
+            let mut rule_inputs = Vec::new();
+            for input_schema in &inputs {
+                let mut matched_cell = DmnRuleInputCell {
+                    op: "-".to_owned(),
+                    value: "-".to_owned(),
+                };
 
-            match &rule.when {
-                WhenAst::CatchAll(_) => {}
-                WhenAst::Predicates(preds, _) => {
-                    if let Some(pred) = find_predicate_for_field(preds, &input_schema.name) {
-                        let (op, val) = format_predicate_cell(pred);
-                        matched_cell = DmnRuleInputCell { op, value: val };
+                match &rule.when {
+                    WhenAst::CatchAll(_) => {}
+                    WhenAst::Predicates(preds, _) => {
+                        if let Some(pred) = find_predicate_for_field(preds, &input_schema.name) {
+                            let (op, val) = format_predicate_cell(pred);
+                            matched_cell = DmnRuleInputCell { op, value: val };
+                        }
                     }
                 }
+                rule_inputs.push(matched_cell);
             }
-            rule_inputs.push(matched_cell);
-        }
 
-        // Build outputs array in same order as outputs list
-        let mut rule_outputs = Vec::new();
-        for output_schema in &outputs {
-            let mut matched_val = "-".to_owned();
-            if let Some(assign) = rule.then.iter().find(|a| a.output.name == output_schema.name) {
-                matched_val = format_literal(&assign.value);
+            // Build outputs array in same order as outputs list
+            let mut rule_outputs = Vec::new();
+            for output_schema in &outputs {
+                let mut matched_val = "-".to_owned();
+                if let Some(assign) = rule
+                    .then
+                    .iter()
+                    .find(|a| a.output.name == output_schema.name)
+                {
+                    matched_val = format_literal(&assign.value);
+                }
+                rule_outputs.push(matched_val);
             }
-            rule_outputs.push(matched_val);
-        }
 
-        DmnRuleDto {
-            id: rule.id.name.clone(),
-            inputs: rule_inputs,
-            outputs: rule_outputs,
-        }
-    }).collect();
+            DmnRuleDto {
+                id: rule.id.name.clone(),
+                inputs: rule_inputs,
+                outputs: rule_outputs,
+            }
+        })
+        .collect();
 
     Ok(DmnSchemaDto {
         decision_name,
@@ -1328,23 +1470,41 @@ fn format_predicate_cell(pred: &dmn_lite_parser::PredicateAst) -> (String, Strin
             let formatted_vals: Vec<String> = values.iter().map(format_literal).collect();
             ("in".to_string(), format!("[{}]", formatted_vals.join(", ")))
         }
-        PredicateAst::Range { lower, upper, lower_inclusive, upper_inclusive, .. } => {
+        PredicateAst::Range {
+            lower,
+            upper,
+            lower_inclusive,
+            upper_inclusive,
+            ..
+        } => {
             let left_bracket = if *lower_inclusive { "[" } else { "(" };
             let right_bracket = if *upper_inclusive { "]" } else { ")" };
             let lower_str = format_range_bound(lower);
             let upper_str = format_range_bound(upper);
-            ("in".to_string(), format!("{}{} .. {}{}", left_bracket, lower_str, upper_str, right_bracket))
+            (
+                "in".to_string(),
+                format!(
+                    "{}{} .. {}{}",
+                    left_bracket, lower_str, upper_str, right_bracket
+                ),
+            )
         }
         PredicateAst::Not { inner, .. } => {
             let (op, val) = format_predicate_cell(inner);
             (format!("not {}", op), val)
         }
         PredicateAst::And { items, .. } => {
-            let formatted_vals: Vec<String> = items.iter().map(|item| format_predicate_cell(item).1).collect();
+            let formatted_vals: Vec<String> = items
+                .iter()
+                .map(|item| format_predicate_cell(item).1)
+                .collect();
             ("and".to_string(), formatted_vals.join(" and "))
         }
         PredicateAst::Or { items, .. } => {
-            let formatted_vals: Vec<String> = items.iter().map(|item| format_predicate_cell(item).1).collect();
+            let formatted_vals: Vec<String> = items
+                .iter()
+                .map(|item| format_predicate_cell(item).1)
+                .collect();
             ("or".to_string(), formatted_vals.join(" or "))
         }
     }
@@ -1398,27 +1558,32 @@ pub(crate) struct MacroApplyResponse {
 fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::macros::MacroConfigList> {
     let workspace_macros = format!("{}/../macros.yaml", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&workspace_macros).exists() {
-        if let Ok(config) = bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&workspace_macros) {
+        if let Ok(config) =
+            bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&workspace_macros)
+        {
             return Some(config);
         }
     }
     let server_macros = format!("{}/macros.yaml", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&server_macros).exists() {
-        if let Ok(config) = bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&server_macros) {
+        if let Ok(config) =
+            bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&server_macros)
+        {
             return Some(config);
         }
     }
     None
 }
 
-async fn apply_dsl_macro(
-    Json(body): Json<MacroApplyRequest>,
-) -> impl IntoResponse {
+async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoResponse {
     use bpmn_lite_compiler::dsl::{
+        ast::NodeAst,
+        macros::{
+            create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
+            XorBranchConfig,
+        },
         parse_workflow_str,
         refactor::{AstMutator, ToSexpr},
-        macros::{create_bounded_retry_macro, create_xor_split_join, create_parallel_split_join, XorBranchConfig},
-        ast::{NodeAst},
     };
 
     let mut workflow = match parse_workflow_str(&body.source_code) {
@@ -1440,12 +1605,22 @@ async fn apply_dsl_macro(
         "BoundedRetry" => {
             let target_node_id = match body.parameters.get("target_node_id") {
                 Some(id) => id,
-                None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing parameter target_node_id"}))).into_response(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Missing parameter target_node_id"})),
+                    )
+                        .into_response();
+                }
             };
-            let ceiling: u32 = body.parameters.get("ceiling")
+            let ceiling: u32 = body
+                .parameters
+                .get("ceiling")
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(3);
-            let loop_id = body.parameters.get("custom_id")
+            let loop_id = body
+                .parameters
+                .get("custom_id")
                 .cloned()
                 .unwrap_or_else(|| format!("{}-retry-loop", target_node_id));
 
@@ -1492,56 +1667,132 @@ async fn apply_dsl_macro(
             }
         }
         "XorSplit" => {
-            let split_id = body.parameters.get("split_id").map(|s| s.as_str()).unwrap_or("xor-split");
-            let placeholder = body.parameters.get("placeholder").map(|s| s.as_str()).unwrap_or("@decision_val");
-            let join_id = body.parameters.get("join_id").map(|s| s.as_str()).unwrap_or("xor-join");
-            let join_next = body.parameters.get("join_next").map(|s| s.as_str()).unwrap_or("end");
-            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+            let split_id = body
+                .parameters
+                .get("split_id")
+                .map(|s| s.as_str())
+                .unwrap_or("xor-split");
+            let placeholder = body
+                .parameters
+                .get("placeholder")
+                .map(|s| s.as_str())
+                .unwrap_or("@decision_val");
+            let join_id = body
+                .parameters
+                .get("join_id")
+                .map(|s| s.as_str())
+                .unwrap_or("xor-join");
+            let join_next = body
+                .parameters
+                .get("join_next")
+                .map(|s| s.as_str())
+                .unwrap_or("end");
+            let predecessor_id = body
+                .parameters
+                .get("predecessor_id")
+                .map(|s| s.as_str())
+                .unwrap_or("start");
 
-            let branch_val = body.parameters.get("branch_value").map(|s| s.as_str()).unwrap_or("yes");
-            let branch_target = body.parameters.get("branch_target").map(|s| s.as_str()).unwrap_or("end");
+            let branch_val = body
+                .parameters
+                .get("branch_value")
+                .map(|s| s.as_str())
+                .unwrap_or("yes");
+            let branch_target = body
+                .parameters
+                .get("branch_target")
+                .map(|s| s.as_str())
+                .unwrap_or("end");
 
             let branches = vec![
-                XorBranchConfig { condition_value: branch_val.to_string(), target_next: branch_target.to_string() },
-                XorBranchConfig { condition_value: "default".to_string(), target_next: join_id.to_string() }
+                XorBranchConfig {
+                    condition_value: branch_val.to_string(),
+                    target_next: branch_target.to_string(),
+                },
+                XorBranchConfig {
+                    condition_value: "default".to_string(),
+                    target_next: join_id.to_string(),
+                },
             ];
 
-            let (split, join) = create_xor_split_join(split_id, placeholder, branches, join_id, join_next);
-            
+            let (split, join) =
+                create_xor_split_join(split_id, placeholder, branches, join_id, join_next);
+
             let mut mutator = AstMutator::new(&mut workflow);
-            mutator.insert_after(predecessor_id, NodeAst::Split(split)).and_then(|_| {
-                let mut mutator = AstMutator::new(&mut workflow);
-                mutator.insert_after(split_id, NodeAst::Join(join))
-            })
+            mutator
+                .insert_after(predecessor_id, NodeAst::Split(split))
+                .and_then(|_| {
+                    let mut mutator = AstMutator::new(&mut workflow);
+                    mutator.insert_after(split_id, NodeAst::Join(join))
+                })
         }
         "ParallelSplit" => {
-            let split_id = body.parameters.get("split_id").map(|s| s.as_str()).unwrap_or("and-split");
-            let join_id = body.parameters.get("join_id").map(|s| s.as_str()).unwrap_or("and-join");
-            let join_next = body.parameters.get("join_next").map(|s| s.as_str()).unwrap_or("end");
-            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+            let split_id = body
+                .parameters
+                .get("split_id")
+                .map(|s| s.as_str())
+                .unwrap_or("and-split");
+            let join_id = body
+                .parameters
+                .get("join_id")
+                .map(|s| s.as_str())
+                .unwrap_or("and-join");
+            let join_next = body
+                .parameters
+                .get("join_next")
+                .map(|s| s.as_str())
+                .unwrap_or("end");
+            let predecessor_id = body
+                .parameters
+                .get("predecessor_id")
+                .map(|s| s.as_str())
+                .unwrap_or("start");
 
-            let branch_target = body.parameters.get("branch_target").map(|s| s.as_str()).unwrap_or("end");
+            let branch_target = body
+                .parameters
+                .get("branch_target")
+                .map(|s| s.as_str())
+                .unwrap_or("end");
 
             let branch_entries = vec![branch_target.to_string(), join_id.to_string()];
-            let (split, join) = create_parallel_split_join(split_id, branch_entries, join_id, join_next);
+            let (split, join) =
+                create_parallel_split_join(split_id, branch_entries, join_id, join_next);
 
             let mut mutator = AstMutator::new(&mut workflow);
-            mutator.insert_after(predecessor_id, NodeAst::Split(split)).and_then(|_| {
-                let mut mutator = AstMutator::new(&mut workflow);
-                mutator.insert_after(split_id, NodeAst::Join(join))
-            })
+            mutator
+                .insert_after(predecessor_id, NodeAst::Split(split))
+                .and_then(|_| {
+                    let mut mutator = AstMutator::new(&mut workflow);
+                    mutator.insert_after(split_id, NodeAst::Join(join))
+                })
         }
         "Custom" => {
             let macro_id = match body.parameters.get("macro_id") {
                 Some(id) => id,
-                None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing parameter macro_id for Custom macro"}))).into_response(),
+                None => return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": "Missing parameter macro_id for Custom macro"}),
+                    ),
+                )
+                    .into_response(),
             };
-            let predecessor_id = body.parameters.get("predecessor_id").map(|s| s.as_str()).unwrap_or("start");
+            let predecessor_id = body
+                .parameters
+                .get("predecessor_id")
+                .map(|s| s.as_str())
+                .unwrap_or("start");
 
-            let config = get_macros_config().ok_or_else(|| "No macros.yaml config found on disk".to_string());
+            let config = get_macros_config()
+                .ok_or_else(|| "No macros.yaml config found on disk".to_string());
             let node = config.and_then(|c| {
-                let macro_cfg = c.macros.into_iter().find(|m| &m.id == macro_id)
-                    .ok_or_else(|| format!("Custom macro '{}' not found in macros.yaml", macro_id))?;
+                let macro_cfg = c
+                    .macros
+                    .into_iter()
+                    .find(|m| &m.id == macro_id)
+                    .ok_or_else(|| {
+                        format!("Custom macro '{}' not found in macros.yaml", macro_id)
+                    })?;
                 macro_cfg.instantiate(&body.parameters)
             });
 
@@ -1570,7 +1821,7 @@ async fn apply_dsl_macro(
 
     let new_dsl = workflow.to_sexpr(0);
     let registry = get_preview_registry();
-    
+
     match bpmn_lite_compiler::dsl::compile(&new_dsl, &registry) {
         Ok(plan) => {
             let visual = plan_to_visual_graph(&plan);
@@ -1587,8 +1838,12 @@ async fn apply_dsl_macro(
         Err(err) => {
             let diagnostics = match err {
                 bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
-                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
-                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                    errs.iter().map(|e| format!("{}", e)).collect()
+                }
+                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                    errs.iter().map(|e| format!("{}", e)).collect()
+                }
             };
             let resp = MacroApplyResponse {
                 source_code: new_dsl,
@@ -1603,31 +1858,48 @@ async fn apply_dsl_macro(
     }
 }
 
-fn find_all_predecessors_id_in_workflow(workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource, target_id: &str) -> Vec<String> {
+fn find_all_predecessors_id_in_workflow(
+    workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource,
+    target_id: &str,
+) -> Vec<String> {
     let mut preds = Vec::new();
     find_all_predecessors_id_rec(&workflow.nodes, target_id, &mut preds);
     preds
 }
 
-fn find_all_predecessors_id_rec(nodes: &[bpmn_lite_compiler::dsl::ast::NodeAst], target_id: &str, acc: &mut Vec<String>) {
+fn find_all_predecessors_id_rec(
+    nodes: &[bpmn_lite_compiler::dsl::ast::NodeAst],
+    target_id: &str,
+    acc: &mut Vec<String>,
+) {
     for node in nodes {
         match node {
             bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
-                if s.next == target_id { acc.push(s.id.clone()); }
+                if s.next == target_id {
+                    acc.push(s.id.clone());
+                }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
-                if t.next == target_id { acc.push(t.id.clone()); }
+                if t.next == target_id {
+                    acc.push(t.id.clone());
+                }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
-                if j.next == target_id { acc.push(j.id.clone()); }
+                if j.next == target_id {
+                    acc.push(j.id.clone());
+                }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
-                if l.next == target_id { acc.push(l.id.clone()); }
+                if l.next == target_id {
+                    acc.push(l.id.clone());
+                }
                 find_all_predecessors_id_rec(&l.body, target_id, acc);
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
                 for flow in &s.flows {
-                    if flow.next == target_id { acc.push(s.id.clone()); }
+                    if flow.next == target_id {
+                        acc.push(s.id.clone());
+                    }
                 }
             }
             bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
@@ -1655,13 +1927,15 @@ pub(crate) struct DiagnosticsResolveResponse {
     diagnostics: Vec<String>,
 }
 
-async fn resolve_dsl_diagnostics(
-    Json(body): Json<DiagnosticsResolveRequest>,
-) -> impl IntoResponse {
+async fn resolve_dsl_diagnostics(Json(body): Json<DiagnosticsResolveRequest>) -> impl IntoResponse {
     let manifests_path = std::env::var("SAGE_MANIFESTS_DIR")
         .unwrap_or_else(|_| format!("{}/../manifests", env!("CARGO_MANIFEST_DIR")));
     let manifests_dir = std::path::PathBuf::from(manifests_path);
-    match bpmn_lite_authoring::diagnostics_executor::execute_autofix(&body.source_code, &body.action, &manifests_dir) {
+    match bpmn_lite_authoring::diagnostics_executor::execute_autofix(
+        &body.source_code,
+        &body.action,
+        &manifests_dir,
+    ) {
         Ok(new_dsl) => {
             let registry = get_preview_registry();
             let new_dsl_str = new_dsl.clone();
@@ -1681,8 +1955,12 @@ async fn resolve_dsl_diagnostics(
                 Err(err) => {
                     let diagnostics = match err {
                         bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
-                        bpmn_lite_compiler::dsl::CompileError::Lint(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
-                        bpmn_lite_compiler::dsl::CompileError::Dag(errs) => errs.iter().map(|e| format!("{}", e)).collect(),
+                        bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                            errs.iter().map(|e| format!("{}", e)).collect()
+                        }
+                        bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                            errs.iter().map(|e| format!("{}", e)).collect()
+                        }
                     };
                     let resp = DiagnosticsResolveResponse {
                         source_code: new_dsl_str,
@@ -1725,27 +2003,53 @@ pub(crate) struct UtteranceResponse {
     action_payload: Option<serde_json::Value>,
 }
 
-async fn sage_utterance_gate(
-    Json(body): Json<UtteranceRequest>,
-) -> impl IntoResponse {
+async fn sage_utterance_gate(Json(body): Json<UtteranceRequest>) -> impl IntoResponse {
     let text = body.utterance.trim().to_lowercase();
-    
-    let is_escape = text.contains("exit") || text.contains("close editor") || text.contains("go back") || text.contains("quit") 
-                    || text.contains("deploy") || text.contains("push release") || text.contains("staging")
-                    || text.contains("check database") || text.contains("list active manifests");
-                    
-    let (suggested_action, msg, payload) = if text.contains("exit") || text.contains("close editor") || text.contains("go back") || text.contains("quit") {
-        ("exit", "Autosaved current workspace. Exiting designer session.", None)
+
+    let is_escape = text.contains("exit")
+        || text.contains("close editor")
+        || text.contains("go back")
+        || text.contains("quit")
+        || text.contains("deploy")
+        || text.contains("push release")
+        || text.contains("staging")
+        || text.contains("check database")
+        || text.contains("list active manifests");
+
+    let (suggested_action, msg, payload) = if text.contains("exit")
+        || text.contains("close editor")
+        || text.contains("go back")
+        || text.contains("quit")
+    {
+        (
+            "exit",
+            "Autosaved current workspace. Exiting designer session.",
+            None,
+        )
     } else if text.contains("deploy") || text.contains("push release") || text.contains("staging") {
-        ("chat", "It looks like you want to perform a deployment or navigate away. Should we save your workflow draft and transition out of the designer session?", None)
+        (
+            "chat",
+            "It looks like you want to perform a deployment or navigate away. Should we save your workflow draft and transition out of the designer session?",
+            None,
+        )
     } else if text.contains("retry loop") || text.contains("wrap") || text.contains("retry") {
         let mut params = serde_json::Map::new();
-        params.insert("target_node_id".to_string(), serde_json::Value::String("create-cbu".to_string()));
-        params.insert("ceiling".to_string(), serde_json::Value::String("3".to_string()));
-        ("apply_macro", "We can wrap your task in a retry loop. Apply macro?", Some(serde_json::json!({
-            "macro_type": "BoundedRetry",
-            "parameters": params
-        })))
+        params.insert(
+            "target_node_id".to_string(),
+            serde_json::Value::String("create-cbu".to_string()),
+        );
+        params.insert(
+            "ceiling".to_string(),
+            serde_json::Value::String("3".to_string()),
+        );
+        (
+            "apply_macro",
+            "We can wrap your task in a retry loop. Apply macro?",
+            Some(serde_json::json!({
+                "macro_type": "BoundedRetry",
+                "parameters": params
+            })),
+        )
     } else if text.starts_with("import ") || text.contains("unknown verb") {
         let verb = if text.starts_with("import ") {
             body.utterance.trim()[7..].to_string()
@@ -1757,11 +2061,15 @@ async fn sage_utterance_gate(
         } else {
             "ob-poc".to_string()
         };
-        ("resolve_diagnostic", "Resolving unresolved symbol by adding signature stub to manifest.", Some(serde_json::json!({
-            "type": "AddVerbStub",
-            "domain": domain,
-            "verb": verb
-        })))
+        (
+            "resolve_diagnostic",
+            "Resolving unresolved symbol by adding signature stub to manifest.",
+            Some(serde_json::json!({
+                "type": "AddVerbStub",
+                "domain": domain,
+                "verb": verb
+            })),
+        )
     } else {
         ("none", "Utterance processed. Continues editing mode.", None)
     };
@@ -1813,7 +2121,8 @@ async fn define_template_endpoint(
                     "error": error_msg,
                     "diagnostics": diagnostics
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -1823,7 +2132,8 @@ async fn define_template_endpoint(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("Serialization failed: {}", e) })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -1833,7 +2143,8 @@ async fn define_template_endpoint(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("Failed to store plan: {}", e) })),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let version = match demo.store.load_latest_template_version(&body.name).await {
@@ -1841,11 +2152,16 @@ async fn define_template_endpoint(
         _ => 1,
     };
 
-    if let Err(e) = demo.store.store_template(&body.name, version, hash, &body.dsl_body).await {
+    if let Err(e) = demo
+        .store
+        .store_template(&body.name, version, hash, &body.dsl_body)
+        .await
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("Failed to store template: {}", e) })),
-        ).into_response();
+        )
+            .into_response();
     }
 
     (
@@ -1854,7 +2170,8 @@ async fn define_template_endpoint(
             plan_hash: hex::encode(hash),
             version,
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 #[derive(Serialize)]
@@ -1865,23 +2182,25 @@ pub(crate) struct TemplateSummaryDto {
     created_at: String,
 }
 
-async fn list_templates_endpoint(
-    State(demo): State<Arc<DemoState>>,
-) -> impl IntoResponse {
+async fn list_templates_endpoint(State(demo): State<Arc<DemoState>>) -> impl IntoResponse {
     match demo.store.list_templates().await {
         Ok(list) => {
-            let dtos: Vec<TemplateSummaryDto> = list.into_iter().map(|t| TemplateSummaryDto {
-                name: t.name,
-                latest_version: t.latest_version,
-                plan_hash: hex::encode(t.plan_hash),
-                created_at: t.created_at,
-            }).collect();
+            let dtos: Vec<TemplateSummaryDto> = list
+                .into_iter()
+                .map(|t| TemplateSummaryDto {
+                    name: t.name,
+                    latest_version: t.latest_version,
+                    plan_hash: hex::encode(t.plan_hash),
+                    created_at: t.created_at,
+                })
+                .collect();
             (StatusCode::OK, Json(dtos)).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
-        ).into_response()
+        )
+            .into_response(),
     }
 }
 
@@ -1922,16 +2241,20 @@ async fn get_template_version_endpoint(
 mod tests {
     use super::*;
     use axum::http::Request;
-    use tower::ServiceExt; // for `oneshot`
     use serde_json::Value;
+    use tower::ServiceExt; // for `oneshot`
 
     #[tokio::test]
     async fn test_rest_graph_and_stack_endpoints() {
-        let state = DemoState::new();
+        let state = DemoState::try_new().unwrap();
         let app = demo_router(state.clone());
 
         // 1. Start a demo instance
-        let start_body = StartBody { cbu_type: "fund".to_owned(), bpmn_dsl: None, variables: None };
+        let start_body = StartBody {
+            cbu_type: "fund".to_owned(),
+            bpmn_dsl: None,
+            variables: None,
+        };
         let response = app
             .clone()
             .oneshot(
@@ -1939,14 +2262,18 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/instances/start")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&start_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&start_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let start_res: Value = serde_json::from_slice(&body_bytes).unwrap();
         let instance_id_str = start_res["instance_id"].as_str().unwrap();
         let instance_id = Uuid::parse_str(instance_id_str).unwrap();
@@ -1965,7 +2292,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 100000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 100000)
+            .await
+            .unwrap();
         let graph: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(graph["workflow_id"], "custody-cbu-onboarding");
         let nodes = graph["nodes"].as_array().unwrap();
@@ -1976,7 +2305,10 @@ mod tests {
         // Verify start node exists and has a span (since it was compiled from DSL!)
         let start_node = nodes.iter().find(|n| n["id"] == "start").unwrap();
         assert_eq!(start_node["kind"], "start");
-        assert!(start_node["span"].is_object(), "start node should carry parsed source span metadata");
+        assert!(
+            start_node["span"].is_object(),
+            "start node should carry parsed source span metadata"
+        );
 
         // 3. Query /stack endpoint
         let response = app
@@ -1992,7 +2324,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let stack: Value = serde_json::from_slice(&body_bytes).unwrap();
         let frames = stack.as_array().unwrap();
         assert_eq!(frames.len(), 1);
@@ -2000,12 +2334,15 @@ mod tests {
         assert_eq!(frame["instance_id"], instance_id_str);
         assert_eq!(frame["workflow_id"], "custody-cbu-onboarding");
         assert_eq!(frame["node_id"], "create-cbu"); // Drive forward stops at the first Task node
-        assert!(frame["span"].is_object(), "active stack frame should carry parsed source span metadata");
+        assert!(
+            frame["span"].is_object(),
+            "active stack frame should carry parsed source span metadata"
+        );
     }
 
     #[tokio::test]
     async fn test_compile_and_preview_endpoints() {
-        let state = DemoState::new();
+        let state = DemoState::try_new().unwrap();
         let app = demo_router(state.clone());
 
         // Test BPMN compilation preview
@@ -2020,14 +2357,18 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/compile/preview")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&bpmn_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&bpmn_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res["workflow_id"], "test-wf");
         assert!(!res["nodes"].as_array().unwrap().is_empty());
@@ -2045,14 +2386,18 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/compile/preview")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&bpmn_err_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&bpmn_err_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res["error"], "Linting failed");
         let diagnostics = res["diagnostics"].as_array().unwrap();
@@ -2081,16 +2426,23 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/compile/preview")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&bpmn_wait_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&bpmn_wait_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 100000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 100000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(res["workflow_id"].as_str().unwrap(), "custody-cbu-onboarding");
+        assert_eq!(
+            res["workflow_id"].as_str().unwrap(),
+            "custody-cbu-onboarding"
+        );
         assert!(res["error"].is_null());
 
         // Test DMN compilation preview
@@ -2110,14 +2462,18 @@ mod tests {
                     .method("POST")
                     .uri("/dmn/compile/preview")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&dmn_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&dmn_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res["decision_name"], "test_dec");
         assert_eq!(res["hit_policy"], "unique");
@@ -2141,7 +2497,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res["decision_name"], "cbu_type_routing");
         assert_eq!(res["hit_policy"], "first");
@@ -2150,7 +2508,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dsl_macro_and_diagnostics_endpoints() {
-        let state = DemoState::new();
+        let state = DemoState::try_new().unwrap();
         let app = demo_router(state);
 
         // 1. Test /api/dsl/macro/apply (BoundedRetry)
@@ -2177,14 +2535,18 @@ mod tests {
                     .method("POST")
                     .uri("/api/dsl/macro/apply")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         let modified_dsl = res["source_code"].as_str().unwrap();
         assert!(modified_dsl.contains("(loop :id my-retry-loop :ceiling 5"));
@@ -2211,14 +2573,18 @@ mod tests {
                     .method("POST")
                     .uri("/api/dsl/diagnostics/resolve")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&resolve_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&resolve_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         let fixed_dsl = res["source_code"].as_str().unwrap();
         assert!(fixed_dsl.contains("(service-task :id my-task :verb ob-poc:cbu.create :next end)"));
@@ -2236,14 +2602,18 @@ mod tests {
                     .method("POST")
                     .uri("/api/dsl/sage/utter")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&utter_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&utter_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(res["escape_intent_detected"].as_bool().unwrap());
         assert_eq!(res["suggested_action"].as_str().unwrap(), "exit");
@@ -2251,7 +2621,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_template_catalog_endpoints() {
-        let state = DemoState::new();
+        let state = DemoState::try_new().unwrap();
         let app = demo_router(state);
 
         // 1. Post version 1 of template "my-template"
@@ -2270,14 +2640,18 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/templates")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&define_body).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&define_body).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res["version"], 1);
         let first_hash = res["plan_hash"].as_str().unwrap().to_string();
@@ -2297,10 +2671,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let summaries: Value = serde_json::from_slice(&body_bytes).unwrap();
         let summaries_arr = summaries.as_array().unwrap();
-        assert!(summaries_arr.iter().any(|t| t["name"] == "my-template" && t["latest_version"] == 1 && t["plan_hash"] == first_hash));
+        assert!(summaries_arr.iter().any(|t| t["name"] == "my-template"
+            && t["latest_version"] == 1
+            && t["plan_hash"] == first_hash));
 
         // 3. Get version 1 of the template
         let response = app
@@ -2316,7 +2694,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let version_dto: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(version_dto["name"], "my-template");
         assert_eq!(version_dto["version"], 1);
@@ -2339,14 +2719,18 @@ mod tests {
                     .method("POST")
                     .uri("/bpmn/templates")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_string(&define_body_v2).unwrap()))
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&define_body_v2).unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let res_v2: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(res_v2["version"], 2);
         let second_hash = res_v2["plan_hash"].as_str().unwrap().to_string();
@@ -2366,10 +2750,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
         let summaries_v2: Value = serde_json::from_slice(&body_bytes).unwrap();
         let summaries_arr_v2 = summaries_v2.as_array().unwrap();
-        assert!(summaries_arr_v2.iter().any(|t| t["name"] == "my-template" && t["latest_version"] == 2 && t["plan_hash"] == second_hash));
+        assert!(summaries_arr_v2.iter().any(|t| t["name"] == "my-template"
+            && t["latest_version"] == 2
+            && t["plan_hash"] == second_hash));
     }
 }
-

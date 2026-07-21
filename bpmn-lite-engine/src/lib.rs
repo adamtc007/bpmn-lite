@@ -14,7 +14,7 @@
 //! / `compile_from_yaml` / `compile_and_publish` — those moved out
 //! to `bpmn-lite-authoring::compile_from_dto` /
 //! `compile_from_yaml` / `compile_and_publish` (free functions
-//! that take a `ProcessStore` handle so they can still persist the
+//! that take a `WorkflowStore` handle so they can still persist the
 //! compiled program after lowering). The engine keeps only:
 //!
 //!   - `compile(bpmn_xml: &str)` — BPMN-XML path; depends only on
@@ -24,15 +24,10 @@
 
 pub mod demo;
 pub mod engine;
-pub mod plan_walker;
-
+pub mod runtime_context;
 
 pub use engine::*;
-
-#[cfg(test)]
-mod demo_integration_tests;
-#[cfg(test)]
-mod plan_walker_tests;
+pub use runtime_context::*;
 
 #[cfg(test)]
 mod tests;

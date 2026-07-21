@@ -33,7 +33,9 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
     // Check acyclicity via DFS (excluding loop back-edges, which are explicitly allowed in Loop structures)
     // For general DAG validation, we only detect unexpected cycles outside Loop blocks.
     if let Some(cycle) = find_cycle(&plan.start_node, &adj, plan) {
-        errors.push(DagError { message: format!("cycle detected: {}", cycle.join(" → ")) });
+        errors.push(DagError {
+            message: format!("cycle detected: {}", cycle.join(" → ")),
+        });
     }
 
     // Check all nodes reachable from start
@@ -47,7 +49,10 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
     }
 
     // Check at least one end-event reachable
-    let has_end = plan.nodes.values().any(|n| matches!(n, ExecutionNode::End(_)));
+    let has_end = plan
+        .nodes
+        .values()
+        .any(|n| matches!(n, ExecutionNode::End(_)));
     if !has_end {
         errors.push(DagError {
             message: "no end-event in workflow".into(),
@@ -133,7 +138,8 @@ fn dfs_cycle<'a>(
         for &next in nexts {
             // In a structured loop, a back-edge pointing to the loop head is expected.
             // Do not treat it as an illegal cycle if next is a Loop node and node is part of its body.
-            let is_expected_back_edge = if let Some(ExecutionNode::Loop(lp)) = plan.nodes.get(next) {
+            let is_expected_back_edge = if let Some(ExecutionNode::Loop(lp)) = plan.nodes.get(next)
+            {
                 lp.body.contains(&node.to_string())
             } else {
                 false

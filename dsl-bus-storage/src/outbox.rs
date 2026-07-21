@@ -2,7 +2,7 @@
 //!
 //! All SQL lives here; nothing leaks to consumers.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
@@ -50,7 +50,7 @@ pub async fn insert_outbox(
     })
 }
 
-/// Claim up to `limit` pending rows whose `next_attempt_at` has passed.
+/// Claim up to `limit` due rows in a short transaction.
 ///
 /// **Must run inside a transaction.** The query uses `FOR UPDATE SKIP
 /// LOCKED` so concurrent senders see disjoint claim sets; the lock is
@@ -59,23 +59,41 @@ pub async fn insert_outbox(
 /// Callers should commit (after marking each row submitted or retrying)
 /// to release the locks. Aborting the transaction returns the rows to
 /// the queue.
-pub async fn select_pending_outbox(
+pub async fn claim_pending_outbox(
     conn: &mut sqlx::PgConnection,
     limit: i64,
+    owner: &str,
+    claim_token: Uuid,
+    claim_until: DateTime<Utc>,
 ) -> Result<Vec<OutboxEntry>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, target_domain, target_endpoint, payload, idempotency_key,
-               execution_id, callout_id, status, attempt_count, next_attempt_at,
-               last_error, created_at, submitted_at, tenant_id
-          FROM dsl_bus.outbox
-         WHERE status = 'pending' AND next_attempt_at <= now()
-         ORDER BY next_attempt_at
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
+        WITH candidates AS (
+            SELECT id
+            FROM dsl_bus.outbox
+            WHERE status IN ('pending', 'dispatching')
+              AND next_attempt_at <= now()
+              AND (claim_until IS NULL OR claim_until <= now())
+            ORDER BY next_attempt_at, id
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE dsl_bus.outbox AS outbox
+        SET status = 'dispatching', claim_owner = $2, claim_token = $3,
+            claim_until = $4
+        FROM candidates
+        WHERE outbox.id = candidates.id
+        RETURNING outbox.id, outbox.target_domain, outbox.target_endpoint,
+                  outbox.payload, outbox.idempotency_key, outbox.execution_id,
+                  outbox.callout_id, outbox.status, outbox.attempt_count,
+                  outbox.next_attempt_at, outbox.last_error, outbox.created_at,
+                  outbox.submitted_at, outbox.tenant_id, outbox.claim_token
         "#,
     )
     .bind(limit)
+    .bind(owner)
+    .bind(claim_token)
+    .bind(claim_until)
     .fetch_all(&mut *conn)
     .await?;
 
@@ -87,21 +105,27 @@ pub async fn select_pending_outbox(
 pub async fn mark_outbox_submitted(
     executor: impl PgExecutor<'_>,
     id: Uuid,
+    claim_token: Uuid,
     execution_id: Uuid,
 ) -> Result<()> {
-    sqlx::query(
+    let result = sqlx::query(
         r#"
         UPDATE dsl_bus.outbox
            SET status = 'submitted',
                execution_id = $2,
-               submitted_at = now()
-         WHERE id = $1
+               submitted_at = now(), claim_owner = NULL, claim_token = NULL,
+               claim_until = NULL
+         WHERE id = $1 AND claim_token = $3 AND status = 'dispatching'
         "#,
     )
     .bind(id)
     .bind(execution_id)
+    .bind(claim_token)
     .execute(executor)
     .await?;
+    if result.rows_affected() != 1 {
+        return Err(crate::BusStorageError::LostClaim(id));
+    }
     Ok(())
 }
 
@@ -111,25 +135,31 @@ pub async fn mark_outbox_submitted(
 pub async fn mark_outbox_retry(
     executor: impl PgExecutor<'_>,
     id: Uuid,
+    claim_token: Uuid,
     backoff_secs: i64,
     error: &str,
 ) -> Result<()> {
     let next_attempt = Utc::now() + Duration::seconds(backoff_secs);
-    sqlx::query(
+    let result = sqlx::query(
         r#"
         UPDATE dsl_bus.outbox
            SET status = 'pending',
                attempt_count = attempt_count + 1,
                next_attempt_at = $2,
-               last_error = $3
-         WHERE id = $1
+               last_error = $3,
+               claim_owner = NULL, claim_token = NULL, claim_until = NULL
+         WHERE id = $1 AND claim_token = $4 AND status = 'dispatching'
         "#,
     )
     .bind(id)
     .bind(next_attempt)
     .bind(error)
+    .bind(claim_token)
     .execute(executor)
     .await?;
+    if result.rows_affected() != 1 {
+        return Err(crate::BusStorageError::LostClaim(id));
+    }
     Ok(())
 }
 
@@ -152,5 +182,6 @@ fn row_to_entry(row: sqlx::postgres::PgRow) -> Result<OutboxEntry> {
         created_at: row.try_get("created_at")?,
         submitted_at: row.try_get("submitted_at")?,
         tenant_id: row.try_get("tenant_id")?,
+        claim_token: row.try_get("claim_token")?,
     })
 }

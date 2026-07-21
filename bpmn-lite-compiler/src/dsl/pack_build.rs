@@ -1,11 +1,14 @@
-use std::collections::HashSet;
-use dsl_manifest::{Manifest, VerbEntry, Signature, InputSpec, OutputSpec, ExternalReferencePin, ServiceDeclaration, ServiceKind};
 use blake3::Hasher;
+use dsl_manifest::{
+    ExternalReferencePin, InputSpec, Manifest, OutputSpec, ServiceDeclaration, ServiceKind,
+    Signature, VerbEntry,
+};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowPackDAG {
-    pub domain: String,             // "bpmn"
-    pub version: String,            // "v1.0.0"
+    pub domain: String,  // "bpmn"
+    pub version: String, // "v1.0.0"
     pub nodes: Vec<PackNode>,
     pub external_references: Vec<ExternalReferencePin>,
     #[serde(default)]
@@ -30,7 +33,7 @@ pub enum PackNode {
     Reference {
         name: String,
         target_node: String,
-    }
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -53,13 +56,23 @@ impl PackNode {
 pub fn generate_manifest(dag: &WorkflowPackDAG) -> Result<Manifest, String> {
     let mut verbs = Vec::new();
     for node in &dag.nodes {
-        if let PackNode::VerbLocal { id, inputs, output, effect_class, authority_required } = node {
+        if let PackNode::VerbLocal {
+            id,
+            inputs,
+            output,
+            effect_class,
+            authority_required,
+        } = node
+        {
             let signature = Signature {
-                inputs: inputs.iter().map(|i| InputSpec {
-                    name: i.name.clone(),
-                    type_name: i.type_name.clone(),
-                    required: i.required,
-                }).collect(),
+                inputs: inputs
+                    .iter()
+                    .map(|i| InputSpec {
+                        name: i.name.clone(),
+                        type_name: i.type_name.clone(),
+                        required: i.required,
+                    })
+                    .collect(),
                 output: output.as_ref().map(|o| OutputSpec {
                     produces: Some(o.type_name.clone()),
                 }),
@@ -132,14 +145,20 @@ pub fn generate_manifest(dag: &WorkflowPackDAG) -> Result<Manifest, String> {
     Manifest::load_from_yaml(&yaml_str).map_err(|e| e.to_string())
 }
 
-pub fn resolve_external_pack(domain: &str, content_hash: &str) -> Result<(Manifest, PackClosureManifest), String> {
+pub fn resolve_external_pack(
+    domain: &str,
+    content_hash: &str,
+) -> Result<(Manifest, PackClosureManifest), String> {
     let mut dir = std::path::PathBuf::from("manifests");
     if !dir.exists() {
         dir = std::path::PathBuf::from("../manifests");
     }
     if !dir.exists() {
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            dir = std::path::PathBuf::from(manifest_dir).parent().unwrap().join("manifests");
+            dir = std::path::PathBuf::from(manifest_dir)
+                .parent()
+                .unwrap()
+                .join("manifests");
         }
     }
     if !dir.exists() {
@@ -158,8 +177,10 @@ pub fn resolve_external_pack(domain: &str, content_hash: &str) -> Result<(Manife
                         let manifest_filename = filename.replace(".closure.yaml", ".yaml");
                         let manifest_path = path.parent().unwrap().join(manifest_filename);
                         if manifest_path.exists() {
-                            let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
-                            let manifest = Manifest::load_from_yaml(&manifest_content).map_err(|e| e.to_string())?;
+                            let manifest_content = std::fs::read_to_string(&manifest_path)
+                                .map_err(|e| e.to_string())?;
+                            let manifest = Manifest::load_from_yaml(&manifest_content)
+                                .map_err(|e| e.to_string())?;
                             return Ok((manifest, closure));
                         }
                     }
@@ -178,13 +199,17 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
 
     // G1 (intra-bijection)
     let lex_verb_ids: HashSet<&str> = lex.verbs.iter().map(|v| v.id.as_str()).collect();
-    let dag_local_verb_ids: HashSet<&str> = dag.nodes.iter().filter_map(|n| {
-        if let PackNode::VerbLocal { id, .. } = n {
-            Some(id.as_str())
-        } else {
-            None
-        }
-    }).collect();
+    let dag_local_verb_ids: HashSet<&str> = dag
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if let PackNode::VerbLocal { id, .. } = n {
+                Some(id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
 
     if lex_verb_ids != dag_local_verb_ids {
         errors.push(format!(
@@ -195,9 +220,17 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
 
     // G2 (signature coherence)
     for node in &dag.nodes {
-        if let PackNode::VerbLocal { id, inputs, output, effect_class, authority_required } = node {
+        if let PackNode::VerbLocal {
+            id,
+            inputs,
+            output,
+            effect_class,
+            authority_required,
+        } = node
+        {
             // Validate effect_class enum
-            if !["read", "idempotent_ensure", "read_modify_write"].contains(&effect_class.as_str()) {
+            if !["read", "idempotent_ensure", "read_modify_write"].contains(&effect_class.as_str())
+            {
                 errors.push(format!(
                     "G2 violation for verb '{}': invalid effect_class '{}'",
                     id, effect_class
@@ -224,11 +257,17 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
             if let Some(lex_verb) = lex.lookup_verb(id) {
                 // Check inputs
                 if inputs.len() != lex_verb.signature.inputs.len() {
-                    errors.push(format!("G2 violation for verb '{}': inputs length mismatch", id));
+                    errors.push(format!(
+                        "G2 violation for verb '{}': inputs length mismatch",
+                        id
+                    ));
                 } else {
                     for (i, ps) in inputs.iter().enumerate() {
                         let is = &lex_verb.signature.inputs[i];
-                        if ps.name != is.name || ps.type_name != is.type_name || ps.required != is.required {
+                        if ps.name != is.name
+                            || ps.type_name != is.type_name
+                            || ps.required != is.required
+                        {
                             errors.push(format!(
                                 "G2 violation for verb '{}': input at index {} mismatch (DAG: {:?}, Lex: {:?})",
                                 id, i, ps, is
@@ -248,7 +287,10 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
                         }
                     }
                     _ => {
-                        errors.push(format!("G2 violation for verb '{}': output presence mismatch", id));
+                        errors.push(format!(
+                            "G2 violation for verb '{}': output presence mismatch",
+                            id
+                        ));
                     }
                 }
             }
@@ -266,7 +308,8 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
 
     // G4 (External Resolution & Pin Validation)
     for pin in &dag.external_references {
-        if pin.content_hash.len() != 64 || !pin.content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        if pin.content_hash.len() != 64 || !pin.content_hash.chars().all(|c| c.is_ascii_hexdigit())
+        {
             errors.push(format!(
                 "G4 violation: content_hash '{}' for domain '{}' is not a 64-character hex string",
                 pin.content_hash, pin.domain
@@ -297,7 +340,9 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
                         ));
                     }
                     Some(p) => {
-                        if p.content_hash.len() == 64 && p.content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                        if p.content_hash.len() == 64
+                            && p.content_hash.chars().all(|c| c.is_ascii_hexdigit())
+                        {
                             match resolve_external_pack(&p.domain, &p.content_hash) {
                                 Ok((ext_lex, _)) => {
                                     let has_verb = ext_lex.lookup_verb(item_id).is_some();
@@ -334,7 +379,10 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
         if let PackNode::Reference { .. } = node {
             let name = node.id();
             if check_cycle(name, &dag.nodes, &mut visited, &mut path) {
-                errors.push(format!("G3 violation: cycle detected containing node '{}'", name));
+                errors.push(format!(
+                    "G3 violation: cycle detected containing node '{}'",
+                    name
+                ));
             }
         }
     }
@@ -350,7 +398,9 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
             if let Ok(entries) = std::fs::read_dir(path) {
                 for entry in entries.flatten() {
                     let file_path = entry.path();
-                    if file_path.is_file() && file_path.extension().and_then(|s| s.to_str()) == Some("sql") {
+                    if file_path.is_file()
+                        && file_path.extension().and_then(|s| s.to_str()) == Some("sql")
+                    {
                         if let Ok(content) = std::fs::read_to_string(&file_path) {
                             for line in content.lines() {
                                 let lower = line.to_lowercase();
@@ -506,31 +556,75 @@ mod tests {
                 PackNode::VerbLocal {
                     id: "define-template".to_string(),
                     inputs: vec![
-                        PortSpec { name: "template_key".into(), type_name: "String".into(), required: true },
-                        PortSpec { name: "plan_body".into(), type_name: "String".into(), required: true },
+                        PortSpec {
+                            name: "template_key".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "plan_body".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
                     ],
-                    output: Some(PortSpec { name: "template".into(), type_name: "BPMN_TEMPLATE".into(), required: true }),
+                    output: Some(PortSpec {
+                        name: "template".into(),
+                        type_name: "BPMN_TEMPLATE".into(),
+                        required: true,
+                    }),
                     effect_class: "idempotent_ensure".to_string(),
                     authority_required: "bpmn.template.write".to_string(),
                 },
                 PackNode::VerbLocal {
                     id: "spawn-instance".to_string(),
                     inputs: vec![
-                        PortSpec { name: "template_key".into(), type_name: "BPMN_TEMPLATE".into(), required: true },
-                        PortSpec { name: "idempotency_key".into(), type_name: "UUID".into(), required: true },
-                        PortSpec { name: "entry_id".into(), type_name: "UUID".into(), required: false },
-                        PortSpec { name: "runbook_id".into(), type_name: "UUID".into(), required: false },
+                        PortSpec {
+                            name: "template_key".into(),
+                            type_name: "BPMN_TEMPLATE".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "idempotency_key".into(),
+                            type_name: "UUID".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "entry_id".into(),
+                            type_name: "UUID".into(),
+                            required: false,
+                        },
+                        PortSpec {
+                            name: "runbook_id".into(),
+                            type_name: "UUID".into(),
+                            required: false,
+                        },
                     ],
-                    output: Some(PortSpec { name: "instance_id".into(), type_name: "BPMN_INSTANCE".into(), required: true }),
+                    output: Some(PortSpec {
+                        name: "instance_id".into(),
+                        type_name: "BPMN_INSTANCE".into(),
+                        required: true,
+                    }),
                     effect_class: "idempotent_ensure".to_string(),
                     authority_required: "bpmn.instance.write".to_string(),
                 },
                 PackNode::VerbLocal {
                     id: "deliver-message".to_string(),
                     inputs: vec![
-                        PortSpec { name: "instance_id".into(), type_name: "UUID".into(), required: true },
-                        PortSpec { name: "message_name".into(), type_name: "String".into(), required: true },
-                        PortSpec { name: "payload".into(), type_name: "String".into(), required: true },
+                        PortSpec {
+                            name: "instance_id".into(),
+                            type_name: "UUID".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "message_name".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "payload".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
                     ],
                     output: None,
                     effect_class: "idempotent_ensure".to_string(),
@@ -539,9 +633,21 @@ mod tests {
                 PackNode::VerbLocal {
                     id: "correlate-message".to_string(),
                     inputs: vec![
-                        PortSpec { name: "message_name".into(), type_name: "String".into(), required: true },
-                        PortSpec { name: "correlation_key".into(), type_name: "String".into(), required: true },
-                        PortSpec { name: "payload".into(), type_name: "String".into(), required: true },
+                        PortSpec {
+                            name: "message_name".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "correlation_key".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "payload".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
                     ],
                     output: None,
                     effect_class: "idempotent_ensure".to_string(),
@@ -550,8 +656,16 @@ mod tests {
                 PackNode::VerbLocal {
                     id: "cancel-instance".to_string(),
                     inputs: vec![
-                        PortSpec { name: "instance_id".into(), type_name: "UUID".into(), required: true },
-                        PortSpec { name: "reason".into(), type_name: "String".into(), required: true },
+                        PortSpec {
+                            name: "instance_id".into(),
+                            type_name: "UUID".into(),
+                            required: true,
+                        },
+                        PortSpec {
+                            name: "reason".into(),
+                            type_name: "String".into(),
+                            required: true,
+                        },
                     ],
                     output: None,
                     effect_class: "idempotent_ensure".to_string(),
@@ -559,10 +673,16 @@ mod tests {
                 },
                 PackNode::VerbLocal {
                     id: "inspect-instance".to_string(),
-                    inputs: vec![
-                        PortSpec { name: "instance_id".into(), type_name: "UUID".into(), required: true },
-                    ],
-                    output: Some(PortSpec { name: "instance_details".into(), type_name: "instance_details".into(), required: true }),
+                    inputs: vec![PortSpec {
+                        name: "instance_id".into(),
+                        type_name: "UUID".into(),
+                        required: true,
+                    }],
+                    output: Some(PortSpec {
+                        name: "instance_details".into(),
+                        type_name: "instance_details".into(),
+                        required: true,
+                    }),
                     effect_class: "read".to_string(),
                     authority_required: "bpmn.instance.read".to_string(),
                 },
@@ -582,7 +702,7 @@ mod tests {
     fn test_g1_violation_mismatch() {
         let dag = valid_bpmn_dag();
         let mut lex = generate_manifest(&dag).expect("failed to generate lexicon");
-        
+
         lex.verbs.remove(0);
         let result = validate_pack(&dag, &lex);
         assert!(result.is_err());
@@ -593,10 +713,11 @@ mod tests {
     #[test]
     fn test_g2_violation_signature_mismatch() {
         let mut dag = valid_bpmn_dag();
-        if let PackNode::VerbLocal { inputs, .. } = &mut dag.nodes[2] { // index 2 is define-template
+        if let PackNode::VerbLocal { inputs, .. } = &mut dag.nodes[2] {
+            // index 2 is define-template
             inputs[0].name = "wrong_name".to_string();
         }
-        
+
         let lex = generate_manifest(&valid_bpmn_dag()).expect("failed to generate lexicon");
         let result = validate_pack(&dag, &lex);
         assert!(result.is_err());
@@ -618,7 +739,9 @@ mod tests {
         let result = validate_pack(&dag, &lex);
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| e.contains("G2 violation") || e.contains("G1 violation")));
+        assert!(errs
+            .iter()
+            .any(|e| e.contains("G2 violation") || e.contains("G1 violation")));
     }
 
     #[test]
@@ -628,7 +751,7 @@ mod tests {
         let _yaml = lex.to_yaml().expect("failed to serialize lexicon");
         let closure = generate_closure(&lex, &dag);
         let _closure_yaml = serde_yaml::to_string(&closure).expect("failed to serialize closure");
-        
+
         let hash1 = compute_canonical_hash(&lex, &dag);
         let hash2 = compute_canonical_hash(&lex, &dag);
         assert_eq!(hash1, hash2);
@@ -639,15 +762,19 @@ mod tests {
         // Test B2 validation receipts:
         // 1. Fake-hash rejection (Fixture A)
         let mut dag_fake_hash = valid_bpmn_dag();
-        dag_fake_hash.external_references.push(ExternalReferencePin {
-            domain: "dmn-lite".to_string(),
-            content_hash: "fake_non_hex_hash_less_than_64_chars".to_string(),
-        });
+        dag_fake_hash
+            .external_references
+            .push(ExternalReferencePin {
+                domain: "dmn-lite".to_string(),
+                content_hash: "fake_non_hex_hash_less_than_64_chars".to_string(),
+            });
         let lex_fake_hash = generate_manifest(&dag_fake_hash).unwrap();
         let result_fake = validate_pack(&dag_fake_hash, &lex_fake_hash);
         assert!(result_fake.is_err());
         let errs_fake = result_fake.err().unwrap();
-        assert!(errs_fake.iter().any(|e| e.contains("G4 violation: content_hash")));
+        assert!(errs_fake
+            .iter()
+            .any(|e| e.contains("G4 violation: content_hash")));
 
         // 2. Real hash shape but absent verb in external pack (Fixture B)
         let mut dag_absent_verb = valid_bpmn_dag();
@@ -656,15 +783,20 @@ mod tests {
             name: "ref-non-existent".to_string(),
             target_node: "dmn-lite:non-existent-verb".to_string(),
         });
-        dag_absent_verb.external_references.push(ExternalReferencePin {
-            domain: "dmn-lite".to_string(),
-            content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836".to_string(),
-        });
+        dag_absent_verb
+            .external_references
+            .push(ExternalReferencePin {
+                domain: "dmn-lite".to_string(),
+                content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836"
+                    .to_string(),
+            });
         let lex_absent = generate_manifest(&dag_absent_verb).unwrap();
         let result_absent = validate_pack(&dag_absent_verb, &lex_absent);
         assert!(result_absent.is_err());
         let errs_absent = result_absent.err().unwrap();
-        assert!(errs_absent.iter().any(|e| e.contains("G4 violation: target 'non-existent-verb' not found")));
+        assert!(errs_absent
+            .iter()
+            .any(|e| e.contains("G4 violation: target 'non-existent-verb' not found")));
 
         // 3. Resolvable pin and present verb/decision (Fixture C)
         let mut dag_valid_ref = valid_bpmn_dag();
@@ -673,12 +805,19 @@ mod tests {
             name: "ref-valid".to_string(),
             target_node: "dmn-lite:cbu_type_routing".to_string(),
         });
-        dag_valid_ref.external_references.push(ExternalReferencePin {
-            domain: "dmn-lite".to_string(),
-            content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836".to_string(),
-        });
+        dag_valid_ref
+            .external_references
+            .push(ExternalReferencePin {
+                domain: "dmn-lite".to_string(),
+                content_hash: "06cd133818af5fe6807fa93b524517bcf7be0fc15109934f11a327e1fe749836"
+                    .to_string(),
+            });
         let lex_valid = generate_manifest(&dag_valid_ref).unwrap();
         let result_valid = validate_pack(&dag_valid_ref, &lex_valid);
-        assert!(result_valid.is_ok(), "Expected valid cross-pack reference to pass: {:?}", result_valid.err());
+        assert!(
+            result_valid.is_ok(),
+            "Expected valid cross-pack reference to pass: {:?}",
+            result_valid.err()
+        );
     }
 }

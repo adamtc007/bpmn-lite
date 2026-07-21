@@ -413,9 +413,9 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
 /// Allows backward `BrCounterLt` (bounded by counter limit).
 pub fn verify_bytecode(program: &CompiledProgram) -> Vec<VerifyError> {
     let mut errors = Vec::new();
-    let program_len = program.program.len() as Addr;
-    for (addr, instr) in program.program.iter().enumerate() {
-        let addr = addr as Addr;
+    let program_len = Addr::new(program.program().len() as u32);
+    for (addr, instr) in program.program().iter().enumerate() {
+        let addr = Addr::new(addr as u32);
         match instr {
             Instr::Jump { target } | Instr::BrIf { target } | Instr::BrIfNot { target } => {
                 check_target(&mut errors, program, addr, *target, program_len);
@@ -425,7 +425,7 @@ pub fn verify_bytecode(program: &CompiledProgram) -> Vec<VerifyError> {
                             "Backward jump at addr {} to {} — only BrCounterLt may jump backward",
                             addr, target
                         ),
-                        element_id: program.debug_map.get(&addr).cloned(),
+                        element_id: program.debug_map().get(&addr).cloned(),
                     });
                 }
             }
@@ -477,7 +477,7 @@ fn check_target(
                 "Bytecode target out of bounds at addr {}: target {} >= program len {}",
                 addr, target, program_len
             ),
-            element_id: program.debug_map.get(&addr).cloned(),
+            element_id: program.debug_map().get(&addr).cloned(),
         });
     }
 }

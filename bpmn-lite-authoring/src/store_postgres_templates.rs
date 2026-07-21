@@ -245,16 +245,17 @@ impl TemplateRow {
 mod tests {
     /// T-PUB-10: Postgres save/load/set_state round-trip.
     /// Requires a running Postgres instance with the migration applied.
-    #[ignore]
     #[tokio::test]
     async fn t_pub_10_postgres_round_trip() {
         use super::*;
         use crate::dto::{EdgeDto, NodeDto, WorkflowGraphDto};
 
-        let db_url = std::env::var("DATABASE_URL")
+        let db_url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| "postgresql:///bpmn_lite_test".to_string());
         let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
         let store = PostgresTemplateStore::new(pool);
+        let template_key = format!("pg_test_wf_{}", uuid::Uuid::now_v7());
 
         let dto = WorkflowGraphDto {
             id: "pg_test".to_string(),
@@ -278,7 +279,7 @@ mod tests {
         };
 
         let tpl = WorkflowTemplate {
-            template_key: "pg_test_wf".to_string(),
+            template_key: template_key.clone(),
             template_version: 1,
             process_key: "pg_test_proc".to_string(),
             bytecode_version: "abc123".to_string(),
@@ -297,17 +298,17 @@ mod tests {
         store.save(&tpl).await.unwrap();
 
         // Load
-        let loaded = store.load("pg_test_wf", 1).await.unwrap();
+        let loaded = store.load(&template_key, 1).await.unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
         assert_eq!(loaded.state, TemplateState::Draft);
 
         // Publish
         store
-            .set_state("pg_test_wf", 1, TemplateState::Published)
+            .set_state(&template_key, 1, TemplateState::Published)
             .await
             .unwrap();
-        let published = store.load("pg_test_wf", 1).await.unwrap().unwrap();
+        let published = store.load(&template_key, 1).await.unwrap().unwrap();
         assert_eq!(published.state, TemplateState::Published);
 
         // Load latest published

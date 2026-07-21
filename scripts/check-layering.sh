@@ -15,7 +15,7 @@ echo "== bpmn-lite layering guard =="
 
 for src in bpmn-lite-types/src bpmn-lite-engine/src bpmn-lite-store/src \
            bpmn-lite-store-postgres/src bpmn-lite-server/src bpmn-lite-vm/src \
-           bpmn-lite-compiler/src bpmn-lite-authoring/src; do
+           bpmn-lite-compiler/src bpmn-lite-authoring/src bpmn-lite-kernel/src; do
   [ -d "$src" ] || continue
   hits="$(grep -rnE '\bob_poc_types\b' "$src" 2>/dev/null \
     | grep -vE ':[0-9]+:[[:space:]]*//' || true)"
@@ -23,8 +23,41 @@ for src in bpmn-lite-types/src bpmn-lite-engine/src bpmn-lite-store/src \
 $hits"
 done
 
+# E4 — the deterministic kernel has one permitted dependency edge and no
+# ambient I/O, clock, or random sources.
+kernel_manifest="bpmn-lite-kernel/Cargo.toml"
+kernel_source="bpmn-lite-kernel/src"
+if [ -f "$kernel_manifest" ]; then
+  dependency_lines="$(awk '
+    /^\[dependencies\]$/ { in_dependencies=1; next }
+    /^\[/ { in_dependencies=0 }
+    in_dependencies && /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/ { print }
+  ' "$kernel_manifest")"
+  unexpected_dependencies="$(printf '%s\n' "$dependency_lines" \
+    | grep -vE '^[[:space:]]*bpmn-lite-types[[:space:]]*=' || true)"
+  [ -n "$unexpected_dependencies" ] && note "bpmn-lite-kernel has dependencies other than bpmn-lite-types:
+$unexpected_dependencies"
+
+  forbidden_kernel_source="$(grep -rnE \
+    'SystemTime::now|Uuid::now_v7|thread_rng|std::net|std::fs|TcpStream|UdpSocket|tokio::|sqlx::' \
+    "$kernel_source" 2>/dev/null || true)"
+  [ -n "$forbidden_kernel_source" ] && note "bpmn-lite-kernel reaches an ambient capability:
+$forbidden_kernel_source"
+fi
+
+# T10 — engine code that constructs DeterministicContext must obtain ambient
+# values through runtime_context.rs, which has deterministic test adapters.
+engine_apply_source="bpmn-lite-engine/src/engine.rs"
+if [ -f "$engine_apply_source" ]; then
+  forbidden_engine_apply="$(grep -nE \
+    'SystemTime::now|Uuid::now_v7|thread_rng|rand::' \
+    "$engine_apply_source" 2>/dev/null || true)"
+  [ -n "$forbidden_engine_apply" ] && note "engine apply path bypasses RuntimeContext:
+$forbidden_engine_apply"
+fi
+
 if [ "$fail" -eq 0 ]; then
-  echo "  OK — bpmn-lite has no ob_poc_types dependency."
+  echo "  OK — layering and deterministic-kernel capability rules hold."
 else
   echo ""
   echo "== Layering guard FAILED =="

@@ -10,8 +10,9 @@
 //! they are part of the durable `CompiledProgram` artifact that the engine,
 //! VM, and store all consume.
 
-use crate::types::FlagKey;
+use crate::types::{FlagKey, ProcessInstance, Value};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 // ── Data object declarations ──────────────────────────────────────────────────
@@ -152,4 +153,119 @@ pub struct FfiTaskDecl {
     pub template_id: [u8; 32],
     pub inputs: Vec<CompiledFfiInputBinding>,
     pub outputs: Vec<CompiledFfiOutputBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FfiBindingError {
+    #[error("domain payload is not valid JSON: {0}")]
+    InvalidDomainPayload(String),
+    #[error("FFI output is not valid JSON: {0}")]
+    InvalidOutput(String),
+    #[error("missing binding value: {0}")]
+    MissingValue(String),
+    #[error("binding value has the wrong type: {0}")]
+    WrongType(String),
+}
+
+pub fn encode_ffi_inputs(
+    instance: &ProcessInstance,
+    declaration: &FfiTaskDecl,
+) -> Result<Vec<u8>, FfiBindingError> {
+    let domain = serde_json::from_str::<serde_json::Value>(&instance.domain_payload)
+        .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))?;
+    let mut object = serde_json::Map::new();
+    for binding in &declaration.inputs {
+        let value = match &binding.source {
+            BindingSource::Literal(Literal::Bool(value)) => serde_json::Value::Bool(*value),
+            BindingSource::Literal(Literal::I64(value)) => (*value).into(),
+            BindingSource::Literal(Literal::F64(value)) => serde_json::Number::from_f64(*value)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| FfiBindingError::WrongType(binding.target_field.clone()))?,
+            BindingSource::Literal(Literal::String(value)) => {
+                serde_json::Value::String(value.clone())
+            }
+            BindingSource::FlagRef(key) => match instance.flags.get(key) {
+                Some(Value::Bool(value)) => serde_json::Value::Bool(*value),
+                Some(Value::I64(value)) => (*value).into(),
+                Some(Value::Str(value)) => (*value).into(),
+                Some(Value::Ref(value)) => (*value).into(),
+                None => return Err(FfiBindingError::MissingValue(binding.target_field.clone())),
+            },
+            BindingSource::DomainPayloadRef(path) => read_json_path(&domain, path)
+                .cloned()
+                .ok_or_else(|| FfiBindingError::MissingValue(binding.target_field.clone()))?,
+        };
+        object.insert(binding.target_field.clone(), value);
+    }
+    serde_json::to_vec(&serde_json::Value::Object(object))
+        .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))
+}
+
+pub fn apply_ffi_outputs(
+    instance: &mut ProcessInstance,
+    declaration: &FfiTaskDecl,
+    bytes: &[u8],
+) -> Result<(), FfiBindingError> {
+    let output: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|error| FfiBindingError::InvalidOutput(error.to_string()))?;
+    let mut domain: serde_json::Value = serde_json::from_str(&instance.domain_payload)
+        .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))?;
+    for binding in &declaration.outputs {
+        let value = output
+            .get(&binding.source_field)
+            .cloned()
+            .ok_or_else(|| FfiBindingError::MissingValue(binding.source_field.clone()))?;
+        match &binding.target {
+            BindingTarget::FlagWrite(key) => {
+                let value = match value {
+                    serde_json::Value::Bool(value) => Value::Bool(value),
+                    serde_json::Value::Number(value) => {
+                        Value::I64(value.as_i64().ok_or_else(|| {
+                            FfiBindingError::WrongType(binding.source_field.clone())
+                        })?)
+                    }
+                    _ => return Err(FfiBindingError::WrongType(binding.source_field.clone())),
+                };
+                instance.flags.insert(*key, value);
+            }
+            BindingTarget::DomainPayloadWrite(path) => write_json_path(&mut domain, path, value)?,
+        }
+    }
+    let canonical = serde_json::to_string(&domain)
+        .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))?;
+    instance.domain_payload = Arc::from(canonical.as_str());
+    instance.domain_payload_hash = crate::EffectId::content_hash(canonical.as_bytes());
+    Ok(())
+}
+
+fn read_json_path<'a>(
+    root: &'a serde_json::Value,
+    path: &[String],
+) -> Option<&'a serde_json::Value> {
+    path.iter()
+        .try_fold(root, |value, segment| value.get(segment))
+}
+
+fn write_json_path(
+    root: &mut serde_json::Value,
+    path: &[String],
+    value: serde_json::Value,
+) -> Result<(), FfiBindingError> {
+    let Some((last, parents)) = path.split_last() else {
+        return Err(FfiBindingError::MissingValue(
+            "empty output path".to_string(),
+        ));
+    };
+    let mut current = root;
+    for segment in parents {
+        current = current
+            .as_object_mut()
+            .and_then(|object| object.get_mut(segment))
+            .ok_or_else(|| FfiBindingError::MissingValue(segment.clone()))?;
+    }
+    current
+        .as_object_mut()
+        .ok_or_else(|| FfiBindingError::WrongType(last.clone()))?
+        .insert(last.clone(), value);
+    Ok(())
 }

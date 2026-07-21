@@ -1,0 +1,89 @@
+name: production-gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rust-and-recovery:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_DB: bpmn_lite_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bpmn_lite_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      BPMN_LITE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bpmn_lite_test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bpmn_lite_test
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Layering and deterministic capability gate
+        run: bash scripts/check-layering.sh
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace build
+        run: cargo build --workspace --all-features
+      - name: Production and demo startup fail-closed checks
+        run: |
+          if BPMN_LITE_ENV=production target/debug/bpmn-lite-server; then
+            echo "production server started without mandatory configuration" >&2
+            exit 1
+          fi
+          if BPMN_LITE_ENV=production target/debug/bpmn-lite-demo; then
+            echo "demo server started in production mode" >&2
+            exit 1
+          fi
+      - name: Migrations, RLS, recovery, integration, and property tests
+        run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Kernel WASI Preview 2 build
+        run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
+      - name: Fiber persistence codec benchmark
+        run: bash scripts/check-benchmark-regression.sh
+      - name: Public API documentation surface
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --workspace --all-features --no-deps
+      - name: Production gRPC wire smoke
+        run: |
+          BPMN_LITE_STORE=memory BPMN_LITE_BIND=127.0.0.1:50051 \
+            cargo run -p bpmn-lite-server --bin bpmn-lite-server > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 60); do
+            if grep -q 'gRPC server listening' server.log; then break; fi
+            sleep 1
+          done
+          BPMN_LITE_URL=http://127.0.0.1:50051 \
+            cargo test -p bpmn-lite-server --test integration test_grpc_smoke -- --exact
+
+  native-wasm-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - name: Cross-implementation replay bytes
+        run: |
+          cargo run --quiet -p bpmn-lite-kernel --bin replay_fixture > native-replay.txt
+          cargo build -p bpmn-lite-kernel --target wasm32-wasip2
+          wasmtime target/wasm32-wasip2/debug/replay_fixture.wasm > wasm-replay.txt
+          cmp native-replay.txt wasm-replay.txt

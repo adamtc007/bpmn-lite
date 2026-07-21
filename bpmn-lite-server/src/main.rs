@@ -1,6 +1,5 @@
 #[cfg(feature = "postgres")]
 mod bus_runtime;
-mod rest;
 
 use std::sync::Arc;
 use uuid::Uuid;
@@ -11,11 +10,12 @@ use bpmn_lite_ffi_http::HttpFfiOwner;
 use bpmn_lite_server::event_fanout::EventFanout;
 use bpmn_lite_server::grpc::proto::bpmn_lite_server::BpmnLiteServer;
 use bpmn_lite_server::grpc::{BpmnLiteService, RequestLimits, ServerMetrics};
-use bpmn_lite_store::store::ProcessStore;
+use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use dmn_lite_bridge::DmnLiteOwner;
 use ffi_catalogue::{FfiCatalogue, MemoryFfiTemplateStore};
 use ffi_dispatcher::FfiDispatcher;
+use futures::{stream, StreamExt};
 use tokio::sync::Semaphore;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
 
+    validate_production_configuration()?;
     let addr = parse_bind_addr().parse()?;
 
     let database_url = parse_database_url();
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // selected, or no postgres feature).
     #[cfg(feature = "postgres")]
     let mut bus_pool: Option<sqlx::PgPool> = None;
-    let store: Arc<dyn ProcessStore> = match database_url {
+    let store: Arc<dyn WorkflowStore> = match database_url {
         #[cfg(feature = "postgres")]
         Some(url) => {
             // A18 — split admin / runtime connections.
@@ -63,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!("Running migrations via DATABASE_ADMIN_URL...");
                 let admin_pool = sqlx::PgPool::connect(admin_url).await?;
                 let admin_store =
-                    bpmn_lite_store_postgres::PostgresProcessStore::new(admin_pool.clone());
+                    bpmn_lite_store_postgres::PostgresWorkflowStore::new(admin_pool.clone());
                 admin_store.migrate().await?;
 
                 // Run bus migrations under admin role with search_path=dsl_bus
@@ -88,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             verify_not_superuser(&pool).await?;
 
             bus_pool = Some(pool.clone());
-            let pg = bpmn_lite_store_postgres::PostgresProcessStore::new(pool);
+            let pg = bpmn_lite_store_postgres::PostgresWorkflowStore::new(pool);
             if database_admin_url.is_none() {
                 // No admin URL — run migrations through the runtime pool
                 // (legacy / dev path).
@@ -105,10 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dsl_bus_storage::migrate(&bus_pool_migrator).await?;
                 bus_pool_migrator.close().await;
 
-                tracing::info!("Using PostgresProcessStore (migrations applied via runtime pool)");
+                tracing::info!("Using PostgresWorkflowStore (migrations applied via runtime pool)");
             } else {
                 tracing::info!(
-                    "Using PostgresProcessStore (migrations already applied via admin pool)"
+                    "Using PostgresWorkflowStore (migrations already applied via admin pool)"
                 );
             }
             Arc::new(pg)
@@ -138,30 +139,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_ffi_owner = Arc::new(HttpFfiOwner::new());
     let grpc_ffi_owner = Arc::new(GrpcFfiOwner::new());
     let mut ffi_dispatcher = FfiDispatcher::new(ffi_cat.clone());
-    ffi_dispatcher
-        .register_owner(ffi_owner.clone())
-        .expect("register DmnLiteOwner");
-    ffi_dispatcher
-        .register_owner(http_ffi_owner.clone())
-        .expect("register HttpFfiOwner");
-    ffi_dispatcher
-        .register_owner(grpc_ffi_owner.clone())
-        .expect("register GrpcFfiOwner");
+    ffi_dispatcher.register_owner(ffi_owner.clone())?;
+    ffi_dispatcher.register_owner(http_ffi_owner.clone())?;
+    ffi_dispatcher.register_owner(grpc_ffi_owner.clone())?;
     let ffi_dispatcher = Arc::new(ffi_dispatcher);
     tracing::info!("FFI dispatcher initialised with dmn-lite + http + grpc execution owners");
 
-    // T3.3 — Build the bus client early (before the engine) so we can
-    // wire it into the engine via .with_bus_client(). The bus server
-    // starts later (after the engine + event_fanout are ready).
+    // Build the transport adapter independently of the deterministic engine.
     #[cfg(feature = "postgres")]
-    let early_bus_client: Option<(
-        Arc<dsl_bus_client::BusClient>,
-        Arc<bpmn_lite_store_postgres::PostgresPendingInvocationStore>,
-    )> = match &bus_pool {
+    let early_bus_client: Option<Arc<dsl_bus_client::BusClient>> = match &bus_pool {
         Some(pool) if std::env::var("BPMN_LITE_BUS_LISTEN").is_ok() => {
+            let pending = Arc::new(
+                bpmn_lite_store_postgres::PostgresPendingInvocationStore::new(pool.clone()),
+            );
             let mut builder = dsl_bus_client::BusClient::builder()
                 .pool(pool.clone())
-                .local_domain("bpmn-lite");
+                .local_domain("bpmn-lite")
+                .submission_ack_handler(Arc::new(bus_runtime::StoreSubmissionAckHandler::new(
+                    pending.clone(),
+                    store.clone(),
+                )));
             if let Ok(uri) = std::env::var("OB_POC_BUS_ENDPOINT") {
                 builder = builder.add_peer("ob-poc", uri);
             }
@@ -169,22 +166,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 builder = builder.add_peer("dmn-lite", uri);
             }
             let client = builder.build().await?;
-            let pending = Arc::new(
-                bpmn_lite_store_postgres::PostgresPendingInvocationStore::new(pool.clone()),
-            );
-            Some((Arc::new(client), pending))
+            Some(Arc::new(client))
         }
         _ => None,
     };
 
-    let engine_builder = BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
-    #[cfg(feature = "postgres")]
-    let engine_builder = if let Some((ref bc, ref ps)) = early_bus_client {
-        tracing::info!("T3: plan walker wired into engine tick loop");
-        engine_builder.with_bus_client(bc.clone(), ps.clone())
-    } else {
-        engine_builder
-    };
+    let engine_builder =
+        BpmnLiteEngine::new(store.clone()).with_ffi_dispatcher(ffi_dispatcher.clone());
     let engine = Arc::new(engine_builder);
     let event_fanout = Arc::new(EventFanout::new(
         engine.clone(),
@@ -215,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         early_bus_client,
         std::env::var("BPMN_LITE_BUS_LISTEN"),
     ) {
-        (Some(pool), Some((bc, _ps)), Ok(listen)) => {
+        (Some(pool), Some(bc), Ok(listen)) => {
             let bind_addr: std::net::SocketAddr = listen
                 .parse()
                 .map_err(|e| config_error(&format!("invalid BPMN_LITE_BUS_LISTEN: {e}")))?;
@@ -241,6 +229,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_batch_size = parse_usize_env("BPMN_LITE_TICK_BATCH_SIZE", 128);
     let tick_lease_ms = parse_u64_env("BPMN_LITE_TICK_LEASE_MS", 5_000);
     let tick_interval_ms = parse_u64_env("BPMN_LITE_TICK_INTERVAL_MS", 500);
+    let scheduler_tenant_concurrency = parse_usize_env(
+        "BPMN_LITE_SCHEDULER_TENANT_CONCURRENCY",
+        std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1),
+    );
+    let dedupe_retention_ms =
+        parse_u64_env("BPMN_LITE_DEDUPE_RETENTION_MS", 7 * 24 * 60 * 60 * 1_000);
+
+    let recovery = engine
+        .recover_all_tenants(&scheduler_owner, tick_batch_size, tick_lease_ms)
+        .await?;
+    tracing::info!(
+        tenants = recovery.tenants_scanned,
+        instances = recovery.instances_verified,
+        timers = recovery.timers_applied,
+        effects = recovery.interrupted_effects,
+        stale_jobs = recovery.stale_jobs_reclaimed,
+        "startup recovery gate passed"
+    );
 
     // Background: reclaim stale claimed jobs (every 60s, 5min timeout)
     let reclaim_store = store.clone();
@@ -262,50 +270,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_store = store.clone();
     let tick_owner = scheduler_owner.clone();
     tokio::spawn(async move {
+        let mut tenant_cursor = 0usize;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(tick_interval_ms)).await;
-            let tenants = match tick_store.list_tenants().await {
+            let mut tenants = match tick_store.list_tenants().await {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::error!(error = %e, "scheduler: failed to list tenants");
                     continue;
                 }
             };
-            for tenant_id in tenants {
-                let engine = tick_engine.for_tenant(&tenant_id);
-                if let Err(e) = engine
-                    .tick_claimed_batch(&tick_owner, tick_batch_size, tick_lease_ms)
-                    .await
-                {
-                    tracing::error!(tenant_id = %tenant_id, error = %e, "scheduler tick batch failed");
-                }
+            if tenants.is_empty() {
+                continue;
             }
+            tenant_cursor %= tenants.len();
+            tenants.rotate_left(tenant_cursor);
+            tenant_cursor = tenant_cursor.saturating_add(1);
+            stream::iter(tenants)
+                .for_each_concurrent(scheduler_tenant_concurrency, |tenant_id| {
+                    let tick_owner = tick_owner.clone();
+                    let tick_engine = tick_engine.clone();
+                    async move {
+                        let tenant_id = match bpmn_lite_types::TenantId::new(tenant_id) {
+                            Ok(tenant_id) => tenant_id,
+                            Err(error) => {
+                                tracing::error!(%error, "scheduler received invalid tenant id");
+                                return;
+                            }
+                        };
+                        let engine = tick_engine.for_tenant(tenant_id.clone());
+                        let logical_time = match std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                        {
+                            Ok(duration) => duration.as_millis() as u64,
+                            Err(error) => {
+                                tracing::error!(tenant_id = %tenant_id, error = %error, "scheduler clock is before Unix epoch");
+                                return;
+                            }
+                        };
+                        if let Err(error) = engine
+                            .tick_due_timers(
+                                &tick_owner,
+                                logical_time,
+                                tick_batch_size,
+                                tick_lease_ms,
+                            )
+                            .await
+                        {
+                            tracing::error!(tenant_id = %tenant_id, %error, "durable timer batch failed");
+                        }
+                        if let Err(error) = engine
+                            .dispatch_pending_effects(
+                                &tick_owner,
+                                tick_batch_size,
+                                tick_lease_ms,
+                            )
+                            .await
+                        {
+                            tracing::error!(tenant_id = %tenant_id, %error, "durable effect batch failed");
+                        }
+                        if let Err(error) = engine
+                            .tick_claimed_batch(&tick_owner, tick_batch_size, tick_lease_ms)
+                            .await
+                        {
+                            tracing::error!(tenant_id = %tenant_id, %error, "scheduler tick batch failed");
+                        }
+                    }
+                })
+                .await;
         }
     });
 
-    // Background: prune dedupe cache (hourly, 24h TTL)
+    // Background: prune dedupe cache using the configured late-delivery window.
     let prune_store = store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            match prune_store.prune_dedupe_cache(24 * 3600 * 1000).await {
+            match prune_store.prune_dedupe_cache(dedupe_retention_ms).await {
                 Ok(n) if n > 0 => tracing::info!(pruned = n, "Pruned dedupe cache"),
                 Err(e) => tracing::error!(error = %e, "Dedupe prune failed"),
                 _ => {}
             }
         }
     });
-
-    // A17 — Detect interrupted FFI calls from a previous crash.
-    match engine.detect_interrupted_ffi_calls("default").await {
-        Ok(0) => tracing::info!("A17: no interrupted FFI calls detected"),
-        Ok(n) => tracing::warn!(
-            count = n,
-            "A17: {} interrupted FFI call(s) detected; see above for details",
-            n
-        ),
-        Err(e) => tracing::warn!(error = %e, "A17: interrupted FFI call scan failed (non-fatal)"),
-    }
 
     // Validate that every ExecFfi instruction in stored programs has a registered owner.
     let coverage_gaps = ffi_dispatcher.validate_coverage().await;
@@ -322,39 +369,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "FFI coverage gap: stored program references unregistered template"
             );
         }
+        if is_production_environment() {
+            return Err(config_error(
+                "production readiness denied: stored FFI operations lack dispatch owners",
+            ));
+        }
         tracing::warn!(
             gaps = coverage_gaps.len(),
             "FFI coverage gaps detected at startup"
         );
-    }
-
-    // T6 — REST demo server (axum, port 8080 by default).
-    // Runs in-process alongside the gRPC server. MemoryStore-backed;
-    // stateless across restarts — only for the §10 demo walkthrough.
-    let rest_bind =
-        std::env::var("BPMN_LITE_REST_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    if let Ok(rest_addr) = rest_bind.parse::<std::net::SocketAddr>() {
-        let demo_state = rest::DemoState::new();
-        let rest_app = rest::demo_router(demo_state);
-        tokio::spawn(async move {
-            tracing::info!(bind_addr = %rest_addr, "BPMN-Lite REST demo server starting");
-            match tokio::net::TcpListener::bind(rest_addr).await {
-                Ok(listener) => {
-                    if let Err(e) = axum::serve(listener, rest_app).await {
-                        tracing::error!(error = %e, "REST demo server error");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        bind_addr = %rest_addr,
-                        "BPMN-Lite REST demo server failed to bind (possibly port already in use); skipping"
-                    );
-                }
-            }
-        });
-    } else {
-        tracing::warn!(bind = %rest_bind, "BPMN_LITE_REST_BIND is invalid — REST demo server disabled");
     }
 
     tracing::info!(
@@ -393,14 +416,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("BPMN-Lite gRPC server listening on {}", addr);
 
-    let shutdown_signal = async {
+    #[cfg(unix)]
+    let mut sigterm = {
+        use tokio::signal::unix::{signal, SignalKind};
+        signal(SignalKind::terminate())?
+    };
+    let shutdown_signal = async move {
         let ctrl_c = tokio::signal::ctrl_c();
 
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
             tokio::select! {
                 _ = ctrl_c => {}
                 _ = sigterm.recv() => {}
@@ -474,6 +499,89 @@ fn config_error(message: &str) -> Box<dyn std::error::Error> {
         std::io::ErrorKind::InvalidInput,
         message.to_string(),
     ))
+}
+
+fn validate_production_configuration() -> Result<(), Box<dyn std::error::Error>> {
+    if !is_production_environment() {
+        return Ok(());
+    }
+    #[cfg(not(feature = "postgres"))]
+    return Err(config_error(
+        "production binary was compiled without the postgres feature",
+    ));
+    #[cfg(feature = "postgres")]
+    {
+        if !std::env::var("BPMN_LITE_STORE")
+            .unwrap_or_else(|_| "postgres".to_string())
+            .eq_ignore_ascii_case("postgres")
+        {
+            return Err(config_error("production requires BPMN_LITE_STORE=postgres"));
+        }
+        if std::env::var("DATABASE_URL").is_err() {
+            return Err(config_error("production requires DATABASE_URL"));
+        }
+        let auth_mode = std::env::var("BPMN_LITE_AUTH_MODE")
+            .map_err(|_| config_error("production requires BPMN_LITE_AUTH_MODE"))?;
+        if auth_mode.eq_ignore_ascii_case("disabled") {
+            return Err(config_error("production authentication cannot be disabled"));
+        }
+        let tls_mode = std::env::var("BPMN_LITE_TLS_MODE")
+            .map_err(|_| config_error("production requires BPMN_LITE_TLS_MODE"))?;
+        if !matches!(tls_mode.as_str(), "native" | "terminated") {
+            return Err(config_error(
+                "BPMN_LITE_TLS_MODE must be 'native' or 'terminated' in production",
+            ));
+        }
+        let late_delivery_ms = parse_required_u64_env("BPMN_LITE_MAX_LATE_DELIVERY_MS")?;
+        let dedupe_retention_ms = parse_required_u64_env("BPMN_LITE_DEDUPE_RETENTION_MS")?;
+        if dedupe_retention_ms < late_delivery_ms {
+            return Err(config_error(
+                "dedupe retention must be at least the maximum late-delivery window",
+            ));
+        }
+        let required_dispatchers = std::env::var("BPMN_LITE_REQUIRED_DISPATCHERS")
+            .map_err(|_| config_error("production requires BPMN_LITE_REQUIRED_DISPATCHERS"))?;
+        if required_dispatchers.trim().is_empty() {
+            return Err(config_error(
+                "production requires BPMN_LITE_REQUIRED_DISPATCHERS",
+            ));
+        }
+        for dispatcher in required_dispatchers.split(',').map(str::trim) {
+            match dispatcher {
+                "ffi" => {}
+                "bus" if std::env::var("BPMN_LITE_BUS_LISTEN").is_ok() => {}
+                "bus" => {
+                    return Err(config_error(
+                        "bus is required but BPMN_LITE_BUS_LISTEN is not configured",
+                    ));
+                }
+                unknown => {
+                    return Err(config_error(&format!(
+                        "unknown required dispatcher '{unknown}'"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_production_environment() -> bool {
+    std::env::var("BPMN_LITE_ENV")
+        .map(|value| value.eq_ignore_ascii_case("production"))
+        .unwrap_or(false)
+}
+
+fn parse_required_u64_env(name: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let value =
+        std::env::var(name).map_err(|_| config_error(&format!("production requires {name}")))?;
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| config_error(&format!("{name} must be a positive integer")))?;
+    if parsed == 0 {
+        return Err(config_error(&format!("{name} must be greater than zero")));
+    }
+    Ok(parsed)
 }
 
 /// Parse database URL from `--database-url <url>` CLI arg or `DATABASE_URL` env var.
@@ -582,17 +690,22 @@ mod tests {
     async fn test_verify_not_superuser_rejects_superuser() {
         let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://postgres@localhost:5432/bpmn_lite_test".to_string());
-        
+
         let pool = match sqlx::PgPool::connect(&url).await {
             Ok(p) => p,
             Err(_) => return,
         };
-        
+
         let res = verify_not_superuser(&pool).await;
-        assert!(res.is_err(), "verify_not_superuser must reject superuser role");
-        
+        assert!(
+            res.is_err(),
+            "verify_not_superuser must reject superuser role"
+        );
+
         let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("superuser role"), "Error message should mention superuser role");
+        assert!(
+            err_msg.contains("superuser role"),
+            "Error message should mention superuser role"
+        );
     }
 }
-

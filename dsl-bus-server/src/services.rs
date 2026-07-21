@@ -81,6 +81,7 @@ pub trait InvocationDispatcher: Send + Sync + 'static {
 
 #[derive(Debug, Clone)]
 pub struct ResultContext {
+    pub tenant_id: String,
     pub idempotency_key: Uuid,
     pub execution_id: Uuid,
     pub source_domain: String,
@@ -132,12 +133,21 @@ impl InvocationService for InvocationServiceImpl {
                 auth.user_identity.clone()
             }
         } else {
-            return reject(SubmissionStatus::RejectedAuthority, "Missing authority context");
+            return reject(
+                SubmissionStatus::RejectedAuthority,
+                "Missing authority context",
+            );
         };
 
         // Assert metadata x-tenant-id matches derived_tenant if present
-        if metadata_tenant.as_ref().is_some_and(|header_tenant| header_tenant != &derived_tenant) {
-            return reject(SubmissionStatus::RejectedAuthority, "Tenant spoofing detected");
+        if metadata_tenant
+            .as_ref()
+            .is_some_and(|header_tenant| header_tenant != &derived_tenant)
+        {
+            return reject(
+                SubmissionStatus::RejectedAuthority,
+                "Tenant spoofing detected",
+            );
         }
 
         let tenant_id = derived_tenant;
@@ -363,6 +373,7 @@ impl ResultService for ResultServiceImpl {
         });
 
         let ctx = ResultContext {
+            tenant_id: tenant_id.clone(),
             idempotency_key: key,
             execution_id,
             source_domain: req.source_domain.clone(),

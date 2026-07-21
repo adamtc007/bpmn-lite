@@ -145,6 +145,7 @@ async fn noop_result_dispatcher_rejects() {
     let err = NoopResultDispatcher
         .dispatch(
             ResultContext {
+                tenant_id: "default".to_string(),
                 idempotency_key: Uuid::now_v7(),
                 execution_id: Uuid::now_v7(),
                 source_domain: "bpmn-lite".into(),

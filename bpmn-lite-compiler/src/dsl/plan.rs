@@ -1,7 +1,7 @@
 //! `WorkflowExecutionPlan` — the linted, DAG-validated output of the
 //! bpmn-dsl compilation pipeline.
 
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 
 /// A compiled, validated workflow ready for execution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -56,7 +56,10 @@ impl WorkflowExecutionPlan {
                 ExecutionNode::Task(t) => {
                     if t.plug == "bpmn:unsafe-placeholder" {
                         if let Some(kind) = t.static_args.get("original_kind") {
-                            if kind.contains("BoundaryTimer") || kind.contains("BoundaryError") || kind.contains("Boundary") {
+                            if kind.contains("BoundaryTimer")
+                                || kind.contains("BoundaryError")
+                                || kind.contains("Boundary")
+                            {
                                 breaches.push("BPMN_BOUNDARY_EVENT_BYPASS".to_string());
                             } else {
                                 breaches.push("BPMN_UNSUPPORTED_NODE_BYPASS".to_string());
@@ -64,7 +67,10 @@ impl WorkflowExecutionPlan {
                         } else {
                             breaches.push("BPMN_UNSUPPORTED_NODE_BYPASS".to_string());
                         }
-                    } else if t.plug.contains("boundary-timer") || t.plug.contains("boundary-error") || t.plug.contains("boundary") {
+                    } else if t.plug.contains("boundary-timer")
+                        || t.plug.contains("boundary-error")
+                        || t.plug.contains("boundary")
+                    {
                         breaches.push("BPMN_BOUNDARY_EVENT_BYPASS".to_string());
                     }
                 }

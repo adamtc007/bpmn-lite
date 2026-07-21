@@ -1,0 +1,2 @@
+postcard_ns_per_encode=1000
+rkyv_ns_per_encode=1000

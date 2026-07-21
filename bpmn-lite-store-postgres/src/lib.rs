@@ -1,6 +1,6 @@
 //! BPMN-Lite PostgreSQL persistence.
 //!
-//! Owns `PostgresProcessStore` (impl of `ProcessStore`) and the
+//! Owns `PostgresWorkflowStore` (impl of `WorkflowStore`) and the
 //! migration set that defines its schema. Separated from
 //! `bpmn-lite-store` so a memory-only deployment (CI, integration
 //! tests, smoke harnesses) doesn't link sqlx + the full Postgres
@@ -15,12 +15,10 @@
 
 pub mod ffi_template_store;
 pub mod pending_store;
-pub mod process_instance_store;
 pub mod store_postgres;
 
 pub use ffi_template_store::PostgresFfiTemplateStore;
 pub use pending_store::PostgresPendingInvocationStore;
-pub use process_instance_store::PostgresBpmnProcessInstanceStore;
 pub use store_postgres::*;
 
 #[cfg(test)]

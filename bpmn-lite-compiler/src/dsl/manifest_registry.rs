@@ -132,7 +132,8 @@ impl<R: PlaceholderRegistry> PlaceholderRegistry for ManifestPlaceholderRegistry
                 let m = self.manifests.get(domain)?;
                 let d = m.lookup_decision(local)?;
                 // Look up in the manifest's type entries
-                let kind = m.lookup_type(&d.output.type_name)
+                let kind = m
+                    .lookup_type(&d.output.type_name)
                     .map(|t| t.kind.clone())
                     .unwrap_or_else(|| "enum".to_string());
                 Some((d.output.type_name.clone(), kind))

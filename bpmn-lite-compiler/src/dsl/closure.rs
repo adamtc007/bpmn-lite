@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use super::plan::{WorkflowExecutionPlan, ExecutionNode, DeliveryMode, JoinMode, SplitMode};
 use super::linter::PlaceholderRegistry;
+use super::plan::{DeliveryMode, ExecutionNode, JoinMode, SplitMode, WorkflowExecutionPlan};
 use super::rpst::verify_sese_nesting;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -35,7 +35,10 @@ pub fn validate_path_family(
             ExecutionNode::End(_) => vec![],
         };
         for &next in &nexts {
-            incoming.entry(next.to_string()).or_insert_with(Vec::new).push(id.clone());
+            incoming
+                .entry(next.to_string())
+                .or_insert_with(Vec::new)
+                .push(id.clone());
         }
         adj.insert(id.clone(), nexts);
     }
@@ -126,7 +129,8 @@ pub fn validate_path_family(
                             node_id: id.clone(),
                             message: format!(
                                 "Task '{}' detects cyclic child workflow recursion: {}",
-                                id, path.join(" -> ")
+                                id,
+                                path.join(" -> ")
                             ),
                             missing_placeholder: None,
                         });
@@ -157,7 +161,10 @@ pub fn validate_path_family(
                 });
             }
             for child_id in &lp.body {
-                enclosing_loops.entry(child_id.clone()).or_default().push(id.clone());
+                enclosing_loops
+                    .entry(child_id.clone())
+                    .or_default()
+                    .push(id.clone());
             }
         }
     }
@@ -169,7 +176,9 @@ pub fn validate_path_family(
         for succ in successors {
             if let Some(ExecutionNode::Loop(_)) = plan.nodes.get(succ) {
                 let enclosers = enclosing_loops.get(id);
-                let is_enclosed = enclosers.map(|v| v.contains(&succ.to_string())).unwrap_or(false);
+                let is_enclosed = enclosers
+                    .map(|v| v.contains(&succ.to_string()))
+                    .unwrap_or(false);
                 if !is_enclosed {
                     diagnostics.push(Diagnostic {
                         node_id: id.clone(),
@@ -212,18 +221,23 @@ pub fn validate_path_family(
                         if jn.mode == JoinMode::Inclusive {
                             if let Some(ExecutionNode::Split(sp)) = plan.nodes.get(&jn.split) {
                                 if let Some(ref socket) = sp.routing_socket {
-                                    if let Some(subsets) = registry.get_decision_enum_values(socket) {
+                                    if let Some(subsets) = registry.get_decision_enum_values(socket)
+                                    {
                                         is_or_join = true;
                                         let mut label_to_pred = HashMap::new();
                                         for flow in &sp.flows {
                                             if let Some(ref val) = flow.expected_value {
                                                 let is_direct = flow.next == *id;
                                                 if is_direct {
-                                                    label_to_pred.insert(val.clone(), sp.id.clone());
+                                                    label_to_pred
+                                                        .insert(val.clone(), sp.id.clone());
                                                 } else {
                                                     for p in p_list {
-                                                        if is_reachable_without_node(&flow.next, p, id, &adj) {
-                                                            label_to_pred.insert(val.clone(), p.clone());
+                                                        if is_reachable_without_node(
+                                                            &flow.next, p, id, &adj,
+                                                        ) {
+                                                            label_to_pred
+                                                                .insert(val.clone(), p.clone());
                                                             break;
                                                         }
                                                     }
@@ -233,14 +247,21 @@ pub fn validate_path_family(
 
                                         let mut first_combo = true;
                                         for combo in &subsets {
-                                            if combo.is_empty() || combo == "empty" || combo == "∅" {
+                                            if combo.is_empty() || combo == "empty" || combo == "∅"
+                                            {
                                                 continue;
                                             }
                                             let mut combo_union = HashSet::new();
-                                            let parts: Vec<&str> = combo.split(',').map(|s| s.trim()).collect();
+                                            let parts: Vec<&str> =
+                                                combo.split(',').map(|s| s.trim()).collect();
                                             for part in parts {
                                                 if let Some(pred_id) = label_to_pred.get(part) {
-                                                    combo_union.extend(exit_avail.get(pred_id).cloned().unwrap_or_default());
+                                                    combo_union.extend(
+                                                        exit_avail
+                                                            .get(pred_id)
+                                                            .cloned()
+                                                            .unwrap_or_default(),
+                                                    );
                                                 }
                                             }
 
@@ -248,7 +269,10 @@ pub fn validate_path_family(
                                                 or_meet = combo_union;
                                                 first_combo = false;
                                             } else {
-                                                or_meet = or_meet.intersection(&combo_union).cloned().collect();
+                                                or_meet = or_meet
+                                                    .intersection(&combo_union)
+                                                    .cloned()
+                                                    .collect();
                                             }
                                         }
                                     }
@@ -261,7 +285,8 @@ pub fn validate_path_family(
                         computed_entrance = or_meet;
                     } else if is_and_join {
                         for p in p_list {
-                            computed_entrance.extend(exit_avail.get(p).cloned().unwrap_or_default());
+                            computed_entrance
+                                .extend(exit_avail.get(p).cloned().unwrap_or_default());
                         }
                     } else {
                         let mut intersect = exit_avail.get(&p_list[0]).cloned().unwrap_or_default();
@@ -287,7 +312,9 @@ pub fn validate_path_family(
                     }
                 }
                 ExecutionNode::Split(sp) => {
-                    let decl = sp.routing_socket.as_ref()
+                    let decl = sp
+                        .routing_socket
+                        .as_ref()
                         .and_then(|plug| registry.decision_bindings(plug))
                         .unwrap_or_default();
                     if let Some(ref prod) = decl.produces {
@@ -339,7 +366,9 @@ pub fn validate_path_family(
                 }
             }
             ExecutionNode::Split(sp) => {
-                let decl = sp.routing_socket.as_ref()
+                let decl = sp
+                    .routing_socket
+                    .as_ref()
                     .and_then(|plug| registry.decision_bindings(plug))
                     .unwrap_or_default();
                 for consumed in &decl.consumes {
@@ -368,7 +397,9 @@ pub fn validate_path_family(
                     if let Some(first_flow) = sp.flows.first() {
                         if let Some(ref ph) = first_flow.placeholder {
                             if let Some(slot) = plan.placeholder_schema.slots.get(ph) {
-                                if let Some(ExecutionNode::Task(t)) = plan.nodes.get(&slot.produced_by) {
+                                if let Some(ExecutionNode::Task(t)) =
+                                    plan.nodes.get(&slot.produced_by)
+                                {
                                     socket_id = Some(t.plug.clone());
                                 }
                             }
@@ -377,7 +408,9 @@ pub fn validate_path_family(
                 }
                 if let Some(ref socket) = socket_id {
                     // Assert type kinds match gateway mode
-                    if let Some((_type_name, type_kind)) = registry.get_decision_output_type_info(socket) {
+                    if let Some((_type_name, type_kind)) =
+                        registry.get_decision_output_type_info(socket)
+                    {
                         if sp.mode == SplitMode::Exclusive && type_kind != "enum" {
                             diagnostics.push(Diagnostic {
                                 node_id: id.clone(),
@@ -401,7 +434,9 @@ pub fn validate_path_family(
                     }
 
                     if let Some(enum_values) = registry.get_decision_enum_values(socket) {
-                        let split_branches: HashSet<String> = sp.flows.iter()
+                        let split_branches: HashSet<String> = sp
+                            .flows
+                            .iter()
                             .filter_map(|f| f.expected_value.clone())
                             .collect();
 
@@ -410,7 +445,11 @@ pub fn validate_path_family(
                         for val in &enum_values {
                             if sp.mode == SplitMode::Exclusive {
                                 allowed_labels.insert(val.clone());
-                            } else if sp.mode == SplitMode::Inclusive && val != "empty" && val != "∅" && !val.is_empty() {
+                            } else if sp.mode == SplitMode::Inclusive
+                                && val != "empty"
+                                && val != "∅"
+                                && !val.is_empty()
+                            {
                                 let parts: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
                                 for part in parts {
                                     if !part.is_empty() {
@@ -460,7 +499,8 @@ pub fn validate_path_family(
                                     });
                                 } else {
                                     // Parse comma-separated branch labels in the subset
-                                    let parts: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
+                                    let parts: Vec<&str> =
+                                        val.split(',').map(|s| s.trim()).collect();
                                     for part in parts {
                                         if !part.is_empty() && !split_branches.contains(part) {
                                             diagnostics.push(Diagnostic {
@@ -494,7 +534,10 @@ pub fn validate_path_family(
         if let ExecutionNode::Task(t) = node {
             if t.delivery_mode == DeliveryMode::BestEffort {
                 if let Some(ref prod) = t.produces_placeholder {
-                    let has_downstream_consumers = plan.placeholder_schema.slots.get(prod)
+                    let has_downstream_consumers = plan
+                        .placeholder_schema
+                        .slots
+                        .get(prod)
                         .map(|slot| !slot.consumed_by.is_empty())
                         .unwrap_or(false);
                     if has_downstream_consumers {
@@ -511,7 +554,10 @@ pub fn validate_path_family(
             }
 
             let decl = registry.verb_bindings(&t.plug).unwrap_or_default();
-            let is_must_complete = matches!(decl.effect_class.as_deref(), Some("read_modify_write") | Some("write_obligation"));
+            let is_must_complete = matches!(
+                decl.effect_class.as_deref(),
+                Some("read_modify_write") | Some("write_obligation")
+            );
             if is_must_complete && t.delivery_mode == DeliveryMode::BestEffort {
                 diagnostics.push(Diagnostic {
                     node_id: id.clone(),
@@ -525,7 +571,10 @@ pub fn validate_path_family(
 
             let is_inside_loop = enclosing_loops.contains_key(id);
             if is_inside_loop {
-                let is_idempotent = matches!(decl.effect_class.as_deref(), Some("idempotent_ensure") | Some("read"));
+                let is_idempotent = matches!(
+                    decl.effect_class.as_deref(),
+                    Some("idempotent_ensure") | Some("read")
+                );
                 if !is_idempotent && !t.static_args.contains_key("idempotency_key") {
                     diagnostics.push(Diagnostic {
                         node_id: id.clone(),
@@ -620,10 +669,14 @@ mod tests {
           (service-task :id add-trust :verb cbu.add-product :args (:product "CUSTODY_TRUST") :next add-im)
           (service-task :id add-im    :verb instrument-matrix.attach :next end)
           (end-event :id end :status "Operational"))"#;
-        
+
         let plan = compile(src, &registry_with_enums()).expect("compile");
         let diags = validate_path_family(&plan, &registry_with_enums());
-        assert!(diags.is_empty(), "expected zero diagnostics, got: {:?}", diags);
+        assert!(
+            diags.is_empty(),
+            "expected zero diagnostics, got: {:?}",
+            diags
+        );
     }
 
     #[test]
@@ -642,23 +695,31 @@ mod tests {
         let plan = compile(src, &registry_with_enums()).expect("compile");
         let diags = validate_path_family(&plan, &registry_with_enums());
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("is not exhaustive: missing branch for value 'trust'"));
+        assert!(diags[0]
+            .message
+            .contains("is not exhaustive: missing branch for value 'trust'"));
     }
 
     #[test]
     fn test_gw3_branch_closure_violation() {
         let mut reg = registry_with_enums();
-        reg.register_verb("cbu.add-product-special", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into(), "@special-token".into()],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        reg.register_verb(
+            "cbu.add-product-special",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into(), "@special-token".into()],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
 
-        reg.register_verb("special.produce", BindingDecl {
-            produces: Some("@special-token".into()),
-            consumes: vec![],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        reg.register_verb(
+            "special.produce",
+            BindingDecl {
+                produces: Some("@special-token".into()),
+                consumes: vec![],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
 
         let src_with_producer = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
@@ -679,9 +740,10 @@ mod tests {
 
         let plan = compile(src_with_producer, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        
+
         assert!(!diags.is_empty(), "expected diagnostics, got none");
-        assert!(diags.iter().any(|d| d.node_id == "add-trust" && d.missing_placeholder.as_deref() == Some("@special-token")));
+        assert!(diags.iter().any(|d| d.node_id == "add-trust"
+            && d.missing_placeholder.as_deref() == Some("@special-token")));
     }
 
     #[test]
@@ -697,7 +759,13 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_ceiling_0, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "my-loop" && d.message.contains("lacks a finite ceiling")), "expected ceiling error, got: {:?}", diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.node_id == "my-loop" && d.message.contains("lacks a finite ceiling")),
+            "expected ceiling error, got: {:?}",
+            diags
+        );
 
         // 2. Loop with correct ceiling (valid)
         let src_valid = r#"(workflow test-loop
@@ -708,7 +776,13 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_valid, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(!diags.iter().any(|d| d.message.contains("lacks a finite ceiling")), "unexpected ceiling error: {:?}", diags);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("lacks a finite ceiling")),
+            "unexpected ceiling error: {:?}",
+            diags
+        );
 
         // 3. Back-edge escaping loop scope (invalid)
         let src_escaping = r#"(workflow test-loop
@@ -722,7 +796,13 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_escaping, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "inside-task" && d.message.contains("targets Loop 'other-loop' which does not enclose it")), "expected back-edge error, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "inside-task"
+                && d.message
+                    .contains("targets Loop 'other-loop' which does not enclose it")),
+            "expected back-edge error, got: {:?}",
+            diags
+        );
     }
 
     #[test]
@@ -730,13 +810,23 @@ mod tests {
         let mut reg = registry_with_enums();
 
         // Register a named subset decision for OR gateway testing:
-        reg.register_decision("cbu_or_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
-        reg.register_decision_enum("cbu_or_routing", vec!["fund,corporate".into(), "trust".into()]);
-        reg.register_decision_type_info("cbu_or_routing", "CbuOrType".to_string(), "named_subset".to_string());
+        reg.register_decision(
+            "cbu_or_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
+        reg.register_decision_enum(
+            "cbu_or_routing",
+            vec!["fund,corporate".into(), "trust".into()],
+        );
+        reg.register_decision_type_info(
+            "cbu_or_routing",
+            "CbuOrType".to_string(),
+            "named_subset".to_string(),
+        );
 
         // 1. XOR Split with enum output mismatching/non-exhaustive branches
         let src_xor_non_exhaustive = r#"(workflow test-xor
@@ -750,7 +840,13 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_xor_non_exhaustive, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("is not exhaustive: missing branch for value 'trust'")), "expected exhaustiveness warning, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway"
+                && d.message
+                    .contains("is not exhaustive: missing branch for value 'trust'")),
+            "expected exhaustiveness warning, got: {:?}",
+            diags
+        );
 
         // 2. OR Split but decision plug returns enum instead of named_subset
         let src_or_type_mismatch = r#"(workflow test-or-mismatch
@@ -765,7 +861,12 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_or_type_mismatch, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("requires Named Subset output")), "expected type mismatch, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway"
+                && d.message.contains("requires Named Subset output")),
+            "expected type mismatch, got: {:?}",
+            diags
+        );
 
         // 3. OR Split with named_subset and exhaustive branches (valid)
         let src_or_valid = r#"(workflow test-or-valid
@@ -780,17 +881,33 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_or_valid, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(!diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("is not exhaustive")), "unexpected exhaustiveness error: {:?}", diags);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.node_id == "type-gateway" && d.message.contains("is not exhaustive")),
+            "unexpected exhaustiveness error: {:?}",
+            diags
+        );
 
         // 4. OR Split with empty set combination (invalid)
         let mut reg_with_empty = registry_with_enums();
-        reg_with_empty.register_decision("cbu_or_routing_empty", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
-        reg_with_empty.register_decision_enum("cbu_or_routing_empty", vec!["fund,corporate".into(), "∅".into()]);
-        reg_with_empty.register_decision_type_info("cbu_or_routing_empty", "CbuOrType".to_string(), "named_subset".to_string());
+        reg_with_empty.register_decision(
+            "cbu_or_routing_empty",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
+        reg_with_empty.register_decision_enum(
+            "cbu_or_routing_empty",
+            vec!["fund,corporate".into(), "∅".into()],
+        );
+        reg_with_empty.register_decision_type_info(
+            "cbu_or_routing_empty",
+            "CbuOrType".to_string(),
+            "named_subset".to_string(),
+        );
 
         let src_or_empty = r#"(workflow test-or-empty
           (start-event :id start :next create-cbu)
@@ -803,7 +920,12 @@ mod tests {
           (end-event :id end :status "Operational"))"#;
         let plan = compile(src_or_empty, &reg_with_empty).expect("compile");
         let diags = validate_path_family(&plan, &reg_with_empty);
-        assert!(diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("has illegal empty set combination")), "expected empty set error, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "type-gateway"
+                && d.message.contains("has illegal empty set combination")),
+            "expected empty set error, got: {:?}",
+            diags
+        );
     }
 
     #[test]
@@ -813,11 +935,15 @@ mod tests {
         let missing_child_hash = "9999999999999999999999999999999999999999999999999999999999999999";
 
         // Register valid child workflow: consumes @cbu
-        reg.register_workflow(child_hash, BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu".into()],
-            effect_class: Some("idempotent_ensure".into()),
-        }, true);
+        reg.register_workflow(
+            child_hash,
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu".into()],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+            true,
+        );
 
         // 1. Missing child hash
         let src_missing_child = format!(
@@ -830,7 +956,14 @@ mod tests {
         );
         let plan = compile(&src_missing_child, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "child-call" && d.message.contains("does not exist in registry")), "expected missing error, got: {:?}", diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.node_id == "child-call"
+                    && d.message.contains("does not exist in registry")),
+            "expected missing error, got: {:?}",
+            diags
+        );
 
         // 2. Child workflow exists but parameter mismatch (parent hasn't produced @cbu at call site)
         let src_param_mismatch = format!(
@@ -842,7 +975,12 @@ mod tests {
         );
         let plan = compile(&src_param_mismatch, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "child-call" && d.message.contains("missing input parameter '@cbu'")), "expected param mismatch error, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "child-call"
+                && d.message.contains("missing input parameter '@cbu'")),
+            "expected param mismatch error, got: {:?}",
+            diags
+        );
 
         // 3. Valid child call
         let src_valid = format!(
@@ -855,7 +993,11 @@ mod tests {
         );
         let plan = compile(&src_valid, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(!diags.iter().any(|d| d.node_id == "child-call"), "unexpected error for valid call: {:?}", diags);
+        assert!(
+            !diags.iter().any(|d| d.node_id == "child-call"),
+            "unexpected error for valid call: {:?}",
+            diags
+        );
 
         // 4. Cyclic recursion child -> parent
         let mut reg_cyclic = registry_with_enums();
@@ -875,30 +1017,45 @@ mod tests {
         );
         let plan = compile(&src_cyclic, &reg_cyclic).expect("compile");
         let diags = validate_path_family(&plan, &reg_cyclic);
-        assert!(diags.iter().any(|d| d.node_id == "child-call" && d.message.contains("detects cyclic child workflow recursion")), "expected recursion error, got: {:?}", diags);
+        assert!(
+            diags.iter().any(|d| d.node_id == "child-call"
+                && d.message
+                    .contains("detects cyclic child workflow recursion")),
+            "expected recursion error, got: {:?}",
+            diags
+        );
     }
 
     #[test]
     fn test_l4_parallel_union() {
         let mut reg = registry_with_enums();
 
-        reg.register_verb("cbu.consume-two", BindingDecl {
-            produces: None,
-            consumes: vec!["@cbu-part1".into(), "@cbu-part2".into()],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        reg.register_verb(
+            "cbu.consume-two",
+            BindingDecl {
+                produces: None,
+                consumes: vec!["@cbu-part1".into(), "@cbu-part2".into()],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
 
-        reg.register_verb("cbu.produce-part1", BindingDecl {
-            produces: Some("@cbu-part1".into()),
-            consumes: vec![],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        reg.register_verb(
+            "cbu.produce-part1",
+            BindingDecl {
+                produces: Some("@cbu-part1".into()),
+                consumes: vec![],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
 
-        reg.register_verb("cbu.produce-part2", BindingDecl {
-            produces: Some("@cbu-part2".into()),
-            consumes: vec![],
-            effect_class: Some("idempotent_ensure".into()),
-        });
+        reg.register_verb(
+            "cbu.produce-part2",
+            BindingDecl {
+                produces: Some("@cbu-part2".into()),
+                consumes: vec![],
+                effect_class: Some("idempotent_ensure".into()),
+            },
+        );
 
         // 1. Parallel AND Join (valid): union of placeholders -> both available downstream
         let src_and_union_valid = r#"(workflow test-and-union
@@ -913,7 +1070,11 @@ mod tests {
           (end-event :id end :status "done"))"#;
         let plan = compile(src_and_union_valid, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(!diags.iter().any(|d| d.node_id == "consumer"), "unexpected error for valid AND union: {:?}", diags);
+        assert!(
+            !diags.iter().any(|d| d.node_id == "consumer"),
+            "unexpected error for valid AND union: {:?}",
+            diags
+        );
 
         // 2. XOR Join (invalid for union): intersection -> neither is available downstream
         let src_xor_intersection_invalid = r#"(workflow test-xor-intersection
@@ -931,8 +1092,16 @@ mod tests {
           (end-event :id end :status "done"))"#;
         let plan = compile(src_xor_intersection_invalid, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        assert!(diags.iter().any(|d| d.node_id == "consumer" && d.missing_placeholder.as_deref() == Some("@cbu-part1")), "expected missing @cbu-part1 error");
-        assert!(diags.iter().any(|d| d.node_id == "consumer" && d.missing_placeholder.as_deref() == Some("@cbu-part2")), "expected missing @cbu-part2 error");
+        assert!(
+            diags.iter().any(|d| d.node_id == "consumer"
+                && d.missing_placeholder.as_deref() == Some("@cbu-part1")),
+            "expected missing @cbu-part1 error"
+        );
+        assert!(
+            diags.iter().any(|d| d.node_id == "consumer"
+                && d.missing_placeholder.as_deref() == Some("@cbu-part2")),
+            "expected missing @cbu-part2 error"
+        );
     }
 
     #[test]
@@ -942,13 +1111,20 @@ mod tests {
         let mut reg = registry_with_enums();
         // type-gateway split expects fund, corporate, and trust from cbu_type_routing.
         // We register cbu_type_routing with only fund and corporate (shrinking output).
-        reg.register_decision("cbu_type_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
+        reg.register_decision(
+            "cbu_type_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
         reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into()]);
-        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+        reg.register_decision_type_info(
+            "cbu_type_routing",
+            "CbuType".to_string(),
+            "enum".to_string(),
+        );
 
         let src = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
@@ -965,8 +1141,11 @@ mod tests {
 
         let plan = compile(src, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        
-        assert!(!diags.is_empty(), "expected output-shrink failure, got none");
+
+        assert!(
+            !diags.is_empty(),
+            "expected output-shrink failure, got none"
+        );
         assert!(
             diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("contains branch for value 'trust' which is not in the output domain of decision 'cbu_type_routing'")),
             "unexpected error message: {:?}", diags
@@ -978,14 +1157,21 @@ mod tests {
         // Swapping an OR decider to a shrunken output domain (removing "trust" combination and its label)
         // must trigger a diagnostic failure for the now-orphaned/dead branch (trust).
         let mut reg = registry_with_enums();
-        reg.register_decision("cbu_or_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
+        reg.register_decision(
+            "cbu_or_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
         // Originally had "fund,corporate" and "trust". Now only "fund,corporate" (trust is removed).
         reg.register_decision_enum("cbu_or_routing", vec!["fund,corporate".into()]);
-        reg.register_decision_type_info("cbu_or_routing", "CbuOrType".to_string(), "named_subset".to_string());
+        reg.register_decision_type_info(
+            "cbu_or_routing",
+            "CbuOrType".to_string(),
+            "named_subset".to_string(),
+        );
 
         let src = r#"(workflow test-or-shrink
           (start-event :id start :next create-cbu)
@@ -1000,8 +1186,11 @@ mod tests {
 
         let plan = compile(src, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        
-        assert!(!diags.is_empty(), "expected OR output-shrink failure, got none");
+
+        assert!(
+            !diags.is_empty(),
+            "expected OR output-shrink failure, got none"
+        );
         assert!(
             diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("contains branch for value 'trust' which is not in the output domain of decision 'cbu_or_routing'")),
             "unexpected error message: {:?}", diags
@@ -1014,13 +1203,23 @@ mod tests {
         // (inputs grow) must fail L4 data-closure check.
         let mut reg = registry_with_enums();
         // Register cbu_type_routing to require `@new-required-input`
-        reg.register_decision("cbu_type_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into(), "@new-required-input".into()],
-            effect_class: None,
-        });
-        reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into()]);
-        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+        reg.register_decision(
+            "cbu_type_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into(), "@new-required-input".into()],
+                effect_class: None,
+            },
+        );
+        reg.register_decision_enum(
+            "cbu_type_routing",
+            vec!["fund".into(), "corporate".into(), "trust".into()],
+        );
+        reg.register_decision_type_info(
+            "cbu_type_routing",
+            "CbuType".to_string(),
+            "enum".to_string(),
+        );
 
         let src = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
@@ -1037,11 +1236,15 @@ mod tests {
 
         let plan = compile(src, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        
+
         assert!(!diags.is_empty(), "expected inputs-grow failure, got none");
         assert!(
-            diags.iter().any(|d| d.node_id == "type-decision" && d.message.contains("consumes placeholder '@new-required-input' which is not produced upstream")),
-            "unexpected error message: {:?}", diags
+            diags.iter().any(|d| d.node_id == "type-decision"
+                && d.message.contains(
+                    "consumes placeholder '@new-required-input' which is not produced upstream"
+                )),
+            "unexpected error message: {:?}",
+            diags
         );
     }
 
@@ -1051,13 +1254,28 @@ mod tests {
         // must fail L5 gateway exhaustiveness.
         let mut reg = registry_with_enums();
         // Register cbu_type_routing to produce a new value "government"
-        reg.register_decision("cbu_type_routing", BindingDecl {
-            produces: Some("@cbu-type".into()),
-            consumes: vec!["@cbu".into()],
-            effect_class: None,
-        });
-        reg.register_decision_enum("cbu_type_routing", vec!["fund".into(), "corporate".into(), "trust".into(), "government".into()]);
-        reg.register_decision_type_info("cbu_type_routing", "CbuType".to_string(), "enum".to_string());
+        reg.register_decision(
+            "cbu_type_routing",
+            BindingDecl {
+                produces: Some("@cbu-type".into()),
+                consumes: vec!["@cbu".into()],
+                effect_class: None,
+            },
+        );
+        reg.register_decision_enum(
+            "cbu_type_routing",
+            vec![
+                "fund".into(),
+                "corporate".into(),
+                "trust".into(),
+                "government".into(),
+            ],
+        );
+        reg.register_decision_type_info(
+            "cbu_type_routing",
+            "CbuType".to_string(),
+            "enum".to_string(),
+        );
 
         let src = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
@@ -1074,11 +1292,14 @@ mod tests {
 
         let plan = compile(src, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
-        
+
         assert!(!diags.is_empty(), "expected output-grow failure, got none");
         assert!(
-            diags.iter().any(|d| d.node_id == "type-gateway" && d.message.contains("is not exhaustive: missing branch for value 'government'")),
-            "unexpected error message: {:?}", diags
+            diags.iter().any(|d| d.node_id == "type-gateway"
+                && d.message
+                    .contains("is not exhaustive: missing branch for value 'government'")),
+            "unexpected error message: {:?}",
+            diags
         );
     }
 }

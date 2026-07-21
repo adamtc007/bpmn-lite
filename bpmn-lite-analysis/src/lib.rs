@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use bpmn_lite_types::{CompiledProgram, FlagKey, Instr};
+use bpmn_lite_types::{Addr, CompiledProgram, FlagKey, Instr};
 use serde::{Deserialize, Serialize};
 
 /// Severity of an analysis finding.
@@ -91,7 +91,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
 
     // Collect all FlagKeys that are ever written in the program.
     let written_flags: HashSet<FlagKey> = program
-        .program
+        .program()
         .iter()
         .filter_map(|instr| match instr {
             Instr::StoreFlag { key } => Some(*key),
@@ -100,14 +100,14 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
         .collect();
 
     // Walk the bytecode looking for branch patterns.
-    let instrs = &program.program;
+    let instrs = program.program();
     for (i, instr) in instrs.iter().enumerate() {
         let next = instrs.get(i + 1);
-        let branch_addr = (i + 1) as u32;
+        let branch_addr = Addr::new((i + 1) as u32);
         let element_id = program
-            .debug_map
+            .debug_map()
             .get(&(branch_addr))
-            .or_else(|| program.debug_map.get(&(i as u32)))
+            .or_else(|| program.debug_map().get(&Addr::new(i as u32)))
             .cloned();
 
         match instr {
@@ -120,7 +120,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                             findings.push(Finding {
                                 severity: Severity::Warning,
                                 kind: FindingKind::ConstantCondition {
-                                    branch_addr,
+                                    branch_addr: branch_addr.into(),
                                     always_taken,
                                 },
                                 element_id,
@@ -141,7 +141,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                             findings.push(Finding {
                                 severity: Severity::Warning,
                                 kind: FindingKind::ConstantCondition {
-                                    branch_addr,
+                                    branch_addr: branch_addr.into(),
                                     always_taken,
                                 },
                                 element_id,
@@ -168,12 +168,12 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
                     && let Some(branch) = next
                     && matches!(branch, Instr::BrIf { .. } | Instr::BrIfNot { .. })
                 {
-                    let flag_name = program.flag_symbol_table.get(key).cloned();
+                    let flag_name = program.flag_symbol_table().get(key).cloned();
                     let name_str = flag_name.as_deref().unwrap_or("<unnamed>");
                     findings.push(Finding {
                         severity: Severity::Warning,
                         kind: FindingKind::UnwrittenFlagCondition {
-                            branch_addr,
+                            branch_addr: branch_addr.into(),
                             flag_key: *key,
                             flag_name: flag_name.clone(),
                         },
@@ -191,18 +191,18 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
     }
 
     // Informational: list FFI template pins.
-    for (addr, decl) in &program.ffi_task_decls {
+    for (addr, decl) in program.ffi_task_decls() {
         let template_id_hex: String = decl
             .template_id
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let element_id = program.debug_map.get(addr).cloned();
+        let element_id = program.debug_map().get(addr).cloned();
         findings.push(Finding {
             severity: Severity::Info,
             kind: FindingKind::FfiTemplatePinned {
                 template_id_hex: template_id_hex.clone(),
-                ffi_task_addr: *addr,
+                ffi_task_addr: (*addr).into(),
             },
             element_id,
             message: format!(
@@ -230,7 +230,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn empty_program(instrs: Vec<Instr>) -> CompiledProgram {
-        CompiledProgram {
+        bpmn_lite_types::legacy_program! {
             bytecode_version: [0u8; 32],
             program: instrs,
             debug_map: BTreeMap::new(),
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn detects_constant_false_condition() {
-        let prog = empty_program(vec![Instr::PushBool(false), Instr::BrIf { target: 10 }]);
+        let prog = empty_program(vec![Instr::PushBool(false), Instr::BrIf { target: Addr::new(10) }]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 1);
         assert!(matches!(
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn detects_constant_true_condition_inverted() {
-        let prog = empty_program(vec![Instr::PushBool(true), Instr::BrIfNot { target: 10 }]);
+        let prog = empty_program(vec![Instr::PushBool(true), Instr::BrIfNot { target: Addr::new(10) }]);
         let report = analyse(&prog);
         // PushBool(true) + BrIfNot → never taken
         assert_eq!(report.warning_count(), 1);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn detects_unwritten_flag_condition() {
-        let prog = empty_program(vec![Instr::LoadFlag { key: 7 }, Instr::BrIf { target: 10 }]);
+        let prog = empty_program(vec![Instr::LoadFlag { key: 7 }, Instr::BrIf { target: Addr::new(10) }]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 1);
         assert!(matches!(
@@ -294,7 +294,7 @@ mod tests {
             Instr::PushBool(true),
             Instr::StoreFlag { key: 7 },
             Instr::LoadFlag { key: 7 },
-            Instr::BrIf { target: 10 },
+            Instr::BrIf { target: Addr::new(10) },
         ]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 0);
@@ -307,8 +307,8 @@ mod tests {
             Instr::PushBool(true),
             Instr::StoreFlag { key: 0 },
             Instr::LoadFlag { key: 0 },
-            Instr::BrIf { target: 5 },
-            Instr::Jump { target: 6 },
+            Instr::BrIf { target: Addr::new(5) },
+            Instr::Jump { target: Addr::new(6) },
         ]);
         let report = analyse(&prog);
         assert_eq!(report.warning_count(), 0);

@@ -6,31 +6,35 @@
 //! plan or a [`CompileError`] describing what went wrong.
 
 pub mod ast;
+pub mod closure;
 pub mod dag;
+pub mod frontend;
 pub mod lexer;
 pub mod linter;
-pub mod manifest_registry;
-pub mod plan;
-pub mod pack_build;
-pub mod closure;
-pub mod rpst;
-pub mod refactor;
 pub mod macros;
+pub mod manifest_registry;
+pub mod pack_build;
+pub mod plan;
+pub mod refactor;
+pub mod rpst;
 
 pub use ast::{
-    ConditionAst, EndAst, StartAst, TaskAst, SplitAst, JoinAst, LoopAst, SplitFlowAst, SplitModeAst, JoinModeAst, NodeAst, WorkflowSource,
+    ConditionAst, EndAst, JoinAst, JoinModeAst, LoopAst, NodeAst, SplitAst, SplitFlowAst,
+    SplitModeAst, StartAst, TaskAst, WorkflowSource,
 };
+pub use closure::{validate_path_family, Diagnostic};
 pub use dag::{validate_dag, DagError};
+pub use frontend::{lower_plan, DslFrontend, FrontendError, WorkflowFrontend};
 pub use linter::{
     lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry, SymbolResolution,
 };
 pub use manifest_registry::ManifestPlaceholderRegistry;
-pub use plan::{
-    StartExecNode, TaskExecNode, SplitExecNode, JoinExecNode, LoopExecNode, EndExecNode, DeliveryMode, SplitMode, JoinMode, SplitExecFlow,
-    ExecutionNode, PlaceholderSchema, PlaceholderSlot, WorkflowExecutionPlan,
-};
-pub use closure::{validate_path_family, Diagnostic};
 pub use parser::{parse_node_str, parse_workflow_str};
+pub use plan::{
+    DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, LoopExecNode,
+    PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode, SplitMode, StartExecNode,
+    TaskExecNode, WorkflowExecutionPlan,
+};
 
 use lexer::lex;
 use parser::Parser;
@@ -50,15 +54,21 @@ impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Parse(errs) => {
-                for e in errs { writeln!(f, "parse: {e}")?; }
+                for e in errs {
+                    writeln!(f, "parse: {e}")?;
+                }
                 Ok(())
             }
             Self::Lint(errs) => {
-                for e in errs { writeln!(f, "lint: {e}")?; }
+                for e in errs {
+                    writeln!(f, "lint: {e}")?;
+                }
                 Ok(())
             }
             Self::Dag(errs) => {
-                for e in errs { writeln!(f, "dag: {e}")?; }
+                for e in errs {
+                    writeln!(f, "dag: {e}")?;
+                }
                 Ok(())
             }
         }
@@ -78,12 +88,14 @@ pub fn compile(
     // Phase 1: parse
     let (tokens, lex_errors) = lex(source);
     let mut p = Parser::new(tokens);
-    let mut raw_errs: Vec<parser::ParseError> =
-        lex_errors.into_iter().map(Into::into).collect();
+    let mut raw_errs: Vec<parser::ParseError> = lex_errors.into_iter().map(Into::into).collect();
     let ast = p.parse_workflow();
     raw_errs.extend(p.into_errors());
     if !raw_errs.is_empty() {
-        let msgs = raw_errs.iter().map(|e| format!("[{}] {}", e.offset, e.message)).collect();
+        let msgs = raw_errs
+            .iter()
+            .map(|e| format!("[{}] {}", e.offset, e.message))
+            .collect();
         return Err(CompileError::Parse(msgs));
     }
     let ast = ast.ok_or_else(|| CompileError::Parse(vec!["empty workflow".into()]))?;
@@ -130,10 +142,22 @@ mod tests {
     #[test]
     fn demo_model_has_correct_placeholder_schema() {
         let plan = compile(DEMO_SRC, &registry()).expect("compile failed");
-        assert!(plan.placeholder_schema.slots.contains_key("@cbu"), "@cbu slot missing");
-        assert!(plan.placeholder_schema.slots.contains_key("@cbu-type"), "@cbu-type slot missing");
-        assert_eq!(plan.placeholder_schema.slots["@cbu"].produced_by, "create-cbu");
-        assert_eq!(plan.placeholder_schema.slots["@cbu-type"].produced_by, "type-decision");
+        assert!(
+            plan.placeholder_schema.slots.contains_key("@cbu"),
+            "@cbu slot missing"
+        );
+        assert!(
+            plan.placeholder_schema.slots.contains_key("@cbu-type"),
+            "@cbu-type slot missing"
+        );
+        assert_eq!(
+            plan.placeholder_schema.slots["@cbu"].produced_by,
+            "create-cbu"
+        );
+        assert_eq!(
+            plan.placeholder_schema.slots["@cbu-type"].produced_by,
+            "type-decision"
+        );
     }
 
     #[test]
@@ -144,7 +168,11 @@ mod tests {
             _ => panic!("expected split"),
         };
         assert_eq!(gw.flows.len(), 3);
-        let values: Vec<&str> = gw.flows.iter().map(|f| f.expected_value.as_ref().unwrap().as_str()).collect();
+        let values: Vec<&str> = gw
+            .flows
+            .iter()
+            .map(|f| f.expected_value.as_ref().unwrap().as_str())
+            .collect();
         assert!(values.contains(&"fund"));
         assert!(values.contains(&"corporate"));
         assert!(values.contains(&"trust"));
@@ -158,7 +186,10 @@ mod tests {
             _ => panic!("expected task"),
         };
         assert_eq!(node.plug, "cbu.add-product");
-        assert_eq!(node.static_args.get("product").map(|s| s.as_str()), Some("CUSTODY_FUND"));
+        assert_eq!(
+            node.static_args.get("product").map(|s| s.as_str()),
+            Some("CUSTODY_FUND")
+        );
     }
 
     #[test]
@@ -169,7 +200,10 @@ mod tests {
                 ExecutionNode::Task(t) => &t.next,
                 _ => panic!(),
             };
-            assert_eq!(next, "type-gateway-join", "expected {id} → type-gateway-join");
+            assert_eq!(
+                next, "type-gateway-join",
+                "expected {id} → type-gateway-join"
+            );
         }
     }
 
@@ -179,13 +213,19 @@ mod tests {
           (start-event :id s :next t)
           (service-task :id t :verb no.such.verb :next e)
           (end-event :id e :status "done"))"#;
-        assert!(matches!(compile(src, &registry()), Err(CompileError::Lint(_))));
+        assert!(matches!(
+            compile(src, &registry()),
+            Err(CompileError::Lint(_))
+        ));
     }
 
     #[test]
     fn compile_rejects_unresolved_next() {
         let src = "(workflow test (start-event :id s :next missing))";
-        assert!(matches!(compile(src, &registry()), Err(CompileError::Lint(_))));
+        assert!(matches!(
+            compile(src, &registry()),
+            Err(CompileError::Lint(_))
+        ));
     }
 
     #[test]
@@ -195,7 +235,10 @@ mod tests {
           (exclusive-gateway :id gw
             (flow :condition (= @never-produced "x") :next e))
           (end-event :id e :status "done"))"#;
-        assert!(matches!(compile(src, &registry()), Err(CompileError::Lint(_))));
+        assert!(matches!(
+            compile(src, &registry()),
+            Err(CompileError::Lint(_))
+        ));
     }
 }
 
@@ -290,7 +333,10 @@ decisions:
         let plan = compile(NAMESPACED_DEMO_SRC, &namespaced_registry()).expect("compile failed");
         assert!(plan.placeholder_schema.slots.contains_key("@cbu"));
         assert!(plan.placeholder_schema.slots.contains_key("@cbu-type"));
-        assert_eq!(plan.placeholder_schema.slots["@cbu"].produced_by, "create-cbu");
+        assert_eq!(
+            plan.placeholder_schema.slots["@cbu"].produced_by,
+            "create-cbu"
+        );
         assert_eq!(
             plan.placeholder_schema.slots["@cbu-type"].produced_by,
             "type-decision"
@@ -338,7 +384,10 @@ decisions:
         match compile(src, &namespaced_registry()) {
             Err(CompileError::Lint(errs)) => {
                 let msg = errs.first().expect("at least one error").message.as_str();
-                assert!(msg.contains("not found in 'dmn-lite' manifest"), "got: {msg}");
+                assert!(
+                    msg.contains("not found in 'dmn-lite' manifest"),
+                    "got: {msg}"
+                );
                 assert!(msg.contains("1 decisions declared"), "got: {msg}");
             }
             other => panic!("expected Lint error, got {other:?}"),

@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
 use std::fs;
-use serde::{Serialize, Deserialize};
+use std::path::{Path, PathBuf};
 
 use bpmn_lite_compiler::dsl::{
+    ast::{JoinAst, JoinModeAst, NodeAst},
     parse_workflow_str,
     refactor::{AstMutator, ToSexpr},
-    ast::{NodeAst, JoinAst, JoinModeAst},
 };
-use dsl_manifest::{Manifest, VerbEntry, Signature, DecisionEntry, DecisionOutput};
+use dsl_manifest::{DecisionEntry, DecisionOutput, Manifest, Signature, VerbEntry};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
@@ -134,10 +134,10 @@ generated_at: "2026-06-04T12:00:00Z"
                     authority_required: format!("{}.write", domain),
                     description: Some("Auto-generated mock stub".to_string()),
                 });
-                let yaml = manifest.to_yaml()
+                let yaml = manifest
+                    .to_yaml()
                     .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-                fs::write(&path, yaml)
-                    .map_err(|e| format!("Failed to write manifest: {}", e))?;
+                fs::write(&path, yaml).map_err(|e| format!("Failed to write manifest: {}", e))?;
             }
 
             Ok(source_code.to_string())
@@ -178,10 +178,10 @@ generated_at: "2026-06-04T12:00:00Z"
                     },
                     description: Some("Auto-generated mock stub".to_string()),
                 });
-                let yaml = manifest.to_yaml()
+                let yaml = manifest
+                    .to_yaml()
                     .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-                fs::write(&path, yaml)
-                    .map_err(|e| format!("Failed to write manifest: {}", e))?;
+                fs::write(&path, yaml).map_err(|e| format!("Failed to write manifest: {}", e))?;
             }
 
             Ok(source_code.to_string())
@@ -217,29 +217,33 @@ generated_at: "2026-06-04T12:00:00Z"
         FixAction::RemoveUnusedNode { node_id } => {
             let mut workflow = parse_workflow_str(source_code)?;
             {
-            let removed_next = {
-                let mut mutator = AstMutator::new(&mut workflow);
-                let node = mutator.find_node_mut(node_id)
-                    .ok_or_else(|| format!("Node '{}' not found for removal", node_id))?;
-                match node {
-                    NodeAst::Start(_) => return Err("Cannot remove start event".to_string()),
-                    NodeAst::End(_) => return Err("Cannot remove end event".to_string()),
-                    NodeAst::Task(t) => t.next.clone(),
-                    NodeAst::Join(j) => j.next.clone(),
-                    NodeAst::Loop(l) => l.next.clone(),
-                    NodeAst::Split(_) => return Err("Cannot automatically remove split node safely".to_string()),
-                }
-            };
+                let removed_next = {
+                    let mut mutator = AstMutator::new(&mut workflow);
+                    let node = mutator
+                        .find_node_mut(node_id)
+                        .ok_or_else(|| format!("Node '{}' not found for removal", node_id))?;
+                    match node {
+                        NodeAst::Start(_) => return Err("Cannot remove start event".to_string()),
+                        NodeAst::End(_) => return Err("Cannot remove end event".to_string()),
+                        NodeAst::Task(t) => t.next.clone(),
+                        NodeAst::Join(j) => j.next.clone(),
+                        NodeAst::Loop(l) => l.next.clone(),
+                        NodeAst::Split(_) => {
+                            return Err("Cannot automatically remove split node safely".to_string())
+                        }
+                    }
+                };
 
-            let pred_ids = find_all_predecessors(&workflow.nodes, node_id);
-            {
-                let mut mutator = AstMutator::new(&mut workflow);
-                for pred in pred_ids {
-                    mutator.rewire_next(&pred, &removed_next)?;
+                let pred_ids = find_all_predecessors(&workflow.nodes, node_id);
+                {
+                    let mut mutator = AstMutator::new(&mut workflow);
+                    for pred in pred_ids {
+                        mutator.rewire_next(&pred, &removed_next)?;
+                    }
+                    mutator
+                        .remove_node(node_id)
+                        .ok_or_else(|| format!("Failed to remove node '{}'", node_id))?;
                 }
-                mutator.remove_node(node_id)
-                    .ok_or_else(|| format!("Failed to remove node '{}'", node_id))?;
-            }
             }
             Ok(workflow.to_sexpr(0))
         }
@@ -256,21 +260,31 @@ fn find_all_predecessors_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<S
     for node in nodes {
         match node {
             NodeAst::Start(s) => {
-                if s.next == target_id { acc.push(s.id.clone()); }
+                if s.next == target_id {
+                    acc.push(s.id.clone());
+                }
             }
             NodeAst::Task(t) => {
-                if t.next == target_id { acc.push(t.id.clone()); }
+                if t.next == target_id {
+                    acc.push(t.id.clone());
+                }
             }
             NodeAst::Join(j) => {
-                if j.next == target_id { acc.push(j.id.clone()); }
+                if j.next == target_id {
+                    acc.push(j.id.clone());
+                }
             }
             NodeAst::Loop(l) => {
-                if l.next == target_id { acc.push(l.id.clone()); }
+                if l.next == target_id {
+                    acc.push(l.id.clone());
+                }
                 find_all_predecessors_rec(&l.body, target_id, acc);
             }
             NodeAst::Split(s) => {
                 for flow in &s.flows {
-                    if flow.next == target_id { acc.push(s.id.clone()); }
+                    if flow.next == target_id {
+                        acc.push(s.id.clone());
+                    }
                 }
             }
             NodeAst::End(_) => {}

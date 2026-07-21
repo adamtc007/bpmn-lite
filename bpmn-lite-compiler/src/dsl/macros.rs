@@ -15,8 +15,8 @@ pub fn create_bounded_retry_macro(
     exit_next: &str,
 ) -> LoopAst {
     let mut body_task = target_task.clone();
-    body_task.next = loop_id.to_string(); 
-    
+    body_task.next = loop_id.to_string();
+
     LoopAst {
         id: loop_id.to_string(),
         ceiling: retry_ceiling,
@@ -34,7 +34,8 @@ pub fn create_xor_split_join(
     join_id: &str,
     join_next: &str,
 ) -> (SplitAst, JoinAst) {
-    let flows = branches.into_iter()
+    let flows = branches
+        .into_iter()
         .map(|b| SplitFlowAst {
             condition: Some(ConditionAst::Eq {
                 placeholder: placeholder.to_string(),
@@ -70,7 +71,8 @@ pub fn create_parallel_split_join(
     join_id: &str,
     join_next: &str,
 ) -> (SplitAst, JoinAst) {
-    let flows = branch_entry_nodes.into_iter()
+    let flows = branch_entry_nodes
+        .into_iter()
         .map(|node_id| SplitFlowAst {
             condition: None,
             next: node_id,
@@ -136,7 +138,11 @@ impl CustomMacroConfig {
                 }
                 if end < bytes.len() {
                     let name_bytes = &bytes[idx + 1..end];
-                    if !name_bytes.is_empty() && name_bytes.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+                    if !name_bytes.is_empty()
+                        && name_bytes
+                            .iter()
+                            .all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                    {
                         if let Ok(name) = std::str::from_utf8(name_bytes) {
                             if !params.contains_key(name) {
                                 return Err(format!("Unreplaced placeholder: %{}%", name));
@@ -190,4 +196,3 @@ macros:
         }
     }
 }
-

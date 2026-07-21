@@ -2,7 +2,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```text
 //! use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_path};
 //! use dmn_lite_parser::parse;
 //!

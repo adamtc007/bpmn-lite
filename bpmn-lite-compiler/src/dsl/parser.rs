@@ -14,7 +14,10 @@ pub(super) struct ParseError {
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> Self {
-        Self { offset: e.offset, message: e.message }
+        Self {
+            offset: e.offset,
+            message: e.message,
+        }
     }
 }
 
@@ -26,7 +29,11 @@ pub(super) struct Parser {
 
 impl Parser {
     pub(super) fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0, errors: Vec::new() }
+        Self {
+            tokens,
+            pos: 0,
+            errors: Vec::new(),
+        }
     }
 
     pub(super) fn into_errors(self) -> Vec<ParseError> {
@@ -62,7 +69,10 @@ impl Parser {
             self.advance();
             Some(offset)
         } else {
-            self.error(format!("expected '(' for {context}, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected '(' for {context}, found {}",
+                self.peek().kind.description()
+            ));
             None
         }
     }
@@ -72,7 +82,10 @@ impl Parser {
             self.advance();
             true
         } else {
-            self.error(format!("expected ')' to close {context}, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected ')' to close {context}, found {}",
+                self.peek().kind.description()
+            ));
             false
         }
     }
@@ -82,7 +95,10 @@ impl Parser {
             self.advance();
             Some(())
         } else {
-            self.error(format!("expected ':{name}', found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected ':{name}', found {}",
+                self.peek().kind.description()
+            ));
             None
         }
     }
@@ -93,7 +109,10 @@ impl Parser {
             self.advance();
             Some(s)
         } else {
-            self.error(format!("expected symbol for {context}, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected symbol for {context}, found {}",
+                self.peek().kind.description()
+            ));
             None
         }
     }
@@ -104,13 +123,19 @@ impl Parser {
             self.advance();
             Some(s)
         } else {
-            self.error(format!("expected string literal for {context}, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected string literal for {context}, found {}",
+                self.peek().kind.description()
+            ));
             None
         }
     }
 
     fn error(&mut self, msg: String) {
-        self.errors.push(ParseError { offset: self.peek().offset, message: msg });
+        self.errors.push(ParseError {
+            offset: self.peek().offset,
+            message: msg,
+        });
     }
 
     // ── Public entry ──────────────────────────────────────────────────────────
@@ -119,7 +144,10 @@ impl Parser {
         self.expect_lparen("workflow")?;
 
         if !matches!(&self.peek().kind, TokenKind::Symbol(s) if s == "workflow") {
-            self.error(format!("expected 'workflow', found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected 'workflow', found {}",
+                self.peek().kind.description()
+            ));
             return None;
         }
         self.advance();
@@ -132,7 +160,10 @@ impl Parser {
                 nodes.push(node);
             } else {
                 // Skip to next '(' to attempt recovery
-                while !matches!(self.peek().kind, TokenKind::LParen | TokenKind::RParen | TokenKind::Eof) {
+                while !matches!(
+                    self.peek().kind,
+                    TokenKind::LParen | TokenKind::RParen | TokenKind::Eof
+                ) {
                     self.advance();
                 }
             }
@@ -150,7 +181,10 @@ impl Parser {
         let kind_sym = match &self.peek().kind {
             TokenKind::Symbol(s) => s.clone(),
             _ => {
-                self.error(format!("expected node kind, found {}", self.peek().kind.description()));
+                self.error(format!(
+                    "expected node kind, found {}",
+                    self.peek().kind.description()
+                ));
                 return None;
             }
         };
@@ -160,15 +194,31 @@ impl Parser {
             "start-event" | "start" => self.parse_start(start_offset).map(NodeAst::Start),
             "end-event" | "end" => self.parse_end(start_offset).map(NodeAst::End),
             "service-task" => self.parse_service_task_old(start_offset).map(NodeAst::Task),
-            "business-rule-task" => self.parse_business_rule_task_old(start_offset).map(NodeAst::Task),
+            "business-rule-task" => self
+                .parse_business_rule_task_old(start_offset)
+                .map(NodeAst::Task),
             "task" => self.parse_task(start_offset).map(NodeAst::Task),
-            "exclusive-gateway" => self.parse_exclusive_gateway_old(start_offset).map(NodeAst::Split),
-            "split-xor" => self.parse_split(start_offset, SplitModeAst::Xor).map(NodeAst::Split),
-            "split-or" => self.parse_split(start_offset, SplitModeAst::Or).map(NodeAst::Split),
-            "split-and" => self.parse_split(start_offset, SplitModeAst::And).map(NodeAst::Split),
-            "join-xor" => self.parse_join(start_offset, JoinModeAst::Xor).map(NodeAst::Join),
-            "join-or" => self.parse_join(start_offset, JoinModeAst::Or).map(NodeAst::Join),
-            "join-and" => self.parse_join(start_offset, JoinModeAst::And).map(NodeAst::Join),
+            "exclusive-gateway" => self
+                .parse_exclusive_gateway_old(start_offset)
+                .map(NodeAst::Split),
+            "split-xor" => self
+                .parse_split(start_offset, SplitModeAst::Xor)
+                .map(NodeAst::Split),
+            "split-or" => self
+                .parse_split(start_offset, SplitModeAst::Or)
+                .map(NodeAst::Split),
+            "split-and" => self
+                .parse_split(start_offset, SplitModeAst::And)
+                .map(NodeAst::Split),
+            "join-xor" => self
+                .parse_join(start_offset, JoinModeAst::Xor)
+                .map(NodeAst::Join),
+            "join-or" => self
+                .parse_join(start_offset, JoinModeAst::Or)
+                .map(NodeAst::Join),
+            "join-and" => self
+                .parse_join(start_offset, JoinModeAst::And)
+                .map(NodeAst::Join),
             "loop" => self.parse_loop(start_offset).map(NodeAst::Loop),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
@@ -250,7 +300,8 @@ impl Parser {
         } else {
             Vec::new()
         };
-        let delivery_mode = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "delivery-mode") {
+        let delivery_mode = if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "delivery-mode")
+        {
             self.advance();
             self.expect_str_lit("delivery-mode")
         } else {
@@ -282,7 +333,10 @@ impl Parser {
                     pairs.push((key, val));
                 }
             } else {
-                self.error(format!("expected :key in args, found {}", self.peek().kind.description()));
+                self.error(format!(
+                    "expected :key in args, found {}",
+                    self.peek().kind.description()
+                ));
                 break;
             }
         }
@@ -343,7 +397,10 @@ impl Parser {
     fn parse_split_flow(&mut self, require_condition: bool) -> Option<SplitFlowAst> {
         self.expect_lparen("flow")?;
         if !matches!(&self.peek().kind, TokenKind::Symbol(s) if s == "flow") {
-            self.error(format!("expected 'flow', found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected 'flow', found {}",
+                self.peek().kind.description()
+            ));
             return None;
         }
         self.advance();
@@ -362,7 +419,10 @@ impl Parser {
     fn parse_condition(&mut self) -> Option<ConditionAst> {
         self.expect_lparen("condition")?;
         if !matches!(&self.peek().kind, TokenKind::Symbol(s) if s == "=") {
-            self.error(format!("expected '=' in condition, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected '=' in condition, found {}",
+                self.peek().kind.description()
+            ));
             return None;
         }
         self.advance(); // consume `=`
@@ -372,13 +432,19 @@ impl Parser {
             self.advance();
             p
         } else {
-            self.error(format!("expected @placeholder in condition, found {}", self.peek().kind.description()));
+            self.error(format!(
+                "expected @placeholder in condition, found {}",
+                self.peek().kind.description()
+            ));
             return None;
         };
 
         let value = self.expect_str_lit("condition value")?;
         self.expect_rparen("condition");
-        Some(ConditionAst::Eq { placeholder: format!("@{placeholder}"), value })
+        Some(ConditionAst::Eq {
+            placeholder: format!("@{placeholder}"),
+            value,
+        })
     }
 
     fn parse_join(&mut self, start_offset: usize, mode: JoinModeAst) -> Option<JoinAst> {
@@ -414,7 +480,10 @@ impl Parser {
             if let Some(node) = self.parse_node() {
                 body.push(node);
             } else {
-                while !matches!(self.peek().kind, TokenKind::LParen | TokenKind::RParen | TokenKind::Eof) {
+                while !matches!(
+                    self.peek().kind,
+                    TokenKind::LParen | TokenKind::RParen | TokenKind::Eof
+                ) {
                     self.advance();
                 }
             }

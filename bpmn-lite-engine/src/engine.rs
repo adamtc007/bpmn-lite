@@ -1,17 +1,19 @@
 // authoring dep removed in Phase 2.7 — see lib.rs
+use crate::runtime_context::{RuntimeContext, SystemRuntimeContext};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::{lowering, parser, verifier};
-use bpmn_lite_store::store::{ProcessStore, TransactionContext, TickOperation};
+use bpmn_lite_compiler::{parser, verifier};
+use bpmn_lite_kernel::{apply as apply_kernel, DeterministicContext};
+use bpmn_lite_store::store::WorkflowStore;
+use bpmn_lite_store::CommitOutcome;
 use bpmn_lite_types::events::RuntimeEvent;
-use bpmn_lite_types::ffi_bindings::{BindingSource, BindingTarget, Literal};
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
-use bpmn_lite_vm::{apply_completion, compute_hash, json_path, TickOutcome, Vm};
 use ffi_dispatcher::FfiDispatcher;
 use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
+use futures::{stream, StreamExt};
 use std::collections::BTreeMap;
-use std::sync::Arc;
-#[allow(unused_imports)]
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 const MAX_BPMN_XML_BYTES: usize = 2_000_000;
@@ -24,22 +26,50 @@ const DEFAULT_WORKER_ID: &str = "engine-default-worker";
 const DEFAULT_JOB_LEASE_MS: u64 = 300_000;
 const DEFAULT_MESSAGE_TTL_MS: u64 = 300_000;
 const DEFAULT_MESSAGE_CLAIM_MS: u64 = 30_000;
+const DEFAULT_ARTIFACT_CACHE_CAPACITY: usize = 128;
+const MAX_SCHEDULER_IN_FLIGHT: usize = 32;
+
+#[derive(Default)]
+struct ArtifactCache {
+    entries: BTreeMap<ArtifactHash, Arc<ExecutableWorkflow>>,
+    recency: VecDeque<ArtifactHash>,
+}
+
+impl ArtifactCache {
+    fn get(&mut self, hash: ArtifactHash) -> Option<Arc<ExecutableWorkflow>> {
+        let artifact = self.entries.get(&hash).cloned()?;
+        self.recency.retain(|candidate| *candidate != hash);
+        self.recency.push_back(hash);
+        Some(artifact)
+    }
+
+    fn insert(&mut self, hash: ArtifactHash, artifact: Arc<ExecutableWorkflow>, capacity: usize) {
+        if capacity == 0 {
+            return;
+        }
+        self.entries.insert(hash, artifact);
+        self.recency.retain(|candidate| *candidate != hash);
+        self.recency.push_back(hash);
+        while self.entries.len() > capacity {
+            if let Some(evicted) = self.recency.pop_front() {
+                self.entries.remove(&evicted);
+            }
+        }
+    }
+}
 
 /// BpmnLiteEngine is the top-level facade that wires together the compiler,
 /// VM, and store. gRPC handlers delegate to this.
 pub struct BpmnLiteEngine {
-    store: Arc<dyn ProcessStore>,
-    tenant_id: String,
+    store: Arc<dyn WorkflowStore>,
+    tenant_id: TenantId,
     transition_owner: String,
     transition_lease_ms: u64,
+    runtime_context: Arc<dyn RuntimeContext>,
+    artifact_cache: Arc<Mutex<ArtifactCache>>,
+    artifact_cache_capacity: usize,
     /// Optional in-process FFI dispatcher. None = ExecFfi produces an incident.
     ffi_dispatcher: Option<Arc<FfiDispatcher>>,
-    /// T3 — bus client for plan-based process execution. When set, Running
-    /// instances with plan_hash are dispatched to PlanWalker instead of the
-    /// bytecode fiber VM.
-    bus_client: Option<Arc<dsl_bus_client::BusClient>>,
-    /// T3 — pending invocation store for plan-based callouts.
-    pending_store: Option<Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>>,
 }
 
 /// Parameters for starting a new process instance.
@@ -96,6 +126,15 @@ pub struct RecoveryIssue {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryReport {
+    pub tenants_scanned: usize,
+    pub instances_verified: usize,
+    pub timers_applied: u32,
+    pub interrupted_effects: usize,
+    pub stale_jobs_reclaimed: u32,
+}
+
 fn enforce_ir_limits(ir: &bpmn_lite_compiler::ir::IRGraph) -> Result<()> {
     if ir.node_count() > MAX_IR_NODES {
         return Err(anyhow!(
@@ -115,17 +154,36 @@ fn enforce_ir_limits(ir: &bpmn_lite_compiler::ir::IRGraph) -> Result<()> {
 }
 
 fn enforce_program_limits(program: &CompiledProgram) -> Result<()> {
-    if program.program.len() > MAX_BYTECODE_INSTRUCTIONS {
+    if program.program().len() > MAX_BYTECODE_INSTRUCTIONS {
         return Err(anyhow!(
             "compiled bytecode has too many instructions: {} > {}",
-            program.program.len(),
+            program.program().len(),
             MAX_BYTECODE_INSTRUCTIONS
         ));
     }
-    if program.task_manifest.len() > MAX_TASK_MANIFEST {
+    if program.task_manifest().len() > MAX_TASK_MANIFEST {
         return Err(anyhow!(
             "compiled task manifest has too many task types: {} > {}",
-            program.task_manifest.len(),
+            program.task_manifest().len(),
+            MAX_TASK_MANIFEST
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_artifact_limits(artifact: &ExecutableWorkflow) -> Result<()> {
+    let envelope = artifact.envelope();
+    if envelope.instructions().len() > MAX_BYTECODE_INSTRUCTIONS {
+        return Err(anyhow!(
+            "compiled bytecode has too many instructions: {} > {}",
+            envelope.instructions().len(),
+            MAX_BYTECODE_INSTRUCTIONS
+        ));
+    }
+    if envelope.metadata().task_manifest().len() > MAX_TASK_MANIFEST {
+        return Err(anyhow!(
+            "compiled task manifest has too many task types: {} > {}",
+            envelope.metadata().task_manifest().len(),
             MAX_TASK_MANIFEST
         ));
     }
@@ -133,19 +191,29 @@ fn enforce_program_limits(program: &CompiledProgram) -> Result<()> {
 }
 
 impl BpmnLiteEngine {
-    pub fn new(store: Arc<dyn ProcessStore>) -> Self {
-        Self::new_with_tenant(store, "default")
+    pub fn new(store: Arc<dyn WorkflowStore>) -> Self {
+        Self::new_with_tenant(store, TenantId::default())
     }
 
-    pub fn new_with_tenant(store: Arc<dyn ProcessStore>, tenant_id: impl Into<String>) -> Self {
+    pub fn new_with_tenant(store: Arc<dyn WorkflowStore>, tenant_id: TenantId) -> Self {
+        Self::new_with_runtime_context(store, tenant_id, Arc::new(SystemRuntimeContext))
+    }
+
+    pub fn new_with_runtime_context(
+        store: Arc<dyn WorkflowStore>,
+        tenant_id: TenantId,
+        runtime_context: Arc<dyn RuntimeContext>,
+    ) -> Self {
+        let transition_owner = format!("engine-{}", runtime_context.new_id());
         Self {
             store,
-            tenant_id: tenant_id.into(),
-            transition_owner: format!("engine-{}", Uuid::now_v7()),
+            tenant_id,
+            transition_owner,
             transition_lease_ms: DEFAULT_TRANSITION_LEASE_MS,
+            runtime_context,
+            artifact_cache: Arc::new(Mutex::new(ArtifactCache::default())),
+            artifact_cache_capacity: DEFAULT_ARTIFACT_CACHE_CAPACITY,
             ffi_dispatcher: None,
-            bus_client: None,
-            pending_store: None,
         }
     }
 
@@ -156,112 +224,315 @@ impl BpmnLiteEngine {
         self
     }
 
-    /// T3 — attach a bus client + pending store for plan-based process
-    /// execution. When set, Running instances with `plan_hash` populated
-    /// are dispatched to `PlanWalker::advance` instead of the bytecode
-    /// fiber loop.
-    pub fn with_bus_client(
-        mut self,
-        client: Arc<dsl_bus_client::BusClient>,
-        pending_store: Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>,
-    ) -> Self {
-        self.bus_client = Some(client);
-        self.pending_store = Some(pending_store);
-        self
-    }
-
-    pub fn for_tenant(&self, tenant_id: impl Into<String>) -> Self {
+    pub fn for_tenant(&self, tenant_id: TenantId) -> Self {
         Self {
             store: self.store.clone(),
-            tenant_id: tenant_id.into(),
-            transition_owner: format!("engine-{}", Uuid::now_v7()),
+            tenant_id,
+            transition_owner: format!("engine-{}", self.runtime_context.new_id()),
             transition_lease_ms: self.transition_lease_ms,
+            runtime_context: self.runtime_context.clone(),
+            artifact_cache: self.artifact_cache.clone(),
+            artifact_cache_capacity: self.artifact_cache_capacity,
             ffi_dispatcher: self.ffi_dispatcher.clone(),
-            bus_client: self.bus_client.clone(),
-            pending_store: self.pending_store.clone(),
         }
     }
 
-    pub fn store(&self) -> Arc<dyn ProcessStore> {
+    pub fn store(&self) -> Arc<dyn WorkflowStore> {
         self.store.clone()
     }
 
-    pub fn pending_store(&self) -> Option<Arc<dyn bpmn_lite_store::pending::PendingInvocationStore>> {
-        self.pending_store.clone()
+    async fn load_artifact_cached(&self, hash: ArtifactHash) -> Result<Arc<ExecutableWorkflow>> {
+        if let Some(artifact) = self
+            .artifact_cache
+            .lock()
+            .map_err(|_| anyhow!("artifact cache lock poisoned"))?
+            .get(hash)
+        {
+            return Ok(artifact);
+        }
+        let artifact = Arc::new(
+            self.store
+                .load_artifact(hash)
+                .await?
+                .ok_or_else(|| anyhow!("artifact {} not found", hex::encode(hash.as_bytes())))?,
+        );
+        self.artifact_cache
+            .lock()
+            .map_err(|_| anyhow!("artifact cache lock poisoned"))?
+            .insert(hash, artifact.clone(), self.artifact_cache_capacity);
+        Ok(artifact)
     }
 
-    pub fn bus_client(&self) -> Option<Arc<dsl_bus_client::BusClient>> {
-        self.bus_client.clone()
-    }
-
-    pub fn tenant_id(&self) -> &str {
+    pub fn tenant_id(&self) -> &TenantId {
         &self.tenant_id
     }
 
+    fn logical_time(&self) -> Result<i64> {
+        self.runtime_context
+            .logical_time()
+            .map_err(|error| anyhow!(error))
+    }
 
     fn ensure_loaded_instance_belongs_to_tenant(
         &self,
         instance: &ProcessInstance,
         instance_id: Uuid,
     ) -> Result<()> {
-        if instance.tenant_id != self.tenant_id {
+        if instance.tenant_id != self.tenant_id.as_str() {
             return Err(anyhow!("Instance not found: {}", instance_id));
         }
         Ok(())
     }
 
-    /// A19 — Combined pickup guard: tenant check then integrity verification.
-    async fn claim_transition_as(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        let claimed = self
+    #[tracing::instrument(
+        name = "workflow.transition",
+        skip(self, command),
+        fields(tenant_id = %self.tenant_id, instance_id = %instance_id)
+    )]
+    async fn apply_and_commit_command(&self, instance_id: Uuid, command: Command) -> Result<()> {
+        let owner = self.transition_owner.clone();
+        let work = self
             .store
-            .claim_instance_for_transition(
+            .claim_work_for_transition(
                 &self.tenant_id,
                 instance_id,
-                owner,
+                &owner,
                 self.transition_lease_ms,
+                command,
             )
+            .await?
+            .ok_or_else(|| anyhow!("instance transition is leased or missing: {instance_id}"))?;
+        let result = async {
+            let (claim, snapshot, command) = work.into_parts();
+            let instance = snapshot.instance();
+            self.ensure_loaded_instance_belongs_to_tenant(instance, instance_id)?;
+            let artifact = self
+                .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
+                .await?;
+            let revision = claim.expected_revision().saturating_add(1);
+            let logical_time = u64::try_from(self.logical_time()?)
+                .map_err(|_| anyhow!("logical time cannot be negative"))?;
+            let context = DeterministicContext::new(
+                logical_time,
+                EffectId::for_transition(instance_id, revision, 0).as_uuid(),
+                revision,
+            );
+            let transition = apply_kernel(&artifact, &snapshot, &command, &context)
+                .map_err(|error| anyhow!(error))?;
+            self.store
+                .commit_transition(&claim, &transition)
+                .await
+                .map_err(|error| anyhow!(error))?;
+            Ok(())
+        }
+        .await;
+        let release = self
+            .store
+            .release_instance_transition(&self.tenant_id, instance_id, &owner)
+            .await;
+        match (result, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error.into()),
+        }
+    }
+
+    /// Dispatch committed effects without holding an instance or database
+    /// transaction, then apply durable inbox responses through the normal
+    /// fenced command path.
+    #[tracing::instrument(
+        name = "workflow.effect.dispatch_batch",
+        skip(self),
+        fields(tenant_id = %self.tenant_id, owner, limit)
+    )]
+    pub async fn dispatch_pending_effects(
+        &self,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> Result<usize> {
+        let logical_time = u64::try_from(self.logical_time()?)
+            .map_err(|_| anyhow!("effect dispatcher clock cannot be negative"))?;
+        let claimed = self
+            .store
+            .claim_pending_effects(&self.tenant_id, owner, logical_time, limit, lease_ms)
             .await?;
-        if !claimed {
+        let mut dispatched = 0usize;
+        for claimed_effect in claimed {
+            let DurableEffect::Invoke {
+                effect_id,
+                template_id,
+                input,
+                operation,
+                ..
+            } = claimed_effect.effect()
+            else {
+                self.store.release_effect_claim(&claimed_effect).await?;
+                continue;
+            };
+            let response = if let Some(dispatcher) = &self.ffi_dispatcher {
+                match dispatcher
+                    .dispatch(FfiCall {
+                        invocation_id: effect_id.as_uuid(),
+                        template_id: *template_id,
+                        tenant_id: self.tenant_id.to_string(),
+                        process_instance_id: claimed_effect.instance_id(),
+                        caller_task_id: operation.clone(),
+                        input_payload: input.clone(),
+                    })
+                    .await
+                {
+                    Ok(FfiResult::Success {
+                        output_payload,
+                        new_domain_payload,
+                        ..
+                    }) => EffectResponse::FfiSuccess {
+                        output_payload,
+                        new_domain_payload,
+                    },
+                    Ok(FfiResult::NoMatch { .. }) => EffectResponse::FfiNoMatch,
+                    Ok(FfiResult::Incident {
+                        error_class,
+                        message,
+                        ..
+                    }) => {
+                        let error_class = ffi_incident_class_to_error_class(error_class);
+                        if matches!(error_class, ErrorClass::Transient) {
+                            let Some(response) = self
+                                .schedule_transient_effect(
+                                    &claimed_effect,
+                                    logical_time,
+                                    message.clone(),
+                                )
+                                .await?
+                            else {
+                                continue;
+                            };
+                            response
+                        } else {
+                            EffectResponse::Failed {
+                                error_class,
+                                message,
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let Some(response) = self
+                            .schedule_transient_effect(
+                                &claimed_effect,
+                                logical_time,
+                                format!("FFI dispatch error: {error}"),
+                            )
+                            .await?
+                        else {
+                            continue;
+                        };
+                        response
+                    }
+                }
+            } else {
+                EffectResponse::Failed {
+                    error_class: ErrorClass::ContractViolation,
+                    message: "ExecFfi reached dispatcher boundary with no FfiDispatcher configured"
+                        .to_string(),
+                }
+            };
+            self.store
+                .record_effect_response(&claimed_effect, &response)
+                .await?;
+            dispatched = dispatched.saturating_add(1);
+        }
+        self.apply_pending_effect_responses(limit).await?;
+        Ok(dispatched)
+    }
+
+    async fn schedule_transient_effect(
+        &self,
+        effect: &ClaimedEffect,
+        logical_time: u64,
+        message: String,
+    ) -> Result<Option<EffectResponse>> {
+        let policy = RetryPolicy::new(1, 5, 1_000, 60_000)
+            .map_err(|error| anyhow!("invalid built-in effect retry policy: {error}"))?;
+        if effect.policy_version() != policy.version() {
             return Err(anyhow!(
-                "process instance mutation is already leased or not found: {}",
-                instance_id
+                "effect retry policy version {} is unavailable",
+                effect.policy_version()
             ));
         }
-        Ok(())
-    }
-
-    async fn release_transition_as(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        self.store
-            .release_instance_transition(&self.tenant_id, instance_id, owner)
-            .await
-    }
-
-    async fn run_guarded_transition<T, F, Fut>(
-        &self,
-        instance_id: Uuid,
-        owner: &str,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        self.claim_transition_as(instance_id, owner).await?;
-        let result = operation().await;
-        let release_result = self.release_transition_as(instance_id, owner).await;
-        match (result, release_result) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Err(err), Ok(())) => Err(err),
-            (Ok(_), Err(err)) => Err(err),
-            (Err(err), Err(release_err)) => {
-                tracing::warn!(
-                    instance_id = %instance_id,
-                    error = %release_err,
-                    "failed to release instance transition guard after transition error"
-                );
-                Err(err)
+        let decision = policy.decision(
+            effect.attempt(),
+            None,
+            &ErrorClass::Transient,
+            logical_time,
+            effect.effect().effect_id().as_uuid(),
+        );
+        match decision {
+            RetryDecision::At { .. } => {
+                self.store
+                    .schedule_effect_retry(effect, decision, &message)
+                    .await?;
+                Ok(None)
             }
+            RetryDecision::Exhausted => Ok(Some(EffectResponse::Failed {
+                error_class: ErrorClass::Transient,
+                message: format!("effect retry budget exhausted: {message}"),
+            })),
+            RetryDecision::Terminal => Ok(Some(EffectResponse::Failed {
+                error_class: ErrorClass::ContractViolation,
+                message,
+            })),
         }
+    }
+
+    async fn apply_pending_effect_responses(&self, limit: usize) -> Result<()> {
+        for pending in self
+            .store
+            .load_effect_responses(&self.tenant_id, limit)
+            .await?
+        {
+            let DurableEffect::Invoke { fiber_id, pc, .. } = pending.effect() else {
+                return Err(anyhow!("non-invocation effect produced an inbox response"));
+            };
+            let command = match pending.response() {
+                EffectResponse::FfiSuccess {
+                    output_payload,
+                    new_domain_payload,
+                } => Command::EffectCompleted {
+                    effect_id: pending.effect_id(),
+                    output: EffectOutput::Ffi {
+                        fiber_id: *fiber_id,
+                        pc: *pc,
+                        output_payload: output_payload.clone(),
+                        new_domain_payload: new_domain_payload.clone(),
+                        no_match: false,
+                    },
+                },
+                EffectResponse::FfiNoMatch => Command::EffectCompleted {
+                    effect_id: pending.effect_id(),
+                    output: EffectOutput::Ffi {
+                        fiber_id: *fiber_id,
+                        pc: *pc,
+                        output_payload: Vec::new(),
+                        new_domain_payload: None,
+                        no_match: true,
+                    },
+                },
+                EffectResponse::Failed {
+                    error_class,
+                    message,
+                } => Command::EffectFailed {
+                    effect_id: pending.effect_id(),
+                    job_key: String::new(),
+                    error_class: error_class.clone(),
+                    message: message.clone(),
+                    retry: None,
+                },
+            };
+            self.apply_and_commit_command(pending.instance_id(), command)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Compile BPMN XML → verified IR → bytecode, store the program.
@@ -275,29 +546,13 @@ impl BpmnLiteEngine {
         }
         let ir = parser::parse_bpmn(bpmn_xml)?;
         enforce_ir_limits(&ir)?;
-        let errors = verifier::verify(&ir);
-        if !errors.is_empty() {
-            let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-            return Err(anyhow!("Verification failed:\n{}", msgs.join("\n")));
-        }
-        let program = lowering::lower(&ir)?;
-        enforce_program_limits(&program)?;
+        let artifact = bpmn_lite_compiler::Compiler::lower(&ir)?;
+        enforce_artifact_limits(&artifact)?;
+        let bytecode_version = artifact.hash().into_bytes();
+        let task_types = artifact.envelope().metadata().task_manifest().to_vec();
+        let flag_symbol_table = artifact.envelope().metadata().flag_symbol_table().clone();
 
-        // Bytecode verification (bounded loop enforcement)
-        let bytecode_errors = verifier::verify_bytecode(&program);
-        if !bytecode_errors.is_empty() {
-            let msgs: Vec<String> = bytecode_errors.iter().map(|e| e.message.clone()).collect();
-            return Err(anyhow!(
-                "Bytecode verification failed:\n{}",
-                msgs.join("\n")
-            ));
-        }
-
-        let bytecode_version = program.bytecode_version;
-        let task_types = program.task_manifest.clone();
-        let flag_symbol_table = program.flag_symbol_table.clone();
-
-        self.store.store_program(bytecode_version, &program).await?;
+        self.store.store_artifact(&artifact).await?;
 
         Ok(CompileResult {
             bytecode_version,
@@ -307,16 +562,37 @@ impl BpmnLiteEngine {
         })
     }
 
+    /// Lower a validated DSL plan through the same verifier and artifact
+    /// repository used by the BPMN XML frontend.
+    pub async fn compile_dsl(
+        &self,
+        plan: &bpmn_lite_compiler::dsl::WorkflowExecutionPlan,
+    ) -> Result<CompileResult> {
+        let artifact =
+            bpmn_lite_compiler::Compiler::lower_dsl(plan).map_err(|error| anyhow!(error))?;
+        enforce_artifact_limits(&artifact)?;
+        let bytecode_version = artifact.hash().into_bytes();
+        let task_types = artifact.envelope().metadata().task_manifest().to_vec();
+        let flag_symbol_table = artifact.envelope().metadata().flag_symbol_table().clone();
+        self.store.store_artifact(&artifact).await?;
+        Ok(CompileResult {
+            bytecode_version,
+            task_types,
+            diagnostics: Vec::new(),
+            flag_symbol_table,
+        })
+    }
+
     /// Load a previously compiled program by its bytecode_version hash.
     pub async fn load_program(
         &self,
         bytecode_version: [u8; 32],
     ) -> Result<Option<CompiledProgram>> {
-        self.store.load_program(bytecode_version).await
+        Ok(self.store.load_program(bytecode_version).await?)
     }
 
     /// Persist an already-compiled program through this engine's
-    /// `ProcessStore` and surface the same `CompileResult` shape the
+    /// `WorkflowStore` and surface the same `CompileResult` shape the
     /// retired `compile_from_dto` / `compile_from_yaml` produced.
     /// Used by the `bpmn-lite-authoring` free-function pipeline
     /// (`authoring::compile_from_dto` / `compile_from_yaml`) after
@@ -340,11 +616,14 @@ impl BpmnLiteEngine {
             ));
         }
 
-        let bytecode_version = program.bytecode_version;
-        let task_types = program.task_manifest.clone();
-        let flag_symbol_table = program.flag_symbol_table.clone();
+        let envelope = ArtifactEnvelope::from_legacy_program(program, env!("CARGO_PKG_VERSION"))?;
+        let artifact = ExecutableWorkflow::from_verified_envelope(envelope)?;
+        enforce_artifact_limits(&artifact)?;
+        let bytecode_version = artifact.hash().into_bytes();
+        let task_types = artifact.envelope().metadata().task_manifest().to_vec();
+        let flag_symbol_table = artifact.envelope().metadata().flag_symbol_table().clone();
 
-        self.store.store_program(bytecode_version, &program).await?;
+        self.store.store_artifact(&artifact).await?;
 
         Ok(CompileResult {
             bytecode_version,
@@ -391,7 +670,8 @@ impl BpmnLiteEngine {
                 if let Some(obj) = json_val.as_object() {
                     for (key, expected_val) in preconditions {
                         let norm_key = key.trim_start_matches('@');
-                        let actual_val_str = obj.get(key)
+                        let actual_val_str = obj
+                            .get(key)
                             .or_else(|| obj.get(norm_key))
                             .map(|v| match v {
                                 serde_json::Value::String(s) => s.clone(),
@@ -400,58 +680,122 @@ impl BpmnLiteEngine {
                             .unwrap_or_default();
 
                         if actual_val_str != *expected_val {
-                            return Err(anyhow!("PreconditionConflict: expected {} to be {}, got '{}'", key, expected_val, actual_val_str));
+                            return Err(anyhow!(
+                                "PreconditionConflict: expected {} to be {}, got '{}'",
+                                key,
+                                expected_val,
+                                actual_val_str
+                            ));
                         }
                     }
                 } else {
-                    return Err(anyhow!("PreconditionConflict: domain payload is not a JSON object"));
+                    return Err(anyhow!(
+                        "PreconditionConflict: domain payload is not a JSON object"
+                    ));
                 }
             } else if !preconditions.is_empty() {
-                return Err(anyhow!("PreconditionConflict: domain payload is empty but preconditions were specified"));
+                return Err(anyhow!(
+                    "PreconditionConflict: domain payload is empty but preconditions were specified"
+                ));
             }
         }
 
-        let instance_id = Uuid::now_v7();
+        let computed_payload_hash = EffectId::content_hash(params.domain_payload.as_bytes());
+        if computed_payload_hash != params.domain_payload_hash {
+            return Err(anyhow!("initial payload hash does not match payload bytes"));
+        }
+        let instance_id = self.runtime_context.new_id();
+        let tenant_id = self.tenant_id.clone();
+        let command = StartCommand::builder(tenant_id, instance_id, params.bytecode_version)
+            .process_key(params.process_key)
+            .lineage(params.entry_id, params.runbook_id)
+            .correlation_id(params.correlation_id)
+            .idempotency_key(instance_id)
+            .initial_payload(params.domain_payload)
+            .session_stack(params.session_stack)
+            .logical_time(self.logical_time()?)
+            .build()
+            .map_err(|error| anyhow!(error))?;
+        self.start_command(command).await
+    }
+
+    /// Commit an idempotent start command and its initial snapshot/event/fiber
+    /// in one transition. A concurrent replay returns the already committed id.
+    pub async fn start_command(&self, command: StartCommand) -> Result<Uuid> {
+        if command.tenant_id() != &self.tenant_id {
+            return Err(anyhow!("start command tenant does not match engine tenant"));
+        }
+        let artifact_hash = ArtifactHash::from_bytes(command.artifact_hash());
+        if self.store.load_artifact(artifact_hash).await?.is_none() {
+            return Err(anyhow!("start command references an unknown artifact"));
+        }
+        if let Some(instance_id) = self
+            .store
+            .lookup_start_instance(self.tenant_id(), command.idempotency_key())
+            .await?
+        {
+            return Ok(instance_id);
+        }
+        let instance_id = command.instance_id();
+        let initial_placeholders =
+            serde_json::from_str::<serde_json::Value>(command.initial_payload())
+                .ok()
+                .filter(serde_json::Value::is_object);
         let instance = ProcessInstance {
             instance_id,
-            tenant_id: self.tenant_id.clone(),
-            process_key: params.process_key,
-            bytecode_version: params.bytecode_version,
-            domain_payload: params.domain_payload.into(),
-            domain_payload_hash: params.domain_payload_hash,
-            session_stack: params.session_stack,
+            tenant_id: self.tenant_id.to_string(),
+            process_key: command.process_key().to_string(),
+            bytecode_version: command.artifact_hash(),
+            domain_payload: command.initial_payload().to_string().into(),
+            domain_payload_hash: command.initial_payload_hash(),
+            session_stack: command.session_stack().clone(),
             flags: BTreeMap::new(),
             counters: BTreeMap::new(),
             join_expected: BTreeMap::new(),
             state: ProcessState::Running,
-            correlation_id: params.correlation_id,
-            entry_id: params.entry_id,
-            runbook_id: params.runbook_id,
-            created_at: now_ms(),
+            correlation_id: command.correlation_id().to_string(),
+            entry_id: command.entry_id(),
+            runbook_id: command.runbook_id(),
+            created_at: command.logical_time(),
             // integrity_hash and quarantine_state are set/managed by the store.
             integrity_hash: None,
             quarantine_state: None,
             plan_hash: None,
             current_node_id: None,
-            placeholder_values: None,
+            placeholder_values: initial_placeholders,
         };
-        let fiber_id = Uuid::now_v7();
+        let fiber_id = EffectId::for_command(command.idempotency_key(), 0, 0).as_uuid();
         let root_fiber = Fiber::new(fiber_id, 0);
 
-        let tenant_id = self.tenant_id.clone();
-        let store = self.store.clone();
-        let instance_clone = instance.clone();
-        let root_fiber_clone = root_fiber.clone();
-        let event_clone = RuntimeEvent::InstanceStarted {
+        let event = RuntimeEvent::InstanceStarted {
             instance_id,
-            bytecode_version: params.bytecode_version,
+            bytecode_version: command.artifact_hash(),
         };
-        let owner = self.transition_owner.clone();
-        store
-            .atomic_start(&tenant_id, &owner, &instance_clone, &root_fiber_clone, &event_clone)
-            .await?;
-
-        Ok(instance_id)
+        let command_envelope = CommandEnvelope::new(
+            command.idempotency_key(),
+            command.logical_time(),
+            JournalCommand::Start(command.clone()),
+        );
+        let transition = TransitionBuilder::new(instance)
+            .upsert_fiber(root_fiber)
+            .event(event)
+            .start_dedupe(StartDedupe::new(command.clone()))
+            .command_envelope(command_envelope)
+            .build();
+        let claim = Claim::new(command.tenant_id().clone(), instance_id, 0, 0);
+        let outcome = self
+            .store
+            .commit_transition(&claim, &transition)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        match outcome {
+            CommitOutcome::Committed { .. } => Ok(instance_id),
+            CommitOutcome::IdempotentNoOp => self
+                .store
+                .lookup_start_instance(self.tenant_id(), command.idempotency_key())
+                .await?
+                .ok_or_else(|| anyhow!("idempotent start committed without a durable owner")),
+        }
     }
 
     /// Tick all running instances. Returns count ticked.
@@ -474,504 +818,257 @@ impl BpmnLiteEngine {
         self.tick_instance_ids_as_owner(ids, owner).await
     }
 
+    /// Claim and apply a bounded batch of durable timer commands.
+    pub async fn tick_due_timers(
+        &self,
+        owner: &str,
+        logical_time: u64,
+        limit: usize,
+        lease_ms: u64,
+    ) -> Result<u32> {
+        let timers = self
+            .store
+            .claim_due_timers(&self.tenant_id, owner, logical_time, limit, lease_ms)
+            .await?;
+        let mut applied = 0u32;
+        for timer in timers {
+            let command = Command::TimerFired {
+                timer: timer.clone(),
+                fired_at: logical_time,
+            };
+            match self.apply_timer_command(command, owner).await {
+                Ok(TimerFireOutcome::Applied) => applied += 1,
+                Ok(TimerFireOutcome::AlreadyConsumed | TimerFireOutcome::Stale) => {}
+                Err(error) => {
+                    self.store.release_timer_claim(&timer).await?;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(applied)
+    }
+
+    #[tracing::instrument(
+        name = "workflow.timer.apply",
+        skip(self, command),
+        fields(tenant_id = %self.tenant_id, owner)
+    )]
+    pub async fn apply_timer_command(
+        &self,
+        command: Command,
+        owner: &str,
+    ) -> Result<TimerFireOutcome> {
+        let Command::TimerFired { timer, fired_at } = &command else {
+            return Err(anyhow!("apply_timer_command requires TimerFired"));
+        };
+        if timer.tenant_id() != &self.tenant_id {
+            return Err(anyhow!("timer command tenant does not match engine tenant"));
+        }
+        if *fired_at < timer.due_at() {
+            return Err(anyhow!("timer command fired before its durable due_at"));
+        }
+        let work = self
+            .store
+            .claim_work_for_transition(
+                &self.tenant_id,
+                timer.instance_id(),
+                owner,
+                self.transition_lease_ms,
+                command.clone(),
+            )
+            .await?
+            .ok_or_else(|| anyhow!("timer instance is leased or missing"))?;
+        let result = async {
+            let (claim, snapshot, command) = work.into_parts();
+            let instance = snapshot.instance();
+            let artifact = self
+                .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
+                .await?;
+            let context = DeterministicContext::new(
+                *fired_at,
+                timer.timer_id().as_uuid(),
+                claim.expected_revision().saturating_add(1),
+            );
+            let transition = apply_kernel(&artifact, &snapshot, &command, &context)
+                .map_err(|error| anyhow!(error))?;
+            let semantic = if transition
+                .events()
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::TimerFired { .. }))
+            {
+                TimerFireOutcome::Applied
+            } else {
+                TimerFireOutcome::Stale
+            };
+            let committed = self
+                .store
+                .commit_transition(&claim, &transition)
+                .await
+                .map_err(|error| anyhow!(error))?;
+            Ok(match committed {
+                CommitOutcome::IdempotentNoOp => TimerFireOutcome::AlreadyConsumed,
+                _ => semantic,
+            })
+        }
+        .await;
+        let release = self
+            .store
+            .release_instance_transition(&self.tenant_id, timer.instance_id(), owner)
+            .await;
+        match (result, release) {
+            (Ok(outcome), Ok(())) => Ok(outcome),
+            (Err(error), _) => {
+                self.store.release_timer_claim(timer).await?;
+                Err(error)
+            }
+            (Ok(_), Err(error)) => Err(error.into()),
+        }
+    }
+
     async fn tick_instance_ids(&self, ids: Vec<Uuid>) -> Result<u32> {
         let owner = self.transition_owner.clone();
         self.tick_instance_ids_as_owner(ids, &owner).await
     }
 
     async fn tick_instance_ids_as_owner(&self, ids: Vec<Uuid>, owner: &str) -> Result<u32> {
-        let mut ticked = 0u32;
-        for id in ids {
-            if let Err(e) = self.tick_instance_as_owner(id, owner).await {
-                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
-                    tracing::error!(instance_id = %id, error = %e, "IntegrityViolation detected in tick_instance_ids_as_owner; quarantining instance");
-                    if let Err(q_err) = self.store.quarantine_instance(
-                        violation.instance_id,
-                        &violation.tenant_id,
-                        owner,
-                        &violation.detection_point,
-                    ).await {
-                        tracing::error!(instance_id = %id, error = %q_err, "Failed to quarantine instance after IntegrityViolation");
-                    }
-                } else {
-                    tracing::warn!(instance_id = %id, error = %e, "tick_instance_ids: instance tick failed");
+        let total = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+        stream::iter(ids)
+            .map(|id| async move {
+                if let Err(error) = self.tick_instance_as_owner(id, owner).await {
+                    tracing::warn!(instance_id = %id, %error, "scheduled instance tick failed");
                 }
-            }
-            ticked += 1;
-        }
-        Ok(ticked)
+            })
+            .buffer_unordered(MAX_SCHEDULER_IN_FLIGHT)
+            .collect::<Vec<()>>()
+            .await;
+        Ok(total)
     }
 
     /// Advance all runnable fibers for a specific instance.
     /// Jobs are left in the queue — use `activate_jobs()` to dequeue them.
     pub async fn tick_instance(&self, instance_id: Uuid) -> Result<()> {
         let owner = self.transition_owner.clone();
-        match self.tick_instance_as_owner(instance_id, &owner).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
-                    tracing::error!(instance_id = %instance_id, error = %e, "IntegrityViolation detected in tick_instance; quarantining instance");
-                    if let Err(q_err) = self.store.quarantine_instance(
-                        violation.instance_id,
-                        &violation.tenant_id,
-                        &owner,
-                        &violation.detection_point,
-                    ).await {
-                        tracing::error!(instance_id = %instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in tick_instance");
-                    }
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        self.tick_instance_as_owner(instance_id, &owner).await
     }
 
     async fn tick_instance_as_owner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        self.run_guarded_transition(instance_id, owner, || async {
-            self.tick_instance_inner(instance_id, owner).await
-        })
-        .await
+        self.tick_instance_inner(instance_id, owner).await
     }
 
+    #[tracing::instrument(
+        name = "workflow.instance.tick",
+        skip(self),
+        fields(tenant_id = %self.tenant_id, instance_id = %instance_id, owner)
+    )]
     async fn tick_instance_inner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        // T3 — plan-based instances bypass the fiber VM entirely.
-        // The discriminator is plan_hash: Some = plan path, None = bytecode path.
-        // WaitingOnSubmission / WaitingOnInvocation instances are skipped by the
-        // ProcessState::Running guard inside PlanWalker::advance.
-        if let (Some(bus_client), Some(pending_store)) = (&self.bus_client, &self.pending_store) {
-            // Peek at the instance state before full load.
-            if let Some(inst) = self.store.load_instance(instance_id).await? {
-                if inst.plan_hash.is_some() {
-                    if matches!(inst.state, ProcessState::Running) {
-                        let walker = crate::plan_walker::PlanWalker::new(
-                            self.store.clone(),
-                            pending_store.clone(),
-                            bus_client.clone(),
-                        );
-                        let _ = walker.advance(instance_id, owner).await?;
-                    }
-                    return Ok(());
+        for _ in 0..MAX_BYTECODE_INSTRUCTIONS {
+            let work = self
+                .store
+                .claim_work_for_transition(
+                    &self.tenant_id,
+                    instance_id,
+                    owner,
+                    self.transition_lease_ms,
+                    Command::Tick { fiber_id: None },
+                )
+                .await?
+                .ok_or_else(|| {
+                    anyhow!("instance transition is leased or missing: {instance_id}")
+                })?;
+
+            let result = async {
+                let (claim, mut snapshot, command) = work.into_parts();
+                let instance = snapshot.instance();
+                if instance.state != ProcessState::Running {
+                    return Ok(None);
                 }
-            }
-        }
-
-        let mut instance = self
-            .store
-            .load_instance(instance_id)
-            .await?
-            .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
-
-        let program = self
-            .store
-            .load_program(instance.bytecode_version)
-            .await?
-            .ok_or_else(|| anyhow!("Program not found for instance {}", instance_id))?;
-
-        let fibers = self.store.load_fibers(instance_id).await?;
-
-        let mut tx_ctx = TransactionContext::new(instance_id, instance.tenant_id.clone());
-
-        'fiber_loop: for fiber in &fibers {
-            if fiber.wait != WaitState::Running {
-                continue;
-            }
-
-            let mut fiber = fiber.clone();
-            let vm = Vm::new(self.store.clone());
-
-            // Inner loop allows re-running the fiber after an in-process FFI call.
-            loop {
-                let outcome = vm
-                    .run_fiber(&mut fiber, &mut instance, &program, 1000, &mut tx_ctx)
+                let artifact = self
+                    .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
                     .await?;
-
-                match outcome {
-                    TickOutcome::ExecFfi {
-                        template_id: _,
-                        pc,
-                        invocation_id,
-                    } => {
-                        // First commit any accumulated operations so the FFI sees them
-                        if !tx_ctx.ops.is_empty() {
-                            self.store
-                                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
-                                .await?;
-                            tx_ctx.ops.clear();
-                        }
-                        let incident = self
-                            .handle_ffi_dispatch(
-                                &mut instance,
-                                &mut fiber,
-                                &program,
-                                invocation_id,
-                                pc,
-                                owner,
-                            )
-                            .await?;
-                        if incident {
-                            // Fiber parked on incident — stop inner loop.
-                            break;
-                        }
-                        // Dispatch succeeded (Success or NoMatch) — fiber.pc advanced.
-                        // Continue inner loop to keep running the fiber.
+                if !snapshot
+                    .fibers()
+                    .values()
+                    .any(|fiber| fiber.wait == WaitState::Running)
+                {
+                    return Ok(None);
+                }
+                let mut buffered_messages = Vec::new();
+                for fiber in snapshot
+                    .fibers()
+                    .values()
+                    .filter(|fiber| fiber.wait == WaitState::Running)
+                {
+                    let Some(Instr::WaitMsg { name, corr_reg, .. }) =
+                        artifact.envelope().instructions().get(fiber.pc.index())
+                    else {
                         continue;
-                    }
-                    TickOutcome::Parked(WaitState::Job { .. }) => {
-                        // Job enqueued by VM — leave in queue for activate_jobs()
-                        break;
-                    }
-                    TickOutcome::Ended => {
-                        break;
-                    }
-                    TickOutcome::Terminated => {
-                        // EndTerminate: kill the entire instance immediately.
-                        let terminating_fiber_id = fiber.fiber_id;
-
-                        // 1. Emit WaitCancelled for all OTHER fibers with active waits
-                        for other in &fibers {
-                            if other.fiber_id == terminating_fiber_id {
-                                continue;
-                            }
-                            let wait_desc = describe_wait(&other.wait);
-                            if !wait_desc.is_empty() {
-                                tx_ctx.add_op(TickOperation::AppendEvent {
-                                    event: RuntimeEvent::WaitCancelled {
-                                        fiber_id: other.fiber_id,
-                                        wait_desc,
-                                        reason: "terminate_end_event".to_string(),
-                                    },
-                                });
-                            }
-                        }
-
-                        // 2. Purge pending/inflight jobs
-                        tx_ctx.add_op(TickOperation::CancelJobsForInstance);
-
-                        // 3. Delete ALL fibers (including the terminating one)
-                        tx_ctx.add_op(TickOperation::DeleteAllFibers);
-
-                        // 4. Set state → Terminated
-                        let at = now_ms();
-                        instance.state = ProcessState::Terminated { at };
-
-                        // 5. Emit Terminated event
-                        tx_ctx.add_op(TickOperation::AppendEvent {
-                            event: RuntimeEvent::Terminated {
-                                at,
-                                fiber_id: terminating_fiber_id,
-                            },
-                        });
-
-                        // 6. BREAK — no more fibers to process
-                        break 'fiber_loop;
-                    }
-                    _ => {
-                        // Continue → hit max_steps; parked on timer/msg/join/race/incident → break inner loop
-                        break;
+                    };
+                    let correlation = fiber
+                        .regs
+                        .get(*corr_reg as usize)
+                        .cloned()
+                        .unwrap_or(Value::Bool(false));
+                    let message_name = artifact
+                        .envelope()
+                        .metadata()
+                        .message_name_map()
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| name.to_string());
+                    if let Some(message) = self
+                        .store
+                        .claim_buffered_message(
+                            &TenantId::new(instance.tenant_id.clone())?,
+                            &message_name,
+                            &value_key(&correlation),
+                            DEFAULT_MESSAGE_CLAIM_MS,
+                        )
+                        .await?
+                    {
+                        buffered_messages.push(message);
                     }
                 }
-            } // end inner FFI-retry loop
-        } // end 'fiber_loop
-
-        // Calculate remaining fibers in-memory using tx_ctx operations
-        let mut final_fibers = fibers.clone();
-        for op in &tx_ctx.ops {
-            match op {
-                TickOperation::DeleteAllFibers => {
-                    final_fibers.clear();
+                snapshot = snapshot.with_buffered_messages(buffered_messages);
+                let logical_time = u64::try_from(self.logical_time()?)
+                    .map_err(|_| anyhow!("logical time cannot be negative"))?;
+                let command_id = EffectId::for_transition(
+                    instance_id,
+                    claim.expected_revision().saturating_add(1),
+                    0,
+                )
+                .as_uuid();
+                let context = DeterministicContext::new(
+                    logical_time,
+                    command_id,
+                    claim.expected_revision().saturating_add(1),
+                );
+                let transition = apply_kernel(&artifact, &snapshot, &command, &context)
+                    .map_err(|error| anyhow!(error))?;
+                self.store
+                    .commit_transition(&claim, &transition)
+                    .await
+                    .map_err(|error| anyhow!(error))?;
+                Ok(Some(()))
+            }
+            .await;
+            let release = self
+                .store
+                .release_instance_transition(&self.tenant_id, instance_id, owner)
+                .await;
+            match (result, release) {
+                (Ok(Some(())), Ok(())) => {
+                    self.dispatch_pending_effects(owner, 32, self.transition_lease_ms)
+                        .await?;
+                    continue;
                 }
-                TickOperation::DeleteFiber { fiber_id } => {
-                    final_fibers.retain(|f| f.fiber_id != *fiber_id);
-                }
-                TickOperation::SaveFiber { fiber } => {
-                    if let Some(pos) = final_fibers.iter().position(|f| f.fiber_id == fiber.fiber_id) {
-                        final_fibers[pos] = fiber.clone();
-                    } else {
-                        final_fibers.push(fiber.clone());
-                    }
-                }
-                _ => {}
+                (Ok(None), Ok(())) => return Ok(()),
+                (Err(error), _) => return Err(error),
+                (Ok(_), Err(error)) => return Err(error.into()),
             }
         }
-
-        // If the instance completed (no fibers left), update its state
-        if final_fibers.is_empty() && !matches!(instance.state, ProcessState::Terminated { .. } | ProcessState::Failed { .. } | ProcessState::Completed { .. }) {
-            let at = now_ms();
-            instance.state = ProcessState::Completed { at };
-            tx_ctx.add_op(TickOperation::AppendEvent {
-                event: RuntimeEvent::Completed { at },
-            });
-        }
-
-        // Save updated instance (flags + counters + state)
-        tx_ctx.add_op(TickOperation::SaveInstance { instance: instance.clone() });
-
-        // Commit the tick transaction
-        if !tx_ctx.ops.is_empty() {
-            self.store
-                .commit_tick(instance_id, &instance.tenant_id, owner, &tx_ctx.ops)
-                .await?;
-        }
-
-        // --- Boundary timer promotion pass: Job → Race ---
-        let fibers_for_promotion = self.store.load_fibers(instance_id).await?;
-        let now_promo = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        for fiber in &fibers_for_promotion {
-            if let WaitState::Job { ref job_key } = fiber.wait {
-                if let Some(&race_id) = program.boundary_map.get(&fiber.pc) {
-                    if let Some(race_entry) = program.race_plan.get(&race_id) {
-                        // Compute absolute deadline from timer arm
-                        let timer_deadline_ms = race_entry.arms.iter().find_map(|arm| match arm {
-                            WaitArm::Timer { duration_ms, .. } => Some(now_promo + duration_ms),
-                            WaitArm::Deadline { deadline_ms, .. } => Some(*deadline_ms),
-                            _ => None,
-                        });
-
-                        // Compute timer_arm_index for non-interrupting logic
-                        let timer_arm_index = race_entry.arms.iter().position(|arm| {
-                            matches!(arm, WaitArm::Timer { .. } | WaitArm::Deadline { .. })
-                        });
-
-                        // Read interrupting flag from timer arm (default true for safety)
-                        let interrupting = race_entry
-                            .arms
-                            .iter()
-                            .find_map(|arm| match arm {
-                                WaitArm::Timer { interrupting, .. } => Some(*interrupting),
-                                _ => None,
-                            })
-                            .unwrap_or(true);
-
-                        // Read cycle spec from timer arm
-                        let cycle_remaining = race_entry.arms.iter().find_map(|arm| match arm {
-                            WaitArm::Timer { cycle: Some(c), .. } => Some(c.max_fires),
-                            _ => None,
-                        });
-
-                        // Promote: Job → Race, PRESERVING the exact job_key
-                        let mut promoted = fiber.clone();
-                        promoted.wait = WaitState::Race {
-                            race_id,
-                            timer_deadline_ms,
-                            job_key: Some(job_key.clone()),
-                            interrupting,
-                            timer_arm_index,
-                            cycle_remaining,
-                            cycle_fired_count: 0,
-                        };
-                        self.store.save_fiber(instance_id, &promoted).await?;
-
-                        // Emit RaceRegistered event
-                        let arm_descs: Vec<bpmn_lite_types::events::WaitArmDesc> =
-                            race_entry.arms.iter().map(|a| a.into()).collect();
-                        self.store
-                            .append_event(
-                                instance_id,
-                                &RuntimeEvent::RaceRegistered {
-                                    race_id,
-                                    fiber_id: fiber.fiber_id,
-                                    arms: arm_descs,
-                                },
-                            )
-                            .await?;
-                    }
-                }
-            }
-        }
-
-        // --- Race timer check pass ---
-        let fibers_after = self.store.load_fibers(instance_id).await?;
-        let now_race = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        for fiber in fibers_after {
-            if let WaitState::Race {
-                race_id,
-                timer_deadline_ms,
-                ref job_key,
-                interrupting,
-                timer_arm_index,
-                cycle_remaining,
-                cycle_fired_count,
-            } = &fiber.wait
-            {
-                let race_id = *race_id;
-                let stored_job_key = job_key.clone();
-                let is_interrupting = *interrupting;
-                let stored_timer_arm_index = *timer_arm_index;
-                let stored_cycle_remaining = *cycle_remaining;
-                let stored_cycle_fired_count = *cycle_fired_count;
-
-                // Check explicit timer_deadline_ms first (boundary timer promotion path)
-                if let Some(deadline) = timer_deadline_ms {
-                    if now_race >= *deadline {
-                        if let Some(race_entry) = program.race_plan.get(&race_id) {
-                            // Use stored timer_arm_index if available, else compute
-                            let timer_arm_idx = stored_timer_arm_index.or_else(|| {
-                                race_entry.arms.iter().position(|arm| {
-                                    matches!(arm, WaitArm::Timer { .. } | WaitArm::Deadline { .. })
-                                })
-                            });
-
-                            if let Some(idx) = timer_arm_idx {
-                                if is_interrupting {
-                                    // ── INTERRUPTING: resolve race (existing behavior) ──
-                                    let mut fiber = fiber.clone();
-                                    let mut instance =
-                                        self.store.load_instance(instance_id).await?.ok_or_else(
-                                            || anyhow!("Instance not found: {}", instance_id),
-                                        )?;
-                                    let vm = Vm::new(self.store.clone());
-                                    vm.resolve_race(
-                                        &mut instance,
-                                        &mut fiber,
-                                        race_id,
-                                        idx,
-                                        &race_entry.arms,
-                                    )
-                                    .await?;
-
-                                    // Ack the pending job
-                                    if let Some(jk) = &stored_job_key {
-                                        let _ = self.store.ack_job(&instance.tenant_id, jk).await;
-                                    }
-                                } else {
-                                    // ── NON-INTERRUPTING: fork child fiber, main stays in Race ──
-                                    let resume_at = match &race_entry.arms[idx] {
-                                        WaitArm::Timer { resume_at, .. } => *resume_at,
-                                        WaitArm::Deadline { resume_at, .. } => *resume_at,
-                                        _ => continue,
-                                    };
-
-                                    // Spawn child fiber at escalation path
-                                    let child_fiber_id = Uuid::now_v7();
-                                    let child_fiber = Fiber::new(child_fiber_id, resume_at);
-                                    self.store.save_fiber(instance_id, &child_fiber).await?;
-
-                                    // Emit BoundaryFired event
-                                    let boundary_element_id =
-                                        race_entry.boundary_element_id.clone().unwrap_or_default();
-                                    self.store
-                                        .append_event(
-                                            instance_id,
-                                            &RuntimeEvent::BoundaryFired {
-                                                race_id,
-                                                fiber_id: fiber.fiber_id,
-                                                spawned_fiber_id: child_fiber_id,
-                                                boundary_element_id,
-                                                resume_at,
-                                            },
-                                        )
-                                        .await?;
-
-                                    let new_fired_count = stored_cycle_fired_count + 1;
-
-                                    // Emit TimerCycleIteration
-                                    let new_remaining =
-                                        stored_cycle_remaining.map(|r| r.saturating_sub(1));
-                                    self.store
-                                        .append_event(
-                                            instance_id,
-                                            &RuntimeEvent::TimerCycleIteration {
-                                                race_id,
-                                                fiber_id: fiber.fiber_id,
-                                                iteration: new_fired_count,
-                                                remaining: new_remaining.unwrap_or(0),
-                                            },
-                                        )
-                                        .await?;
-
-                                    // Check if cycle exhausted
-                                    let cycle_exhausted = new_remaining == Some(0);
-
-                                    if cycle_exhausted {
-                                        // All cycles consumed — emit exhausted, resolve race
-                                        self.store
-                                            .append_event(
-                                                instance_id,
-                                                &RuntimeEvent::TimerCycleExhausted {
-                                                    race_id,
-                                                    fiber_id: fiber.fiber_id,
-                                                    total_fired: new_fired_count,
-                                                },
-                                            )
-                                            .await?;
-
-                                        // Remove timer from race — fiber goes back to plain Job wait
-                                        let mut updated_fiber = fiber.clone();
-                                        if let Some(jk) = &stored_job_key {
-                                            updated_fiber.wait = WaitState::Job {
-                                                job_key: jk.clone(),
-                                            };
-                                        }
-                                        self.store.save_fiber(instance_id, &updated_fiber).await?;
-                                    } else {
-                                        // Re-register timer with new deadline + updated counts
-                                        let new_deadline = match &race_entry.arms[idx] {
-                                            WaitArm::Timer { duration_ms, .. } => {
-                                                now_race + duration_ms
-                                            }
-                                            _ => now_race + 60_000, // fallback 1min
-                                        };
-
-                                        let mut updated_fiber = fiber.clone();
-                                        updated_fiber.wait = WaitState::Race {
-                                            race_id,
-                                            timer_deadline_ms: Some(new_deadline),
-                                            job_key: stored_job_key.clone(),
-                                            interrupting: false,
-                                            timer_arm_index: stored_timer_arm_index,
-                                            cycle_remaining: new_remaining,
-                                            cycle_fired_count: new_fired_count,
-                                        };
-                                        self.store.save_fiber(instance_id, &updated_fiber).await?;
-                                    }
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                }
-
-                // Fallback: check Deadline arms in race_plan (WaitAny opcode path)
-                if let Some(race_entry) = program.race_plan.get(&race_id) {
-                    for (i, arm) in race_entry.arms.iter().enumerate() {
-                        let expired = match arm {
-                            WaitArm::Deadline { deadline_ms, .. } => now_race >= *deadline_ms,
-                            _ => false,
-                        };
-
-                        if expired {
-                            let mut fiber = fiber.clone();
-                            let mut instance = self
-                                .store
-                                .load_instance(instance_id)
-                                .await?
-                                .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
-                            let vm = Vm::new(self.store.clone());
-                            vm.resolve_race(
-                                &mut instance,
-                                &mut fiber,
-                                race_id,
-                                i,
-                                &race_entry.arms,
-                            )
-                            .await?;
-                            break; // Only one winner per race
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        Err(anyhow!(
+            "instance {instance_id} exceeded transition scheduling bound"
+        ))
     }
 
     /// Advance all runnable fibers and return any job activations.
@@ -981,7 +1078,7 @@ impl BpmnLiteEngine {
 
         let instance = self
             .store
-            .load_instance(instance_id)
+            .load_instance(&self.tenant_id, instance_id)
             .await?
             .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
 
@@ -994,7 +1091,7 @@ impl BpmnLiteEngine {
         let jobs = self
             .store
             .dequeue_jobs(
-                &program.task_manifest,
+                program.task_manifest(),
                 100,
                 &self.tenant_id,
                 DEFAULT_WORKER_ID,
@@ -1006,362 +1103,11 @@ impl BpmnLiteEngine {
     }
 
     /// Emit a SignalIgnored audit event for late/ghost completions.
-    async fn emit_late(&self, instance_id: Uuid, desc: String) -> Result<()> {
-        self.store
-            .append_event(
-                instance_id,
-                &RuntimeEvent::SignalIgnored { signal_desc: desc },
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Dispatch an in-process FFI call (ExecFfi opcode path).
-    ///
-    /// Serialises input bindings from instance state, calls the registered
-    /// FfiDispatcher, applies output bindings, writes audit events, and
-    /// advances `fiber.pc`.
-    ///
-    /// Returns `true` if the call produced an incident (fiber is now
-    /// parked on `WaitState::Incident`), `false` for Success/NoMatch.
-    async fn handle_ffi_dispatch(
-        &self,
-        instance: &mut ProcessInstance,
-        fiber: &mut Fiber,
-        program: &CompiledProgram,
-        invocation_id: Uuid,
-        pc: Addr,
-        owner: &str,
-    ) -> Result<bool> {
-        // No dispatcher → create an incident.
-        let Some(dispatcher) = &self.ffi_dispatcher else {
-            let incident_id = self
-                .create_incident(
-                    instance,
-                    fiber,
-                    pc,
-                    ErrorClass::ContractViolation,
-                    "ExecFfi reached engine with no FfiDispatcher configured",
-                )
-                .await?;
-            instance.state = ProcessState::Failed { incident_id };
-            self.store.save_instance(owner, instance).await?;
-            return Ok(true); // incident
-        };
-
-        // Get the compiled task declaration for this instruction.
-        let task_decl = program
-            .ffi_task_decls
-            .get(&pc)
-            .ok_or_else(|| anyhow!("ExecFfi at pc={} has no FfiTaskDecl in CompiledProgram", pc))?;
-
-        // Caller task id for audit.
-        let caller_task_id = program
-            .debug_map
-            .get(&pc)
-            .cloned()
-            .unwrap_or_else(|| format!("pc_{}", pc));
-
-        // Serialise input bindings.
-        let input_obj = self.build_ffi_input_payload(instance, task_decl, program)?;
-        let input_payload = serde_json::to_vec(&input_obj)?;
-
-        // Look up owner_type for audit.
-        let owner_type = dispatcher.owner_type_for(&task_decl.template_id).await;
-
-        // Write Pending audit event (before dispatch — A2 §9).
-        self.store
-            .append_event(
-                instance.instance_id,
-                &RuntimeEvent::FfiInvocationPending {
-                    invocation_id,
-                    template_id_hex: bytes_to_hex(&task_decl.template_id),
-                    caller_task_id: caller_task_id.clone(),
-                    caller_pc: pc,
-                    owner_type: owner_type.clone(),
-                },
-            )
-            .await?;
-
-        // Dispatch.
-        let call = FfiCall {
-            invocation_id,
-            template_id: task_decl.template_id,
-            tenant_id: instance.tenant_id.clone(),
-            process_instance_id: instance.instance_id,
-            caller_task_id,
-            input_payload,
-        };
-        let result = dispatcher.dispatch(call).await;
-
-        match result {
-            Err(e) => {
-                // Transport-level error (owner panicked, dispatch failed internally).
-                let msg = format!("FFI dispatch error: {}", e);
-                self.store
-                    .append_event(
-                        instance.instance_id,
-                        &RuntimeEvent::FfiInvocationCompleted {
-                            invocation_id,
-                            outcome_kind: "incident".to_string(),
-                            error_message: Some(msg.clone()),
-                        },
-                    )
-                    .await?;
-                let incident_id = self
-                    .create_incident(instance, fiber, pc, ErrorClass::Transient, &msg)
-                    .await?;
-                instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(owner, instance).await?;
-                Ok(true)
-            }
-            Ok(FfiResult::Success {
-                output_payload,
-                trace_payload: _,
-                new_domain_payload,
-            }) => {
-                // Apply output bindings.
-                if let Some(new_payload) = new_domain_payload {
-                    instance.domain_payload = Arc::<str>::from(new_payload.as_str());
-                    instance.domain_payload_hash = compute_hash(&new_payload);
-                } else {
-                    self.apply_ffi_outputs(instance, task_decl, &output_payload)?;
-                }
-                self.store
-                    .append_event(
-                        instance.instance_id,
-                        &RuntimeEvent::FfiInvocationCompleted {
-                            invocation_id,
-                            outcome_kind: "success".to_string(),
-                            error_message: None,
-                        },
-                    )
-                    .await?;
-                fiber.pc += 1;
-                fiber.wait = WaitState::Running;
-                self.store.save_fiber(instance.instance_id, fiber).await?;
-                Ok(false)
-            }
-            Ok(FfiResult::NoMatch { trace_payload: _ }) => {
-                // Business "no result" — advance fiber, no output bindings.
-                self.store
-                    .append_event(
-                        instance.instance_id,
-                        &RuntimeEvent::FfiInvocationCompleted {
-                            invocation_id,
-                            outcome_kind: "no_match".to_string(),
-                            error_message: None,
-                        },
-                    )
-                    .await?;
-                fiber.pc += 1;
-                fiber.wait = WaitState::Running;
-                self.store.save_fiber(instance.instance_id, fiber).await?;
-                Ok(false)
-            }
-            Ok(FfiResult::Incident {
-                error_class,
-                message,
-                retry_hint_ms: _,
-            }) => {
-                let ec = ffi_incident_class_to_error_class(error_class);
-                // Check error_route_map for BusinessRejection routing.
-                if let ErrorClass::BusinessRejection { ref rejection_code } = ec {
-                    if let Some(routes) = program.error_route_map.get(&pc) {
-                        let route = routes
-                            .iter()
-                            .find(|r| r.error_code.as_deref() == Some(rejection_code.as_str()))
-                            .or_else(|| routes.iter().find(|r| r.error_code.is_none()));
-                        if let Some(r) = route {
-                            self.store
-                                .append_event(
-                                    instance.instance_id,
-                                    &RuntimeEvent::FfiInvocationCompleted {
-                                        invocation_id,
-                                        outcome_kind: "incident".to_string(),
-                                        error_message: Some(message.clone()),
-                                    },
-                                )
-                                .await?;
-                            self.store
-                                .append_event(
-                                    instance.instance_id,
-                                    &RuntimeEvent::ErrorRouted {
-                                        job_key: format!("ffi:{}", invocation_id),
-                                        error_code: rejection_code.clone(),
-                                        boundary_id: r.boundary_element_id.clone(),
-                                        resume_at: r.resume_at,
-                                    },
-                                )
-                                .await?;
-                            fiber.pc = r.resume_at;
-                            fiber.wait = WaitState::Running;
-                            self.store.save_fiber(instance.instance_id, fiber).await?;
-                            return Ok(false); // routed, not an incident
-                        }
-                    }
-                }
-                self.store
-                    .append_event(
-                        instance.instance_id,
-                        &RuntimeEvent::FfiInvocationCompleted {
-                            invocation_id,
-                            outcome_kind: "incident".to_string(),
-                            error_message: Some(message.clone()),
-                        },
-                    )
-                    .await?;
-                let incident_id = self
-                    .create_incident(instance, fiber, pc, ec, &message)
-                    .await?;
-                instance.state = ProcessState::Failed { incident_id };
-                self.store.save_instance(owner, instance).await?;
-                Ok(true)
-            }
-        }
-    }
-
-    /// Create an Incident record and park the fiber.
-    async fn create_incident(
-        &self,
-        instance: &mut ProcessInstance,
-        fiber: &mut Fiber,
-        pc: Addr,
-        error_class: ErrorClass,
-        message: &str,
-    ) -> Result<Uuid> {
-        let incident_id = Uuid::now_v7();
-        let service_task_id = format!("pc_{}", pc);
-        let incident = Incident {
-            incident_id,
-            process_instance_id: instance.instance_id,
-            fiber_id: fiber.fiber_id,
-            service_task_id: service_task_id.clone(),
-            bytecode_addr: pc,
-            error_class,
-            message: message.to_string(),
-            retry_count: 0,
-            created_at: now_ms(),
-            resolved_at: None,
-            resolution: None,
-        };
-        self.store.save_incident(&incident).await?;
-        self.store
-            .append_event(
-                instance.instance_id,
-                &RuntimeEvent::IncidentCreated {
-                    incident_id,
-                    service_task_id,
-                    job_key: None,
-                },
-            )
-            .await?;
-        fiber.wait = WaitState::Incident { incident_id };
-        self.store.save_fiber(instance.instance_id, fiber).await?;
-        Ok(incident_id)
-    }
-
-    /// Serialise FFI input bindings from the current instance state.
-    fn build_ffi_input_payload(
-        &self,
-        instance: &ProcessInstance,
-        task_decl: &bpmn_lite_types::ffi_bindings::FfiTaskDecl,
-        program: &CompiledProgram,
-    ) -> Result<serde_json::Value> {
-        let mut obj = serde_json::Map::new();
-        let parsed_payload: Option<serde_json::Value> = if task_decl
-            .inputs
-            .iter()
-            .any(|b| matches!(&b.source, BindingSource::DomainPayloadRef(_)))
-        {
-            Some(json_path::parse_json(&instance.domain_payload)?)
-        } else {
-            None
-        };
-        for binding in &task_decl.inputs {
-            let value: serde_json::Value = match &binding.source {
-                BindingSource::Literal(lit) => literal_to_json(lit),
-                BindingSource::FlagRef(key) => match instance.flags.get(key) {
-                    Some(Value::Bool(b)) => serde_json::Value::Bool(*b),
-                    Some(Value::I64(n)) => serde_json::Value::Number((*n).into()),
-                    Some(Value::Str(_)) | Some(Value::Ref(_)) | None => serde_json::Value::Null,
-                },
-                BindingSource::DomainPayloadRef(path) => {
-                    if let Some(ref root) = parsed_payload {
-                        json_path::read(root, path).unwrap_or(serde_json::Value::Null)
-                    } else {
-                        serde_json::Value::Null
-                    }
-                }
-            };
-            obj.insert(binding.target_field.clone(), value);
-        }
-        // suppress unused-variable warning — program only needed for future use
-        let _ = program;
-        Ok(serde_json::Value::Object(obj))
-    }
-
-    /// Apply FFI output bindings back into instance state.
-    fn apply_ffi_outputs(
-        &self,
-        instance: &mut ProcessInstance,
-        task_decl: &bpmn_lite_types::ffi_bindings::FfiTaskDecl,
-        output_payload_bytes: &[u8],
-    ) -> Result<()> {
-        if task_decl.outputs.is_empty() {
-            return Ok(());
-        }
-        let output: serde_json::Value = serde_json::from_slice(output_payload_bytes)
-            .map_err(|e| anyhow!("FFI output_payload is not valid JSON: {}", e))?;
-
-        // For DomainPayloadWrite: parse domain_payload once.
-        let needs_domain_write = task_decl
-            .outputs
-            .iter()
-            .any(|b| matches!(&b.target, BindingTarget::DomainPayloadWrite(_)));
-        let mut parsed_domain: Option<serde_json::Value> = if needs_domain_write {
-            Some(json_path::parse_json(&instance.domain_payload)?)
-        } else {
-            None
-        };
-
-        for binding in &task_decl.outputs {
-            let field_value = output.get(&binding.source_field);
-            match &binding.target {
-                BindingTarget::FlagWrite(key) => {
-                    let v = match field_value {
-                        Some(serde_json::Value::Bool(b)) => Value::Bool(*b),
-                        Some(serde_json::Value::Number(n)) if n.is_i64() => {
-                            Value::I64(n.as_i64().unwrap())
-                        }
-                        _ => continue, // skip non-flag-compatible values
-                    };
-                    instance.flags.insert(*key, v);
-                }
-                BindingTarget::DomainPayloadWrite(path) => {
-                    if let Some(ref mut root) = parsed_domain {
-                        if let Some(field_val) = field_value {
-                            json_path::write_at_path(root, path, field_val.clone())?;
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(new_domain) = parsed_domain {
-            let canonical = json_path::canonicalise_json(&new_domain);
-            instance.domain_payload = Arc::<str>::from(canonical.as_str());
-            instance.domain_payload_hash = compute_hash(&canonical);
-        }
-        Ok(())
-    }
-
-    /// Complete a job — resume the parked fiber.
-    ///
-    /// Three guards protect against ghost signals:
-    ///   1. Dedupe — already-processed job_key is silently accepted
-    ///   2. State  — Cancelled/Completed instance → SignalIgnored event
-    ///   3. Hash   — worker-supplied expected/current hash must match instance snapshot
+    #[tracing::instrument(
+        name = "workflow.job.complete",
+        skip(self, domain_payload, orch_flags),
+        fields(tenant_id = %self.tenant_id, job_key)
+    )]
     pub async fn complete_job(
         &self,
         job_key: &str,
@@ -1371,17 +1117,70 @@ impl BpmnLiteEngine {
     ) -> Result<()> {
         let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
         let owner = self.transition_owner.clone();
-        self.run_guarded_transition(instance_id, &owner, || async {
-            self.complete_job_inner(
-                job_key,
-                domain_payload,
+        let work = self
+            .store
+            .claim_work_for_transition(
+                &self.tenant_id,
+                instance_id,
+                &owner,
+                self.transition_lease_ms,
+                Command::Tick { fiber_id: None },
+            )
+            .await?
+            .ok_or_else(|| anyhow!("instance transition is leased or missing: {instance_id}"))?;
+        let result = async {
+            let (claim, snapshot, _) = work.into_parts();
+            let instance = snapshot.instance();
+            if self
+                .store
+                .dedupe_get(&TenantId::new(instance.tenant_id.clone())?, job_key)
+                .await?
+                .is_some()
+            {
+                return Ok(());
+            }
+            let artifact = self
+                .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
+                .await?;
+            let completion = JobCompletion {
+                job_key: job_key.to_string(),
+                domain_payload: domain_payload.to_string(),
                 expected_instance_payload_hash,
                 orch_flags,
-                &owner,
+            };
+            let revision = claim.expected_revision().saturating_add(1);
+            let context = DeterministicContext::new(
+                u64::try_from(self.logical_time()?)
+                    .map_err(|_| anyhow!("logical time cannot be negative"))?,
+                EffectId::for_transition(instance_id, revision, 0).as_uuid(),
+                revision,
+            );
+            let transition = apply_kernel(
+                &artifact,
+                &snapshot,
+                &Command::EffectCompleted {
+                    effect_id: EffectId::for_transition(instance_id, revision, 0),
+                    output: EffectOutput::Job(completion),
+                },
+                &context,
             )
-            .await
-        })
-        .await
+            .map_err(|error| anyhow!(error))?;
+            self.store
+                .commit_transition(&claim, &transition)
+                .await
+                .map_err(|error| anyhow!(error))?;
+            Ok(())
+        }
+        .await;
+        let release = self
+            .store
+            .release_instance_transition(&self.tenant_id, instance_id, &owner)
+            .await;
+        match (result, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error.into()),
+        }
     }
 
     pub async fn complete_job_with_claim(
@@ -1397,11 +1196,19 @@ impl BpmnLiteEngine {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
         let (instance_id, _, _) = parse_job_key(job_key)?;
-        let instance = self.store.load_instance(instance_id).await?
+        let instance = self
+            .store
+            .load_instance(&self.tenant_id, instance_id)
+            .await?
             .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
+            .validate_job_claim(
+                &TenantId::new(instance.tenant_id.clone())?,
+                job_key,
+                worker_id,
+                claim_token,
+            )
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
@@ -1415,136 +1222,6 @@ impl BpmnLiteEngine {
         .await
     }
 
-    async fn complete_job_inner(
-        &self,
-        job_key: &str,
-        domain_payload: &str,
-        expected_instance_payload_hash: [u8; 32],
-        orch_flags: BTreeMap<String, Value>,
-        owner: &str,
-    ) -> Result<()> {
-        let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
-
-        // ── Guard 2: instance state ──
-        let mut instance = self
-            .store
-            .load_instance(instance_id)
-            .await?
-            .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
-
-        // ── Guard 1: dedupe ──
-        if self.store.dedupe_get(&instance.tenant_id, job_key).await?.is_some() {
-            return Ok(());
-        }
-
-        if instance.state.is_terminal() {
-            self.emit_late(
-                instance_id,
-                format!("complete_job on {:?} instance: {}", instance.state, job_key),
-            )
-            .await?;
-            return Ok(());
-        }
-
-        // ── Guard 3: payload hash ──
-        let expected = compute_hash(&instance.domain_payload);
-        if expected_instance_payload_hash != expected {
-            return Err(anyhow::anyhow!(bpmn_lite_types::integrity::IntegrityViolation {
-                instance_id,
-                tenant_id: instance.tenant_id.clone(),
-                detection_point: format!("complete_job_inner:payload_hash_mismatch:job_key={}", job_key),
-            }));
-        }
-
-        let program = self
-            .store
-            .load_program(instance.bytecode_version)
-            .await?
-            .ok_or_else(|| anyhow!("Program not found"))?;
-
-        let completion = JobCompletion {
-            job_key: job_key.to_string(),
-            domain_payload: domain_payload.to_string(),
-            expected_instance_payload_hash,
-            orch_flags,
-        };
-
-        let vm = Vm::new(self.store.clone());
-
-        // Check if this job's ExecNative has a boundary timer (race)
-        let boundary_race_id = program.boundary_map.get(&pc).copied();
-        let resumed = if let Some(race_id) = boundary_race_id {
-            // Race-aware completion: find fiber in Race state
-            let fibers = self.store.load_fibers(instance_id).await?;
-            let race_fiber = fibers.iter().find(
-                |f| matches!(&f.wait, WaitState::Race { race_id: rid, .. } if *rid == race_id),
-            );
-
-            if let Some(parked) = race_fiber {
-                let mut fiber = parked.clone();
-                if let Some(race_entry) = program.race_plan.get(&race_id) {
-                    let internal_idx = race_entry
-                        .arms
-                        .iter()
-                        .position(|arm| matches!(arm, WaitArm::Internal { .. }))
-                        .unwrap_or(0);
-
-                    vm.resolve_race(
-                        &mut instance,
-                        &mut fiber,
-                        race_id,
-                        internal_idx,
-                        &race_entry.arms,
-                    )
-                    .await?;
-                }
-                true // race path always means fiber was resumed
-            } else {
-                // Fiber still in Job state (promotion hasn't happened)
-                // or race already resolved (late arrival) — try vm path
-                let maybe_fid = vm
-                    .complete_job(&mut instance, &completion, &program)
-                    .await?;
-                maybe_fid.is_some()
-            }
-        } else {
-            // No boundary timer — standard complete_job path
-            let maybe_fid = vm
-                .complete_job(&mut instance, &completion, &program)
-                .await?;
-            maybe_fid.is_some()
-        };
-
-        if resumed {
-            // Mutation ownership: engine applies completion + persists atomically
-            let payload_hash_before = instance.domain_payload_hash;
-            apply_completion(&mut instance, &completion);
-            let events = if boundary_race_id.is_none() {
-                vec![RuntimeEvent::JobCompleted {
-                    job_key: completion.job_key.clone(),
-                    payload_hash_before,
-                    payload_hash_after: instance.domain_payload_hash,
-                    orch_flags_out: completion.orch_flags.clone(),
-                    pc_next: pc + 1,
-                }]
-            } else {
-                Vec::new()
-            };
-            self.store
-                .atomic_complete(&instance.tenant_id, owner, &instance, &completion, &events)
-                .await?;
-        } else {
-            // No fiber matched — ghost signal
-            self.emit_late(
-                instance_id,
-                format!("complete_job: no matching fiber for job_key={}", job_key),
-            )
-            .await?;
-        }
-
-        Ok(())
-    }
-
     /// Fail a job — route to error boundary handler or create an incident.
     ///
     /// Only `BusinessRejection` errors trigger error routing. `Transient` and
@@ -1555,12 +1232,17 @@ impl BpmnLiteEngine {
         error_class: ErrorClass,
         message: &str,
     ) -> Result<()> {
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
-        let owner = self.transition_owner.clone();
-        self.run_guarded_transition(instance_id, &owner, || async {
-            self.fail_job_inner(job_key, error_class, message, None, &owner)
-                .await
-        })
+        let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
+        self.apply_and_commit_command(
+            instance_id,
+            Command::EffectFailed {
+                effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
+                job_key: job_key.to_string(),
+                error_class,
+                message: message.to_string(),
+                retry: None,
+            },
+        )
         .await
     }
 
@@ -1575,214 +1257,43 @@ impl BpmnLiteEngine {
         if worker_id.is_empty() || claim_token.is_empty() {
             return Err(anyhow!("worker_id and claim_token are required"));
         }
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
-        let instance = self.store.load_instance(instance_id).await?
+        let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
+        let instance = self
+            .store
+            .load_instance(&self.tenant_id, instance_id)
+            .await?
             .ok_or_else(|| anyhow!("Instance not found for job: {}", job_key))?;
         if !self
             .store
-            .validate_job_claim(&instance.tenant_id, job_key, worker_id, claim_token)
+            .validate_job_claim(
+                &TenantId::new(instance.tenant_id.clone())?,
+                job_key,
+                worker_id,
+                claim_token,
+            )
             .await?
         {
             return Err(anyhow!("job claim does not match worker ownership"));
         }
-        let owner = self.transition_owner.clone();
-        self.run_guarded_transition(instance_id, &owner, || async {
-            self.fail_job_inner(
-                job_key,
+        self.apply_and_commit_command(
+            instance_id,
+            Command::EffectFailed {
+                effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
+                job_key: job_key.to_string(),
                 error_class,
-                message,
-                Some((worker_id, claim_token)),
-                &owner,
-            )
-            .await
-        })
+                message: message.to_string(),
+                retry: Some(JobRetry::new(
+                    worker_id,
+                    claim_token,
+                    self.logical_time()?
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("retry timestamp overflow"))?,
+                )),
+            },
+        )
         .await
     }
 
-    async fn fail_job_inner(
-        &self,
-        job_key: &str,
-        error_class: ErrorClass,
-        message: &str,
-        worker_claim: Option<(&str, &str)>,
-        owner: &str,
-    ) -> Result<()> {
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
-
-        let instance = self
-            .store
-            .load_instance(instance_id)
-            .await?
-            .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
-
-        // Guard 1: terminal state
-        if instance.state.is_terminal() {
-            self.emit_late(
-                instance_id,
-                format!("fail_job(key={}, state={:?})", job_key, instance.state),
-            )
-            .await?;
-            self.store.ack_job(&instance.tenant_id, job_key).await?;
-            return Ok(());
-        }
-
-        let program = self
-            .store
-            .load_program(instance.bytecode_version)
-            .await?
-            .ok_or_else(|| anyhow!("Program not found"))?;
-
-        // Find parked fiber
-        let fibers = self.store.load_fibers(instance_id).await?;
-        let parked = fibers
-            .iter()
-            .find(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if jk == job_key));
-
-        let Some(parked_fiber) = parked else {
-            // Guard 2: no matching fiber (ghost)
-            self.emit_late(instance_id, format!("fail_job(key={}, no fiber)", job_key))
-                .await?;
-            self.store.ack_job(&instance.tenant_id, job_key).await?;
-            return Ok(());
-        };
-
-        let mut fiber = parked_fiber.clone();
-
-        if matches!(error_class, ErrorClass::Transient) {
-            if let Some((worker_id, claim_token)) = worker_claim {
-                let retry_at = now_ms() + 1;
-                if self
-                    .store
-                    .retry_claimed_job(
-                        &instance.tenant_id,
-                        job_key,
-                        worker_id,
-                        claim_token,
-                        error_class_label(&error_class),
-                        message,
-                        retry_at,
-                    )
-                    .await?
-                {
-                    self.store
-                        .append_event(
-                            instance_id,
-                            &RuntimeEvent::JobRetryScheduled {
-                                job_key: job_key.to_string(),
-                                retry_at,
-                                retries_remaining: 0,
-                            },
-                        )
-                        .await?;
-                    return Ok(());
-                }
-            }
-        }
-
-        // Check error routing (only for BusinessRejection)
-        if let ErrorClass::BusinessRejection { rejection_code } = &error_class {
-            if let Some(routes) = program.error_route_map.get(&fiber.pc) {
-                let matched = routes.iter().find(|r| match &r.error_code {
-                    Some(code) => code == rejection_code,
-                    None => true, // catch-all
-                });
-
-                if let Some(route) = matched {
-                    // ERROR ROUTE PATH: advance fiber to escalation
-                    fiber.pc = route.resume_at;
-                    fiber.wait = WaitState::Running;
-                    self.store.save_fiber(instance_id, &fiber).await?;
-                    self.store.ack_job(&instance.tenant_id, job_key).await?;
-                    self.store
-                        .append_event(
-                            instance_id,
-                            &RuntimeEvent::ErrorRouted {
-                                job_key: job_key.to_string(),
-                                error_code: rejection_code.clone(),
-                                boundary_id: route.boundary_element_id.clone(),
-                                resume_at: route.resume_at,
-                            },
-                        )
-                        .await?;
-                    return Ok(());
-                }
-            }
-        }
-
-        // INCIDENT PATH: no route matched (or not BusinessRejection)
-        let incident_id = Uuid::now_v7();
-        let service_task_id = program
-            .debug_map
-            .get(&fiber.pc)
-            .cloned()
-            .unwrap_or_else(|| format!("pc_{}", fiber.pc));
-
-        let incident = Incident {
-            incident_id,
-            process_instance_id: instance_id,
-            fiber_id: fiber.fiber_id,
-            service_task_id: service_task_id.clone(),
-            bytecode_addr: fiber.pc,
-            error_class,
-            message: message.to_string(),
-            retry_count: 0,
-            created_at: now_ms(),
-            resolved_at: None,
-            resolution: None,
-        };
-
-        self.store.save_incident(&incident).await?;
-        self.store
-            .append_event(
-                instance_id,
-                &RuntimeEvent::IncidentCreated {
-                    incident_id,
-                    service_task_id,
-                    job_key: Some(job_key.to_string()),
-                },
-            )
-            .await?;
-
-        fiber.wait = WaitState::Incident { incident_id };
-        self.store.save_fiber(instance_id, &fiber).await?;
-
-        let mut instance = instance;
-        instance.state = ProcessState::Failed { incident_id };
-        self.store.save_instance(owner, &instance).await?;
-        if let Some((worker_id, claim_token)) = worker_claim {
-            let _ = self
-                .store
-                .dead_letter_claimed_job(
-                    &instance.tenant_id,
-                    job_key,
-                    worker_id,
-                    claim_token,
-                    error_class_label(&incident.error_class),
-                    message,
-                    incident_id,
-                )
-                .await?;
-            self.store
-                .append_event(
-                    instance_id,
-                    &RuntimeEvent::JobDeadLettered {
-                        job_key: job_key.to_string(),
-                        incident_id,
-                    },
-                )
-                .await?;
-        } else {
-            self.store.ack_job(&instance.tenant_id, job_key).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Signal a waiting fiber (message correlation).
-    /// Handles both plain WaitMsg and Race (WaitAny with Msg arm).
-    ///
-    /// Guards: Cancelled/Completed instances get SignalIgnored.
-    /// No-match (no fiber waiting for a message) also emits SignalIgnored.
     pub async fn signal(
         &self,
         instance_id: Uuid,
@@ -1813,327 +1324,43 @@ impl BpmnLiteEngine {
         domain_payload_hash: Option<[u8; 32]>,
         msg_id: Option<&str>,
     ) -> Result<()> {
-        let owner = self.transition_owner.clone();
-        self.run_guarded_transition(instance_id, &owner, || async {
-            self.signal_inner(
-                instance_id,
-                msg_name,
-                corr_key,
-                domain_payload,
-                domain_payload_hash,
-                msg_id,
-            )
-            .await
-        })
-        .await
-    }
-
-    async fn signal_inner(
-        &self,
-        instance_id: Uuid,
-        msg_name: &str,
-        corr_key: Value,
-        domain_payload: Option<&str>,
-        domain_payload_hash: Option<[u8; 32]>,
-        msg_id: Option<&str>,
-    ) -> Result<()> {
         let msg_id = msg_id
             .filter(|msg_id| !msg_id.is_empty())
             .ok_or_else(|| anyhow!("msg_id is required for idempotent signal delivery"))?;
-        let mut instance = self
-            .store
-            .load_instance(instance_id)
-            .await?
-            .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
-
-        // ── State guard ──
-        if instance.state.is_terminal() {
-            if !self
-                .store
-                .record_message_delivery(&self.tenant_id, instance_id, msg_id)
-                .await?
-            {
-                return Ok(());
-            }
-            self.emit_late(
-                instance_id,
-                format!("signal on {:?} instance: msg={}", instance.state, msg_name),
-            )
-            .await?;
-            return Ok(());
-        }
-
-        let correlation_key = value_key(&corr_key);
-        let payload = domain_payload.map(str::as_bytes).unwrap_or(&[]);
-        let buffer_result = self
-            .store
-            .buffer_message(
-                &self.tenant_id,
-                msg_name,
-                &correlation_key,
-                msg_id,
-                payload,
-                domain_payload_hash,
-                DEFAULT_MESSAGE_TTL_MS,
-                Some(instance_id),
-            )
-            .await?;
-        let buffered_event = matches!(buffer_result, BufferMessageResult::Inserted).then(|| {
-            RuntimeEvent::MessageBuffered {
-                message_name: msg_name.to_string(),
-                correlation_key: correlation_key.clone(),
-                msg_id: msg_id.to_string(),
-                expires_at: now_ms() + DEFAULT_MESSAGE_TTL_MS as i64,
-            }
-        });
-
-        let program = self
-            .store
-            .load_program(instance.bytecode_version)
-            .await?
-            .ok_or_else(|| anyhow!("Program not found"))?;
-
-        let fibers = self.store.load_fibers(instance_id).await?;
-
-        for fiber in fibers {
-            match fiber.wait.clone() {
-                // Existing: plain WaitMsg
-                WaitState::Msg {
-                    name,
-                    corr_key: waiting_corr_key,
-                    ..
-                } if signal_name_matches(&program, msg_name, name)
-                    && waiting_corr_key == corr_key =>
-                {
-                    let mut fiber = fiber;
-                    fiber.wait = WaitState::Running;
-                    if let Some(claimed) = self
-                        .store
-                        .claim_buffered_message(
-                            &self.tenant_id,
-                            msg_name,
-                            &correlation_key,
-                            DEFAULT_MESSAGE_CLAIM_MS,
-                        )
-                        .await?
-                    {
-                        let payload_update = match (domain_payload, domain_payload_hash) {
-                            (Some(payload), Some(hash)) => Some(PayloadUpdate {
-                                payload: payload.to_string(),
-                                payload_hash: hash,
-                            }),
-                            _ => None,
-                        };
-                        let mut events = Vec::new();
-                        if let Some(event) = buffered_event.clone() {
-                            events.push(event);
-                        }
-                        events.push(RuntimeEvent::BufferedMessageConsumed {
-                            message_name: msg_name.to_string(),
-                            correlation_key: correlation_key.clone(),
-                            msg_id: msg_id.to_string(),
-                            fiber_id: fiber.fiber_id,
-                        });
-                        events.push(RuntimeEvent::MsgReceived {
-                            name,
-                            corr_key: corr_key.clone(),
-                            msg_ref: None,
-                        });
-                        if self
-                            .store
-                            .atomic_consume_buffered_message(
-                                &instance,
-                                &fiber,
-                                &claimed,
-                                payload_update.as_ref(),
-                                &events,
-                            )
-                            .await?
-                        {
-                            if let Some(payload_update) = payload_update {
-                                instance.domain_payload =
-                                    Arc::from(payload_update.payload.as_str());
-                                instance.domain_payload_hash = payload_update.payload_hash;
-                            }
-                            return Ok(());
-                        }
-                        let _ = self.store.release_buffered_message_claim(&claimed).await?;
-                    }
-                }
-
-                // Race — check if any Msg arm matches
-                WaitState::Race { race_id, .. } => {
-                    if let Some(race_entry) = program.race_plan.get(&race_id) {
-                        for (i, arm) in race_entry.arms.iter().enumerate() {
-                            if let WaitArm::Msg { name, corr_reg, .. } = arm {
-                                let waiting_corr_key = if (*corr_reg as usize) < fiber.regs.len() {
-                                    fiber.regs[*corr_reg as usize].clone()
-                                } else {
-                                    Value::Bool(false)
-                                };
-                                if !signal_name_matches(&program, msg_name, *name)
-                                    || waiting_corr_key != corr_key
-                                {
-                                    continue;
-                                }
-                                let Some(claimed) = self
-                                    .store
-                                    .claim_buffered_message(
-                                        &self.tenant_id,
-                                        msg_name,
-                                        &correlation_key,
-                                        DEFAULT_MESSAGE_CLAIM_MS,
-                                    )
-                                    .await?
-                                else {
-                                    continue;
-                                };
-                                let mut fiber = fiber.clone();
-                                let payload_update = match (domain_payload, domain_payload_hash) {
-                                    (Some(payload), Some(hash)) => Some(PayloadUpdate {
-                                        payload: payload.to_string(),
-                                        payload_hash: hash,
-                                    }),
-                                    _ => None,
-                                };
-                                let resume_at = arm.resume_at();
-                                fiber.pc = resume_at;
-                                fiber.wait = WaitState::Running;
-                                let mut events = Vec::new();
-                                if let Some(event) = buffered_event.clone() {
-                                    events.push(event);
-                                }
-                                events.push(RuntimeEvent::BufferedMessageConsumed {
-                                    message_name: msg_name.to_string(),
-                                    correlation_key: correlation_key.clone(),
-                                    msg_id: msg_id.to_string(),
-                                    fiber_id: fiber.fiber_id,
-                                });
-                                events.push(RuntimeEvent::MsgReceived {
-                                    name: *name,
-                                    corr_key: corr_key.clone(),
-                                    msg_ref: None,
-                                });
-                                events.push(RuntimeEvent::RaceWon {
-                                    race_id,
-                                    fiber_id: fiber.fiber_id,
-                                    winner_index: i,
-                                    resume_at,
-                                });
-                                let cancelled_indices: Vec<usize> =
-                                    (0..race_entry.arms.len()).filter(|idx| *idx != i).collect();
-                                if !cancelled_indices.is_empty() {
-                                    events.push(RuntimeEvent::RaceCancelled {
-                                        race_id,
-                                        cancelled_indices,
-                                    });
-                                }
-                                if self
-                                    .store
-                                    .atomic_consume_buffered_message(
-                                        &instance,
-                                        &fiber,
-                                        &claimed,
-                                        payload_update.as_ref(),
-                                        &events,
-                                    )
-                                    .await?
-                                {
-                                    if let Some(payload_update) = payload_update {
-                                        instance.domain_payload =
-                                            Arc::from(payload_update.payload.as_str());
-                                        instance.domain_payload_hash = payload_update.payload_hash;
-                                    }
-                                    return Ok(());
-                                }
-                                let _ = self.store.release_buffered_message_claim(&claimed).await?;
-                            }
-                        }
-                    }
-                }
-
-                _ => continue,
-            }
-        }
-
-        if let Some(event) = buffered_event {
-            self.store.append_event(instance_id, &event).await?;
-        }
-        Ok(())
-    }
-
-    /// Cancel a process instance.
-    ///
-    /// Emits WaitCancelled per parked fiber, purges pending/inflight jobs,
-    /// then deletes all fibers and marks instance Cancelled.
-    pub async fn cancel(&self, instance_id: Uuid, reason: &str) -> Result<()> {
-        let owner = self.transition_owner.clone();
-        self.run_guarded_transition(instance_id, &owner, || async {
-            self.cancel_inner(instance_id, reason, &owner).await
-        })
+        let now = self.logical_time()?;
+        self.apply_and_commit_command(
+            instance_id,
+            Command::MessageDelivered {
+                message_id: msg_id.to_string(),
+                name: msg_name.to_string(),
+                correlation_key: value_key(&corr_key),
+                payload: domain_payload.map(str::as_bytes).unwrap_or(&[]).to_vec(),
+                payload_hash: domain_payload_hash,
+                expires_at: now + DEFAULT_MESSAGE_TTL_MS as i64,
+            },
+        )
         .await
     }
 
-    async fn cancel_inner(&self, instance_id: Uuid, reason: &str, owner: &str) -> Result<()> {
-        let instance = self.store.load_instance(instance_id).await?
-            .ok_or_else(|| anyhow!("instance {} not found for cancel", instance_id))?;
-        let tenant_id = &instance.tenant_id;
-
-        // 1. Emit WaitCancelled per parked fiber (before deletion)
-        let fibers = self.store.load_fibers(instance_id).await?;
-        for fiber in &fibers {
-            let wait_desc = describe_wait(&fiber.wait);
-            if !wait_desc.is_empty() {
-                self.store
-                    .append_event(
-                        instance_id,
-                        &RuntimeEvent::WaitCancelled {
-                            fiber_id: fiber.fiber_id,
-                            wait_desc,
-                            reason: reason.to_string(),
-                        },
-                    )
-                    .await?;
-            }
-        }
-
-        // 2. Purge pending + inflight jobs for this instance
-        self.store.cancel_jobs_for_instance(instance_id).await?;
-
-        // 3. Update state, delete fibers, emit Cancelled
-        self.store
-            .update_instance_state(
-                tenant_id,
-                owner,
-                instance_id,
-                ProcessState::Cancelled {
-                    reason: reason.to_string(),
-                    at: now_ms(),
-                },
-            )
-            .await?;
-        self.store.delete_all_fibers(instance_id).await?;
-        self.store
-            .append_event(
-                instance_id,
-                &RuntimeEvent::Cancelled {
-                    reason: reason.to_string(),
-                },
-            )
-            .await?;
-        Ok(())
+    pub async fn cancel(&self, instance_id: Uuid, reason: &str) -> Result<()> {
+        self.apply_and_commit_command(
+            instance_id,
+            Command::Cancel {
+                reason: reason.to_string(),
+            },
+        )
+        .await
     }
 
-    /// Inspect a process instance.
     pub async fn inspect(&self, instance_id: Uuid) -> Result<ProcessInspection> {
         let instance = self
             .store
-            .load_instance(instance_id)
+            .load_instance(&self.tenant_id, instance_id)
             .await?
             .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
         self.ensure_loaded_instance_belongs_to_tenant(&instance, instance_id)?;
 
-        let fibers = self.store.load_fibers(instance_id).await?;
+        let fibers = self.store.load_fibers(&self.tenant_id, instance_id).await?;
         let fiber_inspections: Vec<FiberInspection> = fibers
             .iter()
             .map(|f| FiberInspection {
@@ -2144,12 +1371,15 @@ impl BpmnLiteEngine {
             })
             .collect();
 
-        let incidents = self.store.load_incidents(instance_id).await?;
+        let incidents = self
+            .store
+            .load_incidents(&self.tenant_id, instance_id)
+            .await?;
 
         let program = self.store.load_program(instance.bytecode_version).await?;
         let current_node_id = if let Some(prog) = &program {
             if let Some(first_fiber) = fibers.first() {
-                prog.debug_map.get(&first_fiber.pc).cloned()
+                prog.debug_map().get(&first_fiber.pc).cloned()
             } else {
                 None
             }
@@ -2157,7 +1387,8 @@ impl BpmnLiteEngine {
             None
         };
 
-        let placeholder_values = serde_json::from_str::<serde_json::Value>(&instance.domain_payload).ok();
+        let placeholder_values =
+            serde_json::from_str::<serde_json::Value>(&instance.domain_payload).ok();
 
         Ok(ProcessInspection {
             instance_id,
@@ -2178,7 +1409,11 @@ impl BpmnLiteEngine {
         let instance_ids = self.store.list_running_instances(&self.tenant_id).await?;
 
         for instance_id in instance_ids {
-            let Some(instance) = self.store.load_instance(instance_id).await? else {
+            let Some(instance) = self
+                .store
+                .load_instance(&self.tenant_id, instance_id)
+                .await?
+            else {
                 issues.push(RecoveryIssue {
                     instance_id,
                     kind: "missing_instance".to_string(),
@@ -2190,18 +1425,23 @@ impl BpmnLiteEngine {
 
             if self
                 .store
-                .load_program(instance.bytecode_version)
+                .load_artifact(ArtifactHash::from_bytes(instance.bytecode_version))
                 .await?
                 .is_none()
             {
                 issues.push(RecoveryIssue {
                     instance_id,
-                    kind: "missing_program".to_string(),
-                    detail: "compiled program for running instance is absent".to_string(),
+                    kind: "missing_artifact".to_string(),
+                    detail: "verified artifact for running instance is absent".to_string(),
                 });
             }
 
-            if self.store.load_fibers(instance_id).await?.is_empty() {
+            if self
+                .store
+                .load_fibers(&self.tenant_id, instance_id)
+                .await?
+                .is_empty()
+            {
                 issues.push(RecoveryIssue {
                     instance_id,
                     kind: "missing_fibers".to_string(),
@@ -2211,7 +1451,7 @@ impl BpmnLiteEngine {
 
             let has_started_event = self
                 .store
-                .read_events(instance_id, 1)
+                .read_events(&self.tenant_id, instance_id, 1)
                 .await?
                 .iter()
                 .any(|(_, event)| matches!(event, RuntimeEvent::InstanceStarted { .. }));
@@ -2273,16 +1513,15 @@ impl BpmnLiteEngine {
     async fn emit_job_claimed_events(&self, jobs: &[JobActivation]) -> Result<()> {
         for job in jobs {
             if let Some(claim_expires_at) = job.claim_expires_at {
-                self.store
-                    .append_event(
-                        job.process_instance_id,
-                        &RuntimeEvent::JobClaimed {
-                            job_key: job.job_key.clone(),
-                            worker_id: job.worker_id.clone(),
-                            claim_expires_at,
-                        },
-                    )
-                    .await?;
+                self.apply_and_commit_command(
+                    job.process_instance_id,
+                    Command::JobClaimed {
+                        job_key: job.job_key.clone(),
+                        worker_id: job.worker_id.clone(),
+                        claim_expires_at,
+                    },
+                )
+                .await?;
             }
         }
         Ok(())
@@ -2296,15 +1535,123 @@ impl BpmnLiteEngine {
     ) -> Result<Vec<(u64, RuntimeEvent)>> {
         let instance = self
             .store
-            .load_instance(instance_id)
+            .load_instance(&self.tenant_id, instance_id)
             .await?
             .ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
         self.ensure_loaded_instance_belongs_to_tenant(&instance, instance_id)?;
-        self.store.read_events(instance_id, from_seq).await
+        Ok(self
+            .store
+            .read_events(&self.tenant_id, instance_id, from_seq)
+            .await?)
     }
 
     pub async fn health_check(&self) -> Result<()> {
-        self.store.health_check().await
+        Ok(self.store.health_check().await?)
+    }
+
+    /// Fail-closed startup reconciliation across every registered tenant.
+    #[tracing::instrument(name = "workflow.recovery", skip(self), fields(owner, batch_size))]
+    pub async fn recover_all_tenants(
+        &self,
+        owner: &str,
+        batch_size: usize,
+        lease_ms: u64,
+    ) -> Result<RecoveryReport> {
+        self.store.health_check().await?;
+        let stale_jobs_reclaimed = self.store.reclaim_stale_jobs(5 * 60 * 1_000).await?;
+        self.store.reclaim_stale_buffered_message_claims().await?;
+        let tenants = self.store.list_tenants().await?;
+        let logical_time = u64::try_from(self.logical_time()?)
+            .map_err(|_| anyhow!("recovery logical time cannot be negative"))?;
+        let mut report = RecoveryReport {
+            tenants_scanned: tenants.len(),
+            instances_verified: 0,
+            timers_applied: 0,
+            interrupted_effects: 0,
+            stale_jobs_reclaimed,
+        };
+
+        for tenant_id in tenants {
+            let tenant = TenantId::new(&tenant_id)?;
+            let tenant_engine = self.for_tenant(tenant.clone());
+            let instances = self.store.list_running_instances(&tenant).await?;
+            for instance_id in instances {
+                let work = self
+                    .store
+                    .claim_work_for_transition(
+                        &tenant,
+                        instance_id,
+                        owner,
+                        lease_ms,
+                        Command::Tick { fiber_id: None },
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "recovery could not fence tenant {tenant_id} instance {instance_id}"
+                        )
+                    })?;
+                let (claim, snapshot, _) = work.into_parts();
+                let verification = async {
+                    let instance = snapshot.instance();
+                    let artifact = self
+                        .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
+                        .await?;
+                    if artifact.envelope().abi_version() != CURRENT_ARTIFACT_ABI {
+                        return Err(anyhow!("recovery artifact ABI mismatch: {instance_id}"));
+                    }
+                    if snapshot.fibers().is_empty() {
+                        return Err(anyhow!("recovery fibers are missing: {instance_id}"));
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = verification {
+                    let mut instance = snapshot.instance().clone();
+                    instance.quarantine_state = Some("recovery_invariant_failure".to_string());
+                    let transition = TransitionBuilder::new(instance)
+                        .command_envelope(CommandEnvelope::new(
+                            EffectId::for_transition(
+                                instance_id,
+                                claim.expected_revision().saturating_add(1),
+                                u32::MAX,
+                            )
+                            .as_uuid(),
+                            self.logical_time()?,
+                            JournalCommand::Administrative {
+                                kind: "recovery_quarantine".to_string(),
+                            },
+                        ))
+                        .build();
+                    self.store.commit_transition(&claim, &transition).await?;
+                    self.store
+                        .release_instance_transition(&tenant, instance_id, owner)
+                        .await?;
+                    return Err(error);
+                }
+                self.store
+                    .release_instance_transition(&tenant, instance_id, owner)
+                    .await?;
+                report.instances_verified += 1;
+            }
+
+            report.timers_applied = report.timers_applied.saturating_add(
+                tenant_engine
+                    .tick_due_timers(owner, logical_time, batch_size, lease_ms)
+                    .await?,
+            );
+            tenant_engine
+                .dispatch_pending_effects(owner, batch_size, lease_ms)
+                .await?;
+            report.interrupted_effects = report
+                .interrupted_effects
+                .saturating_add(tenant_engine.detect_interrupted_ffi_calls(&tenant).await?);
+            let issues = tenant_engine.scan_recoverable_inconsistencies().await?;
+            if !issues.is_empty() {
+                return Err(anyhow!("recovery invariant failures: {issues:?}"));
+            }
+        }
+        Ok(report)
     }
 
     /// A17 — Scan running instances for interrupted FFI calls and recover.
@@ -2314,7 +1661,7 @@ impl BpmnLiteEngine {
     ///   the instance Failed. Operator must resolve the incident manually.
     ///
     /// Returns the number of interrupted calls processed.
-    pub async fn detect_interrupted_ffi_calls(&self, tenant_id: &str) -> Result<usize> {
+    pub async fn detect_interrupted_ffi_calls(&self, tenant_id: &TenantId) -> Result<usize> {
         use bpmn_lite_types::events::RuntimeEvent;
         use ffi_types::Idempotency;
         use std::collections::HashSet;
@@ -2327,13 +1674,7 @@ impl BpmnLiteEngine {
         let mut count = 0usize;
 
         for instance_id in running {
-            // A19 note: integrity verification is NOT performed here.
-            // This scan runs at startup before the scheduler loop; the
-            // scheduler's first tick of each instance fires Boundary (a)
-            // verification within seconds. Adding load_instance here would
-            // double DB calls for 10k+ running instances (~10s extra startup
-            // latency). Boundary (a) + (b) provide sufficient coverage.
-            let events = self.store.read_events(instance_id, 0).await?;
+            let events = self.store.read_events(tenant_id, instance_id, 0).await?;
 
             let completed_ids: HashSet<Uuid> = events
                 .iter()
@@ -2350,7 +1691,7 @@ impl BpmnLiteEngine {
                     invocation_id,
                     template_id_hex,
                     caller_task_id,
-                    caller_pc,
+                    caller_pc: _,
                     owner_type,
                 } = ev
                 else {
@@ -2386,86 +1727,21 @@ impl BpmnLiteEngine {
                             %instance_id, %invocation_id,
                             template_id = %&template_id_hex[..16],
                             %owner_type, %caller_task_id,
-                            "A17: non-idempotent FFI call interrupted — creating incident"
+                            "non-idempotent FFI effect interrupted; creating a fenced incident transition"
                         );
-
-                        let result: Result<()> = async {
-                            let mut instance = self.store.load_instance(instance_id).await?
-                                .ok_or_else(|| anyhow!("A17: instance {} not found", instance_id))?;
-
-                            if !matches!(instance.state, ProcessState::Running) {
-                                return Ok(());
-                            }
-
-                            let owner = format!("startup-recovery-{}", Uuid::now_v7());
-                            let claimed = self.store
-                                .claim_instance_for_transition(&instance.tenant_id, instance_id, &owner, 30_000)
-                                .await?;
-                            if !claimed {
-                                return Err(anyhow!("failed to claim instance lease for startup recovery"));
-                            }
-
-                            // Fibers are stored separately from the instance.
-                            let mut fibers = self.store.load_fibers(instance_id).await?;
-                            let fiber_idx = fibers.iter().position(|f| f.pc == *caller_pc);
-                            let Some(idx) = fiber_idx else {
-                                tracing::warn!(%instance_id, "A17: fiber at pc={} not found; skipping", caller_pc);
-                                self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await?;
-                                return Ok(());
-                            };
-
-                            let incident_id = Uuid::now_v7();
-                            let fiber = &fibers[idx];
-                            let incident = Incident {
-                                incident_id,
-                                process_instance_id: instance_id,
-                                fiber_id: fiber.fiber_id,
-                                service_task_id: caller_task_id.clone(),
-                                bytecode_addr: *caller_pc,
+                        self.apply_and_commit_command(
+                            instance_id,
+                            Command::EffectFailed {
+                                effect_id: EffectId::from_uuid(*invocation_id),
+                                job_key: String::new(),
                                 error_class: ErrorClass::ContractViolation,
                                 message: format!(
                                     "non-idempotent FFI call to {} interrupted at restart; manual resolution required",
                                     &template_id_hex[..16]
                                 ),
-                                retry_count: 0,
-                                created_at: now_ms(),
-                                resolved_at: None,
-                                resolution: None,
-                            };
-                            self.store.save_incident(&incident).await?;
-                            self.store.append_event(instance_id, &RuntimeEvent::IncidentCreated {
-                                incident_id,
-                                service_task_id: caller_task_id.clone(),
-                                job_key: None,
-                            }).await?;
-
-                            fibers[idx].wait = WaitState::Incident { incident_id };
-                            self.store.save_fiber(instance_id, &fibers[idx]).await?;
-                            instance.state = ProcessState::Failed { incident_id };
-                            
-                            let save_res = self.store.save_instance(&owner, &instance).await;
-                            let release_res = self.store.release_instance_transition(&instance.tenant_id, instance_id, &owner).await;
-                            save_res?;
-                            release_res?;
-                            Ok(())
-                        }.await;
-
-                        if let Err(e) = result {
-                            if let Some(violation) = e.downcast_ref::<bpmn_lite_types::integrity::IntegrityViolation>() {
-                                tracing::error!(%instance_id, error = %e, "IntegrityViolation detected in startup recovery; quarantining instance");
-                                let q_owner = format!("startup-recovery-quarantine-{}", Uuid::now_v7());
-                                if let Err(q_err) = self.store.quarantine_instance(
-                                    violation.instance_id,
-                                    &violation.tenant_id,
-                                    &q_owner,
-                                    &violation.detection_point,
-                                ).await {
-                                    tracing::error!(%instance_id, error = %q_err, "Failed to quarantine instance after IntegrityViolation in startup recovery");
-                                }
-                            } else {
-                                tracing::warn!(%instance_id, error = %e, "A17: incident creation failed");
-                            }
-                        }
+                                retry: None,
+                            },
+                        ).await?;
                     }
                     _ => {
                         tracing::info!(
@@ -2551,23 +1827,6 @@ fn parse_signal_corr_key(corr_key: &str) -> Value {
     Value::Bool(false)
 }
 
-fn signal_name_matches(program: &CompiledProgram, requested_name: &str, waiting_name: u32) -> bool {
-    if program
-        .message_name_map
-        .get(&waiting_name)
-        .map(|raw_name| raw_name == requested_name)
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    requested_name.is_empty()
-        || requested_name == "*"
-        || requested_name
-            .parse::<u32>()
-            .map(|name| name == waiting_name)
-            .unwrap_or(false)
-}
-
 fn value_key(value: &Value) -> String {
     match value {
         Value::Bool(b) => format!("b:{b}"),
@@ -2577,52 +1836,7 @@ fn value_key(value: &Value) -> String {
     }
 }
 
-fn error_class_label(error_class: &ErrorClass) -> &str {
-    match error_class {
-        ErrorClass::Transient => "Transient",
-        ErrorClass::ContractViolation => "ContractViolation",
-        ErrorClass::BusinessRejection { .. } => "BusinessRejection",
-    }
-}
-
-/// Human-readable description of a fiber's wait state for audit events.
-/// Returns empty string for Running (not actually waiting).
-fn describe_wait(wait: &WaitState) -> String {
-    match wait {
-        WaitState::Running => String::new(),
-        WaitState::Timer { .. } => "Timer".to_string(),
-        WaitState::Msg { .. } => "Msg".to_string(),
-        WaitState::Job { job_key } => format!("Job({})", job_key),
-        WaitState::Join { .. } => "Join".to_string(),
-        WaitState::Incident { .. } => "Incident".to_string(),
-        WaitState::Race {
-            race_id, job_key, ..
-        } => {
-            if let Some(jk) = job_key {
-                format!("Race(id={},job={})", race_id, jk)
-            } else {
-                format!("Race(id={})", race_id)
-            }
-        }
-    }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
 // ── A8 FFI helpers ────────────────────────────────────────────────────────────
-
-fn bytes_to_hex(bytes: &[u8; 32]) -> String {
-    let mut s = String::with_capacity(64);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
-}
 
 fn ffi_incident_class_to_error_class(c: FfiIncidentClass) -> ErrorClass {
     match c {
@@ -2631,14 +1845,5 @@ fn ffi_incident_class_to_error_class(c: FfiIncidentClass) -> ErrorClass {
         FfiIncidentClass::BusinessRejection { rejection_code } => {
             ErrorClass::BusinessRejection { rejection_code }
         }
-    }
-}
-
-fn literal_to_json(lit: &Literal) -> serde_json::Value {
-    match lit {
-        Literal::Bool(b) => serde_json::Value::Bool(*b),
-        Literal::I64(n) => serde_json::Value::Number((*n).into()),
-        Literal::F64(f) => serde_json::json!(*f),
-        Literal::String(s) => serde_json::Value::String(s.clone()),
     }
 }
