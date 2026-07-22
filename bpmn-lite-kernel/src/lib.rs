@@ -5710,32 +5710,10 @@ mod tests {
         use super::*;
         use proptest::prelude::*;
 
-        fn oracle_workflow() -> ExecutableWorkflow {
+        fn build_workflow(bytecode_byte: u8, label: &str, program: Vec<Instr>) -> ExecutableWorkflow {
             let program = bpmn_lite_types::legacy_program! {
-                bytecode_version: [19u8; 32],
-                program: vec![
-                    /* 0  */ Instr::V2Guard { handler: Addr::new(16) },
-                    /* 1  */ Instr::V2Fork {
-                        targets: Box::new([Addr::new(2), Addr::new(6)]),
-                        pairing: Addr::new(1),
-                    },
-                    /* 2  */ Instr::PushI64(60_000),
-                    /* 3  */ Instr::V2WaitFor,
-                    /* 4  */ Instr::V2Join { pairing: Addr::new(1) },
-                    /* 5  */ Instr::Jump { target: Addr::new(14) },
-                    /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
-                    /* 7  */ Instr::PushI64(30_000),
-                    /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
-                    /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
-                    /* 10 */ Instr::V2RaceClose,
-                    /* 11 */ Instr::Jump { target: Addr::new(13) },
-                    /* 12 */ Instr::Jump { target: Addr::new(13) },
-                    /* 13 */ Instr::V2Join { pairing: Addr::new(1) },
-                    /* 14 */ Instr::V2GuardEnd,
-                    /* 15 */ Instr::End,
-                    /* 16 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
-                    /* 17 */ Instr::End,
-                ],
+                bytecode_version: [bytecode_byte; 32],
+                program: program,
                 debug_map: BTreeMap::new(),
                 join_plan: BTreeMap::new(),
                 wait_plan: BTreeMap::new(),
@@ -5750,87 +5728,263 @@ mod tests {
                 ffi_task_decls: BTreeMap::new(),
             };
             ExecutableWorkflow::from_verified_envelope(
-                ArtifactEnvelope::from_legacy_program(program, "v4.2-k-invariant-property").unwrap(),
+                ArtifactEnvelope::from_legacy_program(program, label).unwrap(),
             )
             .unwrap()
+        }
+
+        /// Topology 0 — the original V4.2 oracle-shaped fixture: one
+        /// interrupting guard wrapping a barrier whose two branches are a
+        /// plain wait and a race. Kept as the regression baseline.
+        fn topology_guard_fork_race() -> ExecutableWorkflow {
+            build_workflow(19, "v4.2-k-invariant-property", vec![
+                /* 0  */ Instr::V2Guard { handler: Addr::new(16) },
+                /* 1  */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(2), Addr::new(6)]),
+                    pairing: Addr::new(1),
+                },
+                /* 2  */ Instr::PushI64(60_000),
+                /* 3  */ Instr::V2WaitFor,
+                /* 4  */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 5  */ Instr::Jump { target: Addr::new(14) },
+                /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
+                /* 7  */ Instr::PushI64(30_000),
+                /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
+                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                /* 10 */ Instr::V2RaceClose,
+                /* 11 */ Instr::Jump { target: Addr::new(13) },
+                /* 12 */ Instr::Jump { target: Addr::new(13) },
+                /* 13 */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 14 */ Instr::V2GuardEnd,
+                /* 15 */ Instr::End,
+                /* 16 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 17 */ Instr::End,
+            ])
+        }
+
+        /// Topology 1 — nested guards, interrupting OUTSIDE non-interrupting
+        /// (`V4.6` blind-review remediation: this is the exact nesting order
+        /// that exposed the `apply_job_failure` innermost-guard bug). Outer
+        /// handler entry is pre-push (empty); inner `V2GuardN` handler entry
+        /// is post-push and must close both its own token and the outer
+        /// scope's to legally reach `End` — verified admissible the same
+        /// way as `definitive_job_failure_under_non_interrupting_guard_nested_inside_interrupting_guard_still_incidents`.
+        fn topology_nested_guard_interrupting_outer() -> ExecutableWorkflow {
+            build_workflow(20, "v4.6-nested-guard-interrupting-outer", vec![
+                /* 0  */ Instr::V2Guard { handler: Addr::new(7) },
+                /* 1  */ Instr::V2GuardN { handler: Addr::new(8) },
+                /* 2  */ Instr::PushI64(60_000),
+                /* 3  */ Instr::V2WaitFor,
+                /* 4  */ Instr::V2GuardNEnd,
+                /* 5  */ Instr::V2GuardEnd,
+                /* 6  */ Instr::End,
+                /* 7  */ Instr::End,
+                /* 8  */ Instr::V2GuardNEnd,
+                /* 9  */ Instr::V2GuardEnd,
+                /* 10 */ Instr::End,
+            ])
+        }
+
+        /// Topology 2 — nested guards, the REVERSE order: non-interrupting
+        /// outside interrupting. Outer `V2GuardN`'s handler entry is
+        /// post-push (just its own token) and closes cleanly with one
+        /// `V2GuardNEnd`. Inner `V2Guard`'s handler entry is pre-push (the
+        /// outer's still-armed `GuardN` token) and closes it with one
+        /// `V2GuardNEnd` (kind-matched) before `End`.
+        fn topology_nested_guard_noninterrupting_outer() -> ExecutableWorkflow {
+            build_workflow(21, "v4.6-nested-guard-noninterrupting-outer", vec![
+                /* 0  */ Instr::V2GuardN { handler: Addr::new(7) },
+                /* 1  */ Instr::V2Guard { handler: Addr::new(9) },
+                /* 2  */ Instr::PushI64(60_000),
+                /* 3  */ Instr::V2WaitFor,
+                /* 4  */ Instr::V2GuardEnd,
+                /* 5  */ Instr::V2GuardNEnd,
+                /* 6  */ Instr::End,
+                /* 7  */ Instr::V2GuardNEnd,
+                /* 8  */ Instr::End,
+                /* 9  */ Instr::V2GuardNEnd,
+                /* 10 */ Instr::End,
+            ])
+        }
+
+        /// Topology 3 — a race inside a guard inside a barrier (the reverse
+        /// nesting from topology 0, which has the guard outermost). Fork
+        /// opens the barrier first; one branch opens an interrupting guard
+        /// wrapping a race, the other is a plain wait. The guard's handler
+        /// inherits the ambient barrier handle (V-4 pre-push, `apply_v2_trigger_guard`'s
+        /// `handler_stack` construction) and legally closes it with its own
+        /// `V2Join` — the handler fibre is registered as a member of that
+        /// barrier via V4.1's ancestor-membership reconciliation, so this is
+        /// real, not just verifier-satisfying dead code.
+        fn topology_race_inside_guard_inside_barrier() -> ExecutableWorkflow {
+            build_workflow(22, "v4.6-race-inside-guard-inside-barrier", vec![
+                /* 0  */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(12)]),
+                    pairing: Addr::new(0),
+                },
+                /* 1  */ Instr::V2Guard { handler: Addr::new(16) },
+                /* 2  */ Instr::V2RaceOpen { arm_count: 2 },
+                /* 3  */ Instr::PushI64(30_000),
+                /* 4  */ Instr::V2ArmTimer { target: Addr::new(7) },
+                /* 5  */ Instr::V2ArmMsg { target: Addr::new(8), name: 100, corr_reg: 0 },
+                /* 6  */ Instr::V2RaceClose,
+                /* 7  */ Instr::Jump { target: Addr::new(9) },
+                /* 8  */ Instr::Jump { target: Addr::new(9) },
+                /* 9  */ Instr::V2GuardEnd,
+                /* 10 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 11 */ Instr::Jump { target: Addr::new(18) },
+                /* 12 */ Instr::PushI64(60_000),
+                /* 13 */ Instr::V2WaitFor,
+                /* 14 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 15 */ Instr::Jump { target: Addr::new(18) },
+                /* 16 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 17 */ Instr::End,
+                /* 18 */ Instr::End,
+            ])
+        }
+
+        /// Topology 4 — re-entrant `FORK`/`JOIN` in a bounded loop (same
+        /// legal shape as `v2_verifier::tests::reentrant_fork_join_in_bounded_loop_is_admitted`):
+        /// the same static Fork/Join addresses are revisited up to 3 times,
+        /// stressing whether K-1/K-2/K-3 survive re-entry, not just a single
+        /// pass. No guards — pure barrier re-entry under random Tick
+        /// interleaving.
+        fn topology_reentrant_fork_join() -> ExecutableWorkflow {
+            build_workflow(23, "v4.6-reentrant-fork-join", vec![
+                /* 0 */ Instr::IncCounter { counter_id: 0 },
+                /* 1 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(3), Addr::new(5)]),
+                    pairing: Addr::new(1),
+                },
+                /* 2 */ Instr::V2CancelScope, // dead filler, matches V2.7's fixture shape
+                /* 3 */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 4 */ Instr::Jump { target: Addr::new(7) },
+                /* 5 */ Instr::V2Join { pairing: Addr::new(1) },
+                /* 6 */ Instr::Jump { target: Addr::new(7) },
+                /* 7 */ Instr::BrCounterLt { counter_id: 0, limit: 3, target: Addr::new(0) },
+                /* 8 */ Instr::End,
+            ])
+        }
+
+        fn topology_for(selector: u8) -> ExecutableWorkflow {
+            match selector % 5 {
+                0 => topology_guard_fork_race(),
+                1 => topology_nested_guard_interrupting_outer(),
+                2 => topology_nested_guard_noninterrupting_outer(),
+                3 => topology_race_inside_guard_inside_barrier(),
+                _ => topology_reentrant_fork_join(),
+            }
+        }
+
+        /// Shared driver: fires a random `Tick`/`V2TriggerGuard` sequence
+        /// against `workflow` from a single root fibre, asserting
+        /// `check_k_invariants` after every accepted `apply`. Widened past
+        /// V4.2's original scope in two ways (V4.6 blind-review remediation
+        /// item 3): the guard-trigger filter now includes non-interrupting
+        /// `V2GuardN` records too (not just interrupting `V2Guard`), and
+        /// it's called once per topology in `topology_for` rather than
+        /// against one fixed program — a single-topology corpus proves
+        /// nothing about a bug that's invisible except under a specific
+        /// nesting shape, which is exactly how the `apply_job_failure`
+        /// finding above escaped detection.
+        fn run_k_invariant_fuzz(workflow: &ExecutableWorkflow, steps: Vec<(u8, u8)>) {
+            let (_, base_snapshot, _) = fixture();
+            let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+            let mut state = PersistedSnapshotState::new(
+                base_snapshot.instance().clone(),
+                [Fiber::new(root_fiber_id, 0)],
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            );
+            let mut revision = 0u64;
+
+            for (step_index, (action_sel, index_sel)) in steps.into_iter().enumerate() {
+                let snapshot = Snapshot::new(
+                    state.instance().clone(),
+                    state.fibers().values().cloned(),
+                )
+                .with_concurrency_table(state.concurrency_table().clone());
+
+                let running_fibers: Vec<Uuid> = state
+                    .fibers()
+                    .values()
+                    .filter(|f| f.wait == WaitState::Running)
+                    .map(|f| f.fiber_id)
+                    .collect();
+                let armed_guards: Vec<RecordId> = state
+                    .concurrency_table()
+                    .iter()
+                    .filter(|(_, record)| {
+                        record.state == RecordState::Armed
+                            && matches!(record.kind, RecordKind::Guard { .. })
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+
+                let command = if action_sel % 2 == 0 && !running_fibers.is_empty() {
+                    let idx = index_sel as usize % running_fibers.len();
+                    Command::Tick { fiber_id: Some(running_fibers[idx]) }
+                } else if !armed_guards.is_empty() {
+                    let idx = index_sel as usize % armed_guards.len();
+                    Command::V2TriggerGuard { record_id: armed_guards[idx] }
+                } else if !running_fibers.is_empty() {
+                    Command::Tick { fiber_id: Some(running_fibers[0]) }
+                } else {
+                    continue;
+                };
+
+                let context = DeterministicContext::new(
+                    1_000,
+                    Uuid::from_u128(9_000_000 + step_index as u128),
+                    revision + 1,
+                );
+                let Ok(transition) = apply(workflow, &snapshot, &command, &context) else {
+                    continue;
+                };
+                let next = materialize_snapshot(
+                    &state,
+                    &transition,
+                    workflow.envelope().abi_version(),
+                    revision + 1,
+                );
+                revision += 1;
+                state = next.state().clone();
+                assert!(
+                    check_k_invariants(state.fibers(), state.concurrency_table()).is_ok(),
+                    "{:?}",
+                    check_k_invariants(state.fibers(), state.concurrency_table())
+                );
+            }
         }
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(200))]
             #[test]
             fn k_invariants_hold_after_random_tick_and_trigger_sequences(
+                topology_sel in 0u8..5,
                 steps in proptest::collection::vec((0u8..3, 0u8..8), 0..15)
             ) {
-                let workflow = oracle_workflow();
-                let (_, base_snapshot, _) = fixture();
-                let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
-                let mut state = PersistedSnapshotState::new(
-                    base_snapshot.instance().clone(),
-                    [Fiber::new(root_fiber_id, 0)],
-                    BTreeMap::new(),
-                    [],
-                    bpmn_lite_types::concurrency::ConcurrencyTable::new(),
-                    [],
-                );
-                let mut revision = 0u64;
+                let workflow = topology_for(topology_sel);
+                run_k_invariant_fuzz(&workflow, steps);
+            }
+        }
 
-                for (step_index, (action_sel, index_sel)) in steps.into_iter().enumerate() {
-                    let snapshot = Snapshot::new(
-                        state.instance().clone(),
-                        state.fibers().values().cloned(),
-                    )
-                    .with_concurrency_table(state.concurrency_table().clone());
-
-                    let running_fibers: Vec<Uuid> = state
-                        .fibers()
-                        .values()
-                        .filter(|f| f.wait == WaitState::Running)
-                        .map(|f| f.fiber_id)
-                        .collect();
-                    let armed_guards: Vec<RecordId> = state
-                        .concurrency_table()
-                        .iter()
-                        .filter(|(_, record)| {
-                            record.state == RecordState::Armed
-                                && matches!(record.kind, RecordKind::Guard { interrupting: true })
-                        })
-                        .map(|(id, _)| *id)
-                        .collect();
-
-                    let command = if action_sel % 2 == 0 && !running_fibers.is_empty() {
-                        let idx = index_sel as usize % running_fibers.len();
-                        Command::Tick { fiber_id: Some(running_fibers[idx]) }
-                    } else if !armed_guards.is_empty() {
-                        let idx = index_sel as usize % armed_guards.len();
-                        Command::V2TriggerGuard { record_id: armed_guards[idx] }
-                    } else if !running_fibers.is_empty() {
-                        Command::Tick { fiber_id: Some(running_fibers[0]) }
-                    } else {
-                        continue;
-                    };
-
-                    let context = DeterministicContext::new(
-                        1_000,
-                        Uuid::from_u128(9_000_000 + step_index as u128),
-                        revision + 1,
-                    );
-                    let Ok(transition) = apply(&workflow, &snapshot, &command, &context) else {
-                        continue;
-                    };
-                    let next = materialize_snapshot(
-                        &state,
-                        &transition,
-                        workflow.envelope().abi_version(),
-                        revision + 1,
-                    );
-                    revision += 1;
-                    state = next.state().clone();
-                    prop_assert!(
-                        check_k_invariants(state.fibers(), state.concurrency_table()).is_ok(),
-                        "{:?}",
-                        check_k_invariants(state.fibers(), state.concurrency_table())
-                    );
-                }
+        /// Deterministic companion to the property test above: proptest's
+        /// `topology_sel in 0u8..5` picks topologies randomly, so a run
+        /// could in principle exercise fewer than all 5 shapes. This test
+        /// pins a long, fixed step sequence against every topology
+        /// constructor directly — proving each of the 5 (including the two
+        /// new nested-guard orderings, the barrier-wrapped race, and the
+        /// re-entrant fork/join) is independently admissible and
+        /// K-invariant-clean, not just "probably got hit" by the fuzzer.
+        #[test]
+        fn k_invariants_hold_across_every_topology_deterministically() {
+            let steps: Vec<(u8, u8)> = (0u8..30).map(|i| (i % 3, i.wrapping_mul(7) % 8)).collect();
+            for selector in 0u8..5 {
+                let workflow = topology_for(selector);
+                run_k_invariant_fuzz(&workflow, steps.clone());
             }
         }
     }
