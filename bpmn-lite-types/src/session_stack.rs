@@ -31,6 +31,32 @@ pub struct SessionStackState {
     pub trace_sequence: u64,
 }
 
+impl SessionStackState {
+    /// A18 A3 rollback-set: opaque serialized snapshot for
+    /// `ConcurrencyRecord::rollback_session_stack`. Serde JSON, not this
+    /// module's canonical-encoding primitives — `workspace_stack`'s
+    /// arbitrary `serde_json::Value` frames can only round-trip through
+    /// `canonical.rs`'s fallible `encode_canonical_json`, and
+    /// `ConcurrencyRecord`'s `CanonicalEncode` impl is infallible by trait
+    /// signature (see `ConcurrencyRecord`'s doc comment for the full
+    /// rationale). `expect` is sound here: every field of this struct is
+    /// already-valid in-memory state (no externally-supplied string to
+    /// reject), so `serde_json::to_string` cannot fail for it.
+    pub fn to_rollback_snapshot(&self) -> Box<str> {
+        serde_json::to_string(self)
+            .expect("SessionStackState always serializes")
+            .into_boxed_str()
+    }
+
+    /// Inverse of `to_rollback_snapshot`. A malformed snapshot is a defect
+    /// in whatever wrote it (the kernel is the only writer), not a
+    /// tolerable runtime condition — callers should propagate the error as
+    /// a hard rollback failure, never silently substitute a default.
+    pub fn from_rollback_snapshot(snapshot: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(snapshot)
+    }
+}
+
 /// Client-group scope snapshot at activation time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionScopeState {

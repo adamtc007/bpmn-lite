@@ -69,6 +69,11 @@ use std::collections::{BTreeMap, VecDeque};
 enum ScopeKind {
     Guard,
     GuardN,
+    /// A18: `GUARD-R>`. Distinct from `Guard` even though both are
+    /// interrupting — V-10's dominance check and the `V2CancelScope`
+    /// target-kind check both key off this specifically, not off
+    /// "any interrupting guard."
+    GuardR,
     Race,
     Barrier,
 }
@@ -78,6 +83,7 @@ impl ScopeKind {
         match self {
             ScopeKind::Guard => "GUARD>",
             ScopeKind::GuardN => "GUARD-N>",
+            ScopeKind::GuardR => "GUARD-R>",
             ScopeKind::Race => "RACE{",
             ScopeKind::Barrier => "FORK",
         }
@@ -374,6 +380,50 @@ pub(crate) fn verify_v2_control_stack(
                     propagate(&mut entry_states, &mut worklist, address, address + 1, popped)?;
                 }
             }
+            // A18 V-10 (dominance): `GUARD-R>`'s scope must dominate any
+            // `FORK` within its extent — it may CONTAIN a complete
+            // `FORK`/`JOIN` region (that falls out of ordinary well-
+            // nestedness, no extra check needed: a `Barrier` token pushed
+            // after this one and popped before this one closes is already
+            // legal), but must never itself be opened while a `Barrier`
+            // token is already on the entry stack (i.e. nested inside a
+            // fork's own child fibre). Rolling back shared instance-wide
+            // state — `domain_payload`/`flags`/`join_expected`/session
+            // stack — while sibling fork branches keep running
+            // concurrently is exactly the barrier-starvation hazard this
+            // forecloses (a real reproduction of the un-guarded version of
+            // this hazard is `fork_join_barrier_starves_when_a_member_dies_without_arriving_via_guard_rollback`
+            // in `bpmn-lite-kernel`'s test suite — this check makes that
+            // shape unreachable via `GUARD-R>` by construction, not merely
+            // caught downstream).
+            Instr::V2GuardR => {
+                if let Some(enclosing_fork) = state.iter().find(|token| token.kind == ScopeKind::Barrier) {
+                    return Err(violation(
+                        address,
+                        "V-10",
+                        format!(
+                            "GUARD-R> opened while nested inside a FORK (barrier opened at \
+                             {}) — a rollback-capable guard must dominate any FORK within its \
+                             extent, never be contained by one",
+                            enclosing_fork.opened_at
+                        ),
+                    ));
+                }
+                if address + 1 < len {
+                    let mut pushed = state;
+                    pushed.push(ScopeToken {
+                        kind: ScopeKind::GuardR,
+                        opened_at: Addr::from(address as u32),
+                    });
+                    propagate(&mut entry_states, &mut worklist, address, address + 1, pushed)?;
+                }
+            }
+            Instr::V2GuardREnd => {
+                let popped = pop_expecting(address, &state, ScopeKind::GuardR)?;
+                if address + 1 < len {
+                    propagate(&mut entry_states, &mut worklist, address, address + 1, popped)?;
+                }
+            }
             Instr::V2RaceOpen { .. } => {
                 if address + 1 < len {
                     let mut pushed = state;
@@ -474,6 +524,31 @@ pub(crate) fn verify_v2_control_stack(
                         "V-1",
                         "CANCEL-SCOPE with an empty control stack — nothing to cancel",
                     ));
+                }
+                // A18/V-10 companion check: `V2CancelScope` only ever
+                // carries a rollback snapshot to restore when its target
+                // is `GUARD-R>`-opened — `ConcurrencyRecord::rollback_*`
+                // is `None` for `V2Guard`/`V2GuardN` records (see
+                // `Instr::V2Guard`'s doc comment). Rejecting a
+                // mistargeted `V2CancelScope` here, statically, means the
+                // kernel's own runtime check in `v2_rollback_guard_scope`
+                // ("handle carries no rollback snapshot") can never
+                // actually fire against a verified program — this is the
+                // fail-closed version of that guarantee, not a second
+                // independent opinion that might disagree with it.
+                if let Some(top) = state.last() {
+                    if top.kind != ScopeKind::GuardR {
+                        return Err(violation(
+                            address,
+                            "V-10",
+                            format!(
+                                "CANCEL-SCOPE targets a {} scope (opened at {}) — only a \
+                                 GUARD-R> scope carries a rollback snapshot to restore",
+                                top.kind.word(),
+                                top.opened_at
+                            ),
+                        ));
+                    }
                 }
             }
             Instr::End | Instr::EndTerminate => {

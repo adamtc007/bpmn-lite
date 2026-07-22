@@ -278,8 +278,17 @@ pub enum RuntimeEvent {
         fiber_id: Uuid,
         handler: Addr,
     },
-    /// `V2GuardEnd` retired a guard record on its normal (non-triggered) path.
+    /// `V2GuardEnd`/`V2GuardREnd` retired a guard record on its normal
+    /// (non-triggered/non-rollback) path.
     V2GuardRetired {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// A18: `V2GuardR` opened a rollback-capable interrupting-guard record.
+    /// Distinct from `V2GuardOpened` — carries no `handler` (see
+    /// `Instr::V2GuardR`'s doc comment: `GUARD-R>` never spawns a handler
+    /// fibre, so there is no `Addr` to report here).
+    V2GuardROpened {
         record_id: crate::concurrency::RecordId,
         fiber_id: Uuid,
     },

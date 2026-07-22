@@ -371,8 +371,9 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(instance.state, ProcessState::Failed { .. }),
-        "expected Failed (no dispatcher = incident), got {:?}",
+        matches!(instance.state, ProcessState::Incidented { .. }),
+        "expected Incidented (no dispatcher = incident, parked for ResolveIncident, not \
+         permanently Failed), got {:?}",
         instance.state
     );
 }

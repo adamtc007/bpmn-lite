@@ -439,6 +439,7 @@ fn format_state(s: &ProcessState) -> String {
         }
         ProcessState::Completed { .. } => "Completed".into(),
         ProcessState::Failed { .. } => "Failed".into(),
+        ProcessState::Incidented { .. } => "Incidented".into(),
         ProcessState::Cancelled { .. } => "Cancelled".into(),
         ProcessState::Terminated { .. } => "Terminated".into(),
     }

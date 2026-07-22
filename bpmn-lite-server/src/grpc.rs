@@ -585,6 +585,7 @@ impl BpmnLite for BpmnLiteService {
             bpmn_lite_types::ProcessState::Completed { .. } => "COMPLETED",
             bpmn_lite_types::ProcessState::Cancelled { .. } => "CANCELLED",
             bpmn_lite_types::ProcessState::Failed { .. } => "FAILED",
+            bpmn_lite_types::ProcessState::Incidented { .. } => "INCIDENTED",
             bpmn_lite_types::ProcessState::Terminated { .. } => "TERMINATED",
             bpmn_lite_types::ProcessState::WaitingOnSubmission { .. } => "WAITING_ON_SUBMISSION",
             bpmn_lite_types::ProcessState::WaitingOnInvocation { .. } => "WAITING_ON_INVOCATION",

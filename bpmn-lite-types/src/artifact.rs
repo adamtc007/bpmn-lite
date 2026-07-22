@@ -601,6 +601,8 @@ fn is_v2_instruction(instruction: &Instr) -> bool {
             | Instr::V2GuardEnd
             | Instr::V2GuardN { .. }
             | Instr::V2GuardNEnd
+            | Instr::V2GuardR
+            | Instr::V2GuardREnd
             | Instr::V2RaceOpen { .. }
             | Instr::V2ArmTimer { .. }
             | Instr::V2ArmMsg { .. }
@@ -867,10 +869,10 @@ pub enum ControlStackEffect {
 
 pub fn v2_control_stack_effect(instr: &Instr) -> ControlStackEffect {
     match instr {
-        Instr::V2Guard { .. } | Instr::V2GuardN { .. } | Instr::V2RaceOpen { .. } => {
+        Instr::V2Guard { .. } | Instr::V2GuardN { .. } | Instr::V2GuardR | Instr::V2RaceOpen { .. } => {
             ControlStackEffect::Push
         }
-        Instr::V2GuardEnd | Instr::V2GuardNEnd | Instr::V2RaceClose | Instr::V2Join { .. } => {
+        Instr::V2GuardEnd | Instr::V2GuardNEnd | Instr::V2GuardREnd | Instr::V2RaceClose | Instr::V2Join { .. } => {
             ControlStackEffect::Pop
         }
         Instr::V2ArmTimer { .. }

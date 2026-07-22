@@ -392,6 +392,32 @@ pub enum Instr {
     /// `<GUARD-N` — retire a non-interrupting guard.
     V2GuardNEnd,
 
+    /// `GUARD-R>` — `( -- ) [ -- h ]`. Allocate an interrupting,
+    /// rollback-capable guard record and push its handle. A18 (ratified):
+    /// `GUARD>`'s control disposition (unwind members, spawn handler) and
+    /// a rollback's data disposition (restore the A3 rollback-set
+    /// snapshot on cancellation) are orthogonal — bundling both onto one
+    /// opcode was the defect A18 corrects. `GUARD-R>` deliberately carries
+    /// NO `handler` field (unlike `V2Guard`/`V2GuardN`): its only closes
+    /// are the normal `<GUARD-R` pairing and an unwind triggered by
+    /// `V2CancelScope` or automatic rollback-on-definitive-failure
+    /// (`apply_job_failure`) — never `V2TriggerGuard`, which requires a
+    /// handler address to spawn and rejects a handle that has none.
+    /// Verifier V-10 (dominance): `GUARD-R>`'s scope must dominate any
+    /// `FORK` within its extent — it may contain a complete `FORK`/`JOIN`
+    /// region, but must never itself be opened while already nested
+    /// inside one (rolling back shared instance-wide state —
+    /// `domain_payload`/`flags`/`join_expected`/session stack — while
+    /// sibling fork branches keep running concurrently is exactly the
+    /// barrier-starvation hazard V-10 forecloses).
+    V2GuardR,
+    /// `<GUARD-R` — `( -- ) [ h -- ]`. Pop and retire a `GUARD-R>` record
+    /// on its normal (non-rollback) path. Verifier: must match its
+    /// `V2GuardR` on every path (V-1); per V-10's companion check, a
+    /// `GUARD-R>`-opened handle is also the only legal `V2CancelScope`
+    /// target among the three guard-kind opcodes.
+    V2GuardREnd,
+
     /// `RACE{` — `( n -- ) [ -- h ]`. Open a first-wins race record over
     /// the next `arm_count` arms. `arm_count` is a static embedded field
     /// (not an operand-stack value) because V-5's race-shape theorem needs
@@ -639,7 +665,19 @@ pub enum ProcessState {
     Terminated {
         at: Timestamp,
     },
+    /// Genuinely, permanently dead — no `Incident` record exists to resolve
+    /// and no command revives this instance. Distinct from `Incidented`
+    /// (see below); do not conflate the two — that conflation is exactly
+    /// the defect this variant split fixes.
     Failed {
+        incident_id: Uuid,
+    },
+    /// Parked on an open `Incident`, waiting for a human/operator to call
+    /// `Command::ResolveIncident`. Not terminal — `ResolveIncident`
+    /// demonstrably revives this back to `Running`
+    /// (`bpmn-lite-kernel/src/lib.rs`). Also not schedulable — the
+    /// scheduler must not tick an instance parked on an incident.
+    Incidented {
         incident_id: Uuid,
     },
     WaitingOnSubmission {
@@ -653,15 +691,47 @@ pub enum ProcessState {
 }
 
 impl ProcessState {
-    /// Returns true if the process is in a terminal state (no further progress possible).
+    /// Returns true if the process is in a terminal state (no further
+    /// progress possible). Written as an explicit exhaustive match (no
+    /// wildcard arm, no `matches!` macro — `matches!` desugars to an
+    /// implicit `_ => false`, which would silently absorb a future
+    /// variant instead of forcing it to be classified here) so that
+    /// adding a future `ProcessState` variant is a compile error until
+    /// this predicate deliberately answers for it. Companion predicate:
+    /// `is_schedulable()`, below — see V&S §14's meta-rule (no variant
+    /// reaches either question by falling through a wildcard).
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
+        match self {
+            ProcessState::Running => false,
+            ProcessState::Completed { .. } => true,
+            ProcessState::Cancelled { .. } => true,
+            ProcessState::Terminated { .. } => true,
+            ProcessState::Failed { .. } => true,
+            ProcessState::Incidented { .. } => false,
+            ProcessState::WaitingOnSubmission { .. } => false,
+            ProcessState::WaitingOnInvocation { .. } => false,
+        }
+    }
+
+    /// Returns true if the scheduler should attempt to tick this instance.
+    /// Explicit exhaustive match, no wildcard — same reasoning as
+    /// `is_terminal()`. `true` for exactly one variant: `Running`.
+    /// `Completed`/`Cancelled`/`Terminated`/`Failed`/`Incidented` are all
+    /// `false` because none of them make forward progress via ordinary
+    /// scheduler ticking; `WaitingOnSubmission`/`WaitingOnInvocation` are
+    /// `false` because they resolve exclusively via the external
+    /// `Command::StartChildResult` signal, never via ticking.
+    pub fn is_schedulable(&self) -> bool {
+        match self {
+            ProcessState::Running => true,
             ProcessState::Completed { .. }
-                | ProcessState::Cancelled { .. }
-                | ProcessState::Terminated { .. }
-                | ProcessState::Failed { .. }
-        )
+            | ProcessState::Cancelled { .. }
+            | ProcessState::Terminated { .. }
+            | ProcessState::Failed { .. }
+            | ProcessState::Incidented { .. }
+            | ProcessState::WaitingOnSubmission { .. }
+            | ProcessState::WaitingOnInvocation { .. } => false,
+        }
     }
 }
 
@@ -1099,4 +1169,104 @@ pub struct ErrorRoute {
     pub error_code: Option<String>,
     pub resume_at: Addr,
     pub boundary_element_id: String,
+}
+
+#[cfg(test)]
+mod process_state_predicate_tests {
+    use super::*;
+
+    fn representative_instances() -> Vec<(&'static str, ProcessState, bool, bool)> {
+        // (label, state, expected is_terminal, expected is_schedulable)
+        let uid = Uuid::from_u128(1);
+        vec![
+            ("Running", ProcessState::Running, false, true),
+            (
+                "Completed",
+                ProcessState::Completed { at: 0 },
+                true,
+                false,
+            ),
+            (
+                "Cancelled",
+                ProcessState::Cancelled {
+                    reason: "r".to_string(),
+                    at: 0,
+                },
+                true,
+                false,
+            ),
+            (
+                "Terminated",
+                ProcessState::Terminated { at: 0 },
+                true,
+                false,
+            ),
+            (
+                "Failed",
+                ProcessState::Failed { incident_id: uid },
+                true,
+                false,
+            ),
+            (
+                "Incidented",
+                ProcessState::Incidented { incident_id: uid },
+                false,
+                false,
+            ),
+            (
+                "WaitingOnSubmission",
+                ProcessState::WaitingOnSubmission {
+                    callout_id: uid,
+                    node_id: "n".to_string(),
+                },
+                false,
+                false,
+            ),
+            (
+                "WaitingOnInvocation",
+                ProcessState::WaitingOnInvocation {
+                    execution_id: uid,
+                    node_id: "n".to_string(),
+                },
+                false,
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn is_terminal_and_is_schedulable_classify_every_variant_as_expected() {
+        for (label, state, expected_terminal, expected_schedulable) in representative_instances()
+        {
+            assert_eq!(
+                state.is_terminal(),
+                expected_terminal,
+                "{label}: is_terminal() mismatch"
+            );
+            assert_eq!(
+                state.is_schedulable(),
+                expected_schedulable,
+                "{label}: is_schedulable() mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn is_schedulable_is_true_only_for_running() {
+        let schedulable: Vec<&str> = representative_instances()
+            .into_iter()
+            .filter(|(_, _, _, sched)| *sched)
+            .map(|(label, ..)| label)
+            .collect();
+        assert_eq!(schedulable, vec!["Running"]);
+    }
+
+    #[test]
+    fn incidented_is_neither_terminal_nor_schedulable() {
+        let state = ProcessState::Incidented {
+            incident_id: Uuid::from_u128(42),
+        };
+        assert!(!state.is_terminal(), "Incidented must not be terminal — ResolveIncident revives it");
+        assert!(!state.is_schedulable(), "Incidented must not be schedulable — it awaits ResolveIncident, not ticking");
+    }
 }

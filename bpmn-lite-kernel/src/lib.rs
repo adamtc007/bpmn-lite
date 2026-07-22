@@ -409,6 +409,36 @@ pub fn check_k_invariants(
 /// join counts and incidents through `PersistedSnapshotState`, which
 /// `apply` itself has no need of and no access to (only the store layer
 /// carries that forward).
+/// Shared set-arithmetic core of `derive_post_transition_frame`: the live
+/// fibre map after folding a transition's fibre deltas onto `pre` — insert/
+/// overwrite every upserted fibre, then remove every deleted id (idempotent,
+/// so duplicates in `deletes` are harmless), then clear entirely if this is
+/// a full-cleanup terminal transition. Factored out (not just inlined in
+/// `derive_post_transition_frame`) so callers that don't yet have a built
+/// `Transition` — e.g. `Instr::End` deciding, mid-instruction, whether *this*
+/// deletion is the one that empties the fibre set — can ask the identical
+/// question against the in-progress `Changes` instead of hand-rolling new
+/// arithmetic. See `Instr::End`'s doc comment for why the pre-transition
+/// fibre count alone is not a safe way to answer "is this the last fibre?".
+fn apply_fiber_deltas<'a>(
+    pre: &std::collections::BTreeMap<Uuid, Fiber>,
+    upserts: impl IntoIterator<Item = &'a Fiber>,
+    deletes: impl IntoIterator<Item = &'a Uuid>,
+    delete_all_fibers: bool,
+) -> std::collections::BTreeMap<Uuid, Fiber> {
+    if delete_all_fibers {
+        return std::collections::BTreeMap::new();
+    }
+    let mut fibers = pre.clone();
+    for fiber in upserts {
+        fibers.insert(fiber.fiber_id, fiber.clone());
+    }
+    for fiber_id in deletes {
+        fibers.remove(fiber_id);
+    }
+    fibers
+}
+
 fn derive_post_transition_frame(
     snapshot: &Snapshot,
     transition: &Transition,
@@ -416,16 +446,12 @@ fn derive_post_transition_frame(
     std::collections::BTreeMap<Uuid, Fiber>,
     bpmn_lite_types::concurrency::ConcurrencyTable,
 ) {
-    let mut fibers = snapshot.fibers().clone();
-    for fiber in transition.fibers_upsert() {
-        fibers.insert(fiber.fiber_id, fiber.clone());
-    }
-    for fiber_id in transition.fibers_delete() {
-        fibers.remove(fiber_id);
-    }
-    if transition.terminal_cleanup().delete_all_fibers() {
-        fibers.clear();
-    }
+    let fibers = apply_fiber_deltas(
+        snapshot.fibers(),
+        transition.fibers_upsert(),
+        transition.fibers_delete(),
+        transition.terminal_cleanup().delete_all_fibers(),
+    );
     let mut table = snapshot.concurrency_table().clone();
     for mutation in transition.concurrency_mutations() {
         match mutation {
@@ -461,6 +487,14 @@ fn derive_post_transition_frame(
 ///   fibres in the resulting frame reference the same `EffectId`, whether
 ///   parked directly (`WaitState::Effect`) or as a race alternative
 ///   (`WaitState::V2Race`'s `Effect` arms).
+/// - A non-terminal instance has ≥1 live fibre in the post-transition
+///   frame. Zero live fibres with a still-`Running` (or otherwise
+///   non-terminal) `ProcessState` is stuck by construction — nothing is
+///   left to drive the instance forward. This is the general catch for the
+///   `Instr::End` pre-transition-count bug class (see its doc comment):
+///   any transition, from any instruction, that lands here with an empty
+///   fibre set and a non-terminal state is the same defect shape, whatever
+///   produced it.
 fn ring3_shadow_check(
     workflow: &ExecutableWorkflow,
     snapshot: &Snapshot,
@@ -469,6 +503,23 @@ fn ring3_shadow_check(
     let (fibers, table) = derive_post_transition_frame(snapshot, transition);
     let limits = workflow.envelope().limits();
     let program_len = workflow.envelope().instructions().len();
+
+    // Effective post-transition state: `state_override`, when present,
+    // wins over `next_snapshot().state` — mirrors `materialize_snapshot`'s
+    // own resolution of the two, so this check judges the same "final
+    // state" the store layer will actually persist, not an intermediate
+    // value the kernel itself never treats as authoritative.
+    let effective_state = transition
+        .state_override()
+        .unwrap_or(&transition.next_snapshot().state);
+    if fibers.is_empty() && !effective_state.is_terminal() {
+        return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+            "instance {} has zero live fibres post-transition but state {:?} is non-terminal \
+             — stuck by construction",
+            snapshot.instance().instance_id,
+            effective_state
+        )));
+    }
 
     for fiber in transition.fibers_upsert() {
         if fiber.pc.index() >= program_len {
@@ -496,6 +547,55 @@ fn ring3_shadow_check(
     }
 
     check_k_invariants(&fibers, &table).map_err(bpmn_lite_types::IntegrityError::Ring3Runtime)?;
+
+    // Part 2 investigation (Adam's ruling, 2026-07-22, barrier-starvation
+    // hypothesis — confirmed real, see
+    // `fork_join_barrier_starves_when_a_member_dies_without_arriving_via_guard_rollback`):
+    // a live (Armed) `Barrier` record's outstanding arrival count
+    // (`counters.count`) must be satisfiable by its own live, not-yet-
+    // arrived membership. A member fibre that dies without ever arriving
+    // (e.g. cancelled by an enclosing guard's rollback, or by an
+    // interrupting guard trigger, or any other same-transition fibre
+    // deletion reachable while it's still a barrier member) is correctly
+    // deregistered from `record.members` by
+    // `v2_reconcile_ancestor_membership` — but nothing anywhere
+    // decrements `record.counters.count` to match: `Instr::V2Join` is the
+    // *only* code path that ever decrements it, and only on a genuine
+    // arrival. Detection, not remediation (open fork, not decided here —
+    // see the plan doc): every live member of an Armed barrier is,
+    // individually, either already arrived (parked in
+    // `WaitState::V2Barrier` for this exact record — it can never arrive
+    // a second time) or not yet arrived (anything else — still capable of
+    // producing exactly one future arrival). If fewer live members remain
+    // capable of a future arrival than the record still demands, the
+    // barrier is structurally dead: no sequence of further commands can
+    // ever retire it.
+    for (record_id, record) in table.iter() {
+        if record.state != RecordState::Armed || record.kind != RecordKind::Barrier {
+            continue;
+        }
+        let not_yet_arrived = record
+            .members
+            .iter()
+            .filter(|member| {
+                fibers.get(*member).is_some_and(|fiber| {
+                    fiber.wait
+                        != (WaitState::V2Barrier {
+                            record_id: *record_id,
+                        })
+                })
+            })
+            .count() as u32;
+        if not_yet_arrived < record.counters.count {
+            return Err(bpmn_lite_types::IntegrityError::Ring3Runtime(format!(
+                "barrier {record_id} armed with outstanding count={} but only \
+                 {not_yet_arrived} live not-yet-arrived member(s) remain among {} live \
+                 member(s) — structurally unsatisfiable, stuck by construction",
+                record.counters.count,
+                record.members.len(),
+            )));
+        }
+    }
 
     let mut effect_owners: std::collections::BTreeMap<EffectId, Uuid> =
         std::collections::BTreeMap::new();
@@ -609,6 +709,22 @@ pub fn apply(
                 .ok_or(TransitionError::InvalidCommand("incident does not exist"))?;
             if incident.resolved_at.is_some() {
                 return Ok(TransitionBuilder::new(snapshot.instance().clone()).build());
+            }
+            // Fail closed: only an instance actually parked on THIS incident
+            // (ProcessState::Incidented { incident_id }) may be revived to
+            // Running. Without this, an instance that moved on to some other
+            // state (e.g. Cancelled, while an Incident record was still
+            // unresolved) would be silently yanked back to Running by a
+            // late-arriving ResolveIncident — reviving a state the instance
+            // never asked to leave.
+            let parked_on_this_incident = matches!(
+                &snapshot.instance().state,
+                ProcessState::Incidented { incident_id: parked_id } if *parked_id == *incident_id
+            );
+            if !parked_on_this_incident {
+                return Err(TransitionError::InvalidCommand(
+                    "ResolveIncident requires the instance to be Incidented on this incident_id",
+                ));
             }
             incident.resolved_at = Some(logical_timestamp(context)?);
             incident.resolution = Some(resolution.clone());
@@ -753,7 +869,9 @@ fn apply_start_child_result(
     };
     fiber.wait = WaitState::Incident { incident_id };
     let mut next = snapshot.instance().clone();
-    next.state = ProcessState::Failed { incident_id };
+    // Parked on an open Incident, resumable via Command::ResolveIncident —
+    // Incidented, not Failed (the latter means genuinely dead forever).
+    next.state = ProcessState::Incidented { incident_id };
     Ok(TransitionBuilder::new(next)
         .upsert_fiber(fiber)
         .incident(incident)
@@ -1581,8 +1699,36 @@ fn apply_tick(
                 }
             }
             Instr::End => {
+                // Was: `snapshot.fibers().len() == 1` — the *pre*-transition
+                // fibre count. That's only a safe proxy for "this is the
+                // last fibre" when deletion and `End` never coincide with
+                // an in-flight `V2Join` retirement in the same transition.
+                // Ruling B (last arrival survives and falls through into
+                // whatever follows the join, in the same step) makes that
+                // coincidence routine: a `V2Join` immediately followed by
+                // `End` (fork → two branches → join → end, the single most
+                // common BPMN shape) retires the barrier — pushing its
+                // cancelled siblings onto `fibers_delete` — then falls
+                // through to this arm in the same transition, which pushes
+                // this fibre's own id too. The pre-transition count never
+                // reflects any of that, so the instance never observed
+                // itself reaching zero live fibres: `fibers_delete` still
+                // gets processed (the fibres really are deleted), but
+                // `instance.state` stays `Running` forever with no fibre
+                // left to advance it. Permanently stuck, silently.
+                //
+                // Fixed per the set formulation: live-after = (pre-transition
+                // ∪ newly-upserted) − deleted, checked for emptiness against
+                // this instruction's own net effect so far — not a stale
+                // snapshot count.
                 changes.fibers_delete.push(fiber.fiber_id);
-                if snapshot.fibers().len() == 1 {
+                let live_after = apply_fiber_deltas(
+                    snapshot.fibers(),
+                    &changes.fibers_upsert,
+                    &changes.fibers_delete,
+                    false,
+                );
+                if live_after.is_empty() {
                     let at = logical_timestamp(context)?;
                     instance.state = ProcessState::Completed { at };
                     changes.events.push(RuntimeEvent::Completed { at });
@@ -1622,13 +1768,17 @@ fn apply_tick(
                 ordinal = ordinal.saturating_add(1);
                 let mut record = ConcurrencyRecord {
                     handler: Some(*handler),
-                    // V4.1, Adam-ratified: every guard scope's opening
-                    // word captures a rollback snapshot as standard
-                    // lifecycle behaviour — not opt-in — so `V2CancelScope`
-                    // can restore it later. See `ConcurrencyRecord`'s doc
-                    // comment for the full rationale.
-                    rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
-                    rollback_domain_payload_hash: Some(instance.domain_payload_hash),
+                    // A18 (supersedes V4.1's original ruling): `V2Guard`
+                    // is control-only — unwind members, spawn the handler
+                    // — no rollback snapshot is captured here any more.
+                    // That is now `V2GuardR`'s exclusive data disposition
+                    // (see `ConcurrencyRecord`'s doc comment). Leaving
+                    // every `rollback_*` field at `ConcurrencyRecord::new`'s
+                    // `None` default is exactly the point: a plain
+                    // `V2Guard` handle is rollback-INcapable by
+                    // construction, so `V2CancelScope`/automatic
+                    // rollback-on-failure both reject it rather than
+                    // silently restoring nothing.
                     // V&S §15 (v0.7) ruling F: the guard's own static
                     // address, since `record_id` doesn't survive a re-open
                     // — `fiber.pc` here IS this V2Guard instruction's own
@@ -2019,13 +2169,15 @@ fn apply_tick(
                 ordinal = ordinal.saturating_add(1);
                 let mut record = ConcurrencyRecord {
                     handler: Some(*handler),
-                    rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
-                    rollback_domain_payload_hash: Some(instance.domain_payload_hash),
+                    // A18: as `V2Guard`, no rollback snapshot — GuardN was
+                    // already never rollback-eligible in practice (ruling D
+                    // excludes non-interrupting guards from automatic
+                    // rollback-on-failure), and A18 makes that structural
+                    // rather than merely policy: the field is `None` here
+                    // by the same `ConcurrencyRecord::new` default `V2Guard`
+                    // now uses, not populated-but-unconsulted.
                     // V&S §15 (v0.7) ruling F: see V2Guard's identical field
-                    // for the rationale. GuardN never triggers automatic
-                    // rollback (ruling D excludes it), so this is set for
-                    // uniformity across every Guard-kind record, not
-                    // because GuardN's own budget is ever consulted today.
+                    // for the rationale.
                     opened_at: Some(fiber.pc),
                     ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: false })
                 };
@@ -2053,6 +2205,64 @@ fn apply_tick(
                     .control_stack
                     .pop()
                     .ok_or(TransitionError::StackUnderflow("V2GuardNEnd"))?;
+                changes.control_stack_deltas.push(ControlStackDelta::Pop {
+                    fiber_id: fiber.fiber_id,
+                    handle,
+                });
+                changes
+                    .concurrency_mutations
+                    .push(ConcurrencyMutation::Retire(handle));
+                changes.events.push(RuntimeEvent::V2GuardRetired {
+                    record_id: handle,
+                    fiber_id: fiber.fiber_id,
+                });
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // A18: `GUARD-R>` — as `V2Guard`, opening fibre registered as
+            // sole member in the same step the handle is pushed (K-1/K-2).
+            // K-3: n/a. Unlike `V2Guard`/`V2GuardN`, this is the ONLY
+            // opcode that captures the A3 rollback-set snapshot —
+            // `domain_payload`/`flags`/`join_expected`/session stack — and
+            // carries no `handler` (nothing to trigger via
+            // `V2TriggerGuard`; its only unwind paths are `V2CancelScope`
+            // and automatic rollback-on-definitive-failure).
+            Instr::V2GuardR => {
+                let record_id = RecordId::new(context.derived_id(ordinal));
+                ordinal = ordinal.saturating_add(1);
+                let mut record = ConcurrencyRecord {
+                    handler: None,
+                    rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
+                    rollback_domain_payload_hash: Some(instance.domain_payload_hash),
+                    rollback_flags: Some(instance.flags.clone()),
+                    rollback_join_expected: Some(instance.join_expected.clone()),
+                    rollback_session_stack: Some(instance.session_stack.to_rollback_snapshot()),
+                    // V&S §15 (v0.7) ruling F: see V2Guard's identical field
+                    // for the rationale.
+                    opened_at: Some(fiber.pc),
+                    ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true })
+                };
+                record.members.insert(fiber.fiber_id);
+                changes
+                    .concurrency_mutations
+                    .push(ConcurrencyMutation::Insert(record));
+                fiber.control_stack.push(record_id);
+                changes.control_stack_deltas.push(ControlStackDelta::Push {
+                    fiber_id: fiber.fiber_id,
+                    handle: record_id,
+                });
+                changes.events.push(RuntimeEvent::V2GuardROpened {
+                    record_id,
+                    fiber_id: fiber.fiber_id,
+                });
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // A18: `<GUARD-R` — as `V2GuardEnd`, the record's normal
+            // (non-rollback) close path. K-1/K-2/K-3 as `V2GuardEnd`.
+            Instr::V2GuardREnd => {
+                let handle = fiber
+                    .control_stack
+                    .pop()
+                    .ok_or(TransitionError::StackUnderflow("V2GuardREnd"))?;
                 changes.control_stack_deltas.push(ControlStackDelta::Pop {
                     fiber_id: fiber.fiber_id,
                     handle,
@@ -2187,14 +2397,21 @@ fn apply_tick(
                     fiber_id: fiber.fiber_id,
                     handle,
                 });
-                let (rollback_payload, rollback_hash) = v2_rollback_guard_scope(
+                let restored = v2_rollback_guard_scope(
                     snapshot,
                     handle,
                     RollbackCaller::Continues(fiber.fiber_id),
                     &mut changes,
                 )?;
-                instance.domain_payload = rollback_payload.to_string().into();
-                instance.domain_payload_hash = rollback_hash;
+                // A3 rollback-set (A18): domain_payload, flags,
+                // join_expected, and the session stack are all restored
+                // together — `ProcessInstance::counters` is deliberately
+                // untouched (see `ConcurrencyRecord`'s doc comment).
+                instance.domain_payload = restored.domain_payload.to_string().into();
+                instance.domain_payload_hash = restored.domain_payload_hash;
+                instance.flags = restored.flags;
+                instance.join_expected = restored.join_expected;
+                instance.session_stack = restored.session_stack;
                 fiber.pc = fiber.pc.saturating_add(1);
             }
         }
@@ -2425,6 +2642,17 @@ fn apply_job_failure(
     // non-interrupting"). `find_map` skips non-guard handles
     // (V2Barrier/V2Race) — they aren't guards, so they don't count as
     // "the innermost guard".
+    //
+    // A18: additionally requires `rollback_domain_payload.is_some()` —
+    // only a `V2GuardR`-opened record carries a rollback snapshot at all.
+    // A plain interrupting `V2Guard` is now control-only (no automatic
+    // rollback-on-failure data disposition — see `Instr::V2Guard`'s doc
+    // comment); a definitive failure whose innermost armed guard is a
+    // plain `V2Guard` no longer matches here and falls through to the
+    // ordinary v1 incident path below, exactly as if no guard were
+    // present. This is a deliberate behavior change from V4.1 (retargeting
+    // fixtures that exercised guard-rollback onto `V2GuardR` is the A18
+    // migration, not a regression — see the plan doc's A18 Part 2 entry).
     let innermost_guard = rollback_eligible
         .then(|| {
             fiber.control_stack.iter().rev().find_map(|id| {
@@ -2433,24 +2661,163 @@ fn apply_job_failure(
                     return None;
                 }
                 match record.kind {
-                    RecordKind::Guard { interrupting } => Some((*id, interrupting)),
+                    // The search STOPS at the first armed Guard-kind
+                    // record regardless of rollback-capability — a plain
+                    // `V2Guard`/`V2GuardN` sitting innermost must not be
+                    // skipped past in search of a rollback-capable
+                    // `V2GuardR` further out (that would roll back the
+                    // wrong, outer scope). `rollback_domain_payload.is_some()`
+                    // is carried alongside `interrupting` so the caller can
+                    // tell "innermost guard found, but not rollback-capable"
+                    // apart from "no guard at all" without re-querying.
+                    RecordKind::Guard { interrupting } => {
+                        Some((*id, interrupting, record.rollback_domain_payload.is_some()))
+                    }
                     _ => None,
                 }
             })
         })
         .flatten();
-    if let Some((guard_handle, true)) = innermost_guard {
-        let (rollback_payload, rollback_hash) = v2_rollback_guard_scope(
+    if let Some((guard_handle, true, true)) = innermost_guard {
+        let guard_record = snapshot
+            .concurrency_table()
+            .get(guard_handle)
+            .cloned()
+            .ok_or(TransitionError::InvalidCommand(
+                "rollback: unknown scope handle",
+            ))?;
+        let restored = v2_rollback_guard_scope(
             snapshot,
             guard_handle,
             RollbackCaller::Dies(fiber.fiber_id),
             &mut changes,
         )?;
         let mut instance = snapshot.instance().clone();
-        instance.domain_payload = rollback_payload.to_string().into();
-        instance.domain_payload_hash = rollback_hash;
+        // A3 rollback-set (A18): see the `V2CancelScope` handler's
+        // identical restoration for the full field-by-field rationale.
+        instance.domain_payload = restored.domain_payload.to_string().into();
+        instance.domain_payload_hash = restored.domain_payload_hash;
+        instance.flags = restored.flags;
+        instance.join_expected = restored.join_expected;
+        instance.session_stack = restored.session_stack;
         if !job_key.is_empty() {
             changes.jobs_ack.push(job_key.to_string());
+        }
+
+        // §13 amendment (Adam's ruling, 2026-07-22): §13's kill-and-no-
+        // incident disposition only holds when the guard scope is a
+        // proper subset of the instance's live fibres — `v2_rollback_guard_scope`
+        // has already pushed the triggering fibre (a genuine member of
+        // the cancelled subtree, `RollbackCaller::Dies` does not exempt
+        // it) onto `changes.fibers_delete`. Compute whether anything else
+        // in the instance survives this transition; if not, killing the
+        // trigger too would leave the instance with zero live fibres and
+        // a non-terminal state — permanently stuck, and Ring 3's own
+        // zero-live-fibre assert would reject the frame outright. Restore
+        // the fibre instead: pop the retiring guard (and anything nested
+        // above it on this fibre's own stack — also retiring, same
+        // cascade) off its control stack, and park it on an incident at
+        // the guard's own `opened_at` address, so resolving the incident
+        // re-executes `GUARD>` and opens a fresh scope activation over the
+        // now-restored payload — exactly §13's own stated intent ("the
+        // instance is left as it was at scope-open so it can simply be
+        // re-run"), now with a mechanism. The kernel still never initiates
+        // the retry itself; it parks and waits for `Command::ResolveIncident`.
+        let live_after_without_trigger: std::collections::BTreeSet<Uuid> = apply_fiber_deltas(
+            snapshot.fibers(),
+            &changes.fibers_upsert,
+            &changes.fibers_delete,
+            false,
+        )
+        .into_keys()
+        .filter(|id| *id != fiber.fiber_id)
+        .collect();
+        if live_after_without_trigger.is_empty() {
+            let opened_at = guard_record.opened_at.ok_or(TransitionError::InvalidCommand(
+                "rollback: spanning guard scope carries no opened_at address",
+            ))?;
+            // The trigger fibre survives after all — undo its deletion.
+            changes.fibers_delete.retain(|id| *id != fiber.fiber_id);
+            // Pop the retiring guard (and anything nested above it on this
+            // fibre's own chain — also part of the cancelled subtree) off
+            // the surviving fibre's control stack, mirroring
+            // `V2CancelScope`'s own explicit pop at its call site: re-
+            // executing `GUARD>` on resume must open a fresh record, not
+            // layer under the stale retired one still sitting on the stack
+            // (K-2 would also reject a live fibre referencing a Retired
+            // handle).
+            if let Some(pos) = fiber.control_stack.iter().position(|id| *id == guard_handle) {
+                let popped: Vec<_> = fiber.control_stack.split_off(pos);
+                for handle in popped.into_iter().rev() {
+                    changes.control_stack_deltas.push(ControlStackDelta::Pop {
+                        fiber_id: fiber.fiber_id,
+                        handle,
+                    });
+                }
+            }
+            // `v2_rollback_guard_scope`'s own ancestor-membership sweep
+            // (run above, as part of the initial call) treated this fibre
+            // as fully dead and removed it from every ancestor record on
+            // its pre-rollback control stack, including any still-`Armed`
+            // scope enclosing this guard. That's wrong here: the fibre is
+            // not leaving those outer scopes, only the retiring guard (and
+            // whatever nested under it) — re-add it to whatever remains on
+            // its (now-truncated) control stack.
+            let readd_ops: Vec<_> = fiber
+                .control_stack
+                .iter()
+                .map(|ancestor| (*ancestor, MembershipOp::Add(fiber.fiber_id)))
+                .collect();
+            v2_reconcile_ancestor_membership(
+                snapshot,
+                &readd_ops,
+                &std::collections::BTreeSet::new(),
+                &mut changes,
+            );
+
+            let incident_id = context.derived_id(0);
+            let service_task_id = workflow
+                .envelope()
+                .metadata()
+                .debug_map()
+                .get(&fiber.pc)
+                .cloned()
+                .unwrap_or_else(|| format!("pc_{}", fiber.pc));
+            let incident = Incident {
+                incident_id,
+                process_instance_id: instance.instance_id,
+                fiber_id: fiber.fiber_id,
+                service_task_id: service_task_id.clone(),
+                // Diagnostic pointer: where the underlying technical fault
+                // actually occurred, NOT the resume address — those are
+                // deliberately different fields now (see `fiber.pc` below).
+                bytecode_addr: fiber.pc,
+                error_class: error_class.clone(),
+                message: message.to_string(),
+                retry_count: *attempt,
+                created_at: logical_timestamp(context)?,
+                resolved_at: None,
+                resolution: None,
+            };
+            // Resume address: the guard's own opening word, not the failed
+            // task — `Command::ResolveIncident` does not itself touch
+            // `fiber.pc`, so whatever is set here is exactly where
+            // execution resumes, opening a fresh guard activation.
+            fiber.pc = opened_at;
+            fiber.wait = WaitState::Incident { incident_id };
+            // Parked on an open Incident, resumable via
+            // Command::ResolveIncident — Incidented, not Failed. Inherits
+            // the ordinary incident path's classification below (A18: "A18's
+            // spanning case sets the same state as the ordinary incident
+            // path, whatever that is").
+            instance.state = ProcessState::Incidented { incident_id };
+            changes.incidents.push(incident);
+            changes.fibers_upsert.push(fiber);
+            changes.events.push(RuntimeEvent::IncidentCreated {
+                incident_id,
+                service_task_id,
+                job_key: (!job_key.is_empty()).then(|| job_key.to_string()),
+            });
         }
         return Ok(changes.finish(instance));
     }
@@ -2482,7 +2849,9 @@ fn apply_job_failure(
     };
     fiber.wait = WaitState::Incident { incident_id };
     let mut instance = snapshot.instance().clone();
-    instance.state = ProcessState::Failed { incident_id };
+    // Parked on an open Incident, resumable via Command::ResolveIncident —
+    // Incidented, not Failed.
+    instance.state = ProcessState::Incidented { incident_id };
     changes.incidents.push(incident);
     changes.fibers_upsert.push(fiber);
     changes.events.push(RuntimeEvent::IncidentCreated {
@@ -3322,12 +3691,25 @@ enum RollbackCaller {
 /// exhaustive over the live subtree, and every cancelled fibre is swept
 /// from ancestor records above `guard_handle` not themselves retiring this
 /// step. K-3: as above, subtree barriers retire with the scope.
+/// A18 A3 rollback-set: everything `v2_rollback_guard_scope` restores onto
+/// the caller's own `ProcessInstance`. Deliberately excludes
+/// `ProcessInstance::counters` (loop/retry bounds) — see
+/// `ConcurrencyRecord`'s doc comment for why restoring them would be
+/// unsound, not merely out of scope.
+struct RollbackSnapshot {
+    domain_payload: Box<str>,
+    domain_payload_hash: [u8; 32],
+    flags: std::collections::BTreeMap<bpmn_lite_types::FlagKey, Value>,
+    join_expected: std::collections::BTreeMap<JoinId, u16>,
+    session_stack: bpmn_lite_types::session_stack::SessionStackState,
+}
+
 fn v2_rollback_guard_scope(
     snapshot: &Snapshot,
     guard_handle: RecordId,
     caller: RollbackCaller,
     changes: &mut Changes,
-) -> Result<(Box<str>, [u8; 32]), TransitionError> {
+) -> Result<RollbackSnapshot, TransitionError> {
     let record = snapshot
         .concurrency_table()
         .get(guard_handle)
@@ -3335,17 +3717,37 @@ fn v2_rollback_guard_scope(
         .ok_or(TransitionError::InvalidCommand(
             "rollback: unknown scope handle",
         ))?;
-    let (rollback_payload, rollback_hash) = match (
-        record.rollback_domain_payload,
-        record.rollback_domain_payload_hash,
-    ) {
-        (Some(payload), Some(hash)) => (payload, hash),
-        _ => {
-            return Err(TransitionError::InvalidCommand(
-                "rollback: handle carries no rollback snapshot",
-            ));
-        }
-    };
+    // A18/V-10: only a `V2GuardR`-opened record carries a rollback
+    // snapshot at all — a plain `V2Guard`/`V2GuardN` handle reaching here
+    // (via `V2CancelScope` or automatic rollback-on-failure) is rejected,
+    // not silently treated as a no-op restore. This is the runtime half of
+    // the "V2CancelScope must target GUARD-R>" rule; V-10's static
+    // companion check in `v2_verifier.rs` rejects the same mistargeting
+    // at verify time, before this branch could ever be reached from a
+    // verified program.
+    let (rollback_payload, rollback_hash, rollback_flags, rollback_join_expected, rollback_session_stack) =
+        match (
+            record.rollback_domain_payload,
+            record.rollback_domain_payload_hash,
+            record.rollback_flags,
+            record.rollback_join_expected,
+            record.rollback_session_stack,
+        ) {
+            (Some(payload), Some(hash), Some(flags), Some(join_expected), Some(session_stack)) => {
+                (payload, hash, flags, join_expected, session_stack)
+            }
+            _ => {
+                return Err(TransitionError::InvalidCommand(
+                    "rollback: handle carries no rollback snapshot (not a GUARD-R> scope)",
+                ));
+            }
+        };
+    let session_stack = bpmn_lite_types::session_stack::SessionStackState::from_rollback_snapshot(
+        &rollback_session_stack,
+    )
+    .map_err(|_| {
+        TransitionError::InvalidCommand("rollback: malformed session-stack snapshot")
+    })?;
     let mut retire_order = Vec::new();
     let mut cancelled_fibers = Vec::new();
     v2_cancel_guard_scope(snapshot, guard_handle, &mut retire_order, &mut cancelled_fibers);
@@ -3387,7 +3789,13 @@ fn v2_rollback_guard_scope(
         cancelled_records: retire_order,
         cancelled_fibers,
     });
-    Ok((rollback_payload, rollback_hash))
+    Ok(RollbackSnapshot {
+        domain_payload: rollback_payload,
+        domain_payload_hash: rollback_hash,
+        flags: rollback_flags,
+        join_expected: rollback_join_expected,
+        session_stack,
+    })
 }
 
 fn join_arrive(snapshot: &Snapshot, changes: &Changes, join_id: JoinId) -> u16 {
@@ -3445,7 +3853,9 @@ fn fail_contract(
         resolution: None,
     };
     fiber.wait = WaitState::Incident { incident_id };
-    instance.state = ProcessState::Failed { incident_id };
+    // Parked on an open Incident, resumable via Command::ResolveIncident —
+    // Incidented, not Failed.
+    instance.state = ProcessState::Incidented { incident_id };
     changes.incidents.push(incident);
     changes.events.push(RuntimeEvent::IncidentCreated {
         incident_id,
@@ -5155,16 +5565,35 @@ mod tests {
     /// than being deleted (unlike `V2TriggerGuard`'s external-fire path).
     #[test]
     fn v2_cancel_scope_restores_rollback_snapshot_and_continues_in_place() {
+        // A18 retarget: `V2CancelScope` only ever restores a rollback
+        // snapshot for a `GUARD-R>`-opened handle now (`V2Guard` is
+        // control-only, no snapshot to restore — V-10's companion check
+        // rejects `V2CancelScope` against a plain `V2Guard` at verify
+        // time). This fixture originally used `V2Guard`; retargeted to
+        // `V2GuardR` to keep testing what it always intended to prove.
+        // `V2GuardR` carries no `handler` field (A18), so unlike the
+        // original `V2Guard` fixture this program has no second static
+        // edge to an `End` for `verify_program`'s global
+        // entry-reaches-an-End check to find (`V2CancelScope` is
+        // deliberately a dead end in the static CFG — see its
+        // `successors()` doc comment — even though the kernel does
+        // continue the calling fibre past it dynamically). Addresses 0-1
+        // (`PushBool(false); BrIf { target: 7 }`) supply that second,
+        // never-dynamically-taken static edge: a legal, forward, stack-
+        // effect-neutral branch whose only purpose is to make address 7
+        // statically reachable, exactly the role the old handler edge
+        // played.
         let program = bpmn_lite_types::legacy_program! {
             bytecode_version: [12u8; 32],
             program: vec![
-                /* 0 */ Instr::V2Guard { handler: Addr::new(6) },
-                /* 1 */ Instr::PushI64(1_000),
-                /* 2 */ Instr::V2WaitFor,
-                /* 3 */ Instr::V2CancelScope,
-                /* 4 */ Instr::End,
-                /* 5 */ Instr::End,
+                /* 0 */ Instr::PushBool(false),
+                /* 1 */ Instr::BrIf { target: Addr::new(7) },
+                /* 2 */ Instr::V2GuardR,
+                /* 3 */ Instr::PushI64(1_000),
+                /* 4 */ Instr::V2WaitFor,
+                /* 5 */ Instr::V2CancelScope,
                 /* 6 */ Instr::End,
+                /* 7 */ Instr::End,
             ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -5219,7 +5648,7 @@ mod tests {
         let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
             bpmn_lite_types::ClaimedTimerIdentity::new(
                 bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
-                EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 4),
                 after_t1.state().instance().instance_id,
                 root_fiber_id,
             ),
@@ -5284,24 +5713,33 @@ mod tests {
         assert!(t2.fibers_upsert().is_empty());
     }
 
-    /// V4.1 automatic rollback-on-fail (Adam-ratified): a *definitive*
-    /// job failure (no retry token, no error_route_map match — the exact
-    /// point v1 would otherwise create an `Incident`) for a fibre inside
-    /// an armed interrupting `V2Guard` scope bypasses the incident path
-    /// entirely, restores the scope's rollback snapshot, and kills the
-    /// fibre rather than continuing or auto-respawning. Outside any
-    /// guard scope, the existing v1 incident path is unchanged — proven
-    /// by running the identical failure both inside and outside a guard.
+    /// A18 A3 rollback-set: `GUARD-R>` restores `domain_payload`, business
+    /// `flags`, and `join_expected` on rollback — but deliberately NOT
+    /// `ProcessInstance::counters` (loop/retry bounds), since restoring
+    /// those would let a failing scope retry unboundedly. Constructed so
+    /// the counter case actually distinguishes correct from incorrect
+    /// behaviour (not merely asserting a value that happens to match
+    /// either way): the counter is mutated from 0 to 5 while parked
+    /// inside the scope, and the assertion requires it to STAY 5 after
+    /// rollback — a wrongly-restoring implementation would leave it 0,
+    /// failing this test.
     #[test]
-    fn definitive_job_failure_inside_interrupting_guard_rolls_back_instead_of_incident() {
+    fn guard_r_rollback_restores_a3_set_but_not_loop_counters() {
+        // Same reachable-end padding shape as
+        // `v2_cancel_scope_restores_rollback_snapshot_and_continues_in_place`
+        // (`V2GuardR` has no handler edge, and `V2CancelScope` is a static
+        // dead end — see that test's own comment for the full rationale).
         let program = bpmn_lite_types::legacy_program! {
-            bytecode_version: [13u8; 32],
+            bytecode_version: [20u8; 32],
             program: vec![
-                /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
-                /* 1 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
-                /* 2 */ Instr::V2GuardEnd,
-                /* 3 */ Instr::End,
-                /* 4 */ Instr::End,
+                /* 0 */ Instr::PushBool(false),
+                /* 1 */ Instr::BrIf { target: Addr::new(7) },
+                /* 2 */ Instr::V2GuardR,
+                /* 3 */ Instr::PushI64(1_000),
+                /* 4 */ Instr::V2WaitFor,
+                /* 5 */ Instr::V2CancelScope,
+                /* 6 */ Instr::End,
+                /* 7 */ Instr::End,
             ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -5310,20 +5748,34 @@ mod tests {
             race_plan: BTreeMap::new(),
             boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
-            task_manifest: vec!["SomeTask".to_string()],
+            task_manifest: vec![],
             error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4-rollback-on-fail").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program, "a18-a3-rollback-set").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, _) = fixture();
         let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
-        let original_payload = base_snapshot.instance().domain_payload.to_string();
-        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        // Seed pre-scope state on the base instance: one flag, one dynamic
+        // join-expected entry, zero on the loop counter. This is the
+        // snapshot `V2GuardR` must capture and later restore (minus the
+        // counter).
+        let flag_key: bpmn_lite_types::FlagKey = 7;
+        let join_id: JoinId = 42;
+        let counter_id: u32 = 1;
+        let mut base_instance = base_snapshot.instance().clone();
+        base_instance.flags.insert(flag_key, Value::Bool(false));
+        base_instance.join_expected.insert(join_id, 3);
+        base_instance.counters.insert(counter_id, 0);
+        let original_payload = base_instance.domain_payload.to_string();
+        let original_flags = base_instance.flags.clone();
+        let original_join_expected = base_instance.join_expected.clone();
+        let snapshot = Snapshot::new(base_instance, [Fiber::new(root_fiber_id, 0)]);
 
         let genesis = SnapshotEnvelope::new(
             workflow.envelope().abi_version(),
@@ -5339,22 +5791,313 @@ mod tests {
             ),
         );
 
-        // Tick 1: V2Guard (captures snapshot) -> ExecNative parks the
-        // fibre on WaitState::Job.
-        let context1 = DeterministicContext::new(300, Uuid::from_u128(301), 1);
+        // Tick 1: PushBool/BrIf (dead branch not taken) -> V2GuardR
+        // (captures the A3 snapshot: payload, flags, join_expected,
+        // session stack — NOT counters) -> PushI64 -> V2WaitFor parks.
+        let context1 = DeterministicContext::new(200, Uuid::from_u128(401), 1);
         let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let guard_handle = t1.fibers_upsert()[0].control_stack[0];
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let captured = after_t1.state().concurrency_table().get(guard_handle).unwrap();
+        assert_eq!(captured.rollback_flags.as_ref().unwrap(), &original_flags);
+        assert_eq!(
+            captured.rollback_join_expected.as_ref().unwrap(),
+            &original_join_expected
+        );
+
+        // Resolve the parked timer.
+        let context1b = DeterministicContext::new(400, Uuid::from_u128(4015), 1);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 4),
+                after_t1.state().instance().instance_id,
+                root_fiber_id,
+            ),
+            1_200,
+            TimerKind::Wait,
+            None,
+            Uuid::nil(),
+        );
+        let t1c = apply(
+            &workflow,
+            &Snapshot::new(after_t1.state().instance().clone(), after_t1.state().fibers().values().cloned())
+                .with_concurrency_table(after_t1.state().concurrency_table().clone()),
+            &Command::TimerFired { timer: claimed_timer, fired_at: 1_200 },
+            &context1b,
+        )
+        .unwrap();
+        let after_t1c = materialize_snapshot(after_t1.state(), &t1c, workflow.envelope().abi_version(), 1);
+
+        // Mutate everything while the fibre is parked inside the scope —
+        // domain_payload, flags, join_expected (all A3-restorable), and
+        // the loop counter (NOT A3-restorable, must survive rollback).
+        let mut resumed_instance = after_t1c.state().instance().clone();
+        resumed_instance.domain_payload = "mutated-while-parked".to_string().into();
+        resumed_instance.domain_payload_hash = EffectId::content_hash(b"mutated-while-parked");
+        resumed_instance.flags.insert(flag_key, Value::Bool(true));
+        resumed_instance.join_expected.insert(join_id, 1);
+        resumed_instance.counters.insert(counter_id, 5);
+        let snapshot_running = Snapshot::new(resumed_instance, after_t1c.state().fibers().values().cloned())
+            .with_concurrency_table(after_t1c.state().concurrency_table().clone());
+
+        // Tick 2: V2CancelScope restores the A3 set, leaves the counter
+        // alone, continues to End in the same transition.
+        let context2 = DeterministicContext::new(401, Uuid::from_u128(402), 2);
+        let t2 = apply(
+            &workflow,
+            &snapshot_running,
+            &Command::Tick { fiber_id: Some(root_fiber_id) },
+            &context2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            t2.next_snapshot().domain_payload.to_string(),
+            original_payload,
+            "A3: domain_payload must be restored"
+        );
+        assert_eq!(
+            t2.next_snapshot().flags, original_flags,
+            "A3: business flags must be restored to their pre-scope values"
+        );
+        assert_eq!(
+            t2.next_snapshot().join_expected, original_join_expected,
+            "A3: join_expected must be restored to its pre-scope values"
+        );
+        assert_eq!(
+            t2.next_snapshot().counters.get(&counter_id).copied(),
+            Some(5),
+            "A3 deliberately excludes loop/retry counters — restoring them would let a \
+             failing scope retry unboundedly. A wrongly-restoring implementation would \
+             leave this at the pre-scope value (0), not the mutated one (5)."
+        );
+    }
+
+    /// A18/V-10: `V2CancelScope` targeting a plain (non-rollback-capable)
+    /// `V2Guard`/`V2GuardN` handle must be rejected at VERIFY time, not
+    /// merely fail at runtime against a `None` snapshot.
+    #[test]
+    fn v2_verifier_rejects_cancel_scope_against_plain_guard() {
+        let program = vec![
+            /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
+            /* 1 */ Instr::V2CancelScope,
+            /* 2 */ Instr::End,
+            /* 3 */ Instr::End, // dead fallthrough of V2Guard's own close, unused
+            /* 4 */ Instr::End, // handler target
+        ];
+        let legacy = bpmn_lite_types::legacy_program! {
+            bytecode_version: [21u8; 32],
+            program: program,
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let result = ArtifactEnvelope::from_legacy_program(legacy, "v10-cancel-scope-wrong-target");
+        let err = result.expect_err("V2CancelScope against a plain V2Guard handle must be rejected");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("V-10"),
+            "expected a V-10 mistargeting violation, got {message}"
+        );
+    }
+
+    /// A18 V-10, positive admission: `GUARD-R>` MAY contain a complete
+    /// `FORK`/`JOIN` region (only being CONTAINED BY one is forbidden —
+    /// see `v2_verifier_v10_rejects_guard_r_nested_inside_a_fork_branch`).
+    #[test]
+    fn v2_verifier_v10_admits_guard_r_containing_a_complete_fork_join() {
+        let program = vec![
+            /* 0 */ Instr::V2GuardR,
+            /* 1 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(3), Addr::new(6)]),
+                pairing: Addr::new(1),
+            },
+            /* 2 */ Instr::End, // unreachable filler (V2Fork has no fallthrough)
+            /* 3 */ Instr::V2Join { pairing: Addr::new(1) },
+            /* 4 */ Instr::V2GuardREnd,
+            /* 5 */ Instr::End,
+            /* 6 */ Instr::V2Join { pairing: Addr::new(1) },
+            /* 7 */ Instr::V2GuardREnd,
+            /* 8 */ Instr::End,
+        ];
+        let legacy = bpmn_lite_types::legacy_program! {
+            bytecode_version: [22u8; 32],
+            program: program,
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        ArtifactEnvelope::from_legacy_program(legacy, "v10-guard-r-contains-fork-join")
+            .expect("GUARD-R> containing a complete FORK/JOIN region must be admitted");
+    }
+
+    /// V4.1 automatic rollback-on-fail (Adam-ratified), **rescoped
+    /// 2026-07-22 for the §13 amendment** (see
+    /// `definitive_job_failure_inside_interrupting_guard_and_spanning_the_whole_instance_parks_on_incident`
+    /// below for the amendment itself and its full rationale). This test's
+    /// original program shape — a single fibre, guard wrapping the
+    /// instance's entire live fibre set — is exactly the case the
+    /// amendment changes: killing the trigger fibre there would leave zero
+    /// live fibres with a non-terminal state, which Ring 3's own
+    /// zero-live-fibre assert (landed alongside the `Instr::End`
+    /// remediation, same file) now rejects. That is the *correct* new
+    /// behaviour for that shape, not a regression in this test — so this
+    /// test is rescoped to what it actually still proves: §13's original
+    /// kill-and-no-incident disposition, for the case the amendment leaves
+    /// untouched — a guard scope that is a **proper subset** of the
+    /// instance's live fibres. The instance now starts with a second,
+    /// independent fibre parked on its own job, entered directly at a
+    /// second static address rather than spawned via `V2Fork` (a real
+    /// `V2Fork`/`V2Join` pairing would introduce barrier-arrival semantics
+    /// that are orthogonal to what this test proves — see Part 2's
+    /// barrier-starvation investigation for that shape instead), so the
+    /// instance survives the rollback independently of the guarded fibre;
+    /// the guard-branch assertions below are otherwise unchanged from the
+    /// original test.
+    ///
+    /// A *definitive* job failure (no retry token, no error_route_map
+    /// match — the exact point v1 would otherwise create an `Incident`)
+    /// for a fibre inside an armed interrupting `V2Guard` scope bypasses
+    /// the incident path entirely, restores the scope's rollback snapshot,
+    /// and kills the fibre rather than continuing or auto-respawning.
+    /// Outside any guard scope, the existing v1 incident path is unchanged
+    /// — proven by running the identical failure both inside and outside a
+    /// guard.
+    #[test]
+    fn definitive_job_failure_inside_interrupting_guard_rolls_back_instead_of_incident() {
+        // A18 retarget: automatic rollback-on-definitive-failure now only
+        // fires for a `GUARD-R>`-opened scope (`V2Guard` is control-only —
+        // see `apply_job_failure`'s `innermost_guard` doc comment).
+        // Retargeted from `V2Guard`/`V2GuardEnd` to `V2GuardR`/
+        // `V2GuardREnd` to keep testing what it always intended to prove.
+        //
+        // Addresses 0-1 (`PushBool(false); BrIf { target: 8 }`) and 8-10
+        // (a never-triggered `V2Guard`/`V2GuardEnd` pair behind that
+        // never-taken branch) are test-scaffolding padding, not part of
+        // the scenario under test: `sibling_fiber_id` below simulates a
+        // second, already-live fibre outside the guard (proving the
+        // guard scope is a proper *subset* of the instance's fibres) by
+        // being seeded directly into the initial `Snapshot` rather than
+        // spawned by any real fork/guard-trigger — with no static
+        // fork/guard-with-handler on `root_fiber_id`'s own path any more
+        // (`V2GuardR` has none — A18), `verify_program`'s statically
+        // computed `max_fibers` ceiling would otherwise be 1, rejecting
+        // this legitimately-2-live-fibre initial snapshot. The padding
+        // branch supplies a second statically-reachable (never
+        // dynamically-taken) fibre-spawn source, exactly restoring the
+        // ceiling the original `V2Guard`-with-a-real-handler fixture
+        // provided incidentally.
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [13u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushBool(false),
+                /* 1 */ Instr::BrIf { target: Addr::new(8) },
+                /* 2 */ Instr::V2GuardR,
+                /* 3 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 4 */ Instr::V2GuardREnd,
+                /* 5 */ Instr::End,
+                /* 6 */ Instr::ExecNative { task_type: 1, argc: 0, retc: 0 },
+                /* 7 */ Instr::End,
+                /* 8 */ Instr::V2Guard { handler: Addr::new(10) },
+                /* 9 */ Instr::V2GuardEnd,
+                /* 10 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string(), "OtherTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-rollback-on-fail").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let sibling_fiber_id = Uuid::from_u128(424_242);
+        let original_payload = base_snapshot.instance().domain_payload.to_string();
+        let snapshot = Snapshot::new(
+            base_snapshot.instance().clone(),
+            [Fiber::new(root_fiber_id, 0), Fiber::new(sibling_fiber_id, 6)],
+        );
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: root_fiber_id runs V2Guard (captures snapshot) ->
+        // ExecNative parks on WaitState::Job.
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(301), 1);
+        let t1 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(root_fiber_id) },
+            &context1,
+        )
+        .unwrap();
         let guard_handle = t1.fibers_upsert()[0].control_stack[0];
         let job_key = t1.jobs_enqueue()[0].job_key.clone();
         let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
-        let snapshot_running = Snapshot::new(
-            after_t1.state().instance().clone(),
-            after_t1.state().fibers().values().cloned(),
-        )
-        .with_concurrency_table(after_t1.state().concurrency_table().clone());
 
-        // A definitive (non-retriable) failure — mutating domain_payload
-        // beforehand is not needed to prove the point, but a mutated
-        // instance makes the rollback observable rather than a no-op.
+        // Tick 2: sibling_fiber_id — independent of the guard entirely —
+        // parks on its own job. This is what keeps the instance alive
+        // independent of whatever happens to root_fiber_id.
+        let context1b = DeterministicContext::new(300, Uuid::from_u128(3011), 1);
+        let t1b = apply(
+            &workflow,
+            &Snapshot::new(after_t1.state().instance().clone(), after_t1.state().fibers().values().cloned())
+                .with_concurrency_table(after_t1.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(sibling_fiber_id) },
+            &context1b,
+        )
+        .unwrap();
+        let after_t1b = materialize_snapshot(after_t1.state(), &t1b, workflow.envelope().abi_version(), 2);
+        let snapshot_running = Snapshot::new(
+            after_t1b.state().instance().clone(),
+            after_t1b.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1b.state().concurrency_table().clone());
+
+        // A definitive (non-retriable) failure on root_fiber_id — mutating
+        // domain_payload beforehand is not needed to prove the point, but
+        // a mutated instance makes the rollback observable rather than a
+        // no-op.
         let mut mutated_snapshot = snapshot_running.clone();
         let mut mutated_instance = mutated_snapshot.instance().clone();
         mutated_instance.domain_payload = "mutated-before-fail".to_string().into();
@@ -5380,7 +6123,9 @@ mod tests {
         );
         assert!(
             t2.incidents().is_empty(),
-            "the v1 incident path must not fire inside an interrupting guard scope"
+            "the v1 incident path must not fire — the guard scope is a proper subset of the \
+             instance's live fibres (sibling_fiber_id survives outside it), so §13's original \
+             kill-and-no-incident disposition still applies"
         );
         assert_eq!(t2.fibers_delete(), &[root_fiber_id], "the failing fibre is killed, not continued");
         assert!(t2.fibers_upsert().is_empty(), "no auto-respawn");
@@ -5389,6 +6134,11 @@ mod tests {
             &t2.concurrency_mutations()[0],
             ConcurrencyMutation::Retire(id) if *id == guard_handle
         ));
+        assert_eq!(
+            t2.next_snapshot().state,
+            ProcessState::Running,
+            "instance state is untouched by this rollback — sibling_fiber_id keeps it Running"
+        );
 
         // Same failure, no enclosing guard: today's v1 incident path is
         // unchanged.
@@ -5462,6 +6212,232 @@ mod tests {
             ut2.incidents()[0].retry_count,
             7,
             "V&S §15 ruling E: Incident.retry_count carries the real attempt count, not a hardcoded 0"
+        );
+    }
+
+    /// §13 amendment (Adam's ruling, 2026-07-22): the spanning case. §13
+    /// enumerated three dispositions for the fibre that triggers an
+    /// automatic rollback — killed, not continued, not auto-respawned —
+    /// and never considered a fourth: parked. When the guard scope being
+    /// rolled back is a proper *subset* of the instance's live fibres
+    /// (other fibres survive elsewhere), killing the trigger is fine —
+    /// that's the case
+    /// `definitive_job_failure_inside_interrupting_guard_rolls_back_instead_of_incident`
+    /// (rescoped above) still covers. This test is the other case: the
+    /// guard scope spans the instance's *entire* live fibre set (this
+    /// program's own shape — a single root-level `V2Guard` wrapping the
+    /// whole program body, exactly the original pre-rescope fixture) —
+    /// killing the trigger too would leave zero live fibres with a
+    /// non-terminal state, permanently stuck and silent (§13's original
+    /// text also explicitly rules out the v1 incident path firing here,
+    /// so there would be no signal of any kind).
+    ///
+    /// Adam's ruling: don't kill the trigger fibre in this case. Restore
+    /// the rollback payload (unchanged from the subset case), pop the
+    /// retiring guard off the fibre's own control stack, and park it on an
+    /// `Incident` at the guard's `opened_at` address — the guard's own
+    /// opening word. This is not auto-respawn (no new fibre) and not
+    /// continuation (it doesn't fall through past the guard) — §13's two
+    /// prohibitions hold. Resuming via `Command::ResolveIncident`
+    /// re-executes `GUARD>`, opening a fresh guard activation with a fresh
+    /// rollback snapshot over the now-restored payload — exactly §13's own
+    /// stated intent ("the instance is left as it was at scope-open so it
+    /// can simply be re-run"), now with a mechanism. The kernel still does
+    /// not initiate the retry itself — it parks and waits for an operator
+    /// via `ResolveIncident`.
+    #[test]
+    fn definitive_job_failure_inside_interrupting_guard_and_spanning_the_whole_instance_parks_on_incident() {
+        // A18 retarget: as the sibling `..._rolls_back_instead_of_incident`
+        // test above — automatic rollback-on-definitive-failure (and thus
+        // the §13-amendment park-on-incident path this test proves) now
+        // only fires for a `GUARD-R>`-opened scope.
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [15u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2GuardR,
+                /* 1 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 2 */ Instr::V2GuardREnd,
+                /* 3 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-spanning-rollback-parks-on-incident").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let original_payload = base_snapshot.instance().domain_payload.to_string();
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: V2Guard (captures snapshot, opened_at = its own address,
+        // Addr(0)) -> ExecNative parks the fibre on WaitState::Job.
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(301), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let guard_handle = t1.fibers_upsert()[0].control_stack[0];
+        let job_key = t1.jobs_enqueue()[0].job_key.clone();
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot_running = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        let mut mutated_instance = snapshot_running.instance().clone();
+        mutated_instance.domain_payload = "mutated-before-fail".to_string().into();
+        mutated_instance.domain_payload_hash = EffectId::content_hash(b"mutated-before-fail");
+        let mutated_snapshot = Snapshot::new(mutated_instance, snapshot_running.fibers().values().cloned())
+            .with_concurrency_table(snapshot_running.concurrency_table().clone());
+
+        let context2 = DeterministicContext::new(301, Uuid::from_u128(302), 2);
+        let fail_command = Command::EffectFailed {
+            effect_id: EffectId::for_instruction(Uuid::nil(), Uuid::nil(), 0),
+            job_key: job_key.clone(),
+            error_class: ErrorClass::ContractViolation,
+            message: "boom".to_string(),
+            retry: None,
+            attempt: 3,
+        };
+        let t2 = apply(&workflow, &mutated_snapshot, &fail_command, &context2).unwrap();
+
+        assert_eq!(
+            t2.next_snapshot().domain_payload.to_string(),
+            original_payload,
+            "rollback must restore the pre-scope snapshot even when the fibre survives"
+        );
+        assert!(
+            t2.fibers_delete().is_empty(),
+            "the trigger fibre must NOT be deleted — it's the instance's only live fibre"
+        );
+        assert_eq!(t2.fibers_upsert().len(), 1, "the fibre survives, parked on the incident");
+        let surviving = &t2.fibers_upsert()[0];
+        assert_eq!(surviving.fiber_id, root_fiber_id);
+        assert_eq!(t2.incidents().len(), 1, "no signal at all would otherwise leave this stuck and silent");
+        let incident_id = t2.incidents()[0].incident_id;
+        assert_eq!(
+            surviving.wait,
+            WaitState::Incident { incident_id },
+            "the surviving fibre must be parked on exactly the incident just raised"
+        );
+        assert_eq!(
+            surviving.pc,
+            Addr::new(0),
+            "resume address is the guard's own opened_at (GUARD> at Addr(0)), not the failed task"
+        );
+        assert!(
+            surviving.control_stack.is_empty(),
+            "the retiring guard (and anything nested above it) must be popped off the \
+             surviving fibre's own control stack — re-executing GUARD> must open a fresh \
+             record, not layer under the stale retired one"
+        );
+        assert_eq!(
+            t2.next_snapshot().state,
+            ProcessState::Incidented { incident_id },
+            "instance state follows the same Incidented{incident_id} shape as the unguarded incident path"
+        );
+        assert_eq!(t2.concurrency_mutations().len(), 1);
+        assert!(matches!(
+            &t2.concurrency_mutations()[0],
+            ConcurrencyMutation::Retire(id) if *id == guard_handle
+        ));
+
+        // Drive it further: resolving the incident must resume execution
+        // at GUARD> (Addr(0)) and re-arm the record from scratch — not
+        // just assert the parked shape, demonstrate the "fresh guard
+        // activation" claim.
+        let after_t2 = materialize_snapshot(after_t1.state(), &t2, workflow.envelope().abi_version(), 2);
+        let resolved_snapshot = Snapshot::new(
+            after_t2.state().instance().clone(),
+            after_t2.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t2.state().concurrency_table().clone())
+        .with_incidents(after_t2.state().incidents().values().cloned());
+        assert_eq!(
+            resolved_snapshot.instance().state,
+            ProcessState::Incidented { incident_id },
+            "sanity: materialized instance really is Incidented pre-resolve"
+        );
+
+        let context3 = DeterministicContext::new(302, Uuid::from_u128(303), 3);
+        let t3 = apply(
+            &workflow,
+            &resolved_snapshot,
+            &Command::ResolveIncident {
+                incident_id,
+                resolution: "retry".to_string(),
+            },
+            &context3,
+        )
+        .unwrap();
+        assert_eq!(
+            t3.next_snapshot().state,
+            ProcessState::Running,
+            "ResolveIncident restores Running"
+        );
+        let resumed_fiber = t3
+            .fibers_upsert()
+            .iter()
+            .find(|fiber| fiber.fiber_id == root_fiber_id)
+            .expect("ResolveIncident must upsert the parked fibre back to Running");
+        assert_eq!(resumed_fiber.wait, WaitState::Running);
+        assert_eq!(
+            resumed_fiber.pc,
+            Addr::new(0),
+            "ResolveIncident does not touch fiber.pc — it resumes exactly where parking left it, GUARD>"
+        );
+
+        let after_t3 = materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 3);
+        let post_resolve_snapshot = Snapshot::new(
+            after_t3.state().instance().clone(),
+            after_t3.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t3.state().concurrency_table().clone());
+
+        let context4 = DeterministicContext::new(303, Uuid::from_u128(304), 4);
+        let t4 = apply(
+            &workflow,
+            &post_resolve_snapshot,
+            &Command::Tick { fiber_id: Some(root_fiber_id) },
+            &context4,
+        )
+        .unwrap();
+        assert_eq!(
+            t4.concurrency_mutations().len(),
+            1,
+            "re-executing GUARD> opens a fresh concurrency record"
+        );
+        assert!(
+            matches!(&t4.concurrency_mutations()[0], ConcurrencyMutation::Insert(record) if record.id != guard_handle),
+            "the fresh record must be a genuinely new activation, not a re-arm of the retired one"
+        );
+        assert!(
+            t4.fibers_upsert()[0].control_stack.len() == 1,
+            "the resumed fibre picks up the fresh guard handle on its control stack"
         );
     }
 
@@ -6105,6 +7081,418 @@ mod tests {
                     if msg.contains("no such record exists")
             ),
             "expected a K-2 Ring 3 rejection, got {result:?}"
+        );
+    }
+
+    /// V4 remediation (found during V5 scoping, 2026-07-22, via the
+    /// differential harness's end-to-end drive, not via `apply` unit
+    /// tests): `Instr::End` used to decide "am I the last fibre?" from
+    /// `snapshot.fibers().len()` — the *pre*-transition count. Ruling B's
+    /// last-arrival-survives-and-continues `V2Join` semantics make deletion
+    /// and `End` land in the *same* transition for the single most common
+    /// BPMN shape (fork → two branches → join → end, no trailing task):
+    /// the last-arriving branch retires the barrier (cancelling its
+    /// sibling, pushed onto `fibers_delete`), falls through `Jump` into
+    /// `End` in the same step, which pushes its own id onto
+    /// `fibers_delete` too — but the *pre*-transition count never reflected
+    /// either deletion, so `instance.state` never became `Completed` even
+    /// though both fibres genuinely got deleted. Net effect: instance stuck
+    /// `Running` forever with zero live fibres.
+    ///
+    /// Red before the fix (confirmed by temporarily reverting `Instr::End`
+    /// to the old `snapshot.fibers().len() == 1` check, with the new Ring 3
+    /// assert below also disabled so the raw pre-fix behaviour was
+    /// observable rather than intercepted a second way): tick 3's `apply`
+    /// returned `Ok`, and `t3.next_snapshot().state` was `ProcessState::Running`
+    /// — `expected Completed, got Running` — with `t3.fibers_delete()`
+    /// still containing both fibre ids. Genuinely stuck, not hypothetically:
+    /// both fibres really deleted, state never advanced. (With only the
+    /// Ring 3 assert re-enabled and `Instr::End` still reverted, `apply`
+    /// instead returns `Err(Integrity(Ring3Runtime(..)))` on tick 3 — the
+    /// two fixes independently catch the same defect via different paths,
+    /// as intended.) Green after restoring both: `Completed`.
+    #[test]
+    fn v2_fork_join_end_completes_instance_not_stuck_running() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [24u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(3)]),
+                    pairing: Addr::new(0),
+                },
+                /* 1 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 2 */ Instr::Jump { target: Addr::new(5) },
+                /* 3 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 4 */ Instr::Jump { target: Addr::new(5) },
+                /* 5 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-fork-join-end-remediation").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        // Tick 1: V2Fork spawns the two branches, root fibre dies.
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        assert_eq!(t1.fibers_delete(), &[root_fiber_id]);
+        assert_eq!(t1.fibers_upsert().len(), 2);
+        let (child_a, child_b) = (t1.fibers_upsert()[0].clone(), t1.fibers_upsert()[1].clone());
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        // Tick 2: child_a arrives at V2Join first — not last, parks.
+        let t2 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_a.fiber_id) },
+            &context,
+        )
+        .unwrap();
+        assert!(t2.fibers_delete().is_empty());
+
+        let after_t2 = materialize_snapshot(after_t1.state(), &t2, workflow.envelope().abi_version(), 2);
+        let snapshot = Snapshot::new(
+            after_t2.state().instance().clone(),
+            after_t2.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t2.state().concurrency_table().clone());
+
+        // Tick 3: child_b is the last arrival — sole survivor, falls
+        // straight through Jump into End in the same transition. Both
+        // fibres end up in `fibers_delete` (child_a cancelled by the join
+        // retiring, child_b deleted by End itself) with zero upserts — the
+        // exact shape the pre-transition-count check couldn't see.
+        let t3 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_b.fiber_id) },
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            std::collections::BTreeSet::from_iter(t3.fibers_delete().iter().copied()),
+            std::collections::BTreeSet::from([child_a.fiber_id, child_b.fiber_id])
+        );
+        assert!(t3.fibers_upsert().is_empty());
+        assert!(
+            matches!(t3.next_snapshot().state, ProcessState::Completed { .. }),
+            "expected Completed, got {:?} — instance stuck Running with zero live fibres \
+             is exactly the pre-fix defect",
+            t3.next_snapshot().state
+        );
+    }
+
+    /// V4 remediation companion: the general Ring 3 catch for the bug class
+    /// above, independent of `Instr::End` specifically. Exercises a
+    /// legitimate-looking but pathological v1 `Instr::Join` where the sole
+    /// remaining fibre arrives at a join whose static `expected` arity (2)
+    /// was never going to be met by a single fibre — the non-last-arrival
+    /// branch unconditionally deletes the arriving fibre and parks nothing
+    /// in its place, exactly the shape `Instr::End`'s old pre-transition
+    /// count would also have missed. Ring 3 must reject this: zero live
+    /// fibres post-transition, `ProcessState::Running` still non-terminal.
+    #[test]
+    fn ring3_rejects_zero_live_fibres_with_non_terminal_state() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [25u8; 32],
+            program: vec![
+                /* 0 */ Instr::Join { id: 0, expected: 2, next: Addr::new(1) },
+                /* 1 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::from([(
+                0u32,
+                bpmn_lite_types::JoinPlanEntry {
+                    expected: 2,
+                    next: Addr::new(1),
+                    reg_template: std::array::from_fn(|_| Value::I64(0)),
+                },
+            )]),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4.3-ring3-zero-live-fibres").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let result = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context);
+        assert!(
+            matches!(
+                &result,
+                Err(TransitionError::Integrity(bpmn_lite_types::IntegrityError::Ring3Runtime(msg)))
+                    if msg.contains("stuck by construction")
+            ),
+            "expected a Ring 3 zero-live-fibres rejection, got {result:?}"
+        );
+    }
+
+    /// Part 2 investigation (Adam's barrier-starvation hypothesis,
+    /// 2026-07-22), **rescoped for A18 (2026-07-22)**: the original form of
+    /// this test constructed a `FORK` into 3 branches, one of which sat
+    /// inside an interrupting `V2Guard` that failed and automatically
+    /// rolled back — silently dropping a fork member without decrementing
+    /// the barrier's `counters.count`, permanently starving it (the defect
+    /// Ring 3's barrier-satisfiability check below exists to reject).
+    ///
+    /// A18 makes that exact fixture unreconstructible as a *rollback*
+    /// repro: automatic rollback-on-definitive-failure now only fires for
+    /// a `GUARD-R>`-opened scope, and V-10 statically FORBIDS `GUARD-R>`
+    /// from ever being opened while nested inside a `FORK`'s child fibre
+    /// (`v2_verifier_v10_rejects_guard_r_nested_inside_a_fork_branch`,
+    /// below, proves the identical program shape — `V2GuardR` in place of
+    /// `V2Guard` here — is rejected at verify time). The historical
+    /// starvation hazard is therefore now unreachable via a rollback-
+    /// capable guard **by construction**, not merely caught downstream —
+    /// a strictly stronger guarantee than what this test originally
+    /// proved.
+    ///
+    /// This test is retargeted, not deleted, to prove the corresponding
+    /// new fact: with the guard left as plain `V2Guard` (still legal
+    /// nested inside a fork branch — V-10 only restricts `GUARD-R>`), the
+    /// same definitive job failure no longer triggers ANY rollback at
+    /// all — `V2Guard` is control-only (A18) and the innermost-guard
+    /// search in `apply_job_failure` requires a rollback snapshot to
+    /// engage its special-case path. The failure falls straight through
+    /// to the ordinary v1 incident path: branch_a parks on an `Incident`
+    /// (not deleted), the barrier is completely untouched
+    /// (`counters.count` still 1, membership still all three branches),
+    /// and no starvation is possible because no member ever silently
+    /// disappears.
+    #[test]
+    fn fork_join_barrier_is_untouched_when_a_member_incidents_because_plain_guard_no_longer_auto_rolls_back(
+    ) {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [16u8; 32],
+            program: vec![
+                /*  0 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(6), Addr::new(8)]),
+                    pairing: Addr::new(0),
+                },
+                /*  1 */ Instr::V2Guard { handler: Addr::new(10) },
+                /*  2 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /*  3 */ Instr::V2GuardEnd,
+                /*  4 */ Instr::V2Join { pairing: Addr::new(0) },
+                /*  5 */ Instr::End,
+                /*  6 */ Instr::V2Join { pairing: Addr::new(0) },
+                /*  7 */ Instr::End,
+                /*  8 */ Instr::V2Join { pairing: Addr::new(0) },
+                /*  9 */ Instr::End,
+                // Guard handler (unused at runtime — this test never fires
+                // `V2TriggerGuard`) — still runs nested inside the fork's
+                // barrier scope per the interrupting-guard edge's abstract
+                // state, so it must close that scope structurally (V-1)
+                // rather than `End` directly.
+                /* 10 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 11 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-barrier-starvation-repro").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: V2Fork spawns branch_a (pc=1, guarded), branch_b (pc=6),
+        // branch_c (pc=8). Root dies.
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(301), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let branch_a = t1.fibers_upsert()[0].clone();
+        let branch_b = t1.fibers_upsert()[1].clone();
+        let branch_c = t1.fibers_upsert()[2].clone();
+        let barrier_handle = branch_b.control_stack[0];
+        let mut state = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let mut tick_no = 1u64;
+
+        let mut apply_and_materialize = |fiber_id: Uuid, state: &PersistedSnapshotState| {
+            tick_no += 1;
+            let snap = Snapshot::new(state.instance().clone(), state.fibers().values().cloned())
+                .with_concurrency_table(state.concurrency_table().clone());
+            let ctx = DeterministicContext::new(300 + tick_no, Uuid::from_u128((300 + tick_no).into()), 1);
+            let t = apply(&workflow, &snap, &Command::Tick { fiber_id: Some(fiber_id) }, &ctx).unwrap();
+            let materialized = materialize_snapshot(state, &t, workflow.envelope().abi_version(), tick_no);
+            (t, materialized)
+        };
+
+        // Tick 2: branch_a enters V2Guard, parks its ExecNative on a job.
+        let (t2, after_t2) = apply_and_materialize(branch_a.fiber_id, state.state());
+        let job_key = t2.jobs_enqueue()[0].job_key.clone();
+        state = after_t2;
+
+        // Tick 3: branch_b arrives at V2Join (count 3 -> 2), non-last, parks.
+        let (_, after_t3) = apply_and_materialize(branch_b.fiber_id, state.state());
+        state = after_t3;
+
+        // Tick 4: branch_c arrives at V2Join (count 2 -> 1), non-last, parks.
+        let (_, after_t4) = apply_and_materialize(branch_c.fiber_id, state.state());
+        state = after_t4;
+
+        assert_eq!(
+            state.state().concurrency_table().get(barrier_handle).unwrap().counters.count,
+            1,
+            "sanity: two of three arrivals in, one outstanding"
+        );
+
+        // branch_a's job fails definitively, inside a plain (non-rollback)
+        // interrupting `V2Guard`. A18: this no longer matches
+        // `apply_job_failure`'s innermost-guard rollback special-case at
+        // all (no rollback snapshot on the record) — it falls straight
+        // through to the ordinary v1 incident path.
+        let snapshot_for_fail = Snapshot::new(state.state().instance().clone(), state.state().fibers().values().cloned())
+            .with_concurrency_table(state.state().concurrency_table().clone());
+        let context5 = DeterministicContext::new(999, Uuid::from_u128(999), 1);
+        let fail_command = Command::EffectFailed {
+            effect_id: EffectId::for_instruction(Uuid::nil(), Uuid::nil(), 0),
+            job_key,
+            error_class: ErrorClass::ContractViolation,
+            message: "boom".to_string(),
+            retry: None,
+            attempt: 1,
+        };
+        let result = apply(&workflow, &snapshot_for_fail, &fail_command, &context5).unwrap();
+        assert_eq!(
+            result.incidents().len(),
+            1,
+            "no rollback special-case matches a plain V2Guard any more — this is the ordinary v1 incident path"
+        );
+        assert!(
+            result.fibers_delete().is_empty(),
+            "the incident path parks the failing fibre, it does not kill it — branch_a is not silently dropped"
+        );
+        assert!(
+            result.concurrency_mutations().is_empty(),
+            "no guard scope was retired and no rollback ran: the barrier record is completely untouched"
+        );
+        let after_t5 = materialize_snapshot(state.state(), &result, workflow.envelope().abi_version(), tick_no + 1);
+        let barrier = after_t5.state().concurrency_table().get(barrier_handle).unwrap();
+        assert_eq!(
+            barrier.counters.count, 1,
+            "barrier arrival count is exactly as it was before the failure — no member silently disappeared"
+        );
+        assert_eq!(
+            barrier.members.len(),
+            3,
+            "all three branches are still counted as members — branch_a parked on an Incident, not removed"
+        );
+    }
+
+    /// A18 V-10 positive proof: the exact program shape the historical
+    /// barrier-starvation reproduction above used to construct —
+    /// `GUARD-R>` nested inside a `FORK`'s child branch — is now rejected
+    /// at VERIFY time, not merely detected at runtime by Ring 3. This is
+    /// the receipt that the starvation hazard is unreachable via a
+    /// rollback-capable guard by construction.
+    #[test]
+    fn v2_verifier_v10_rejects_guard_r_nested_inside_a_fork_branch() {
+        let program = vec![
+            /*  0 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(1), Addr::new(6), Addr::new(8)]),
+                pairing: Addr::new(0),
+            },
+            /*  1 */ Instr::V2GuardR,
+            /*  2 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+            /*  3 */ Instr::V2GuardREnd,
+            /*  4 */ Instr::V2Join { pairing: Addr::new(0) },
+            /*  5 */ Instr::End,
+            /*  6 */ Instr::V2Join { pairing: Addr::new(0) },
+            /*  7 */ Instr::End,
+            /*  8 */ Instr::V2Join { pairing: Addr::new(0) },
+            /*  9 */ Instr::End,
+        ];
+        let legacy = bpmn_lite_types::legacy_program! {
+            bytecode_version: [19u8; 32],
+            program: program,
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let result = ArtifactEnvelope::from_legacy_program(legacy, "v10-guard-r-nested-in-fork");
+        let err = result.expect_err("GUARD-R> nested inside a FORK branch must be rejected");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("V-10"),
+            "expected a V-10 dominance violation, got {message}"
         );
     }
 

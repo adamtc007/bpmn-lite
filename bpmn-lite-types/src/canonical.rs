@@ -390,6 +390,25 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         w.write_option(&self.rollback_domain_payload_hash, |w, h| {
             w.write_bytes_fixed(h)
         });
+        // A18 A3 rollback-set additions. `rollback_flags`/
+        // `rollback_join_expected` encode structurally (their element
+        // types — `u32` keys, `Value`/`u16` values — already have
+        // infallible `CanonicalEncode`/primitive writers);
+        // `rollback_session_stack` is opaque serialized text — see the
+        // struct doc comment for why it can't follow the structural path.
+        w.write_option(&self.rollback_flags, |w, flags| {
+            w.write_seq(flags.iter(), |w, (k, v)| {
+                w.write_u32(*k);
+                v.canonical_encode(w);
+            });
+        });
+        w.write_option(&self.rollback_join_expected, |w, joins| {
+            w.write_seq(joins.iter(), |w, (k, v)| {
+                w.write_u32(*k);
+                w.write_u16(*v);
+            });
+        });
+        w.write_option(&self.rollback_session_stack, |w, s| w.write_str(s));
         w.write_option(&self.opened_at, |w, a| a.canonical_encode(w));
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
@@ -406,6 +425,25 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             .read_option(|r| r.read_str())?
             .map(String::into_boxed_str);
         let rollback_domain_payload_hash = r.read_option(|r| r.read_bytes_fixed::<32>())?;
+        let rollback_flags = r.read_option(|r| {
+            let entries = r.read_seq(|r| -> Result<(u32, crate::types::Value), CanonicalDecodeError> {
+                let k = r.read_u32()?;
+                let v = crate::types::Value::canonical_decode(r)?;
+                Ok((k, v))
+            })?;
+            Ok::<_, CanonicalDecodeError>(entries.into_iter().collect::<std::collections::BTreeMap<_, _>>())
+        })?;
+        let rollback_join_expected = r.read_option(|r| {
+            let entries = r.read_seq(|r| -> Result<(u32, u16), CanonicalDecodeError> {
+                let k = r.read_u32()?;
+                let v = r.read_u16()?;
+                Ok((k, v))
+            })?;
+            Ok::<_, CanonicalDecodeError>(entries.into_iter().collect::<std::collections::BTreeMap<_, _>>())
+        })?;
+        let rollback_session_stack = r
+            .read_option(|r| r.read_str())?
+            .map(String::into_boxed_str);
         let opened_at = r.read_option(crate::types::Addr::canonical_decode)?;
         Ok(Self {
             id,
@@ -416,6 +454,9 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             counters,
             rollback_domain_payload,
             rollback_domain_payload_hash,
+            rollback_flags,
+            rollback_join_expected,
+            rollback_session_stack,
             opened_at,
         })
     }
@@ -680,6 +721,10 @@ impl CanonicalEncode for crate::types::ProcessState {
                 w.write_u8(0x04);
                 incident_id.canonical_encode(w);
             }
+            Self::Incidented { incident_id } => {
+                w.write_u8(0x07);
+                incident_id.canonical_encode(w);
+            }
             Self::WaitingOnSubmission {
                 callout_id,
                 node_id,
@@ -712,6 +757,9 @@ impl CanonicalEncode for crate::types::ProcessState {
                 at: r.read_u64()? as i64,
             },
             0x04 => Self::Failed {
+                incident_id: uuid::Uuid::canonical_decode(r)?,
+            },
+            0x07 => Self::Incidented {
                 incident_id: uuid::Uuid::canonical_decode(r)?,
             },
             0x05 => Self::WaitingOnSubmission {
@@ -1180,6 +1228,12 @@ mod tests {
             0x00,
             // rollback_domain_payload_hash: None
             0x00,
+            // rollback_flags: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_join_expected: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_session_stack: None (A18 A3 rollback-set)
+            0x00,
             // opened_at: None (V&S §15 v0.7 ruling F)
             0x00,
             // -- record 2: id = Uuid::from_u128(2) --
@@ -1200,10 +1254,51 @@ mod tests {
             0x00,
             // rollback_domain_payload_hash: None
             0x00,
+            // rollback_flags: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_join_expected: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_session_stack: None (A18 A3 rollback-set)
+            0x00,
             // opened_at: None (V&S §15 v0.7 ruling F)
             0x00,
         ];
         assert_eq!(bytes, golden, "canonical encoding drifted from the committed golden bytes — this is exactly the R1 risk V2.1 exists to catch; any change here must be a reviewed, deliberate encoding change, not an incidental one");
+    }
+
+    /// A18 golden-bytes fixture: a `GUARD-R>`-opened record with every A3
+    /// rollback-set field populated (`Some`, not `None`) — the companion
+    /// fixture to `golden_bytes_concurrency_table` above, which only
+    /// exercises the `None` case for these three new fields. Proves the
+    /// new encode/decode arms round-trip real content, not just presence
+    /// tags.
+    #[test]
+    fn golden_bytes_concurrency_record_guard_r_rollback_set() {
+        let mut record = ConcurrencyRecord::new(
+            RecordId::new(Uuid::from_u128(9)),
+            RecordKind::Guard { interrupting: true },
+        );
+        record.rollback_domain_payload = Some("{}".to_string().into_boxed_str());
+        record.rollback_domain_payload_hash = Some([0x11; 32]);
+        record.rollback_flags = Some(std::collections::BTreeMap::from([(7u32, crate::types::Value::Bool(false))]));
+        record.rollback_join_expected = Some(std::collections::BTreeMap::from([(42u32, 3u16)]));
+        record.rollback_session_stack = Some(r#"{"session_id":"00000000-0000-0000-0000-000000000000"}"#.to_string().into_boxed_str());
+        record.opened_at = Some(crate::types::Addr::new(5));
+
+        let bytes = record.to_canonical_bytes();
+        let decoded = ConcurrencyRecord::from_canonical_bytes(&bytes)
+            .expect("a freshly-encoded GUARD-R> record must always decode");
+        assert_eq!(decoded, record, "round-trip must be a fixed point");
+        assert_eq!(decoded.to_canonical_bytes(), bytes, "canonicalize(decode(b)) == b");
+
+        // Presence tags for the three new A3 fields must all be 0x01
+        // (Some), not 0x00 — the concrete receipt that `Some` content, not
+        // merely a `None` tag, survived the round trip.
+        let flags_tag_and_beyond = &bytes[bytes.len() - 60..];
+        assert!(
+            flags_tag_and_beyond.contains(&0x01),
+            "expected at least one 0x01 (Some) presence tag among the tail A3 fields"
+        );
     }
 
     /// V2.1a gate: golden-bytes fixture per `Value` variant.
@@ -1348,6 +1443,13 @@ mod tests {
             ]
         );
         assert_eq!(
+            ProcessState::Incidented { incident_id: Uuid::from_u128(16) }.to_canonical_bytes(),
+            vec![
+                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x10
+            ]
+        );
+        assert_eq!(
             ProcessState::WaitingOnSubmission {
                 callout_id: Uuid::from_u128(17),
                 node_id: "n".to_string(),
@@ -1368,6 +1470,27 @@ mod tests {
                 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00, 0x6D
             ]
+        );
+    }
+
+    #[test]
+    fn incidented_process_state_round_trips_through_canonical_bytes() {
+        use crate::types::ProcessState;
+        let original = ProcessState::Incidented {
+            incident_id: Uuid::from_u128(99),
+        };
+        let bytes = original.to_canonical_bytes();
+        // Tag 0x07 — distinct from Failed's 0x04, per the two-jobs-one-name
+        // split (Failed = genuinely dead; Incidented = parked, resumable
+        // via Command::ResolveIncident).
+        assert_eq!(bytes[0], 0x07);
+        let mut reader = CanonicalReader::new(&bytes);
+        let decoded = ProcessState::canonical_decode(&mut reader).expect("decode");
+        assert_eq!(decoded, original);
+        assert_ne!(
+            ProcessState::Incidented { incident_id: Uuid::from_u128(99) }.to_canonical_bytes(),
+            ProcessState::Failed { incident_id: Uuid::from_u128(99) }.to_canonical_bytes(),
+            "Incidented and Failed must not share a wire tag"
         );
     }
 
@@ -1604,21 +1727,44 @@ mod proptest_round_trip {
         prop_oneof![Just(RecordState::Armed), Just(RecordState::Retired)]
     }
 
+    fn arb_rollback_flags() -> impl Strategy<Value = Option<std::collections::BTreeMap<u32, crate::types::Value>>> {
+        proptest::option::of(proptest::collection::btree_map(
+            any::<u32>(),
+            any::<i64>().prop_map(crate::types::Value::I64),
+            0..4,
+        ))
+    }
+
+    fn arb_rollback_join_expected() -> impl Strategy<Value = Option<std::collections::BTreeMap<u32, u16>>> {
+        proptest::option::of(proptest::collection::btree_map(any::<u32>(), any::<u16>(), 0..4))
+    }
+
     fn arb_record() -> impl Strategy<Value = ConcurrencyRecord> {
         (
-            arb_uuid(),
-            arb_record_kind(),
-            btree_set(arb_uuid(), 0..4),
-            proptest::option::of(any::<u32>()),
-            arb_record_state(),
-            any::<u32>(),
-            any::<u32>(),
+            (
+                arb_uuid(),
+                arb_record_kind(),
+                btree_set(arb_uuid(), 0..4),
+                proptest::option::of(any::<u32>()),
+                arb_record_state(),
+                any::<u32>(),
+                any::<u32>(),
+                proptest::option::of(".{0,16}"),
+                proptest::option::of(any::<[u8; 32]>()),
+            ),
+            arb_rollback_flags(),
+            arb_rollback_join_expected(),
             proptest::option::of(".{0,16}"),
-            proptest::option::of(any::<[u8; 32]>()),
             proptest::option::of(any::<u32>()),
         )
             .prop_map(
-                |(id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash, opened_at)| {
+                |(
+                    (id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash),
+                    rollback_flags,
+                    rollback_join_expected,
+                    rollback_session_stack,
+                    opened_at,
+                )| {
                     ConcurrencyRecord {
                         id: RecordId::new(id),
                         kind,
@@ -1628,6 +1774,9 @@ mod proptest_round_trip {
                         counters: RecordCounters { arity, count },
                         rollback_domain_payload: rollback_payload.map(String::into_boxed_str),
                         rollback_domain_payload_hash: rollback_hash,
+                        rollback_flags,
+                        rollback_join_expected,
+                        rollback_session_stack: rollback_session_stack.map(String::into_boxed_str),
                         opened_at: opened_at.map(Addr::new),
                     }
                 },
@@ -1769,6 +1918,7 @@ mod proptest_round_trip_v2_1h {
                 .prop_map(|(reason, at)| ProcessState::Cancelled { reason, at }),
             any::<i64>().prop_map(|at| ProcessState::Terminated { at }),
             arb_uuid().prop_map(|incident_id| ProcessState::Failed { incident_id }),
+            arb_uuid().prop_map(|incident_id| ProcessState::Incidented { incident_id }),
             (arb_uuid(), ".{0,16}").prop_map(|(callout_id, node_id)| {
                 ProcessState::WaitingOnSubmission {
                     callout_id,

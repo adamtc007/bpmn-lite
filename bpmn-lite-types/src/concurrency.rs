@@ -16,7 +16,7 @@
 //! allocate/retire/mutate records (`GUARD>`, `RACE{`, `FORK`, `JOIN`, ...)
 //! land in V4; V1's `TransitionBuilder` only carries the mutation deltas.
 
-use crate::types::Addr;
+use crate::types::{Addr, FlagKey, JoinId, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -103,18 +103,40 @@ pub struct RecordCounters {
 /// counters }` per V&S §4. `members` is a `BTreeSet` for canonical
 /// ordering (Ring 1 requires BTreeMap/BTreeSet-only, fixed field order).
 ///
-/// `rollback_domain_payload`/`rollback_domain_payload_hash` (V4.1, Adam-
-/// ratified): a `Guard`-kind record captures the process instance's
-/// `domain_payload` at the moment its opening word (`V2Guard`/`V2GuardN`)
-/// executes — "a standard lifecycle snapshot," not opt-in, not a distinct
-/// word. `V2CancelScope` restores it. This is deliberately narrower than
+/// `rollback_domain_payload`/`rollback_domain_payload_hash`/
+/// `rollback_flags`/`rollback_join_expected`/`rollback_session_stack`
+/// (A18, superseding V4.1's original ruling): populated ONLY by
+/// `V2GuardR`'s opening word — never by `V2Guard`/`V2GuardN`, which A18
+/// re-derives as control-only opcodes with no data disposition. V4.1's
+/// original text called the rollback snapshot "a standard lifecycle
+/// snapshot" captured unconditionally by every guard-kind opener; A18's
+/// root diagnosis is exactly that this conflated control disposition
+/// (interrupting/non-interrupting: unwind-or-not, spawn-handler-or-not)
+/// with data disposition (restore-or-not), which are orthogonal and need
+/// independent opcodes. `V2CancelScope` (restricted to `V2GuardR`-opened
+/// handles, V-10's companion check) and automatic rollback-on-definitive-
+/// failure both restore all five fields together — A3's rollback-set rule:
+/// `domain_payload`, business-meaningful `flags`, and `join_expected` are
+/// restored; `ProcessInstance.counters` (loop/retry bounds) are
+/// deliberately NOT captured or restored here — restoring them would let
+/// a failing scope retry unboundedly, defeating their own bound. The
+/// kernel is pure (E4) and cannot reach the store's `payload_history`
+/// mid-transition, so the actual snapshot values (not just a hash) must
+/// travel here for the restore to be a pure function of already-available
+/// snapshot state. `rollback_session_stack` is stored as opaque serialized
+/// JSON text (`serde_json::to_string` of `SessionStackState`), the same
+/// "preserve opaquely, never parsed by the VM" treatment `domain_payload`
+/// itself already gets on `ProcessInstance` — `SessionStackState`'s own
+/// `workspace_stack: Vec<serde_json::Value>` field can only round-trip
+/// through this module's canonical-encoding primitives via the fallible
+/// `encode_canonical_json` path (arbitrary caller-supplied JSON, e.g. a
+/// non-finite float), and `CanonicalEncode::canonical_encode` is
+/// infallible by trait signature — so this field is encoded as an opaque
+/// canonical string, exactly like `rollback_domain_payload`, rather than
+/// structurally. This is deliberately narrower than
 /// `RecordKind::Compensation`'s full "reverse-order handler execution"
 /// (§5) — that record kind stays uninhabited by v2 (see its own doc
-/// comment); this is a property of `Guard` scopes specifically. The
-/// kernel is pure (E4) and cannot reach the store's `payload_history`
-/// mid-transition, so the actual payload text (not just its hash) must
-/// travel here for `V2CancelScope` to restore it as a pure function of
-/// already-available snapshot state.
+/// comment); this is a property of `V2GuardR` scopes specifically.
 ///
 /// `opened_at` (V&S §15, v0.7 ruling F): the static bytecode `Addr` of the
 /// `Guard`-kind record's own opening word (`V2Guard`/`V2GuardN`), `None`
@@ -136,6 +158,16 @@ pub struct ConcurrencyRecord {
     pub counters: RecordCounters,
     pub rollback_domain_payload: Option<Box<str>>,
     pub rollback_domain_payload_hash: Option<[u8; 32]>,
+    /// A3 rollback-set (A18): business-meaningful orchestration flags at
+    /// `V2GuardR` open time. `None` for every other guard-kind record.
+    pub rollback_flags: Option<BTreeMap<FlagKey, Value>>,
+    /// A3 rollback-set (A18): dynamic join-expected counts at `V2GuardR`
+    /// open time. `None` for every other guard-kind record.
+    pub rollback_join_expected: Option<BTreeMap<JoinId, u16>>,
+    /// A3 rollback-set (A18): `SessionStackState` at `V2GuardR` open time,
+    /// serialized opaquely (see the struct doc comment for why). `None`
+    /// for every other guard-kind record.
+    pub rollback_session_stack: Option<Box<str>>,
     pub opened_at: Option<Addr>,
 }
 
@@ -150,6 +182,9 @@ impl ConcurrencyRecord {
             counters: RecordCounters::default(),
             rollback_domain_payload: None,
             rollback_domain_payload_hash: None,
+            rollback_flags: None,
+            rollback_join_expected: None,
+            rollback_session_stack: None,
             opened_at: None,
         }
     }

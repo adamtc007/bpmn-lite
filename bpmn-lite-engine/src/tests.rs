@@ -2084,7 +2084,9 @@ async fn t_err_2_unmatched_error_creates_incident() {
         "Should NOT emit ErrorRouted for unmatched code"
     );
 
-    // Assert: instance Failed
+    // Assert: instance Incidented (parked on an open Incident, resumable
+    // via Command::ResolveIncident — not Failed, which is genuinely dead
+    // forever).
     let instance = store
         .load_instance(
             &bpmn_lite_types::TenantId::new("default").unwrap(),
@@ -2093,7 +2095,7 @@ async fn t_err_2_unmatched_error_creates_incident() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(instance.state, ProcessState::Failed { .. }));
+    assert!(matches!(instance.state, ProcessState::Incidented { .. }));
 }
 
 /// T-ERR-3: Catch-all error route (error_code: None) catches any BusinessRejection.
@@ -3161,7 +3163,8 @@ async fn t_ig_3_zero_match_no_default_incident() {
 
     engine.tick_instance(instance_id).await.unwrap();
 
-    // Assert: instance Failed with incident
+    // Assert: instance Incidented (parked on an open Incident, resumable
+    // via Command::ResolveIncident — not Failed).
     let inst = store
         .load_instance(
             &bpmn_lite_types::TenantId::new("default").unwrap(),
@@ -3171,7 +3174,7 @@ async fn t_ig_3_zero_match_no_default_incident() {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(inst.state, ProcessState::Failed { .. }),
+        matches!(inst.state, ProcessState::Incidented { .. }),
         "Zero match with no default should create incident, got {:?}",
         inst.state
     );

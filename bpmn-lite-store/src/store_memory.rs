@@ -488,7 +488,7 @@ impl RuntimeStore for MemoryStore {
         let r = self.inner.read().await;
         Ok(r.instances
             .iter()
-            .filter(|(_, inst)| !inst.state.is_terminal() && inst.tenant_id == tenant_id.as_str())
+            .filter(|(_, inst)| inst.state.is_schedulable() && inst.tenant_id == tenant_id.as_str())
             .map(|(id, _)| *id)
             .collect())
     }
@@ -2992,5 +2992,49 @@ mod tests {
             .unwrap();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].1, RuntimeEvent::Completed { at: 12345 }));
+    }
+
+    /// `list_running_instances`/`claim_running_instances` filter on
+    /// `ProcessState::is_schedulable()`, not `!is_terminal()` — an
+    /// `Incidented` instance is not terminal (`ResolveIncident` revives
+    /// it) but must still be excluded from scheduler ticking. Regression
+    /// check on the common case: a genuinely `Running` instance must still
+    /// be picked up.
+    #[tokio::test]
+    async fn list_and_claim_running_instances_exclude_incidented_but_include_running() {
+        let store = MemoryStore::new();
+        let running_id = Uuid::now_v7();
+        let incidented_id = Uuid::now_v7();
+
+        let mut running_inst = make_instance(running_id);
+        running_inst.state = ProcessState::Running;
+        store.save_instance("default", &running_inst).await.unwrap();
+
+        let mut incidented_inst = make_instance(incidented_id);
+        incidented_inst.state = ProcessState::Incidented {
+            incident_id: Uuid::now_v7(),
+        };
+        store
+            .save_instance("default", &incidented_inst)
+            .await
+            .unwrap();
+
+        let tenant = TenantId::default();
+        let listed = store.list_running_instances(&tenant).await.unwrap();
+        assert!(
+            listed.contains(&running_id),
+            "a Running instance must still be scheduled"
+        );
+        assert!(
+            !listed.contains(&incidented_id),
+            "an Incidented instance must be excluded — it awaits ResolveIncident, not ticking"
+        );
+
+        let claimed = store
+            .claim_running_instances(&tenant, "owner-1", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(claimed.contains(&running_id));
+        assert!(!claimed.contains(&incidented_id));
     }
 }
