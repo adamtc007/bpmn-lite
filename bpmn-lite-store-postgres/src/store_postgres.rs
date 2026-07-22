@@ -339,6 +339,113 @@ impl PostgresWorkflowStore {
         Ok(())
     }
 
+    /// V&S §15 (v0.7) ruling F: the store-side repeated-failure budget.
+    /// Called from `commit_transition` with `concurrency_table` already
+    /// carrying this transition's own mutations applied (so a
+    /// just-cancelled guard's `opened_at` is still resolvable even though
+    /// its `RecordState` is now `Retired`).
+    ///
+    /// - `V2ScopeCancelled` whose `fiber_id` is in `transition.fibers_delete()`
+    ///   is ruling C's automatic rollback (the triggering fibre is killed,
+    ///   `RollbackCaller::Dies`) — increments the budget, quarantining the
+    ///   instance via the existing `quarantine_state` mechanism if
+    ///   exhausted (T10.3's claim gate already refuses claims for any
+    ///   quarantined instance — no new claim-path code needed). The same
+    ///   event with a *surviving* `fiber_id` is an in-line, explicit
+    ///   `V2CancelScope` (`RollbackCaller::Continues`) — intentional
+    ///   control flow, not a failure, and does not touch the budget.
+    /// - `V2GuardRetired` (a guard closing normally via `V2GuardEnd`)
+    ///   resets the budget for that guard.
+    async fn apply_guard_failure_budget(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tenant_id: &str,
+        instance_id: Uuid,
+        transition: &Transition,
+        concurrency_table: &ConcurrencyTable,
+    ) -> Result<()> {
+        // Built-in budget: 5 automatic rollbacks of the same guard before
+        // escalating to quarantine. Not yet exposed as configuration —
+        // ruling F ratifies the mechanism, not a specific ceiling; this
+        // is a deliberately conservative placeholder pending an explicit
+        // policy-configuration decision.
+        let budget = ScopeFailureBudget::new(1, 5)
+            .expect("built-in guard failure budget bounds are valid");
+        for event in transition.events() {
+            match event {
+                RuntimeEvent::V2ScopeCancelled { record_id, fiber_id, .. } => {
+                    if !transition.fibers_delete().contains(fiber_id) {
+                        continue;
+                    }
+                    let Some(guard_addr) =
+                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    else {
+                        continue;
+                    };
+                    let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
+                        StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                    })?;
+                    let new_count: i32 = sqlx::query_scalar(
+                        r#"
+                        INSERT INTO guard_failure_budget (tenant_id, instance_id, guard_addr, failure_count, updated_at)
+                        VALUES ($1, $2, $3, 1, now())
+                        ON CONFLICT (tenant_id, instance_id, guard_addr)
+                        DO UPDATE SET failure_count = guard_failure_budget.failure_count + 1, updated_at = now()
+                        RETURNING failure_count
+                        "#,
+                    )
+                    .bind(tenant_id)
+                    .bind(instance_id)
+                    .bind(guard_addr_i32)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .persistence()?;
+                    let prior = u32::try_from(new_count).unwrap_or(u32::MAX).saturating_sub(1);
+                    if matches!(budget.decision(prior), ScopeFailureDecision::Exhausted(_)) {
+                        sqlx::query(
+                            r#"
+                            UPDATE workflow_instances
+                            SET quarantine_state = 'guard_failure_budget_exhausted',
+                                lease_owner = NULL, lease_until = NULL
+                            WHERE tenant_id = $1 AND instance_id = $2
+                            "#,
+                        )
+                        .bind(tenant_id)
+                        .bind(instance_id)
+                        .execute(&mut **tx)
+                        .await
+                        .persistence()?;
+                        tracing::warn!(
+                            %instance_id,
+                            guard_addr = guard_addr.get(),
+                            failure_count = new_count,
+                            "guard repeated-failure budget exhausted; instance quarantined"
+                        );
+                    }
+                }
+                RuntimeEvent::V2GuardRetired { record_id, .. } => {
+                    if let Some(guard_addr) =
+                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    {
+                        let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
+                            StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                        })?;
+                        sqlx::query(
+                            "DELETE FROM guard_failure_budget WHERE tenant_id = $1 AND instance_id = $2 AND guard_addr = $3",
+                        )
+                        .bind(tenant_id)
+                        .bind(instance_id)
+                        .bind(guard_addr_i32)
+                        .execute(&mut **tx)
+                        .await
+                        .persistence()?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     async fn list_tenants(&self) -> Result<Vec<String>> {
         use sqlx::Row;
         let rows = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
@@ -2633,6 +2740,20 @@ impl RuntimeStore for PostgresWorkflowStore {
                 }
             }
         }
+        // V&S §15 (v0.7) ruling F: read BEFORE `concurrency_table` moves
+        // into `PersistedSnapshotState` below — this transition's own
+        // mutations are already applied, so a just-cancelled Guard's
+        // `opened_at` is still resolvable here even though its record is
+        // now `Retired`.
+        Self::apply_guard_failure_budget(
+            &mut tx,
+            claim.tenant_id().as_str(),
+            claim.instance_id(),
+            transition,
+            &concurrency_table,
+        )
+        .await
+        .map_err(|error| CommitError::Unavailable(error.to_string()))?;
         let snapshot_envelope = SnapshotEnvelope::new(
             CURRENT_ARTIFACT_ABI,
             persisted_instance.bytecode_version,
@@ -5396,6 +5517,213 @@ mod tests {
         assert!(
             msg.contains("immutable") || msg.contains("P0001"),
             "expected immutability rejection, got: {msg}"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: 5 automatic-rollback `V2ScopeCancelled`
+    /// events for the *same* guard `Addr` (a fresh `RecordId` each time,
+    /// mirroring reality — the record retires and is fresh on re-open)
+    /// exhaust the built-in budget and quarantine the instance via the
+    /// existing `quarantine_state` mechanism. `fiber_id` is included in
+    /// `fibers_delete()` on every commit — the signal that distinguishes
+    /// ruling C's automatic rollback (`RollbackCaller::Dies`) from an
+    /// in-line, explicit `V2CancelScope` (`RollbackCaller::Continues`),
+    /// which must NOT count against the budget.
+    #[tokio::test]
+    async fn test_guard_failure_budget_quarantines_after_repeated_automatic_rollback() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(7);
+
+        for _ in 0..5u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine.as_deref(),
+            Some("guard_failure_budget_exhausted"),
+            "5 automatic rollbacks of the same guard address must exhaust the built-in budget"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: an explicit, in-line `V2CancelScope`
+    /// (the triggering fibre survives — not in `fibers_delete()`) must
+    /// never count against the budget, however many times it fires.
+    #[tokio::test]
+    async fn test_guard_failure_budget_ignores_explicit_cancel_scope() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(9);
+
+        for _ in 0..10u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let surviving_fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                // No `.delete_fiber(surviving_fiber_id)` — the cancelling
+                // fibre continues in place (`RollbackCaller::Continues`).
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id: surviving_fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine, None,
+            "10 explicit V2CancelScope firings must never quarantine — only automatic rollback counts"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: a successful guard close (`V2GuardRetired`)
+    /// resets the budget — 4 automatic-rollback failures (under the
+    /// built-in 5-failure budget), a successful close, then 4 more
+    /// failures must NOT quarantine, proving the counter actually reset
+    /// rather than merely not yet having reached 8.
+    #[tokio::test]
+    async fn test_guard_failure_budget_resets_on_successful_close() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(11);
+
+        async fn fail_once(
+            store: &PostgresWorkflowStore,
+            instance: &ProcessInstance,
+            instance_id: Uuid,
+            guard_addr: Addr,
+        ) {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        for _ in 0..4u32 {
+            fail_once(&store, &instance, instance_id, guard_addr).await;
+        }
+
+        // A successful close resets the counter.
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record = ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(guard_addr);
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(record))
+            .event(RuntimeEvent::V2GuardRetired { record_id, fiber_id })
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        for _ in 0..4u32 {
+            fail_once(&store, &instance, instance_id, guard_addr).await;
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine, None,
+            "4 + 4 failures with a successful close in between must not quarantine — the close must have reset the counter, not merely paused it short of 8"
         );
     }
 

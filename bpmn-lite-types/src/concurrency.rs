@@ -115,6 +115,17 @@ pub struct RecordCounters {
 /// mid-transition, so the actual payload text (not just its hash) must
 /// travel here for `V2CancelScope` to restore it as a pure function of
 /// already-available snapshot state.
+///
+/// `opened_at` (V&S §15, v0.7 ruling F): the static bytecode `Addr` of the
+/// `Guard`-kind record's own opening word (`V2Guard`/`V2GuardN`), `None`
+/// for every other kind. This is NOT a §4 violation — an `Addr` recorded
+/// on runtime state that the machine never reads to decide execution is
+/// the same category as an `Addr` in a journal event; only a runtime
+/// handle steering control flow is what §4 forbids. Ruling F needs it
+/// because `RecordId` does not survive a guard's re-open (the record
+/// retires with the rollback cascade) but its static `Addr` does, and the
+/// store-side repeated-failure budget must be keyed by something that
+/// outlives one activation.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ConcurrencyRecord {
     pub id: RecordId,
@@ -125,6 +136,7 @@ pub struct ConcurrencyRecord {
     pub counters: RecordCounters,
     pub rollback_domain_payload: Option<Box<str>>,
     pub rollback_domain_payload_hash: Option<[u8; 32]>,
+    pub opened_at: Option<Addr>,
 }
 
 impl ConcurrencyRecord {
@@ -138,6 +150,7 @@ impl ConcurrencyRecord {
             counters: RecordCounters::default(),
             rollback_domain_payload: None,
             rollback_domain_payload_hash: None,
+            opened_at: None,
         }
     }
 }

@@ -1629,6 +1629,11 @@ fn apply_tick(
                     // comment for the full rationale.
                     rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
                     rollback_domain_payload_hash: Some(instance.domain_payload_hash),
+                    // V&S §15 (v0.7) ruling F: the guard's own static
+                    // address, since `record_id` doesn't survive a re-open
+                    // — `fiber.pc` here IS this V2Guard instruction's own
+                    // address (not yet advanced past it).
+                    opened_at: Some(fiber.pc),
                     ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true })
                 };
                 // K-1/K-2 (V4.2): the opening fibre is this record's first
@@ -2016,6 +2021,12 @@ fn apply_tick(
                     handler: Some(*handler),
                     rollback_domain_payload: Some(instance.domain_payload.to_string().into_boxed_str()),
                     rollback_domain_payload_hash: Some(instance.domain_payload_hash),
+                    // V&S §15 (v0.7) ruling F: see V2Guard's identical field
+                    // for the rationale. GuardN never triggers automatic
+                    // rollback (ruling D excludes it), so this is set for
+                    // uniformity across every Guard-kind record, not
+                    // because GuardN's own budget is ever consulted today.
+                    opened_at: Some(fiber.pc),
                     ..ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: false })
                 };
                 record.members.insert(fiber.fiber_id);

@@ -601,6 +601,73 @@ impl RetryPolicy {
     }
 }
 
+/// V&S §15 (v0.7) ruling F: the repeated-failure budget for a `Guard`
+/// scope's automatic-rollback-on-`ContractViolation` path (§13/§14 ruling
+/// C/D). Deliberately a **distinct type from `RetryPolicy`**, not a reuse
+/// of it — same shape (bounded, deterministic, terminating in escalation)
+/// but a different granularity and clock: `RetryPolicy` counts per-effect
+/// attempts with backoff/jitter; this counts per-scope re-runs with no
+/// backoff concept at all (an external actor decides when to re-run, not
+/// this budget). Keeping them distinct types means "attempt 3" can never
+/// be ambiguous between the two callers — a compile-time guarantee a
+/// shared type wouldn't give.
+///
+/// Store-side only (never touched by the pure kernel) — see
+/// `ConcurrencyRecord::opened_at`'s doc comment for why this is safe
+/// outside the hash domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeFailureBudget {
+    version: u32,
+    max_failures: u32,
+}
+
+/// The terminal action is always quarantine-and-surface (§15) — there is
+/// no `Terminal`/non-retriable-class distinction here the way
+/// `RetryDecision` has one, because this budget only ever sees one
+/// failure class (`ContractViolation` inside an interrupting guard,
+/// ruling D's sole rollback-eligible class) by construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScopeFailureDecision {
+    /// Still under budget. Carries the new failure count to persist.
+    Continue(u32),
+    /// Budget exhausted as of this failure. Carries the new failure count
+    /// (for the audit trail) — the caller quarantines the instance via
+    /// the existing `quarantine_instance` mechanism (T10.3's claim gate
+    /// already refuses claims for any quarantined instance; no new
+    /// claim-path code needed).
+    Exhausted(u32),
+}
+
+impl ScopeFailureBudget {
+    pub fn new(version: u32, max_failures: u32) -> Result<Self, &'static str> {
+        if version == 0 || max_failures == 0 {
+            return Err("invalid scope failure budget bounds");
+        }
+        Ok(Self { version, max_failures })
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn max_failures(&self) -> u32 {
+        self.max_failures
+    }
+
+    /// `prior_failures` is the count persisted before this failure (`0`
+    /// for a guard's first-ever automatic rollback). Deterministic: no
+    /// jitter, no time input — this budget has no backoff concept, only
+    /// a ceiling.
+    pub fn decision(&self, prior_failures: u32) -> ScopeFailureDecision {
+        let next = prior_failures.saturating_add(1);
+        if next >= self.max_failures {
+            ScopeFailureDecision::Exhausted(next)
+        } else {
+            ScopeFailureDecision::Continue(next)
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingEffectResponse {
     tenant_id: TenantId,
@@ -1602,5 +1669,28 @@ mod retry_policy_tests {
             policy.decision(2, None, &ErrorClass::Transient, 0, Uuid::nil()),
             RetryDecision::Exhausted
         );
+    }
+}
+
+/// V&S §15 (v0.7) ruling F.
+#[cfg(test)]
+mod scope_failure_budget_tests {
+    use super::*;
+
+    #[test]
+    fn continues_under_budget_then_exhausts_at_the_ceiling() {
+        let budget = ScopeFailureBudget::new(1, 3).unwrap();
+        assert_eq!(budget.decision(0), ScopeFailureDecision::Continue(1));
+        assert_eq!(budget.decision(1), ScopeFailureDecision::Continue(2));
+        assert_eq!(budget.decision(2), ScopeFailureDecision::Exhausted(3));
+        // Deterministic: same input, same output, every time (no jitter,
+        // no time input — unlike RetryPolicy, this budget has none).
+        assert_eq!(budget.decision(2), ScopeFailureDecision::Exhausted(3));
+    }
+
+    #[test]
+    fn rejects_a_zero_budget() {
+        assert!(ScopeFailureBudget::new(1, 0).is_err());
+        assert!(ScopeFailureBudget::new(0, 3).is_err());
     }
 }

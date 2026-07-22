@@ -390,6 +390,7 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         w.write_option(&self.rollback_domain_payload_hash, |w, h| {
             w.write_bytes_fixed(h)
         });
+        w.write_option(&self.opened_at, |w, a| a.canonical_encode(w));
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
         let id = crate::concurrency::RecordId::canonical_decode(r)?;
@@ -405,6 +406,7 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             .read_option(|r| r.read_str())?
             .map(String::into_boxed_str);
         let rollback_domain_payload_hash = r.read_option(|r| r.read_bytes_fixed::<32>())?;
+        let opened_at = r.read_option(crate::types::Addr::canonical_decode)?;
         Ok(Self {
             id,
             kind,
@@ -414,6 +416,7 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             counters,
             rollback_domain_payload,
             rollback_domain_payload_hash,
+            opened_at,
         })
     }
 }
@@ -1177,6 +1180,8 @@ mod tests {
             0x00,
             // rollback_domain_payload_hash: None
             0x00,
+            // opened_at: None (V&S §15 v0.7 ruling F)
+            0x00,
             // -- record 2: id = Uuid::from_u128(2) --
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
@@ -1194,6 +1199,8 @@ mod tests {
             // rollback_domain_payload: None
             0x00,
             // rollback_domain_payload_hash: None
+            0x00,
+            // opened_at: None (V&S §15 v0.7 ruling F)
             0x00,
         ];
         assert_eq!(bytes, golden, "canonical encoding drifted from the committed golden bytes — this is exactly the R1 risk V2.1 exists to catch; any change here must be a reviewed, deliberate encoding change, not an incidental one");
@@ -1608,9 +1615,10 @@ mod proptest_round_trip {
             any::<u32>(),
             proptest::option::of(".{0,16}"),
             proptest::option::of(any::<[u8; 32]>()),
+            proptest::option::of(any::<u32>()),
         )
             .prop_map(
-                |(id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash)| {
+                |(id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash, opened_at)| {
                     ConcurrencyRecord {
                         id: RecordId::new(id),
                         kind,
@@ -1620,6 +1628,7 @@ mod proptest_round_trip {
                         counters: RecordCounters { arity, count },
                         rollback_domain_payload: rollback_payload.map(String::into_boxed_str),
                         rollback_domain_payload_hash: rollback_hash,
+                        opened_at: opened_at.map(Addr::new),
                     }
                 },
             )
