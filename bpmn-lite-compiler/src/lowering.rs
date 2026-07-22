@@ -78,9 +78,12 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     // static `pairing` field (V-3's arity proof; runtime resolution is by
     // dynamic handle only — see the V&S §5 word-table entry for `JOIN`).
     // `order` is BFS from Start, so a Diverging gateway is always visited
-    // strictly before any Join reachable only through its forked branches
-    // (SESE-only topology — V&S §5 — guarantees no cross-region overlap
-    // that would make this stack-based pairing ambiguous).
+    // strictly before any Join reachable only through its forked branches.
+    // Correctness depends on well-nested (SESE) topology — CLAUDE.md's
+    // settled decision, not a stated V&S theorem — which `verifier::verify`
+    // now checks structurally (§4a below) before `lower` is called in the
+    // real pipeline, rejecting non-well-nested input rather than letting
+    // this stack silently mispair it.
     let mut fork_pairing_stack: Vec<Addr> = Vec::new();
     let mut fork_pairing: HashMap<NodeIndex, Addr> = HashMap::new();
     for &node_idx in &order {
@@ -346,7 +349,21 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     // No `join_id`/`JoinPlanEntry` side-table entry (V-9
                     // forbids it surviving into a v2 envelope) — resolution
                     // is via the dynamically-inherited handle only.
-                    let pairing = fork_pairing.get(&node_idx).copied().unwrap_or(base);
+                    //
+                    // No silent fallback here: `verifier::verify` rejects
+                    // non-well-nested GatewayAnd topology before `lower` is
+                    // ever called in the real pipeline (§4a), but `lower`
+                    // is itself a public fn callable directly — a missing
+                    // pairing must fail loudly, not default to this node's
+                    // own address and mispair silently.
+                    let pairing = fork_pairing.get(&node_idx).copied().ok_or_else(|| {
+                        anyhow!(
+                            "GatewayAnd '{}' (converging) has no matching diverging \
+                             GatewayAnd on the fork-pairing stack — non-well-nested \
+                             parallel-gateway topology",
+                            node.id()
+                        )
+                    })?;
                     instructions.push(Instr::V2Join { pairing });
 
                     // `V2Join` carries no `next` field (continuation is

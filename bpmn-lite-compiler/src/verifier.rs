@@ -1,6 +1,7 @@
 use crate::ir::*;
 use anyhow::{anyhow, Result};
 use bpmn_lite_types::{Addr, CompiledProgram, Instr};
+use petgraph::graph::NodeIndex;
 use petgraph::visit::Dfs;
 use std::collections::HashMap;
 
@@ -135,6 +136,34 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
             ),
             element_id: None,
         });
+    }
+
+    // 4a. Parallel gateways: structural well-nestedness (SESE), not just
+    // matching counts. Adam, 2026-07-22: V5's XML->V2Fork/V2Join lowering
+    // pre-pass pairs each Converging GatewayAnd with a Diverging one via a
+    // stack, correct only for well-nested topology — a property this
+    // codebase has always called "SESE-only" (CLAUDE.md's settled
+    // decision, never itself promoted into a V&S theorem) but which
+    // nothing in this pipeline actually checked: `dto_to_ir` -> `verify`
+    // -> `lower` never ran the DSL's `rpst::verify_sese_nesting` (that
+    // lives on a separate importer path, into `WorkflowExecutionPlan`, not
+    // `IRGraph`). Mirrors the DSL check's DFS-second-visit algorithm as
+    // closely as `IRNode::GatewayAnd`'s schema allows: `GatewayAnd` carries
+    // no explicit fork/join name reference (unlike the DSL's
+    // `JoinExecNode.split`), so this catches unmatched forks/joins and
+    // gross stack-order crossing structurally, but cannot independently
+    // cross-check a join against its *intended* fork by name the way the
+    // DSL's check does — a strictly weaker, not equivalent, guarantee.
+    if let Some(start_idx) = find_start(graph) {
+        let mut visited = std::collections::HashSet::new();
+        let mut fork_stack: Vec<String> = Vec::new();
+        check_gateway_and_nesting(graph, start_idx, &mut visited, &mut fork_stack, &mut errors);
+        if !fork_stack.is_empty() {
+            errors.push(VerifyError {
+                message: format!("Unclosed diverging GatewayAnd node(s): [{}]", fork_stack.join(", ")),
+                element_id: None,
+            });
+        }
     }
 
     // 5. All task_type references are non-empty (ServiceTask)
@@ -407,6 +436,54 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
     errors
 }
 
+/// Structural well-nestedness (SESE) check for `GatewayAnd` fork/join
+/// pairs, mirroring `dsl::rpst::verify_sese_nesting`'s DFS-second-visit
+/// algorithm: entering a Diverging gateway pushes its element id; the
+/// *second* time DFS reaches a node (i.e. `visited.insert` returns
+/// `false`, meaning another path already explored it) is when a
+/// Converging gateway's pairing is checked and popped. Unlike the DSL's
+/// check, `IRNode::GatewayAnd` has no explicit fork/join name reference
+/// to cross-validate against, so this can only detect stack-order
+/// crossing and unmatched joins structurally — not verify a join closes
+/// the *specific* fork a BPMN author intended.
+fn check_gateway_and_nesting(
+    graph: &IRGraph,
+    curr: NodeIndex,
+    visited: &mut std::collections::HashSet<NodeIndex>,
+    fork_stack: &mut Vec<String>,
+    errors: &mut Vec<VerifyError>,
+) {
+    if !visited.insert(curr) {
+        if let IRNode::GatewayAnd {
+            direction: GatewayDirection::Converging,
+            ..
+        } = &graph[curr]
+        {
+            if fork_stack.pop().is_none() {
+                errors.push(VerifyError {
+                    message: "Unmatched GatewayAnd (converging): no open diverging \
+                        GatewayAnd found — non-well-nested parallel-gateway topology"
+                        .to_string(),
+                    element_id: Some(graph[curr].id().to_string()),
+                });
+            }
+        }
+        return;
+    }
+
+    if let IRNode::GatewayAnd {
+        direction: GatewayDirection::Diverging,
+        ..
+    } = &graph[curr]
+    {
+        fork_stack.push(graph[curr].id().to_string());
+    }
+
+    for neighbor in graph.neighbors(curr) {
+        check_gateway_and_nesting(graph, neighbor, visited, fork_stack, errors);
+    }
+}
+
 /// Verify bytecode for bounded-loop safety.
 ///
 /// Rejects backward `Jump`/`BrIf`/`BrIfNot` (infinite loop risk).
@@ -633,5 +710,81 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| e.message.contains("Mismatched parallel gateways")));
+    }
+
+    /// V5.1 correction (2026-07-22): equal fork/join counts do not imply
+    /// well-nested topology — the count check alone would admit this.
+    /// A Converging `GatewayAnd` appears *before* its Diverging counterpart
+    /// in the graph (1 fork, 1 join, but out of nesting order), which the
+    /// XML->V2Fork/V2Join lowering pre-pass depends on never happening.
+    #[test]
+    fn test_out_of_order_gateway_and_rejected_despite_matching_counts() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let join_first = graph.add_node(IRNode::GatewayAnd {
+            id: "join_first".to_string(),
+            name: "Join".to_string(),
+            direction: GatewayDirection::Converging,
+        });
+        let fork_later = graph.add_node(IRNode::GatewayAnd {
+            id: "fork_later".to_string(),
+            name: "Fork".to_string(),
+            direction: GatewayDirection::Diverging,
+        });
+        let end1 = graph.add_node(IRNode::End {
+            id: "end1".to_string(),
+            terminate: false,
+        });
+        let end2 = graph.add_node(IRNode::End {
+            id: "end2".to_string(),
+            terminate: false,
+        });
+
+        graph.add_edge(
+            start,
+            join_first,
+            IREdge {
+                id: "f1".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            join_first,
+            fork_later,
+            IREdge {
+                id: "f2".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            fork_later,
+            end1,
+            IREdge {
+                id: "f3".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            fork_later,
+            end2,
+            IREdge {
+                id: "f4".to_string(),
+                condition: None,
+            },
+        );
+
+        let errors = verify(&graph);
+        // The old count-only check (§4) would find 1 fork, 1 join — equal,
+        // no error. The structural check (§4a) must still reject it.
+        assert!(
+            !errors.iter().any(|e| e.message.contains("Mismatched parallel gateways")),
+            "counts are equal — the count check alone must not fire here"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Unclosed diverging GatewayAnd")),
+            "the structural nesting check must catch the out-of-order pair"
+        );
     }
 }

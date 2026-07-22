@@ -2140,6 +2140,19 @@ fn apply_tick(
                     name: *name,
                     corr_key: corr_key.clone(),
                 });
+                // V4 remediation (2026-07-22, found during V5 scoping):
+                // this word never advanced `fiber.pc` before parking,
+                // unlike every other parking word (`V2WaitFor`/
+                // `V2WaitUntil` above, v1 `WaitMsg`'s own parking branch).
+                // `apply_message`'s plain (non-race) `WaitState::Msg` match
+                // doesn't set a resume `pc` either — only the race-arm case
+                // has an explicit `resume_at`. Together, a fibre parked
+                // here resumed at the *same* `pc` and re-executed
+                // `V2WaitMsg` rather than continuing past it. Zero test
+                // coverage anywhere caught this — genuinely untested since
+                // V4.1 landed the word. Fixed to match `V2WaitFor`'s and
+                // v1 `WaitMsg`'s own pattern.
+                fiber.pc = fiber.pc.saturating_add(1);
                 // wait_id is v1's `CancelWait` bookkeeping identifier; it's
                 // inert in resolution (apply_message matches on
                 // name/corr_key only) and CancelWait itself is a no-op in
@@ -4167,6 +4180,175 @@ mod tests {
             2,
             "child_b's own Pop(BAR) then Pop(G) — child_a's stack was already fully popped in tick 2"
         );
+    }
+
+    /// V4 remediation (found during V5 scoping, 2026-07-22): plain
+    /// (non-race) `V2WaitMsg` never advanced `fiber.pc` before parking, so
+    /// a resumed fibre re-executed `V2WaitMsg` instead of continuing past
+    /// it — genuinely untested since V4.1 landed the word (grepped: zero
+    /// prior construction of `Instr::V2WaitMsg` anywhere in this file).
+    /// Red before the fix: `resumed.pc` was `Addr::new(0)` (still pointing
+    /// at the `V2WaitMsg` instruction itself); green after: `Addr::new(1)`.
+    #[test]
+    fn v2_wait_msg_resumes_past_itself_not_at_itself() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [11u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2WaitMsg { name: 100, corr_reg: 0 },
+                /* 1 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-waitmsg-remediation").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        let parked = t1.fibers_upsert()[0].clone();
+        assert!(matches!(&parked.wait, WaitState::Msg { name: 100, .. }));
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot2 = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        // corr_reg 0 defaults to Value::Bool(false) -> correlation key "b:false".
+        let message_command = Command::MessageDelivered {
+            message_id: "m1".to_string(),
+            name: "100".to_string(),
+            correlation_key: "b:false".to_string(),
+            payload: b"{}".to_vec(),
+            payload_hash: None,
+            expires_at: 0,
+        };
+        let t2 = apply(&workflow, &snapshot2, &message_command, &context).unwrap();
+        assert_eq!(t2.fibers_upsert().len(), 1);
+        let resumed = &t2.fibers_upsert()[0];
+        assert_eq!(
+            resumed.pc,
+            Addr::new(1),
+            "must continue past V2WaitMsg (addr 0), not re-park at it"
+        );
+        assert_eq!(resumed.wait, WaitState::Running);
+    }
+
+    /// V4 word-coverage audit (2026-07-22, following the `V2WaitMsg`
+    /// remediation above): `V2WaitUntil` had zero test coverage anywhere
+    /// in the kernel — the only other hole the audit found. Unlike
+    /// `V2WaitMsg`, direct code inspection showed it already advances
+    /// `fiber.pc` correctly (mirroring `V2WaitFor`); this test confirms
+    /// that by evidence rather than trusting the read.
+    #[test]
+    fn v2_wait_until_resumes_past_itself_on_timer_fire() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [12u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushI64(5_000),
+                /* 1 */ Instr::V2WaitUntil,
+                /* 2 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-waituntil-audit").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        let parked = t1.fibers_upsert()[0].clone();
+        assert!(matches!(&parked.wait, WaitState::Timer { deadline_ms: 5_000 }));
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot2 = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 1),
+                after_t1.state().instance().instance_id,
+                root_fiber_id,
+            ),
+            5_000,
+            TimerKind::Wait,
+            None,
+            Uuid::nil(),
+        );
+        let t2 = apply(
+            &workflow,
+            &snapshot2,
+            &Command::TimerFired { timer: claimed_timer, fired_at: 5_000 },
+            &context,
+        )
+        .unwrap();
+        assert_eq!(t2.fibers_upsert().len(), 1);
+        let resumed = &t2.fibers_upsert()[0];
+        assert_eq!(
+            resumed.pc,
+            Addr::new(2),
+            "must continue past V2WaitUntil (addr 1), not re-park at it"
+        );
+        assert_eq!(resumed.wait, WaitState::Running);
     }
 
     /// V4.1 race words (`V2RaceOpen`/`V2ArmTimer`/`V2ArmMsg`/`V2RaceClose`)
