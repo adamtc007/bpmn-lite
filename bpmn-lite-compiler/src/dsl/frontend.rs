@@ -1,8 +1,7 @@
 use super::plan::{ExecutionNode, JoinMode, SplitMode, WorkflowExecutionPlan};
 use crate::VerifiedWorkflow;
 use bpmn_lite_types::{
-    legacy_program, Addr, ArtifactEnvelope, ExecutableWorkflow, Instr, JoinPlanEntry,
-    PayloadRouteBranch, Value,
+    legacy_program, Addr, ArtifactEnvelope, ExecutableWorkflow, Instr, PayloadRouteBranch,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -75,13 +74,18 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     let mut next_join_id = 0u32;
     for node in plan.nodes.values() {
         if let ExecutionNode::Split(split) = node {
-            if split.mode != SplitMode::Exclusive {
+            // Parallel splits pair with their join via `V2Fork`/`V2Join`'s
+            // dynamic-handle + static-`Addr`-pairing mechanism (V-3) —
+            // `fork_pairing` below, not this v1-only numeric `join_id`
+            // side table, which V-9 forbids surviving into a v2 envelope.
+            if split.mode == SplitMode::Inclusive {
                 join_ids.insert(split.join.clone(), next_join_id);
                 next_join_id = next_join_id.saturating_add(1);
             }
         }
     }
-    let mut join_plan = BTreeMap::new();
+    let join_plan = BTreeMap::new();
+    let mut fork_pairing: BTreeMap<String, Addr> = BTreeMap::new();
 
     for node_id in &order {
         let node = &plan.nodes[node_id];
@@ -126,14 +130,17 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                         });
                     }
                     SplitMode::Parallel => {
-                        instructions.push(Instr::Fork {
+                        let pairing = Addr::new(instructions.len() as u32);
+                        instructions.push(Instr::V2Fork {
                             targets: node
                                 .flows
                                 .iter()
                                 .map(|flow| target(&addresses, &flow.next))
                                 .collect::<Result<Vec<_>, _>>()?
                                 .into_boxed_slice(),
+                            pairing,
                         });
+                        fork_pairing.insert(node.join.clone(), pairing);
                     }
                     SplitMode::Inclusive => {
                         let join_id = *join_ids
@@ -153,23 +160,12 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     target: target(&addresses, &node.next)?,
                 }),
                 JoinMode::Parallel => {
-                    let join_id = *join_ids
+                    let pairing = *fork_pairing
                         .get(&node.id)
                         .ok_or_else(|| FrontendError::MissingNode(node.id.clone()))?;
-                    let expected = incoming_count(plan, &node.id);
-                    let next = target(&addresses, &node.next)?;
-                    join_plan.insert(
-                        join_id,
-                        JoinPlanEntry {
-                            expected,
-                            next,
-                            reg_template: std::array::from_fn(|_| Value::Bool(false)),
-                        },
-                    );
-                    instructions.push(Instr::Join {
-                        id: join_id,
-                        expected,
-                        next,
+                    instructions.push(Instr::V2Join { pairing });
+                    instructions.push(Instr::Jump {
+                        target: target(&addresses, &node.next)?,
                     });
                 }
                 JoinMode::Inclusive => {
@@ -236,6 +232,10 @@ fn instruction_count(node: &ExecutionNode) -> Result<u32, FrontendError> {
     match node {
         ExecutionNode::Task(_) => Ok(2),
         ExecutionNode::Split(node) if node.routing_socket.is_some() => Ok(2),
+        // V5.2 mechanical re-lowering: `V2Join` carries no `next` field
+        // (kernel continuation is PC+1 on last arrival, per K-3) — an
+        // explicit trailing `Jump` supplies what v1's embedded `next` used to.
+        ExecutionNode::Join(node) if node.mode == JoinMode::Parallel => Ok(2),
         ExecutionNode::Loop(_) => Ok(3),
         _ => Ok(1),
     }
@@ -400,16 +400,6 @@ fn outgoing_for_order(node: &ExecutionNode) -> Vec<&str> {
         ExecutionNode::Loop(node) => vec![node.next.as_str()],
         _ => outgoing(node),
     }
-}
-
-fn incoming_count(plan: &WorkflowExecutionPlan, target: &str) -> u16 {
-    plan.nodes
-        .values()
-        .flat_map(outgoing)
-        .filter(|node| *node == target)
-        .count()
-        .try_into()
-        .unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
@@ -602,5 +592,131 @@ mod tests {
                 Instr::BrCounterLt { limit: 4, target, .. } if *target < Addr::from(address as u32)
             )
         ));
+    }
+
+    fn parallel_plan() -> WorkflowExecutionPlan {
+        let mut plan = routing_plan();
+        plan.nodes = BTreeMap::from([
+            (
+                "start".to_string(),
+                ExecutionNode::Start(StartExecNode {
+                    id: "start".to_string(),
+                    next: "split".to_string(),
+                    span: None,
+                }),
+            ),
+            (
+                "split".to_string(),
+                ExecutionNode::Split(SplitExecNode {
+                    id: "split".to_string(),
+                    mode: SplitMode::Parallel,
+                    routing_socket: None,
+                    flows: vec![
+                        SplitExecFlow {
+                            placeholder: None,
+                            expected_value: None,
+                            next: "fund".to_string(),
+                        },
+                        SplitExecFlow {
+                            placeholder: None,
+                            expected_value: None,
+                            next: "trust".to_string(),
+                        },
+                    ],
+                    join: "join".to_string(),
+                    produces_placeholder: None,
+                    span: None,
+                }),
+            ),
+            (
+                "fund".to_string(),
+                ExecutionNode::Task(TaskExecNode {
+                    id: "fund".to_string(),
+                    plug: "ob-poc:add-fund".to_string(),
+                    delivery_mode: DeliveryMode::GuaranteedAsync,
+                    static_args: HashMap::new(),
+                    next: "join".to_string(),
+                    produces_placeholder: None,
+                    consumes_placeholders: Vec::new(),
+                    span: None,
+                }),
+            ),
+            (
+                "trust".to_string(),
+                ExecutionNode::Task(TaskExecNode {
+                    id: "trust".to_string(),
+                    plug: "ob-poc:add-trust".to_string(),
+                    delivery_mode: DeliveryMode::GuaranteedAsync,
+                    static_args: HashMap::new(),
+                    next: "join".to_string(),
+                    produces_placeholder: None,
+                    consumes_placeholders: Vec::new(),
+                    span: None,
+                }),
+            ),
+            (
+                "join".to_string(),
+                ExecutionNode::Join(JoinExecNode {
+                    id: "join".to_string(),
+                    mode: JoinMode::Parallel,
+                    split: "split".to_string(),
+                    next: "end".to_string(),
+                    span: None,
+                }),
+            ),
+            (
+                "end".to_string(),
+                ExecutionNode::End(EndExecNode {
+                    id: "end".to_string(),
+                    status: "done".to_string(),
+                    span: None,
+                }),
+            ),
+        ]);
+        plan.start_node = "start".to_string();
+        plan
+    }
+
+    /// V5.2: DSL `Split`/`Join` mode `Parallel` lowers to `V2Fork`/`V2Join`,
+    /// not v1 `Fork`/`Join` — proves the real V3 verifier (V-1..V-9,
+    /// exercised via `ExecutableWorkflow::from_verified_envelope`, not a
+    /// standalone call) admits the emitted pairing, and that the emitted
+    /// shape is actually `V2Fork`/`V2Join` rather than the v1 words they
+    /// replace.
+    #[test]
+    fn dsl_parallel_split_join_lowers_to_v2_fork_join_with_matching_pairing() {
+        let plan = parallel_plan();
+        let workflow = DslFrontend::lower(&plan).expect("v2 Fork/Join must be verifier-admitted");
+        let instructions = workflow.envelope().instructions();
+
+        let fork_pairing = instructions
+            .iter()
+            .enumerate()
+            .find_map(|(address, instruction)| match instruction {
+                Instr::V2Fork { pairing, .. } => {
+                    assert_eq!(
+                        pairing.index(),
+                        address,
+                        "V2Fork's pairing must be its own address"
+                    );
+                    Some(*pairing)
+                }
+                Instr::Fork { .. } => panic!("must not emit v1 Fork for a Parallel split"),
+                _ => None,
+            })
+            .expect("a V2Fork must be emitted");
+
+        let join_count = instructions
+            .iter()
+            .filter(|instruction| match instruction {
+                Instr::V2Join { pairing } => {
+                    assert_eq!(*pairing, fork_pairing, "V2Join must reference the V2Fork's pairing");
+                    true
+                }
+                Instr::Join { .. } => panic!("must not emit v1 Join for a Parallel join"),
+                _ => false,
+            })
+            .count();
+        assert_eq!(join_count, 1, "one shared V2Join, arrived at by both branches");
     }
 }
