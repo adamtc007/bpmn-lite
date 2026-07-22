@@ -24,7 +24,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     let mut node_addr: HashMap<NodeIndex, Addr> = HashMap::new();
     let mut instructions: Vec<Instr> = Vec::new();
     let mut debug_map: BTreeMap<Addr, String> = BTreeMap::new();
-    let mut join_plan: BTreeMap<JoinId, JoinPlanEntry> = BTreeMap::new();
+    let join_plan: BTreeMap<JoinId, JoinPlanEntry> = BTreeMap::new();
     let mut wait_plan: BTreeMap<WaitId, WaitPlanEntry> = BTreeMap::new();
     let mut message_name_map: BTreeMap<u32, String> = BTreeMap::new();
     let mut race_plan: BTreeMap<RaceId, RacePlanEntry> = BTreeMap::new();
@@ -72,6 +72,36 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
     let mut race_id_counter: RaceId = 0;
     let mut boundary_map: BTreeMap<Addr, RaceId> = BTreeMap::new();
+
+    // Pre-scan: pair each converging GatewayAnd (parallel join) with its
+    // diverging counterpart's own bytecode `Addr`, for `V2Fork`/`V2Join`'s
+    // static `pairing` field (V-3's arity proof; runtime resolution is by
+    // dynamic handle only — see the V&S §5 word-table entry for `JOIN`).
+    // `order` is BFS from Start, so a Diverging gateway is always visited
+    // strictly before any Join reachable only through its forked branches
+    // (SESE-only topology — V&S §5 — guarantees no cross-region overlap
+    // that would make this stack-based pairing ambiguous).
+    let mut fork_pairing_stack: Vec<Addr> = Vec::new();
+    let mut fork_pairing: HashMap<NodeIndex, Addr> = HashMap::new();
+    for &node_idx in &order {
+        match &graph[node_idx] {
+            IRNode::GatewayAnd {
+                direction: GatewayDirection::Diverging,
+                ..
+            } => {
+                fork_pairing_stack.push(node_addr[&node_idx]);
+            }
+            IRNode::GatewayAnd {
+                direction: GatewayDirection::Converging,
+                ..
+            } => {
+                if let Some(pairing) = fork_pairing_stack.pop() {
+                    fork_pairing.insert(node_idx, pairing);
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Pre-scan: allocate join_ids for converging inclusive gateways
     let mut inclusive_join_ids: HashMap<String, JoinId> = HashMap::new();
@@ -307,37 +337,27 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                         .iter()
                         .map(|s| node_addr.get(s).copied().unwrap_or(Addr::new(0)))
                         .collect();
-                    instructions.push(Instr::Fork { targets });
+                    instructions.push(Instr::V2Fork {
+                        targets,
+                        pairing: base,
+                    });
                 }
                 GatewayDirection::Converging => {
-                    let join_id = join_id_counter;
-                    join_id_counter += 1;
+                    // No `join_id`/`JoinPlanEntry` side-table entry (V-9
+                    // forbids it surviving into a v2 envelope) — resolution
+                    // is via the dynamically-inherited handle only.
+                    let pairing = fork_pairing.get(&node_idx).copied().unwrap_or(base);
+                    instructions.push(Instr::V2Join { pairing });
 
-                    // Count incoming edges as expected arrivals
-                    let incoming = graph
-                        .edges_directed(node_idx, petgraph::Direction::Incoming)
-                        .count() as u16;
-
+                    // `V2Join` carries no `next` field (continuation is
+                    // PC+1 on last arrival, per K-3) — an explicit trailing
+                    // `Jump` supplies what v1's embedded `next` used to.
                     let successors = get_successors(graph, node_idx);
                     let next = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
                         .unwrap_or(Addr::new(0));
-
-                    join_plan.insert(
-                        join_id,
-                        JoinPlanEntry {
-                            expected: incoming,
-                            next,
-                            reg_template: std::array::from_fn(|_| Value::Bool(false)),
-                        },
-                    );
-
-                    instructions.push(Instr::Join {
-                        id: join_id,
-                        expected: incoming,
-                        next,
-                    });
+                    instructions.push(Instr::Jump { target: next });
                 }
             },
 
@@ -390,21 +410,30 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
             },
 
             IRNode::TimerWait { spec, .. } => {
+                // `V2WaitFor`/`V2WaitUntil` pop their duration/deadline from
+                // the operand stack (V2.7 addressing-review BLOCKING #2.4)
+                // rather than carrying it as a static field, so an explicit
+                // `PushI64` precedes them — the established pattern (see
+                // `bpmn-lite-kernel`'s own golden fixtures).
                 match spec {
                     TimerSpec::Duration { ms } => {
-                        instructions.push(Instr::WaitFor { ms: *ms });
+                        instructions.push(Instr::PushI64(*ms as i64));
+                        instructions.push(Instr::V2WaitFor);
                     }
                     TimerSpec::Date { deadline_ms } => {
-                        instructions.push(Instr::WaitUntil {
-                            deadline_ms: *deadline_ms,
-                        });
+                        instructions.push(Instr::PushI64(*deadline_ms as i64));
+                        instructions.push(Instr::V2WaitUntil);
                     }
                     TimerSpec::Cycle { interval_ms, .. } => {
                         // Standalone timer cycle treated as single wait for first interval
-                        instructions.push(Instr::WaitFor { ms: *interval_ms });
+                        instructions.push(Instr::PushI64(*interval_ms as i64));
+                        instructions.push(Instr::V2WaitFor);
                     }
                 }
 
+                // `V2WaitFor`/`V2WaitUntil` carry no `next` field (kernel
+                // continuation is PC+1 on resume) — an explicit trailing
+                // `Jump` supplies what v1's embedded field used to.
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
                     let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
@@ -757,9 +786,16 @@ fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> u32 {
             // Each conditional edge: LoadFlag + BrIf, plus default Jump
             (outgoing as u32 * 2).max(1) + 1
         }
-        IRNode::GatewayAnd { .. } => 1,       // Fork or Join
+        IRNode::GatewayAnd {
+            direction: GatewayDirection::Diverging,
+            ..
+        } => 1, // V2Fork
+        IRNode::GatewayAnd {
+            direction: GatewayDirection::Converging,
+            ..
+        } => 2, // V2Join + Jump (V2Join carries no `next` field)
         IRNode::GatewayInclusive { .. } => 1, // ForkInclusive or JoinDynamic
-        IRNode::TimerWait { .. } => 2,        // WaitFor/WaitUntil + Jump
+        IRNode::TimerWait { .. } => 3,         // PushI64 + V2WaitFor/V2WaitUntil + Jump
         IRNode::MessageWait { .. } => 2,      // WaitMsg + Jump
         IRNode::HumanWait { .. } => 2,        // WaitMsg + Jump
         IRNode::BoundaryTimer { .. } => 0,    // structural only — no bytecode emitted
@@ -1121,14 +1157,37 @@ mod tests {
 
         let program = lower(&graph).unwrap();
 
-        assert!(program
+        let fork_pairing = program
             .program()
             .iter()
-            .any(|i| matches!(i, Instr::Fork { .. })));
-        assert!(program
+            .enumerate()
+            .find_map(|(address, instruction)| match instruction {
+                Instr::V2Fork { pairing, .. } => {
+                    assert_eq!(
+                        pairing.index(),
+                        address,
+                        "V2Fork's pairing must be its own address"
+                    );
+                    Some(*pairing)
+                }
+                Instr::Fork { .. } => panic!("must not emit v1 Fork for a parallel gateway"),
+                _ => None,
+            })
+            .expect("a V2Fork must be emitted");
+
+        let join_count = program
             .program()
             .iter()
-            .any(|i| matches!(i, Instr::Join { .. })));
+            .filter(|instruction| match instruction {
+                Instr::V2Join { pairing } => {
+                    assert_eq!(*pairing, fork_pairing, "V2Join must reference the V2Fork's pairing");
+                    true
+                }
+                Instr::Join { .. } => panic!("must not emit v1 Join for a parallel gateway"),
+                _ => false,
+            })
+            .count();
+        assert_eq!(join_count, 1, "one shared V2Join, arrived at by both branches");
     }
 
     /// A4.T4: Timer/Message waits lower correctly
@@ -1179,10 +1238,23 @@ mod tests {
 
         let program = lower(&graph).unwrap();
 
+        assert!(
+            program
+                .program()
+                .iter()
+                .any(|i| matches!(i, Instr::PushI64(5000))),
+            "V2WaitFor's duration is popped from the operand stack, not embedded"
+        );
+        assert!(
+            !program.program().iter().any(|i| matches!(i, Instr::WaitFor { .. })),
+            "must not emit v1 WaitFor for a standalone TimerWait"
+        );
         assert!(program
             .program()
             .iter()
-            .any(|i| matches!(i, Instr::WaitFor { ms: 5000 })));
+            .any(|i| matches!(i, Instr::V2WaitFor)));
+        // MessageWait still lowers to v1 WaitMsg — deferred pending the
+        // V2WaitMsg kernel-continuation question (see plan doc V5.1 note).
         assert!(program
             .program()
             .iter()
