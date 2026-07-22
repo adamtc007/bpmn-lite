@@ -2352,45 +2352,68 @@ fn apply_job_failure(
         return Ok(changes.finish(snapshot.instance().clone()));
     }
 
-    // Adam-ratified (V&S §13 amendment v0.5, ruling C): a *definitive*
-    // job failure (reached here — no retry token left, no matching
-    // error_route_map entry) for a fibre sitting inside an armed
-    // *interrupting* V2Guard scope bypasses the v1 error-route/incident
-    // path entirely — "any fail whatsoever" inside an interrupting guard
-    // is binary (go/stay), not a taxonomy. A transient failure that's
-    // still retriable (handled above) is not "a fail" yet — it can still
-    // succeed. This does not apply to V2GuardN (non-interrupting)
-    // scopes, or outside any guard scope, or to a timer/wait resolving
-    // normally (not reachable through this function at all — TimerFired
-    // has its own handler). Uses the same shared `v2_rollback_guard_scope`
-    // as `V2CancelScope` — "all roads lead to Rome" — but the triggering
-    // fibre is killed (not continued in place): there's no "next
-    // instruction" for an externally-surfaced job failure to fall
-    // through to, and per Adam: "kill the fibre... can simply be re-run"
-    // — the instance is left exactly as it was at scope-open, ready for
-    // an external actor to retry the whole scope, not auto-respawned.
-    // Bug found in independent V4.6 blind review (2026-07-21): the prior
-    // `.find()` here matched the first *interrupting* armed guard anywhere
-    // on the stack, innermost-first — but did not stop at the innermost
-    // *guard* record regardless of its interrupting flag. That let an
-    // outer interrupting V2Guard fire automatic rollback even when the
-    // innermost armed guard was a non-interrupting V2GuardN, contradicting
-    // ruling C's explicit carve-out ("today's v1 incident/routing path is
-    // unchanged for fibres whose innermost armed guard is non-interrupting").
-    // `find_map` below skips non-guard handles (V2Barrier/V2Race) — they
-    // aren't guards, so they don't count as "the innermost guard" — but
-    // stops at the first Guard-kind record it meets, interrupting or not,
-    // and only that record's flag decides the branch.
-    let innermost_guard = fiber.control_stack.iter().rev().find_map(|id| {
-        let record = snapshot.concurrency_table().get(*id)?;
-        if record.state != RecordState::Armed {
-            return None;
-        }
-        match record.kind {
-            RecordKind::Guard { interrupting } => Some((*id, interrupting)),
-            _ => None,
-        }
-    });
+    // Adam-ratified (V&S §13 amendment v0.5 ruling C, revised by §14
+    // amendment v0.6 ruling D): a *definitive* job failure (reached here —
+    // no retry token left, no matching error_route_map entry) for a fibre
+    // sitting inside an armed *interrupting* V2Guard scope bypasses the v1
+    // error-route/incident path — but only for `ErrorClass::ContractViolation`
+    // (a technical fault). §13's original text said "no distinction between
+    // ContractViolation/BusinessRejection/exhausted-Transient"; §14 supersedes
+    // that clause: an unmatched `BusinessRejection` is a gap in the workflow's
+    // own route map, not a machine fault, and rolling back would destroy the
+    // evidence that a business outcome occurred; an exhausted `Transient` is
+    // the retry budget's own terminal state and belongs in quarantine with
+    // its attempt history, not silently erased. Both always surface as an
+    // `Incident`, exactly like today's v1 path, regardless of guard nesting.
+    //
+    // `rollback_eligible` is an EXHAUSTIVE match over `ErrorClass`, no
+    // wildcard arm — this is §14's meta-rule ("no failure class reaches
+    // rollback by falling through") enforced by the compiler: a future
+    // fourth `ErrorClass` variant is a compile error here until it is
+    // deliberately classified, not a silent inheritor of whatever a
+    // wildcard would have done.
+    let rollback_eligible = match error_class {
+        ErrorClass::ContractViolation => true,
+        ErrorClass::BusinessRejection { .. } => false,
+        ErrorClass::Transient => false,
+    };
+    // A transient failure that's still retriable is handled above and
+    // never reaches here; a timer/wait resolving normally is ordinary
+    // forward progress, not reachable through this function at all
+    // (`TimerFired` has its own handler).
+    //
+    // Uses the same shared `v2_rollback_guard_scope` as `V2CancelScope` —
+    // "all roads lead to Rome" — but the triggering fibre is killed (not
+    // continued in place): there's no "next instruction" for an
+    // externally-surfaced job failure to fall through to, and per Adam:
+    // "kill the fibre... can simply be re-run" — the instance is left
+    // exactly as it was at scope-open, ready for an external actor to
+    // retry the whole scope, not auto-respawned.
+    //
+    // Innermost-guard selection (fixed in independent V4.6 blind review,
+    // 2026-07-21): stops at the first Guard-kind record the stack search
+    // meets, innermost-first, regardless of its interrupting flag — a
+    // non-interrupting innermost guard means this rule does not fire even
+    // if an outer interrupting guard exists further out on the stack,
+    // matching §13's explicit carve-out ("today's v1 incident/routing
+    // path is unchanged for fibres whose innermost armed guard is
+    // non-interrupting"). `find_map` skips non-guard handles
+    // (V2Barrier/V2Race) — they aren't guards, so they don't count as
+    // "the innermost guard".
+    let innermost_guard = rollback_eligible
+        .then(|| {
+            fiber.control_stack.iter().rev().find_map(|id| {
+                let record = snapshot.concurrency_table().get(*id)?;
+                if record.state != RecordState::Armed {
+                    return None;
+                }
+                match record.kind {
+                    RecordKind::Guard { interrupting } => Some((*id, interrupting)),
+                    _ => None,
+                }
+            })
+        })
+        .flatten();
     if let Some((guard_handle, true)) = innermost_guard {
         let (rollback_payload, rollback_hash) = v2_rollback_guard_scope(
             snapshot,
@@ -5235,6 +5258,189 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ut2.incidents().len(), 1, "unchanged outside a guard scope: definitive failure still creates an Incident");
+    }
+
+    /// V&S §14 amendment v0.6, ruling D: an unmatched `BusinessRejection`
+    /// inside an interrupting guard must NOT roll back — §13's original
+    /// "no distinction between error classes" clause is superseded. The
+    /// workflow's own route map being incomplete is information about the
+    /// workflow, not a machine fault, and rolling back would destroy the
+    /// evidence that a business outcome occurred. Same program shape as
+    /// `definitive_job_failure_inside_interrupting_guard_rolls_back_instead_of_incident`,
+    /// same guard, only the error class differs — proving the routing now
+    /// depends on `ErrorClass`, not merely on being inside an interrupting
+    /// guard.
+    #[test]
+    fn unmatched_business_rejection_inside_interrupting_guard_incidents_not_rollback() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [17u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
+                /* 1 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 2 */ Instr::V2GuardEnd,
+                /* 3 */ Instr::End,
+                /* 4 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v0.6-unmatched-business-rejection").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let original_payload = base_snapshot.instance().domain_payload.to_string();
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(321), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let job_key = t1.jobs_enqueue()[0].job_key.clone();
+        let after_t1 = materialize_snapshot(
+            &PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+            &t1,
+            workflow.envelope().abi_version(),
+            1,
+        );
+        let snapshot_running = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        let context2 = DeterministicContext::new(301, Uuid::from_u128(322), 2);
+        let fail_command = Command::EffectFailed {
+            effect_id: EffectId::for_instruction(Uuid::nil(), Uuid::nil(), 0),
+            job_key: job_key.clone(),
+            error_class: ErrorClass::BusinessRejection {
+                rejection_code: "NO_ROUTE_FOR_THIS_CODE".to_string(),
+            },
+            message: "rejected".to_string(),
+            retry: None,
+        };
+        let t2 = apply(&workflow, &snapshot_running, &fail_command, &context2).unwrap();
+
+        assert_eq!(
+            t2.incidents().len(),
+            1,
+            "an unmatched BusinessRejection must surface as an Incident, never roll back, even inside an interrupting guard"
+        );
+        assert!(
+            t2.fibers_delete().is_empty(),
+            "the incident path parks the fibre, it does not kill it"
+        );
+        assert_eq!(
+            t2.next_snapshot().domain_payload.to_string(),
+            original_payload,
+            "unmutated in this test, but confirms no rollback-restore path ran"
+        );
+        assert!(
+            t2.concurrency_mutations().is_empty(),
+            "no guard scope was retired: rollback must not have run"
+        );
+    }
+
+    /// V&S §14 amendment v0.6, ruling D: an exhausted-retry `Transient`
+    /// failure (reached `apply_job_failure`'s definitive-failure boundary
+    /// with `retry: None`) inside an interrupting guard must NOT roll
+    /// back — it is the retry budget's own terminal state and belongs in
+    /// quarantine (today's Incident path), not silently erased.
+    #[test]
+    fn exhausted_transient_inside_interrupting_guard_incidents_not_rollback() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [18u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
+                /* 1 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 2 */ Instr::V2GuardEnd,
+                /* 3 */ Instr::End,
+                /* 4 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v0.6-exhausted-transient").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let original_payload = base_snapshot.instance().domain_payload.to_string();
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(331), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let job_key = t1.jobs_enqueue()[0].job_key.clone();
+        let after_t1 = materialize_snapshot(
+            &PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+            &t1,
+            workflow.envelope().abi_version(),
+            1,
+        );
+        let snapshot_running = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        let context2 = DeterministicContext::new(301, Uuid::from_u128(332), 2);
+        let fail_command = Command::EffectFailed {
+            effect_id: EffectId::for_instruction(Uuid::nil(), Uuid::nil(), 0),
+            job_key: job_key.clone(),
+            error_class: ErrorClass::Transient,
+            message: "retries exhausted".to_string(),
+            retry: None,
+        };
+        let t2 = apply(&workflow, &snapshot_running, &fail_command, &context2).unwrap();
+
+        assert_eq!(
+            t2.incidents().len(),
+            1,
+            "an exhausted-retry Transient must surface as an Incident, never roll back, even inside an interrupting guard"
+        );
+        assert!(
+            t2.fibers_delete().is_empty(),
+            "the incident path parks the fibre, it does not kill it"
+        );
+        assert_eq!(t2.next_snapshot().domain_payload.to_string(), original_payload);
+        assert!(
+            t2.concurrency_mutations().is_empty(),
+            "no guard scope was retired: rollback must not have run"
+        );
     }
 
     /// V4.6 blind-review regression: ruling C's rollback-on-fail carve-out
