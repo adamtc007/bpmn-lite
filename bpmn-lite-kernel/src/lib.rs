@@ -2369,15 +2369,29 @@ fn apply_job_failure(
     // through to, and per Adam: "kill the fibre... can simply be re-run"
     // — the instance is left exactly as it was at scope-open, ready for
     // an external actor to retry the whole scope, not auto-respawned.
-    if let Some(guard_handle) = fiber.control_stack.iter().rev().find(|id| {
-        matches!(
-            snapshot.concurrency_table().get(**id),
-            Some(record)
-                if matches!(record.kind, RecordKind::Guard { interrupting: true })
-                    && record.state == RecordState::Armed
-        )
-    }) {
-        let guard_handle = *guard_handle;
+    // Bug found in independent V4.6 blind review (2026-07-21): the prior
+    // `.find()` here matched the first *interrupting* armed guard anywhere
+    // on the stack, innermost-first — but did not stop at the innermost
+    // *guard* record regardless of its interrupting flag. That let an
+    // outer interrupting V2Guard fire automatic rollback even when the
+    // innermost armed guard was a non-interrupting V2GuardN, contradicting
+    // ruling C's explicit carve-out ("today's v1 incident/routing path is
+    // unchanged for fibres whose innermost armed guard is non-interrupting").
+    // `find_map` below skips non-guard handles (V2Barrier/V2Race) — they
+    // aren't guards, so they don't count as "the innermost guard" — but
+    // stops at the first Guard-kind record it meets, interrupting or not,
+    // and only that record's flag decides the branch.
+    let innermost_guard = fiber.control_stack.iter().rev().find_map(|id| {
+        let record = snapshot.concurrency_table().get(*id)?;
+        if record.state != RecordState::Armed {
+            return None;
+        }
+        match record.kind {
+            RecordKind::Guard { interrupting } => Some((*id, interrupting)),
+            _ => None,
+        }
+    });
+    if let Some((guard_handle, true)) = innermost_guard {
         let (rollback_payload, rollback_hash) = v2_rollback_guard_scope(
             snapshot,
             guard_handle,
@@ -5221,6 +5235,117 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ut2.incidents().len(), 1, "unchanged outside a guard scope: definitive failure still creates an Incident");
+    }
+
+    /// V4.6 blind-review regression: ruling C's rollback-on-fail carve-out
+    /// is keyed to the *innermost* armed guard, not "any interrupting
+    /// guard anywhere on the stack." A fibre nested
+    /// `V2Guard(interrupting) > V2GuardN(non-interrupting) > [failing task]`
+    /// must take the v1 incident path — the innermost armed guard is the
+    /// GuardN, and non-interrupting guards are explicitly carved out —
+    /// even though an outer interrupting V2Guard also sits on the stack.
+    #[test]
+    fn definitive_job_failure_under_non_interrupting_guard_nested_inside_interrupting_guard_still_incidents() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [16u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Guard { handler: Addr::new(6) },
+                /* 1 */ Instr::V2GuardN { handler: Addr::new(7) },
+                /* 2 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 3 */ Instr::V2GuardNEnd,
+                /* 4 */ Instr::V2GuardEnd,
+                /* 5 */ Instr::End,
+                /* 6 */ Instr::End,
+                /* 7 */ Instr::V2GuardNEnd,
+                /* 8 */ Instr::V2GuardEnd,
+                /* 9 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            race_plan: BTreeMap::new(),
+            boundary_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["SomeTask".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v4-nested-guardn-under-guard").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let original_payload = base_snapshot.instance().domain_payload.to_string();
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: V2Guard -> V2GuardN -> ExecNative parks the fibre on
+        // WaitState::Job, with both guard handles on the control stack,
+        // outer (interrupting) first, inner (non-interrupting) last.
+        let context1 = DeterministicContext::new(300, Uuid::from_u128(311), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        assert_eq!(t1.fibers_upsert()[0].control_stack.len(), 2);
+        let job_key = t1.jobs_enqueue()[0].job_key.clone();
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot_running = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        let mut mutated_snapshot = snapshot_running.clone();
+        let mut mutated_instance = mutated_snapshot.instance().clone();
+        mutated_instance.domain_payload = "mutated-before-fail-nested".to_string().into();
+        mutated_instance.domain_payload_hash = EffectId::content_hash(b"mutated-before-fail-nested");
+        mutated_snapshot = Snapshot::new(mutated_instance, mutated_snapshot.fibers().values().cloned())
+            .with_concurrency_table(mutated_snapshot.concurrency_table().clone());
+
+        let context2 = DeterministicContext::new(301, Uuid::from_u128(312), 2);
+        let fail_command = Command::EffectFailed {
+            effect_id: EffectId::for_instruction(Uuid::nil(), Uuid::nil(), 0),
+            job_key: job_key.clone(),
+            error_class: ErrorClass::ContractViolation,
+            message: "boom".to_string(),
+            retry: None,
+        };
+        let t2 = apply(&workflow, &mutated_snapshot, &fail_command, &context2).unwrap();
+
+        assert_eq!(
+            t2.incidents().len(),
+            1,
+            "innermost armed guard is non-interrupting: the v1 incident path must fire, \
+             not automatic rollback via the outer interrupting guard"
+        );
+        assert!(
+            t2.fibers_delete().is_empty(),
+            "the incident path parks the fibre, it does not kill it"
+        );
+        assert_ne!(
+            t2.next_snapshot().domain_payload.to_string(),
+            original_payload,
+            "no rollback occurred: the mutated payload must survive, not be restored"
+        );
+        assert!(
+            t2.concurrency_mutations().is_empty(),
+            "no guard scope was retired: rollback must not have run"
+        );
     }
 
     /// V4.1 `V2GuardN`'s trigger path (Q2 ratified, V&S §13 amendment
