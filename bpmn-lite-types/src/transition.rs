@@ -469,6 +469,13 @@ pub enum EffectResponse {
     Failed {
         error_class: ErrorClass,
         message: String,
+        /// V&S §15 (v0.7) ruling E: how many attempts this effect had
+        /// consumed by the time it failed definitively. `0` where no
+        /// retry bookkeeping was ever consulted for this failure (an
+        /// honest "no history to report", not a lie) — populated with
+        /// real history only at the one site that runs `RetryPolicy`
+        /// decisions (`Engine::schedule_transient_effect`).
+        attempt: u32,
     },
 }
 
@@ -820,6 +827,14 @@ pub enum Command {
         error_class: crate::ErrorClass,
         message: String,
         retry: Option<JobRetry>,
+        /// V&S §15 (v0.7) ruling E: attempt history at the moment of
+        /// this failure. `0` where no retry bookkeeping exists for this
+        /// call site (job-queue failures reported directly, restart-time
+        /// incidents) — an honest absence, not a lie. See
+        /// `EffectResponse::Failed::attempt`'s doc comment for the full
+        /// rationale; this field carries the same value through once an
+        /// `EffectResponse::Failed` becomes a `Command::EffectFailed`.
+        attempt: u32,
     },
     TimerFired {
         timer: ClaimedTimer,

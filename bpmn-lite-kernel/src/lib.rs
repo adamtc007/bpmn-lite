@@ -2269,6 +2269,7 @@ fn apply_job_failure(
         error_class,
         message,
         retry,
+        attempt,
     } = command
     else {
         return Err(TransitionError::InvalidCommand(
@@ -2446,7 +2447,11 @@ fn apply_job_failure(
         bytecode_addr: fiber.pc,
         error_class: error_class.clone(),
         message: message.to_string(),
-        retry_count: 0,
+        // V&S §15 (v0.7) ruling E: real attempt history, not a hardcoded
+        // lie. `0` at call sites with no RetryPolicy bookkeeping to
+        // report (an honest absence — see `Command::EffectFailed::attempt`'s
+        // doc comment).
+        retry_count: *attempt,
         created_at: logical_timestamp(context)?,
         resolved_at: None,
         resolution: None,
@@ -5171,6 +5176,7 @@ mod tests {
             error_class: ErrorClass::ContractViolation,
             message: "boom".to_string(),
             retry: None,
+            attempt: 3,
         };
         let t2 = apply(&workflow, &mutated_snapshot, &fail_command, &context2).unwrap();
 
@@ -5253,11 +5259,17 @@ mod tests {
                 error_class: ErrorClass::ContractViolation,
                 message: "boom".to_string(),
                 retry: None,
+                attempt: 7,
             },
             &context4,
         )
         .unwrap();
         assert_eq!(ut2.incidents().len(), 1, "unchanged outside a guard scope: definitive failure still creates an Incident");
+        assert_eq!(
+            ut2.incidents()[0].retry_count,
+            7,
+            "V&S §15 ruling E: Incident.retry_count carries the real attempt count, not a hardcoded 0"
+        );
     }
 
     /// V&S §14 amendment v0.6, ruling D: an unmatched `BusinessRejection`
@@ -5334,6 +5346,7 @@ mod tests {
             },
             message: "rejected".to_string(),
             retry: None,
+            attempt: 1,
         };
         let t2 = apply(&workflow, &snapshot_running, &fail_command, &context2).unwrap();
 
@@ -5342,6 +5355,7 @@ mod tests {
             1,
             "an unmatched BusinessRejection must surface as an Incident, never roll back, even inside an interrupting guard"
         );
+        assert_eq!(t2.incidents()[0].retry_count, 1, "attempt history threads through to the Incident");
         assert!(
             t2.fibers_delete().is_empty(),
             "the incident path parks the fibre, it does not kill it"
@@ -5424,6 +5438,7 @@ mod tests {
             error_class: ErrorClass::Transient,
             message: "retries exhausted".to_string(),
             retry: None,
+            attempt: 5,
         };
         let t2 = apply(&workflow, &snapshot_running, &fail_command, &context2).unwrap();
 
@@ -5431,6 +5446,11 @@ mod tests {
             t2.incidents().len(),
             1,
             "an exhausted-retry Transient must surface as an Incident, never roll back, even inside an interrupting guard"
+        );
+        assert_eq!(
+            t2.incidents()[0].retry_count,
+            5,
+            "V&S §15 ruling E: the attempt history that led to exhaustion is preserved on the Incident, not erased"
         );
         assert!(
             t2.fibers_delete().is_empty(),
@@ -5530,6 +5550,7 @@ mod tests {
             error_class: ErrorClass::ContractViolation,
             message: "boom".to_string(),
             retry: None,
+            attempt: 4,
         };
         let t2 = apply(&workflow, &mutated_snapshot, &fail_command, &context2).unwrap();
 

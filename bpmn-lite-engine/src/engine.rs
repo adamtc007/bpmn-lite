@@ -413,6 +413,7 @@ impl BpmnLiteEngine {
                             EffectResponse::Failed {
                                 error_class,
                                 message,
+                                attempt: claimed_effect.attempt(),
                             }
                         }
                     }
@@ -435,6 +436,7 @@ impl BpmnLiteEngine {
                     error_class: ErrorClass::ContractViolation,
                     message: "ExecFfi reached dispatcher boundary with no FfiDispatcher configured"
                         .to_string(),
+                    attempt: claimed_effect.attempt(),
                 }
             };
             self.store
@@ -477,10 +479,18 @@ impl BpmnLiteEngine {
             RetryDecision::Exhausted => Ok(Some(EffectResponse::Failed {
                 error_class: ErrorClass::Transient,
                 message: format!("effect retry budget exhausted: {message}"),
+                // Mirrors the store's own `schedule_effect_retry` handling
+                // of `RetryDecision::Exhausted` (attempt + 1: the attempt
+                // that just exhausted the budget counts).
+                attempt: effect.attempt().saturating_add(1),
             })),
             RetryDecision::Terminal => Ok(Some(EffectResponse::Failed {
                 error_class: ErrorClass::ContractViolation,
                 message,
+                // Mirrors the store's own handling of `RetryDecision::Terminal`
+                // (attempt unchanged: this error class was never retriable,
+                // so no new attempt was consumed deciding that).
+                attempt: effect.attempt(),
             })),
         }
     }
@@ -521,12 +531,14 @@ impl BpmnLiteEngine {
                 EffectResponse::Failed {
                     error_class,
                     message,
+                    attempt,
                 } => Command::EffectFailed {
                     effect_id: pending.effect_id(),
                     job_key: String::new(),
                     error_class: error_class.clone(),
                     message: message.clone(),
                     retry: None,
+                    attempt: *attempt,
                 },
             };
             self.apply_and_commit_command(pending.instance_id(), command)
@@ -1241,6 +1253,9 @@ impl BpmnLiteEngine {
                 error_class,
                 message: message.to_string(),
                 retry: None,
+                // No RetryPolicy bookkeeping is consulted on this path
+                // (V&S §15 ruling E): honest absence, not a lie.
+                attempt: 0,
             },
         )
         .await
@@ -1289,6 +1304,9 @@ impl BpmnLiteEngine {
                         .checked_add(1)
                         .ok_or_else(|| anyhow!("retry timestamp overflow"))?,
                 )),
+                // No RetryPolicy bookkeeping is consulted on this path
+                // (V&S §15 ruling E): honest absence, not a lie.
+                attempt: 0,
             },
         )
         .await
@@ -1740,6 +1758,10 @@ impl BpmnLiteEngine {
                                     &template_id_hex[..16]
                                 ),
                                 retry: None,
+                                // No RetryPolicy bookkeeping is consulted
+                                // on this path (V&S §15 ruling E): honest
+                                // absence, not a lie.
+                                attempt: 0,
                             },
                         ).await?;
                     }
