@@ -132,6 +132,20 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 attached_to: host.clone(),
                 error_code: error_code.clone(),
             },
+
+            NodeDto::MultiInstance {
+                id,
+                task_type,
+                bpmn_id,
+                length_flag,
+                declared_max,
+            } => IRNode::MultiInstance {
+                id: id.clone(),
+                name: bpmn_id.as_ref().cloned().unwrap_or_else(|| id.clone()),
+                task_type: task_type.clone(),
+                length_flag_name: length_flag.clone(),
+                declared_max: *declared_max,
+            },
         };
 
         let idx = graph.add_node(ir_node);

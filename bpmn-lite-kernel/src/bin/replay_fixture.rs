@@ -11,13 +11,11 @@ use std::collections::BTreeMap;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = legacy_program! {
         bytecode_version: [7u8; 32],
-        program: vec![Instr::Fork { targets: vec![Addr::new(1), Addr::new(2)].into() }, Instr::End, Instr::End],
+        program: vec![Instr::V2Fork { targets: vec![Addr::new(1), Addr::new(2)].into(), pairing: Addr::new(0) }, Instr::End, Instr::End],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
         error_route_map: BTreeMap::new(),

@@ -529,7 +529,13 @@ impl CanonicalEncode for crate::types::Value {
 }
 
 /// Tags: `0x00` Running, `0x01` Timer, `0x02` Msg, `0x03` Job, `0x04` Effect,
-/// `0x05` Join, `0x06` Race, `0x07` Incident, `0x08` V2Barrier, `0x09` V2Race.
+/// `0x05` Join, `0x07` Incident, `0x08` V2Barrier, `0x09` V2Race. `0x06`
+/// (v1 `Race`) is permanently retired, not reused (V5.3, §18, landed
+/// 2026-07-23 — `WaitState::Race` is deleted along with `race_plan`/
+/// `boundary_map`) — decoding `0x06` is a typed `UnknownTag` error, same
+/// as any other never-assigned byte, rather than silently accepting stale
+/// persisted v1 bytes or reusing the tag for something new (greenfield:
+/// no v1 state survives cutover, per the plan's wipe-and-recompile rule).
 impl CanonicalEncode for crate::types::WaitState {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
         match self {
@@ -559,24 +565,6 @@ impl CanonicalEncode for crate::types::WaitState {
             Self::Join { join_id } => {
                 w.write_u8(0x05);
                 w.write_u32(*join_id);
-            }
-            Self::Race {
-                race_id,
-                timer_deadline_ms,
-                job_key,
-                interrupting,
-                timer_arm_index,
-                cycle_remaining,
-                cycle_fired_count,
-            } => {
-                w.write_u8(0x06);
-                w.write_u32(*race_id);
-                w.write_option(timer_deadline_ms, |w, v| w.write_u64(*v));
-                w.write_option(job_key, |w, v| w.write_str(v));
-                w.write_bool(*interrupting);
-                w.write_option(timer_arm_index, |w, v| w.write_u64(*v as u64));
-                w.write_option(cycle_remaining, |w, v| w.write_u32(*v));
-                w.write_u32(*cycle_fired_count);
             }
             Self::Incident { incident_id } => {
                 w.write_u8(0x07);
@@ -612,15 +600,6 @@ impl CanonicalEncode for crate::types::WaitState {
             },
             0x05 => Self::Join {
                 join_id: r.read_u32()?,
-            },
-            0x06 => Self::Race {
-                race_id: r.read_u32()?,
-                timer_deadline_ms: r.read_option(|r| r.read_u64())?,
-                job_key: r.read_option(|r| r.read_str())?,
-                interrupting: r.read_bool()?,
-                timer_arm_index: r.read_option(|r| Ok(r.read_u64()? as usize))?,
-                cycle_remaining: r.read_option(|r| r.read_u32())?,
-                cycle_fired_count: r.read_u32()?,
             },
             0x07 => Self::Incident {
                 incident_id: uuid::Uuid::canonical_decode(r)?,
@@ -1373,24 +1352,11 @@ mod tests {
             WaitState::Join { join_id: 6 }.to_canonical_bytes(),
             vec![0x05, 0x06, 0x00, 0x00, 0x00]
         );
-        assert_eq!(
-            WaitState::Race {
-                race_id: 7,
-                timer_deadline_ms: Some(8),
-                job_key: Some("rk".to_string()),
-                interrupting: true,
-                timer_arm_index: Some(9),
-                cycle_remaining: Some(10),
-                cycle_fired_count: 11,
-            }
-            .to_canonical_bytes(),
-            vec![
-                0x06, 0x07, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x72, 0x6B, 0x01, 0x01, 0x09, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x0A, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00,
-                0x00
-            ]
-        );
+        // V5.3 (§18, landed 2026-07-23): the golden-bytes fixture for v1
+        // `WaitState::Race` (tag `0x06`) that used to sit here is deleted
+        // along with the variant itself — `0x06` is now permanently
+        // retired (see this impl's own doc comment); nothing constructs
+        // `WaitState::Race` any more so there is no shape left to lock.
         assert_eq!(
             WaitState::Incident { incident_id: Uuid::from_u128(12) }.to_canonical_bytes(),
             vec![
@@ -1878,34 +1844,6 @@ mod proptest_round_trip_v2_1h {
             ".{0,16}".prop_map(|job_key| WaitState::Job { job_key }),
             arb_effect_id().prop_map(|effect_id| WaitState::Effect { effect_id }),
             any::<u32>().prop_map(|join_id| WaitState::Join { join_id }),
-            (
-                any::<u32>(),
-                proptest::option::of(any::<u64>()),
-                proptest::option::of(".{0,16}"),
-                any::<bool>(),
-                proptest::option::of(any::<u16>().prop_map(|v| v as usize)),
-                proptest::option::of(any::<u32>()),
-                any::<u32>(),
-            )
-                .prop_map(
-                    |(
-                        race_id,
-                        timer_deadline_ms,
-                        job_key,
-                        interrupting,
-                        timer_arm_index,
-                        cycle_remaining,
-                        cycle_fired_count,
-                    )| WaitState::Race {
-                        race_id,
-                        timer_deadline_ms,
-                        job_key,
-                        interrupting,
-                        timer_arm_index,
-                        cycle_remaining,
-                        cycle_fired_count,
-                    }
-                ),
             arb_uuid().prop_map(|incident_id| WaitState::Incident { incident_id }),
         ]
     }

@@ -210,6 +210,23 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             error_code: error_code.clone(),
         },
 
+        IRNode::MultiInstance {
+            id,
+            name,
+            task_type,
+            length_flag_name,
+            declared_max,
+        } => {
+            let bpmn_id = if name != id { Some(name.clone()) } else { None };
+            NodeDto::MultiInstance {
+                id: id.clone(),
+                task_type: task_type.clone(),
+                bpmn_id,
+                length_flag: length_flag_name.clone(),
+                declared_max: *declared_max,
+            }
+        }
+
         // DataObject and FfiServiceTask are not represented in the DTO/YAML
         // authoring layer (they are FFI-specific constructs). If encountered,
         // omit them by returning a minimal placeholder that the DTO round-trip

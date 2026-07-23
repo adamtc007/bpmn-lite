@@ -8,8 +8,7 @@ use bpmn_lite_types::{
     JobActivation, JobMutation, JoinId, JoinMutation, JournalCommand, JournalRecord,
     PersistedSnapshotState, ProcessInstance, ProcessState, RecordCounters, RecordId, RecordKind,
     RecordState, RuntimeEvent, Snapshot, SnapshotEnvelope, TerminalCleanup, TimerKind,
-    TimerMutation, TimerRepeatSpec, Transition, TransitionBuilder, Uuid, Value, WaitArm,
-    WaitState,
+    TimerMutation, TimerRepeatSpec, Transition, TransitionBuilder, Uuid, Value, WaitState,
 };
 use std::fmt;
 
@@ -70,6 +69,14 @@ pub enum TransitionError {
     /// V4.3 — Ring 3 shadow assert failure over the frame this transition
     /// would produce. See `bpmn_lite_types::IntegrityError::Ring3Runtime`.
     Integrity(bpmn_lite_types::IntegrityError),
+    /// §18 ruling J (v0.10): superseded as `RoutePayload`/`ForkPayload`'s
+    /// zero-match behaviour — a gateway matching none of its declared
+    /// routes now raises an `Incident` via `fail_contract` (same
+    /// mechanism `ForkInclusive`'s own zero-match arm already used) and
+    /// stays resumable, rather than aborting the whole transition with a
+    /// hard `Err`. Kept as a variant (not deleted — an API/serialization
+    /// surface, not dead weight) since no call site constructs it
+    /// anymore; retained for any external caller still matching on it.
     RouteNotMatched(String),
 }
 
@@ -635,7 +642,9 @@ pub fn apply(
 ) -> Result<Transition, TransitionError> {
     validate_snapshot_limits(workflow, snapshot)?;
     let transition = match command {
-        Command::TimerFired { timer, fired_at } => apply_timer(snapshot, timer, *fired_at),
+        Command::TimerFired { timer, fired_at } => {
+            apply_timer(workflow, snapshot, timer, *fired_at, context)
+        }
         Command::Cancel { reason } => {
             let mut next = snapshot.instance().clone();
             next.state = ProcessState::Cancelled {
@@ -664,7 +673,7 @@ pub fn apply(
         Command::EffectCompleted {
             output: EffectOutput::Job(completion),
             ..
-        } => apply_job_completion(workflow, snapshot, completion),
+        } => apply_job_completion(snapshot, completion),
         Command::EffectCompleted {
             output:
                 EffectOutput::Ffi {
@@ -978,6 +987,87 @@ fn apply_tick(
                 );
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // V5 dynamic-arity gateway lowering glue (§18 rulings H/J, not
+            // a ratified D2 word — see the `Instr` doc comment). DSL-side
+            // analogue of `LoadFlag` above: pushes the placeholder-match
+            // boolean `Instr::ForkPayload`'s kernel handler already
+            // computes internally, exposing it as a straight-line
+            // operand-stack producer so a V2Fork-based DSL inclusive-split
+            // lowering can build its own `BrIf`/`BrIfNot` checks the same
+            // way XML's `LoadFlag`-based lowering does.
+            Instr::V2LoadPlaceholderMatch {
+                placeholder,
+                expected_value,
+            } => {
+                let matched = instance.placeholder_matches(placeholder, expected_value);
+                fiber.stack.push(Value::Bool(matched));
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // Unconditional zero-match incident (§18 ruling J), reached
+            // only when a chain of `LoadFlag`/`V2LoadPlaceholderMatch` +
+            // `BrIf`-to-`V2Fork` checks ahead of it all fell through —
+            // i.e. no branch's condition was true and there is no
+            // always-live (unconditional/default) branch. Same helper,
+            // same message shape, as `RoutePayload`/`ForkPayload`/
+            // `ForkInclusive`'s own zero-match arms — not a new mechanism.
+            Instr::V2RouteZeroMatch => {
+                let node = metadata
+                    .debug_map()
+                    .get(&fiber.pc)
+                    .cloned()
+                    .unwrap_or_else(|| format!("pc_{}", fiber.pc));
+                return fail_contract(
+                    instance,
+                    fiber,
+                    changes,
+                    context,
+                    &format!(
+                        "inclusive gateway at {node} matched none of its declared \
+                         branches and has no default target"
+                    ),
+                );
+            }
+            // V5 dynamic-arity MI lowering glue (§18 ruling K, not a
+            // ratified D2 word — see the `Instr` doc comment). MI's
+            // `inputCollection` is represented, for this step, by its
+            // runtime LENGTH only (an `I64` flag) — no array/collection
+            // value type exists anywhere in this ISA (a real, recorded
+            // finding, not an oversight). A missing key or a non-`I64`
+            // value defaults to length 0 — the same default `LoadFlag`
+            // already uses for a missing bool flag, and exactly ruling K
+            // item (c)'s "empty collection is legal" default, not a
+            // special case bolted on here.
+            Instr::V2MiIndexLive { length_flag, index } => {
+                let length = match instance.flags.get(length_flag) {
+                    Some(Value::I64(n)) => *n,
+                    _ => 0,
+                };
+                let live = i64::from(*index) < length;
+                fiber.stack.push(Value::Bool(live));
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // Runs once, straight-line, immediately before the MI
+            // `V2Fork` — see the `Instr` doc comment for why this must
+            // precede `V2Fork` rather than run inside or after it, and
+            // for why exceeding the declared max is a hard
+            // `ResourceLimitExceeded` reject, not an `Incident` (ruling
+            // K's own "not unified with zero-match" text, applied to a
+            // different runtime-zero case: this one is over-capacity, not
+            // under).
+            Instr::V2MiArityCheck { length_flag, max } => {
+                let length = match instance.flags.get(length_flag) {
+                    Some(Value::I64(n)) => *n,
+                    _ => 0,
+                };
+                if length > i64::from(*max) {
+                    return Err(TransitionError::ResourceLimitExceeded {
+                        resource: "multi-instance collection length",
+                        actual: length.max(0) as usize,
+                        limit: u64::from(*max),
+                    });
+                }
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
             Instr::StoreFlag { key } => {
                 let value = fiber
                     .stack
@@ -1046,72 +1136,17 @@ fn apply_tick(
                     service_task_id,
                     pc: instruction_pc,
                 });
-                if let Some(race_id) = metadata.boundary_map().get(&instruction_pc).copied() {
-                    let race = metadata
-                        .race_plan()
-                        .get(&race_id)
-                        .ok_or(TransitionError::MissingMetadata("boundary race plan"))?;
-                    let arm_index = race.arms.iter().position(|arm| {
-                        matches!(arm, WaitArm::Timer { .. } | WaitArm::Deadline { .. })
-                    });
-                    let due_at = arm_index.and_then(|index| match &race.arms[index] {
-                        WaitArm::Timer { duration_ms, .. } => {
-                            context.logical_time().checked_add(*duration_ms)
-                        }
-                        WaitArm::Deadline { deadline_ms, .. } => Some(*deadline_ms),
-                        _ => None,
-                    });
-                    let interrupting = arm_index
-                        .and_then(|index| match &race.arms[index] {
-                            WaitArm::Timer { interrupting, .. } => Some(*interrupting),
-                            WaitArm::Deadline { .. } => Some(true),
-                            _ => None,
-                        })
-                        .unwrap_or(true);
-                    fiber.wait = WaitState::Race {
-                        race_id,
-                        timer_deadline_ms: due_at,
-                        job_key: Some(job_key.clone()),
-                        interrupting,
-                        timer_arm_index: arm_index,
-                        cycle_remaining: arm_index.and_then(|index| match &race.arms[index] {
-                            WaitArm::Timer { cycle, .. } => {
-                                cycle.as_ref().map(|cycle| cycle.max_fires)
-                            }
-                            _ => None,
-                        }),
-                        cycle_fired_count: 0,
-                    };
-                    changes.events.push(RuntimeEvent::RaceRegistered {
-                        race_id,
-                        fiber_id: fiber.fiber_id,
-                        arms: race.arms.iter().map(Into::into).collect(),
-                    });
-                    if let (Some(due_at), Some(arm_index)) = (due_at, arm_index) {
-                        let (resume_at, repeat_spec) = timer_arm(&race.arms[arm_index])?;
-                        changes.effects.push(DurableEffect::schedule_timer(
-                            EffectId::for_instruction(
-                                instance.instance_id,
-                                fiber.fiber_id,
-                                instruction_pc.into(),
-                            ),
-                            fiber.fiber_id,
-                            due_at,
-                            TimerKind::Race {
-                                race_id,
-                                arm_index,
-                                resume_at: resume_at.into(),
-                                interrupting,
-                                job_key: Some(job_key),
-                                boundary_element_id: race.boundary_element_id.clone(),
-                                arm_count: race.arms.len(),
-                            },
-                            repeat_spec,
-                        ));
-                    }
-                } else {
-                    fiber.wait = WaitState::Job { job_key };
-                }
+                // V5.3 (§18, landed 2026-07-23): the v1 `race_plan`/
+                // `boundary_map` boundary-timer-promotion mechanism this
+                // arm used to consult here — "structure consulted as
+                // state," D1's forbidden pattern — is deleted. Boundary
+                // timers on service tasks now lower exclusively to
+                // `V2Guard`/`V2GuardN` + `GUARD-TIMER>` wrapping this same
+                // `ExecNative` (§18 ruling I), which needs no cooperation
+                // from the task-dispatch arm itself — the guard scope races
+                // independently around it. This arm always parks on the
+                // job alone.
+                fiber.wait = WaitState::Job { job_key };
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
@@ -1189,66 +1224,37 @@ fn apply_tick(
                         .placeholder_matches(&branch.placeholder, &branch.expected_value)
                         .then_some(branch.target)
                 });
-                fiber.pc = target.or(*default_target).ok_or_else(|| {
-                    TransitionError::RouteNotMatched(
-                        metadata
+                match target.or(*default_target) {
+                    Some(next_pc) => fiber.pc = next_pc,
+                    None => {
+                        // §18 ruling J: zero-match raises an Incident, not
+                        // a hard transition error — the workflow COULDN'T
+                        // decide, which is what an incident means (not a
+                        // decision to stop, `END-TERMINATE`'s meaning).
+                        // Supersedes the old `TransitionError::RouteNotMatched`
+                        // hard-abort here; reuses `fail_contract` verbatim,
+                        // the same helper `Instr::ForkInclusive`'s own
+                        // zero-match arm already calls for the identical
+                        // shape ("gateway matched none of its declared
+                        // routes") — not a new mechanism, the existing one
+                        // applied where it was previously missing.
+                        let node = metadata
                             .debug_map()
                             .get(&fiber.pc)
                             .cloned()
-                            .unwrap_or_else(|| format!("pc_{}", fiber.pc)),
-                    )
-                })?;
-            }
-            Instr::ForkPayload {
-                branches,
-                join_id,
-                default_target,
-            } => {
-                let mut targets: Vec<_> = branches
-                    .iter()
-                    .filter(|branch| {
-                        instance.placeholder_matches(&branch.placeholder, &branch.expected_value)
-                    })
-                    .map(|branch| branch.target)
-                    .collect();
-                if targets.is_empty() {
-                    if let Some(target) = default_target {
-                        targets.push(*target);
-                    } else {
-                        return Err(TransitionError::RouteNotMatched(
-                            metadata
-                                .debug_map()
-                                .get(&fiber.pc)
-                                .cloned()
-                                .unwrap_or_else(|| format!("pc_{}", fiber.pc)),
-                        ));
+                            .unwrap_or_else(|| format!("pc_{}", fiber.pc));
+                        return fail_contract(
+                            instance,
+                            fiber,
+                            changes,
+                            context,
+                            &format!(
+                                "exclusive route at {node} matched none of its declared \
+                                 branches and has no default target"
+                            ),
+                        );
                     }
                 }
-                instance
-                    .join_expected
-                    .insert(*join_id, targets.len() as u16);
-                for target in &targets {
-                    let child_id = context.derived_id(ordinal);
-                    ordinal = ordinal.saturating_add(1);
-                    changes.fibers_upsert.push(Fiber::new(child_id, *target));
-                    changes.events.push(RuntimeEvent::FiberSpawned {
-                        fiber_id: child_id,
-                        pc: *target,
-                        parent: Some(fiber.fiber_id),
-                    });
-                }
-                changes.events.push(RuntimeEvent::InclusiveForkTaken {
-                    gateway_id: metadata
-                        .debug_map()
-                        .get(&fiber.pc)
-                        .cloned()
-                        .unwrap_or_else(|| format!("pc_{}", fiber.pc)),
-                    branches_taken: targets.clone(),
-                    join_id: *join_id,
-                    expected: targets.len() as u16,
-                });
-                changes.fibers_delete.push(fiber.fiber_id);
-                return Ok(changes.finish(instance));
             }
             Instr::ExecFfi { template_id, .. } => {
                 let pc = fiber.pc;
@@ -1345,142 +1351,6 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
-            Instr::Fork { targets } => {
-                let mut ids = Vec::with_capacity(targets.len());
-                for target in targets.iter().copied() {
-                    let child_id = context.derived_id(ordinal);
-                    ordinal = ordinal.saturating_add(1);
-                    changes.fibers_upsert.push(Fiber::new(child_id, target));
-                    changes.events.push(RuntimeEvent::FiberSpawned {
-                        fiber_id: child_id,
-                        pc: target,
-                        parent: Some(fiber.fiber_id),
-                    });
-                    ids.push(child_id);
-                }
-                changes.events.push(RuntimeEvent::Forked {
-                    fork_id: format!("pc_{}", fiber.pc),
-                    child_fibers: ids,
-                    targets: targets.to_vec(),
-                });
-                changes.fibers_delete.push(fiber.fiber_id);
-                return Ok(changes.finish(instance));
-            }
-            Instr::Join { id, expected, next } => {
-                if join_arrive(snapshot, &changes, *id) >= *expected {
-                    changes.join_mutations.push(JoinMutation::Reset(*id));
-                    changes.events.push(RuntimeEvent::JoinReleased {
-                        join_id: *id,
-                        next_pc: *next,
-                        released_fiber_id: fiber.fiber_id,
-                    });
-                    fiber.pc = *next;
-                } else {
-                    changes.join_mutations.push(JoinMutation::Arrive(*id));
-                    changes.events.push(RuntimeEvent::JoinArrived {
-                        join_id: *id,
-                        fiber_id: fiber.fiber_id,
-                    });
-                    changes.fibers_delete.push(fiber.fiber_id);
-                    return Ok(changes.finish(instance));
-                }
-            }
-            Instr::WaitFor { ms } => {
-                let pc = fiber.pc;
-                let deadline = context
-                    .logical_time()
-                    .checked_add(*ms)
-                    .ok_or(TransitionError::NumericOverflow("WaitFor deadline"))?;
-                fiber.pc = fiber.pc.saturating_add(1);
-                fiber.wait = WaitState::Timer {
-                    deadline_ms: deadline,
-                };
-                changes.events.push(RuntimeEvent::WaitTimerSet {
-                    fiber_id: fiber.fiber_id,
-                    deadline_ms: deadline,
-                });
-                changes.effects.push(DurableEffect::schedule_timer(
-                    EffectId::for_instruction(instance.instance_id, fiber.fiber_id, pc.into()),
-                    fiber.fiber_id,
-                    deadline,
-                    TimerKind::Wait,
-                    None,
-                ));
-                changes.fibers_upsert.push(fiber);
-                return Ok(changes.finish(instance));
-            }
-            Instr::WaitUntil { deadline_ms } => {
-                let pc = fiber.pc;
-                fiber.pc = fiber.pc.saturating_add(1);
-                fiber.wait = WaitState::Timer {
-                    deadline_ms: *deadline_ms,
-                };
-                changes.events.push(RuntimeEvent::WaitTimerSet {
-                    fiber_id: fiber.fiber_id,
-                    deadline_ms: *deadline_ms,
-                });
-                changes.effects.push(DurableEffect::schedule_timer(
-                    EffectId::for_instruction(instance.instance_id, fiber.fiber_id, pc.into()),
-                    fiber.fiber_id,
-                    *deadline_ms,
-                    TimerKind::Wait,
-                    None,
-                ));
-                changes.fibers_upsert.push(fiber);
-                return Ok(changes.finish(instance));
-            }
-            Instr::WaitMsg {
-                wait_id,
-                name,
-                corr_reg,
-            } => {
-                let corr_key = fiber
-                    .regs
-                    .get(*corr_reg as usize)
-                    .cloned()
-                    .unwrap_or(Value::Bool(false));
-                if let Some(buffered) = snapshot.buffered_messages().first() {
-                    if let Some(hash) = buffered.message.payload_hash {
-                        let payload =
-                            std::str::from_utf8(&buffered.message.payload).map_err(|_| {
-                                TransitionError::InvalidCommand(
-                                    "buffered message payload is not UTF-8",
-                                )
-                            })?;
-                        instance.domain_payload = payload.to_string().into();
-                        instance.domain_payload_hash = hash;
-                    }
-                    fiber.pc = fiber.pc.saturating_add(1);
-                    changes
-                        .buffered_messages
-                        .push(BufferedMessageMutation::Consume(buffered.clone()));
-                    changes.events.push(RuntimeEvent::BufferedMessageConsumed {
-                        message_name: buffered.message.message_name.clone(),
-                        correlation_key: buffered.message.correlation_key.clone(),
-                        msg_id: buffered.message.msg_id.clone(),
-                        fiber_id: fiber.fiber_id,
-                    });
-                    changes.events.push(RuntimeEvent::MsgReceived {
-                        name: *name,
-                        corr_key,
-                        msg_ref: None,
-                    });
-                    continue;
-                }
-                fiber.pc = fiber.pc.saturating_add(1);
-                fiber.wait = WaitState::Msg {
-                    wait_id: *wait_id,
-                    name: *name,
-                    corr_key: corr_key.clone(),
-                };
-                changes.events.push(RuntimeEvent::WaitMsgSubscribed {
-                    fiber_id: fiber.fiber_id,
-                    name: *name,
-                    corr_key,
-                });
-                changes.fibers_upsert.push(fiber);
-                return Ok(changes.finish(instance));
-            }
             Instr::PublishMessage { name, corr_reg } => {
                 let corr_key = fiber
                     .regs
@@ -1528,78 +1398,6 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
-            Instr::WaitAny { race_id, arms } => {
-                changes.events.push(RuntimeEvent::RaceRegistered {
-                    race_id: *race_id,
-                    fiber_id: fiber.fiber_id,
-                    arms: arms.iter().map(Into::into).collect(),
-                });
-                let mut first_deadline = None;
-                for (arm_index, arm) in arms.iter().enumerate() {
-                    if let WaitArm::Msg { name, corr_reg, .. } = arm {
-                        let corr_key = fiber
-                            .regs
-                            .get(*corr_reg as usize)
-                            .cloned()
-                            .unwrap_or(Value::Bool(false));
-                        changes.events.push(RuntimeEvent::WaitMsgSubscribed {
-                            fiber_id: fiber.fiber_id,
-                            name: *name,
-                            corr_key,
-                        });
-                    }
-                    let due_at = match arm {
-                        WaitArm::Timer { duration_ms, .. } => context
-                            .logical_time()
-                            .checked_add(*duration_ms)
-                            .ok_or(TransitionError::NumericOverflow("race timer deadline"))?,
-                        WaitArm::Deadline { deadline_ms, .. } => *deadline_ms,
-                        _ => continue,
-                    };
-                    if first_deadline.is_none() {
-                        first_deadline = Some(due_at);
-                    }
-                    let (resume_at, repeat_spec) = timer_arm(arm)?;
-                    let interrupting = !matches!(
-                        arm,
-                        WaitArm::Timer {
-                            interrupting: false,
-                            ..
-                        }
-                    );
-                    changes.effects.push(DurableEffect::schedule_timer(
-                        EffectId::for_instruction_ordinal(
-                            instance.instance_id,
-                            fiber.fiber_id,
-                            fiber.pc.into(),
-                            arm_index as u32,
-                        ),
-                        fiber.fiber_id,
-                        due_at,
-                        TimerKind::Race {
-                            race_id: *race_id,
-                            arm_index,
-                            resume_at: resume_at.into(),
-                            interrupting,
-                            job_key: None,
-                            boundary_element_id: None,
-                            arm_count: arms.len(),
-                        },
-                        repeat_spec,
-                    ));
-                }
-                fiber.wait = WaitState::Race {
-                    race_id: *race_id,
-                    timer_deadline_ms: first_deadline,
-                    job_key: None,
-                    interrupting: true,
-                    timer_arm_index: None,
-                    cycle_remaining: None,
-                    cycle_fired_count: 0,
-                };
-                changes.fibers_upsert.push(fiber);
-                return Ok(changes.finish(instance));
-            }
             Instr::CancelWait { .. } => fiber.pc = fiber.pc.saturating_add(1),
             Instr::IncCounter { counter_id } => {
                 let count = instance.counters.entry(*counter_id).or_insert(0);
@@ -1622,81 +1420,6 @@ fn apply_tick(
                 } else {
                     fiber.pc.saturating_add(1)
                 };
-            }
-            Instr::ForkInclusive {
-                branches,
-                join_id,
-                default_target,
-            } => {
-                let mut targets: Vec<_> = branches
-                    .iter()
-                    .filter(|branch| {
-                        branch
-                            .condition_flag
-                            .map(|key| {
-                                is_truthy(instance.flags.get(&key).unwrap_or(&Value::Bool(false)))
-                            })
-                            .unwrap_or(true)
-                    })
-                    .map(|branch| branch.target)
-                    .collect();
-                if targets.is_empty() {
-                    if let Some(target) = default_target {
-                        targets.push(*target);
-                    } else {
-                        return fail_contract(
-                            instance,
-                            fiber,
-                            changes,
-                            context,
-                            "inclusive gateway has no matching or default branch",
-                        );
-                    }
-                }
-                instance
-                    .join_expected
-                    .insert(*join_id, targets.len() as u16);
-                for target in &targets {
-                    let child_id = context.derived_id(ordinal);
-                    ordinal = ordinal.saturating_add(1);
-                    changes.fibers_upsert.push(Fiber::new(child_id, *target));
-                    changes.events.push(RuntimeEvent::FiberSpawned {
-                        fiber_id: child_id,
-                        pc: *target,
-                        parent: Some(fiber.fiber_id),
-                    });
-                }
-                changes.events.push(RuntimeEvent::InclusiveForkTaken {
-                    gateway_id: format!("pc_{}", fiber.pc),
-                    branches_taken: targets.clone(),
-                    join_id: *join_id,
-                    expected: targets.len() as u16,
-                });
-                changes.fibers_delete.push(fiber.fiber_id);
-                return Ok(changes.finish(instance));
-            }
-            Instr::JoinDynamic { id, next } => {
-                let expected = instance.join_expected.get(id).copied().ok_or(
-                    TransitionError::MissingMetadata("dynamic join expected count"),
-                )?;
-                if join_arrive(snapshot, &changes, *id) >= expected {
-                    changes.join_mutations.push(JoinMutation::Reset(*id));
-                    instance.join_expected.remove(id);
-                    changes.events.push(RuntimeEvent::JoinReleased {
-                        join_id: *id,
-                        next_pc: *next,
-                        released_fiber_id: fiber.fiber_id,
-                    });
-                    fiber.pc = *next;
-                } else {
-                    changes.join_mutations.push(JoinMutation::Arrive(*id));
-                    changes.events.push(RuntimeEvent::JoinArrived {
-                        join_id: *id,
-                        fiber_id: fiber.fiber_id,
-                    });
-                    changes.fibers_delete.push(fiber.fiber_id);
-                    return Ok(changes.finish(instance));
-                }
             }
             Instr::End => {
                 // Was: `snapshot.fibers().len() == 1` — the *pre*-transition
@@ -1744,6 +1467,36 @@ fn apply_tick(
                     fiber_id: fiber.fiber_id,
                 });
                 changes.cleanup = Some(TerminalCleanup::new(true, true, true));
+                // V-1's fix (v2_verifier.rs) exempts `EndTerminate` from the
+                // empty-control-stack requirement — unlike `End`, it kills
+                // the WHOLE instance, so no fibre's own open scope can be
+                // orphaned (every fibre dies with it). That exemption's
+                // rider, the K-invariant side: `TerminalCleanup`'s
+                // `delete_all_fibers`/`delete_all_joins` above clear
+                // `fibers`/`joins` but never touch `concurrency_table` — an
+                // enclosing `V2Fork` barrier or an open guard anywhere else
+                // in the instance would otherwise survive forever as a
+                // zero-member `Armed` record, never retired (a real K-1/K-2
+                // orphaned-record hazard, unguarded by the verifier once it
+                // stopped requiring the pop for this instruction
+                // specifically). `Instr::End` needs no equivalent: its own
+                // V-1 check still requires this fibre's stack to be empty,
+                // and `End` only fires once every fibre is dead (the
+                // pre-condition below), so by construction every other
+                // fibre's own scopes already closed (and retired) through
+                // their own normal scope-close instructions before this
+                // point — there is nothing left open to sweep. Bulk
+                // retirement, not a subtree walk (`v2_cancel_guard_scope`'s
+                // shape doesn't apply — there's no single root; every
+                // still-`Armed` record anywhere in the table is in scope,
+                // since the whole instance is ending).
+                for (record_id, record) in snapshot.concurrency_table().iter() {
+                    if record.state == RecordState::Armed {
+                        changes
+                            .concurrency_mutations
+                            .push(ConcurrencyMutation::Retire(*record_id));
+                    }
+                }
                 return Ok(changes.finish(instance));
             }
             Instr::Fail { code } => {
@@ -2276,6 +2029,133 @@ fn apply_tick(
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
+            // §18 v0.10 ruling I: `GUARD-TIMER>` — arms the guard this
+            // fibre just opened (verifier-enforced adjacency: this
+            // instruction's own address is always exactly the opening
+            // guard's address + 1, so `fiber.control_stack.last()` is
+            // unambiguously that same record). K-1/K-2/K-3: touches no
+            // concurrency record and no control stack, exactly like
+            // `V2ArmTimer` arming an open `RACE{` — the fibre's held-
+            // handle set and every record's membership are unchanged by
+            // arming; only a durable timer effect is scheduled, bound to
+            // `TimerKind::V2GuardTimer` rather than `TimerKind::V2Race`.
+            // Fire-time dispatch (both the `V2Guard`/`V2GuardN` case,
+            // which behaves exactly as a manually-issued
+            // `Command::V2TriggerGuard`, and the `V2GuardR` case, which
+            // has no `handler` to trigger and instead runs the same
+            // automatic-rollback path as a definitive job failure) lives
+            // in `apply_timer`'s `TimerKind::V2GuardTimer` arm below, not
+            // here — arming and firing are deliberately separate steps,
+            // same separation `V2ArmTimer`/`Command::TimerFired` already
+            // have for races.
+            Instr::V2GuardArmTimer => {
+                let value = fiber
+                    .stack
+                    .pop()
+                    .ok_or(TransitionError::StackUnderflow("V2GuardArmTimer"))?;
+                let Value::I64(duration) = value else {
+                    return Err(TransitionError::InvalidCommand(
+                        "V2GuardArmTimer: duration must be I64",
+                    ));
+                };
+                let record_id = *fiber.control_stack.last().ok_or(
+                    TransitionError::InvalidCommand("V2GuardArmTimer: no open guard"),
+                )?;
+                let due_at = context.logical_time().saturating_add(duration.max(0) as u64);
+                let effect_id =
+                    EffectId::for_instruction(instance.instance_id, fiber.fiber_id, fiber.pc.into());
+                // Post-close remediation (V&S §13 amendment v0.5, ruling A,
+                // restored to GUARD-TIMER>'s own timer-fire path): a
+                // non-interrupting `GUARD-N>` record re-arms after trigger
+                // "by default... nothing... expresses a non-re-arming
+                // variant." A `GUARD-TIMER>`-armed `GUARD-N>` therefore
+                // gets an UNBOUNDED repeat spec here (`remaining:
+                // u32::MAX`) unless the immediately-following
+                // `GUARD-TIMER-CYCLE>` narrows it (below) — that word
+                // patches this very effect's `repeat_spec` before this
+                // tick ends, so `changes.effects` never actually observes
+                // the unbounded default in a bounded-cycle program.
+                // `GUARD>`/`GUARD-R>` (interrupting) retire their record on
+                // trigger regardless (`v2_trigger_guard_changes`/
+                // `apply_v2_guard_timer_rollback`), so a repeat spec would
+                // be dead weight for them — left `None`, unchanged from
+                // ruling I's original fire-once behaviour, matching every
+                // pre-existing interrupting-guard fixture byte-for-byte.
+                // `record_id` may be brand new THIS SAME tick (the common
+                // case — `V2GuardN`/`V2GuardArmTimer` are verifier-enforced
+                // adjacent, so the record was just opened by the
+                // immediately-preceding instruction and only exists in
+                // `changes.concurrency_mutations`, not yet materialized
+                // into `snapshot`) — check the in-flight mutations first,
+                // falling back to `snapshot` for the (also legal) case of
+                // a guard opened in an earlier transition being re-armed
+                // again after `V2GuardTimerCycle` narrowed/exhausted a
+                // prior spec.
+                let record_kind = changes
+                    .concurrency_mutations
+                    .iter()
+                    .rev()
+                    .find_map(|mutation| match mutation {
+                        ConcurrencyMutation::Insert(record) if record.id == record_id => {
+                            Some(record.kind)
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| snapshot.concurrency_table().get(record_id).map(|r| r.kind));
+                let repeat_spec = match record_kind {
+                    Some(RecordKind::Guard { interrupting: false }) => {
+                        Some(TimerRepeatSpec::new(duration.max(0) as u64, u32::MAX, 0))
+                    }
+                    _ => None,
+                };
+                changes.effects.push(DurableEffect::schedule_timer(
+                    effect_id,
+                    fiber.fiber_id,
+                    due_at,
+                    TimerKind::V2GuardTimer { record_id },
+                    repeat_spec,
+                ));
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // Post-close remediation (V&S §13 amendment v0.5 ruling A,
+            // restored — see `Instr::V2GuardTimerCycle`'s own doc comment
+            // for the full rationale). Verifier-enforced to sit at exactly
+            // `guard_arm_timer_address + 1`, so the effect it patches is
+            // guaranteed to be the very last element `changes.effects`
+            // holds right now — pushed by the `V2GuardArmTimer` this
+            // instruction is the immediate successor of, earlier in this
+            // SAME tick's instruction loop. No control-stack or
+            // concurrency-record change; touches no VM operand stack.
+            Instr::V2GuardTimerCycle { max_fires } => {
+                match changes.effects.last_mut() {
+                    Some(DurableEffect::ScheduleTimer {
+                        kind: TimerKind::V2GuardTimer { .. },
+                        repeat_spec: repeat_spec @ Some(_),
+                        ..
+                    }) => {
+                        let current = repeat_spec.as_ref().expect("just matched Some");
+                        *repeat_spec = Some(TimerRepeatSpec::new(
+                            current.interval_ms(),
+                            *max_fires,
+                            current.fired_count(),
+                        ));
+                    }
+                    _ => {
+                        // Unreachable past a verified program (V-1's new
+                        // GUARD-TIMER-CYCLE> arm rejects anything but
+                        // immediately-after-V2GuardArmTimer-on-a-GuardN
+                        // placement, and V2GuardArmTimer always attaches
+                        // `Some(repeat_spec)` for a GuardN target) — kept
+                        // as a typed, fail-closed error rather than a
+                        // panic/silent no-op for a malformed or
+                        // hand-assembled-and-unverified program.
+                        return Err(TransitionError::InvalidCommand(
+                            "V2GuardTimerCycle: no unbounded GUARD-TIMER> repeat spec to narrow",
+                        ));
+                    }
+                }
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
             // K-1/K-2/K-3 (V4.2): a bare park — no concurrency record or
             // control-stack change, so all three are vacuously preserved.
             Instr::V2WaitFor => {
@@ -2345,6 +2225,46 @@ fn apply_tick(
                     .get(*corr_reg as usize)
                     .cloned()
                     .unwrap_or(Value::Bool(false));
+                // V5.3 (§18, landed 2026-07-23): the `IRNode::MessageWait`/
+                // `HumanWait` migration to this word (from v1 `WaitMsg`,
+                // now deleted) carries over v1 `WaitMsg`'s own
+                // signal-before-wait check — a message already buffered
+                // for this correlation, delivered before the fibre ever
+                // parks, rather than requiring a real park+signal
+                // round-trip. Without this, a buffered message sent before
+                // the workflow reaches its wait point would sit unconsumed
+                // until *some* unrelated tick happened to run the
+                // buffered-message sweep, if one exists — v1 never
+                // depended on that; it checked inline, so this preserves
+                // that guarantee rather than silently narrowing it.
+                if let Some(buffered) = snapshot.buffered_messages().first() {
+                    if let Some(hash) = buffered.message.payload_hash {
+                        let payload =
+                            std::str::from_utf8(&buffered.message.payload).map_err(|_| {
+                                TransitionError::InvalidCommand(
+                                    "buffered message payload is not UTF-8",
+                                )
+                            })?;
+                        instance.domain_payload = payload.to_string().into();
+                        instance.domain_payload_hash = hash;
+                    }
+                    fiber.pc = fiber.pc.saturating_add(1);
+                    changes
+                        .buffered_messages
+                        .push(BufferedMessageMutation::Consume(buffered.clone()));
+                    changes.events.push(RuntimeEvent::BufferedMessageConsumed {
+                        message_name: buffered.message.message_name.clone(),
+                        correlation_key: buffered.message.correlation_key.clone(),
+                        msg_id: buffered.message.msg_id.clone(),
+                        fiber_id: fiber.fiber_id,
+                    });
+                    changes.events.push(RuntimeEvent::MsgReceived {
+                        name: *name,
+                        corr_key,
+                        msg_ref: None,
+                    });
+                    continue;
+                }
                 changes.events.push(RuntimeEvent::WaitMsgSubscribed {
                     fiber_id: fiber.fiber_id,
                     name: *name,
@@ -2533,7 +2453,6 @@ fn apply_job_failure(
     }
     let Some(mut fiber) = snapshot.fibers().values().find(|fiber| {
         matches!(&fiber.wait, WaitState::Job { job_key: parked } if parked == job_key)
-            || matches!(&fiber.wait, WaitState::Race { job_key: Some(parked), .. } if parked == job_key)
             || matches!(fiber.wait, WaitState::Effect { effect_id: parked } if parked == *effect_id)
     }).cloned() else {
         changes.events.push(RuntimeEvent::SignalIgnored {
@@ -3111,7 +3030,7 @@ fn apply_message(
             {
                 let mut resumed = fiber.clone();
                 resumed.wait = WaitState::Running;
-                matched = Some((resumed, None));
+                matched = Some(resumed);
                 break;
             }
             WaitState::V2Race { record_id, arms } => {
@@ -3135,43 +3054,9 @@ fn apply_message(
                         let mut resumed = fiber.clone();
                         resumed.pc = *target;
                         resumed.wait = WaitState::Running;
-                        matched = Some((resumed, None));
+                        matched = Some(resumed);
                         v2_race_record = Some(*record_id);
                         break;
-                    }
-                }
-                if matched.is_some() {
-                    break;
-                }
-            }
-            WaitState::Race { race_id, .. } => {
-                if let Some(race) = metadata.race_plan().get(race_id) {
-                    for (index, arm) in race.arms.iter().enumerate() {
-                        let WaitArm::Msg {
-                            name: waiting_name,
-                            corr_reg,
-                            resume_at,
-                        } = arm
-                        else {
-                            continue;
-                        };
-                        let corr = fiber
-                            .regs
-                            .get(*corr_reg as usize)
-                            .cloned()
-                            .unwrap_or(Value::Bool(false));
-                        if message_name_matches(metadata.message_name_map(), name, *waiting_name)
-                            && value_key(&corr) == correlation_key.as_str()
-                        {
-                            let mut resumed = fiber.clone();
-                            resumed.pc = *resume_at;
-                            resumed.wait = WaitState::Running;
-                            matched = Some((
-                                resumed,
-                                Some((*race_id, index, race.arms.len(), *resume_at)),
-                            ));
-                            break;
-                        }
                     }
                 }
                 if matched.is_some() {
@@ -3188,7 +3073,7 @@ fn apply_message(
         msg_id: message_id.to_string(),
         expires_at: *expires_at,
     });
-    let Some((fiber, race)) = matched else {
+    let Some(fiber) = matched else {
         changes
             .buffered_messages
             .push(BufferedMessageMutation::Insert(message));
@@ -3220,30 +3105,6 @@ fn apply_message(
         corr_key: parse_value_key(correlation_key),
         msg_ref: None,
     });
-    if let Some((race_id, winner_index, arm_count, resume_at)) = race {
-        changes.events.push(RuntimeEvent::RaceWon {
-            race_id,
-            fiber_id: fiber.fiber_id,
-            winner_index,
-            resume_at,
-        });
-        let cancelled_indices = (0..arm_count)
-            .filter(|index| *index != winner_index)
-            .collect();
-        changes.events.push(RuntimeEvent::RaceCancelled {
-            race_id,
-            cancelled_indices,
-        });
-        changes.timer_mutations.push(TimerMutation::CancelRace {
-            fiber_id: fiber.fiber_id,
-            race_id,
-            except: EffectId::for_instruction(
-                snapshot.instance().instance_id,
-                fiber.fiber_id,
-                fiber.pc.into(),
-            ),
-        });
-    }
     if let Some(record_id) = v2_race_record {
         changes
             .concurrency_mutations
@@ -3311,7 +3172,6 @@ fn error_class_label(error_class: &ErrorClass) -> &'static str {
 }
 
 fn apply_job_completion(
-    workflow: &ExecutableWorkflow,
     snapshot: &Snapshot,
     completion: &bpmn_lite_types::JobCompletion,
 ) -> Result<Transition, TransitionError> {
@@ -3334,53 +3194,21 @@ fn apply_job_completion(
     let mut fiber = snapshot
         .fibers()
         .values()
-        .find(|fiber| matches!(&fiber.wait, WaitState::Job { job_key } if job_key == &completion.job_key)
-            || matches!(&fiber.wait, WaitState::Race { job_key: Some(job_key), .. } if job_key == &completion.job_key))
+        .find(|fiber| matches!(&fiber.wait, WaitState::Job { job_key } if job_key == &completion.job_key))
         .cloned()
         .ok_or(TransitionError::InvalidCommand("completion has no parked fiber"))?;
     let before = current_hash;
     let mut instance = snapshot.instance().clone();
     apply_completion(&mut instance, completion);
     let mut changes = Changes::default();
-    let current_pc = fiber.pc;
-    if let WaitState::Race { race_id, .. } = fiber.wait.clone() {
-        let race = workflow
-            .envelope()
-            .metadata()
-            .race_plan()
-            .get(&race_id)
-            .ok_or(TransitionError::MissingMetadata("job boundary race"))?;
-        let (winner_index, resume_at) = race
-            .arms
-            .iter()
-            .enumerate()
-            .find_map(|(index, arm)| {
-                matches!(arm, WaitArm::Internal { .. }).then(|| (index, arm.resume_at()))
-            })
-            .ok_or(TransitionError::MissingMetadata(
-                "job boundary internal arm",
-            ))?;
-        fiber.pc = resume_at;
-        changes.events.push(RuntimeEvent::RaceWon {
-            race_id,
-            fiber_id: fiber.fiber_id,
-            winner_index,
-            resume_at,
-        });
-        changes.events.push(RuntimeEvent::RaceCancelled {
-            race_id,
-            cancelled_indices: (0..race.arms.len())
-                .filter(|index| *index != winner_index)
-                .collect(),
-        });
-        changes.timer_mutations.push(TimerMutation::CancelRace {
-            fiber_id: fiber.fiber_id,
-            race_id,
-            except: EffectId::for_instruction(instance.instance_id, fiber.fiber_id, current_pc.into()),
-        });
-    } else {
-        fiber.pc = fiber.pc.saturating_add(1);
-    }
+    // V5.3 (§18, landed 2026-07-23): the v1 `race_plan`-consulting branch
+    // that used to live here (a job racing a boundary timer via
+    // `WaitState::Race`) is deleted along with `race_plan`/`boundary_map`
+    // — boundary timers on service tasks now race independently via
+    // `V2Guard`/`V2GuardN` + `GUARD-TIMER>` wrapping the task (§18 ruling
+    // I), which needs no cooperation from job completion at all: an
+    // ordinary job completion always just advances PC+1.
+    fiber.pc = fiber.pc.saturating_add(1);
     fiber.wait = WaitState::Running;
     changes.events.push(RuntimeEvent::JobCompleted {
         job_key: completion.job_key.clone(),
@@ -3506,9 +3334,29 @@ fn apply_v2_trigger_guard(
             "v2 guard trigger requires V2TriggerGuard",
         ));
     };
+    let changes = v2_trigger_guard_changes(snapshot, *record_id, context)?;
+    Ok(changes.finish(snapshot.instance().clone()))
+}
+
+/// The actual K-1/K-2 discharge (see the doc comment above), factored out
+/// of `apply_v2_trigger_guard` so `apply_timer`'s `TimerKind::V2GuardTimer`
+/// arm (§18 v0.10 ruling I) can reuse it verbatim for a timer-armed
+/// `V2Guard`/`V2GuardN` firing — "the same effect as issuing
+/// `Command::V2TriggerGuard`," not a re-derived parallel mechanism.
+/// Returns `Changes` rather than a finished `Transition` so the timer-fire
+/// caller can fold in its own `RuntimeEvent::TimerFired`/timer-consume
+/// mutation before finishing — `apply_v2_trigger_guard` itself finishes
+/// against `snapshot.instance().clone()` unchanged, exactly as before this
+/// refactor (this function never mutates `ProcessInstance` fields; only
+/// `V2GuardR`'s rollback path does that, see `apply_v2_guard_timer_rollback`).
+fn v2_trigger_guard_changes(
+    snapshot: &Snapshot,
+    record_id: RecordId,
+    context: &DeterministicContext,
+) -> Result<Changes, TransitionError> {
     let record = snapshot
         .concurrency_table()
-        .get(*record_id)
+        .get(record_id)
         .cloned()
         .ok_or(TransitionError::InvalidCommand(
             "V2TriggerGuard: unknown guard handle",
@@ -3548,7 +3396,7 @@ fn apply_v2_trigger_guard(
             fiber
                 .control_stack
                 .iter()
-                .position(|id| *id == *record_id)
+                .position(|id| *id == record_id)
                 .map(|pos| {
                     let end = if interrupting { pos } else { pos + 1 };
                     fiber.control_stack[..end].to_vec()
@@ -3584,7 +3432,7 @@ fn apply_v2_trigger_guard(
     if interrupting {
         let mut retire_order = Vec::new();
         let mut cancelled_fibers = Vec::new();
-        v2_cancel_guard_scope(snapshot, *record_id, &mut retire_order, &mut cancelled_fibers);
+        v2_cancel_guard_scope(snapshot, record_id, &mut retire_order, &mut cancelled_fibers);
         for id in &retire_order {
             changes
                 .concurrency_mutations
@@ -3609,7 +3457,7 @@ fn apply_v2_trigger_guard(
         }
         v2_reconcile_ancestor_membership(snapshot, &ancestor_ops, &retiring, &mut changes);
         changes.events.push(RuntimeEvent::V2GuardTriggered {
-            record_id: *record_id,
+            record_id,
             handler_fiber_id,
             cancelled_records: retire_order,
             cancelled_fibers,
@@ -3620,11 +3468,11 @@ fn apply_v2_trigger_guard(
         // nothing, leave the record exactly as it was (still `Armed`;
         // no mutation to emit, it never changed).
         changes.events.push(RuntimeEvent::V2GuardNTriggered {
-            record_id: *record_id,
+            record_id,
             handler_fiber_id,
         });
     }
-    Ok(changes.finish(snapshot.instance().clone()))
+    Ok(changes)
 }
 
 /// Post-order (deepest-first) walk of the record tree rooted at `parent`,
@@ -3798,32 +3646,191 @@ fn v2_rollback_guard_scope(
     })
 }
 
-fn join_arrive(snapshot: &Snapshot, changes: &Changes, join_id: JoinId) -> u16 {
-    changes.join_mutations.iter().fold(
-        snapshot.join_count(join_id).saturating_add(1),
-        |count, mutation| match mutation {
-            JoinMutation::Arrive(id) if *id == join_id => count.saturating_add(1),
-            JoinMutation::Reset(id) if *id == join_id => 1,
-            _ => count,
-        },
-    )
-}
+/// §18 v0.10 ruling I: a `GUARD-TIMER>`-armed `V2GuardR` firing. `GUARD-R>`
+/// carries no `handler` (by construction — see `Instr::V2GuardR`'s doc
+/// comment: "its only unwind paths are `V2CancelScope` and automatic
+/// rollback-on-definitive-failure"), so a timer-fired trigger against it
+/// cannot go through `v2_trigger_guard_changes` at all — there is nothing
+/// to spawn. Ruling I's own text is unqualified about which kind of
+/// guarded work a timer trigger applies to ("indifferent to whether the
+/// work inside is synchronous, effect-based, or a nested FORK region"),
+/// and by the same reasoning it does not exempt the guard's *own kind*
+/// either: a `GUARD-R>` wrapped in a boundary timer is exactly "this
+/// scope, and everything nested inside it, times out — restore the A3
+/// rollback-set" with no handler step, i.e. the automatic-rollback branch
+/// `apply_job_failure` already takes for a definitive `ContractViolation`
+/// inside an interrupting rollback-capable guard, minus the "which job
+/// failed" starting point (§13 ruling C originally, §14 ruling D
+/// narrowing it to `GUARD-R>` specifically). "All roads lead to Rome"
+/// (§13 amendment v0.5) gains a third caller of the same
+/// `v2_rollback_guard_scope` primitive here — `V2CancelScope` (in-line,
+/// continues), `apply_job_failure` (external job failure, dies), and now
+/// this (external deadline, dies).
+///
+/// The one genuine adaptation: `apply_job_failure` always has a specific
+/// failing fibre (the one parked on the job that failed) to hand
+/// `RollbackCaller::Dies`. A guard's own deadline has no equivalent — the
+/// scope times out as a whole, not because any one member failed — so the
+/// representative fibre for `RollbackCaller::Dies`'s audit id and the
+/// §13-amendment spanning-case survivor-selection anchor (below) is the
+/// lowest-UUID live member of the record (deterministic and replay-
+/// stable; `v2_cancel_guard_scope`'s walk is exhaustive over the whole
+/// live subtree regardless of which live member is named — see its own
+/// doc comment — so this choice is bookkeeping, not a semantic one).
+///
+/// Scope finding (V-10/A18 interaction, reported per the task's own ask
+/// rather than silently assumed benign): V-10 already forbids `GUARD-R>`
+/// from being opened while nested inside a `FORK`'s child fibre, but it
+/// does NOT forbid a `FORK`/`JOIN` region from existing *inside* a
+/// `GUARD-R>`'s own extent (dominance, not exclusion — see `Instr::V2GuardR`'s
+/// doc comment). So `guard_record.members` can legitimately contain
+/// several live fibres spanning multiple fork branches when this fires,
+/// not just one — `v2_cancel_guard_scope`'s walk already handles that
+/// (it discovers the entire live subtree, not just direct members), and
+/// the spanning-case check below (computed over the FULL post-rollback
+/// fibre set, not just the chosen representative) is unaffected by how
+/// many members there were. No V-10 amendment needed; recorded because
+/// the interaction was worth checking, not because it changed anything.
+///
+/// Returns the `Changes` accumulated so far and the `ProcessInstance` with
+/// the A3 rollback-set already restored (and, in the spanning case, its
+/// `state` set to `Incidented`) — mirroring `apply_job_failure`'s own
+/// local `instance` variable, just handed back instead of finished
+/// in-place, so the caller (`apply_timer`) can still attach its own
+/// `TimerFired` event and `Consume` timer mutation before finishing.
+fn apply_v2_guard_timer_rollback(
+    workflow: &ExecutableWorkflow,
+    snapshot: &Snapshot,
+    guard_handle: RecordId,
+    guard_record: &ConcurrencyRecord,
+    context: &DeterministicContext,
+) -> Result<(Changes, ProcessInstance), TransitionError> {
+    let Some(trigger_fiber_id) = guard_record.members.iter().min().copied() else {
+        // No live member left inside the scope at all — the record is
+        // still Armed (checked by the caller) but has already been
+        // vacated some other way (e.g. every member already left via a
+        // path that doesn't retire the record itself). Nothing to roll
+        // back or kill; leave the record exactly as-is, the caller still
+        // consumes the timer.
+        return Ok((Changes::default(), snapshot.instance().clone()));
+    };
+    let mut changes = Changes::default();
+    let restored = v2_rollback_guard_scope(
+        snapshot,
+        guard_handle,
+        RollbackCaller::Dies(trigger_fiber_id),
+        &mut changes,
+    )?;
+    let mut instance = snapshot.instance().clone();
+    // A3 rollback-set (A18): see `V2CancelScope`'s handler for the full
+    // field-by-field rationale — not repeated here.
+    instance.domain_payload = restored.domain_payload.to_string().into();
+    instance.domain_payload_hash = restored.domain_payload_hash;
+    instance.flags = restored.flags;
+    instance.join_expected = restored.join_expected;
+    instance.session_stack = restored.session_stack;
 
-fn timer_arm(arm: &WaitArm) -> Result<(Addr, Option<TimerRepeatSpec>), TransitionError> {
-    match arm {
-        WaitArm::Timer {
-            resume_at, cycle, ..
-        } => Ok((
-            *resume_at,
-            cycle
-                .as_ref()
-                .map(|cycle| TimerRepeatSpec::new(cycle.interval_ms, cycle.max_fires, 0)),
-        )),
-        WaitArm::Deadline { resume_at, .. } => Ok((*resume_at, None)),
-        _ => Err(TransitionError::InvalidCommand(
-            "timer arm metadata is not a timer",
-        )),
+    // §13 amendment (spanning case): identical computation to
+    // `apply_job_failure`'s own branch of the same shape — see its
+    // comment for the full rationale, not repeated here. If killing the
+    // representative trigger fibre (and everything else
+    // `v2_rollback_guard_scope` just cancelled) would leave the instance
+    // with zero live fibres, restore the trigger fibre instead and park
+    // it on an incident at the guard's own `opened_at` address.
+    let live_after_without_trigger: std::collections::BTreeSet<Uuid> = apply_fiber_deltas(
+        snapshot.fibers(),
+        &changes.fibers_upsert,
+        &changes.fibers_delete,
+        false,
+    )
+    .into_keys()
+    .filter(|id| *id != trigger_fiber_id)
+    .collect();
+    if live_after_without_trigger.is_empty() {
+        let Some(mut trigger_fiber) = snapshot.fibers().get(&trigger_fiber_id).cloned() else {
+            return Err(TransitionError::InvalidCommand(
+                "guard timer rollback: trigger fibre vanished mid-transition",
+            ));
+        };
+        let opened_at = guard_record.opened_at.ok_or(TransitionError::InvalidCommand(
+            "guard timer rollback: spanning guard scope carries no opened_at address",
+        ))?;
+        // The trigger fibre survives after all — undo its deletion.
+        changes.fibers_delete.retain(|id| *id != trigger_fiber_id);
+        // Pop the retiring guard (and anything nested above it on this
+        // fibre's own chain) off the surviving fibre's control stack —
+        // mirrors `apply_job_failure`'s identical truncation, see its
+        // comment for why.
+        if let Some(pos) = trigger_fiber
+            .control_stack
+            .iter()
+            .position(|id| *id == guard_handle)
+        {
+            let popped: Vec<_> = trigger_fiber.control_stack.split_off(pos);
+            for handle in popped.into_iter().rev() {
+                changes.control_stack_deltas.push(ControlStackDelta::Pop {
+                    fiber_id: trigger_fiber.fiber_id,
+                    handle,
+                });
+            }
+        }
+        // `v2_rollback_guard_scope`'s ancestor-membership sweep (run
+        // above) treated this fibre as fully dead and removed it from
+        // every ancestor record on its pre-rollback control stack — wrong
+        // here, since it is not leaving those outer scopes, only the
+        // retiring guard. Re-add it to whatever remains on its
+        // now-truncated control stack.
+        let readd_ops: Vec<_> = trigger_fiber
+            .control_stack
+            .iter()
+            .map(|ancestor| (*ancestor, MembershipOp::Add(trigger_fiber.fiber_id)))
+            .collect();
+        v2_reconcile_ancestor_membership(
+            snapshot,
+            &readd_ops,
+            &std::collections::BTreeSet::new(),
+            &mut changes,
+        );
+
+        let incident_id = context.derived_id(0);
+        let service_task_id = workflow
+            .envelope()
+            .metadata()
+            .debug_map()
+            .get(&trigger_fiber.pc)
+            .cloned()
+            .unwrap_or_else(|| format!("pc_{}", trigger_fiber.pc));
+        let incident = Incident {
+            incident_id,
+            process_instance_id: instance.instance_id,
+            fiber_id: trigger_fiber.fiber_id,
+            service_task_id: service_task_id.clone(),
+            bytecode_addr: trigger_fiber.pc,
+            error_class: ErrorClass::ContractViolation,
+            message: "guard-arming timer deadline elapsed".to_string(),
+            retry_count: 0,
+            created_at: logical_timestamp(context)?,
+            resolved_at: None,
+            resolution: None,
+        };
+        // Resume address: the guard's own opening word, not wherever the
+        // deadline caught the scope mid-execution — matches
+        // `apply_job_failure`'s identical resume-address choice, for the
+        // identical reason (`Command::ResolveIncident` re-executes
+        // `GUARD-R>`, opening a fresh scope activation over the restored
+        // payload).
+        trigger_fiber.pc = opened_at;
+        trigger_fiber.wait = WaitState::Incident { incident_id };
+        instance.state = ProcessState::Incidented { incident_id };
+        changes.incidents.push(incident);
+        changes.fibers_upsert.push(trigger_fiber);
+        changes.events.push(RuntimeEvent::IncidentCreated {
+            incident_id,
+            service_task_id,
+            job_key: None,
+        });
     }
+    Ok((changes, instance))
 }
 
 fn logical_timestamp(context: &DeterministicContext) -> Result<i64, TransitionError> {
@@ -3901,7 +3908,6 @@ fn describe_wait(wait: &WaitState) -> String {
         WaitState::Msg { name, corr_key, .. } => format!("Msg({name}, {corr_key:?})"),
         WaitState::Job { job_key } => format!("Job({job_key})"),
         WaitState::Effect { effect_id } => format!("Effect({})", effect_id.as_uuid()),
-        WaitState::Race { race_id, .. } => format!("Race({race_id})"),
         WaitState::Join { join_id, .. } => format!("Join({join_id})"),
         WaitState::V2Barrier { record_id } => format!("V2Barrier({record_id})"),
         WaitState::V2Race { record_id, arms } => {
@@ -3912,9 +3918,11 @@ fn describe_wait(wait: &WaitState) -> String {
 }
 
 fn apply_timer(
+    workflow: &ExecutableWorkflow,
     snapshot: &Snapshot,
     timer: &bpmn_lite_types::ClaimedTimer,
     fired_at: u64,
+    context: &DeterministicContext,
 ) -> Result<Transition, TransitionError> {
     if timer.tenant_id().as_str() != snapshot.instance().tenant_id {
         return Err(TransitionError::InvalidCommand(
@@ -3931,7 +3939,6 @@ fn apply_timer(
     }
 
     let mut builder = TransitionBuilder::new(snapshot.instance().clone());
-    let mut rearmed = false;
     match (timer.kind(), snapshot.fiber(timer.fiber_id()).cloned()) {
         (TimerKind::Wait, Some(mut fiber)) if matches!(fiber.wait, WaitState::Timer { deadline_ms } if deadline_ms <= fired_at) =>
         {
@@ -3941,121 +3948,6 @@ fn apply_timer(
                 fiber_id: timer.fiber_id(),
                 fired_at,
             });
-        }
-        (
-            TimerKind::Race {
-                race_id,
-                arm_index,
-                resume_at,
-                interrupting,
-                job_key,
-                boundary_element_id,
-                arm_count,
-            },
-            Some(mut fiber),
-        ) if matches!(&fiber.wait, WaitState::Race { race_id: current, .. } if current == race_id) =>
-        {
-            builder = builder.event(RuntimeEvent::TimerFired {
-                timer_id: timer.timer_id(),
-                fiber_id: timer.fiber_id(),
-                fired_at,
-            });
-            if *interrupting {
-                fiber.pc = Addr::from(*resume_at);
-                fiber.wait = WaitState::Running;
-                builder = builder
-                    .upsert_fiber(fiber)
-                    .event(RuntimeEvent::RaceWon {
-                        race_id: *race_id,
-                        fiber_id: timer.fiber_id(),
-                        winner_index: *arm_index,
-                        resume_at: Addr::from(*resume_at),
-                    })
-                    .event(RuntimeEvent::RaceCancelled {
-                        race_id: *race_id,
-                        cancelled_indices: (0..*arm_count)
-                            .filter(|index| *index != *arm_index)
-                            .collect(),
-                    })
-                    .timer_mutation(TimerMutation::CancelRace {
-                        fiber_id: timer.fiber_id(),
-                        race_id: *race_id,
-                        except: timer.timer_id(),
-                    });
-                if let Some(job_key) = job_key {
-                    builder = builder.ack_job(job_key.clone());
-                }
-            } else {
-                let next_fire_count = timer
-                    .repeat_spec()
-                    .map(|spec| spec.fired_count().saturating_add(1))
-                    .unwrap_or(1);
-                let child_id =
-                    EffectId::for_timer_fire(timer.timer_id(), next_fire_count).as_uuid();
-                builder = builder
-                    .upsert_fiber(Fiber::new(child_id, Addr::from(*resume_at)))
-                    .event(RuntimeEvent::BoundaryFired {
-                        race_id: *race_id,
-                        fiber_id: timer.fiber_id(),
-                        spawned_fiber_id: child_id,
-                        boundary_element_id: boundary_element_id.clone().unwrap_or_default(),
-                        resume_at: Addr::from(*resume_at),
-                    });
-                if let Some(spec) = timer.repeat_spec() {
-                    let remaining = spec.remaining().saturating_sub(1);
-                    if remaining > 0 {
-                        let next =
-                            TimerRepeatSpec::new(spec.interval_ms(), remaining, next_fire_count);
-                        let next_due_at = fired_at.saturating_add(spec.interval_ms());
-                        fiber.wait = WaitState::Race {
-                            race_id: *race_id,
-                            timer_deadline_ms: Some(next_due_at),
-                            job_key: job_key.clone(),
-                            interrupting: false,
-                            timer_arm_index: Some(*arm_index),
-                            cycle_remaining: Some(next.remaining()),
-                            cycle_fired_count: next.fired_count(),
-                        };
-                        builder = builder
-                            .timer_mutation(TimerMutation::Rearm {
-                                timer_id: timer.timer_id(),
-                                claim_token: timer.claim_token(),
-                                due_at: next_due_at,
-                                repeat_spec: next.clone(),
-                            })
-                            .event(RuntimeEvent::TimerCycleIteration {
-                                race_id: *race_id,
-                                fiber_id: timer.fiber_id(),
-                                iteration: next_fire_count,
-                                remaining: next.remaining(),
-                            });
-                        rearmed = true;
-                    } else {
-                        builder = builder
-                            .event(RuntimeEvent::TimerCycleIteration {
-                                race_id: *race_id,
-                                fiber_id: timer.fiber_id(),
-                                iteration: next_fire_count,
-                                remaining: 0,
-                            })
-                            .event(RuntimeEvent::TimerCycleExhausted {
-                                race_id: *race_id,
-                                fiber_id: timer.fiber_id(),
-                                total_fired: next_fire_count,
-                            });
-                        set_post_cycle_wait(
-                            &mut fiber,
-                            job_key,
-                            *race_id,
-                            *arm_index,
-                            next_fire_count,
-                        );
-                    }
-                } else {
-                    set_post_cycle_wait(&mut fiber, job_key, *race_id, *arm_index, next_fire_count);
-                }
-                builder = builder.upsert_fiber(fiber);
-            }
         }
         (
             TimerKind::V2Race { record_id, resume_at },
@@ -4082,39 +3974,144 @@ fn apply_timer(
                     except: timer.timer_id(),
                 });
         }
+        // §18 v0.10 ruling I: a `GUARD-TIMER>`-armed guard's deadline.
+        // Deliberately matched on `TimerKind` alone (the wildcard `_` in
+        // the tuple's second position, unlike every arm above) — arming
+        // does not park the fibre in a matching `WaitState` the way a race
+        // does (the guarded body keeps executing normally after arming),
+        // so there is no fibre-side wait-state to gate staleness against.
+        // Staleness is instead gated on the record itself: `RecordState`
+        // (already `Retired` if the guard closed normally via
+        // `<GUARD`/`<GUARD-N`/`<GUARD-R`, or was already triggered, before
+        // this deadline arrived) is the sole check — exactly the same
+        // shape as `TimerKind::V2Race`'s `WaitState::V2Race` match guard,
+        // just keyed on the concurrency table instead of a fibre.
+        //
+        // Builds its own complete `Changes`-based transition and returns
+        // early, bypassing `builder`/`rearmed` entirely — the shared
+        // `builder`/`rearmed` machinery below is v1's own general-purpose
+        // rearm path (dead since V5.3's v1 deletion; nothing sets
+        // `rearmed` any more). This arm's own rearm decision (below,
+        // post-close remediation restoring V&S §13 amendment v0.5 ruling A
+        // to `GUARD-TIMER>` specifically — a `GUARD-N>`-kind record's
+        // timer DOES rearm, in the same transition, via
+        // `TimerMutation::Rearm`; `GUARD>`/`GUARD-R>` still never do,
+        // their record having just retired) is self-contained (reusing
+        // `v2_trigger_guard_changes`/`apply_v2_guard_timer_rollback`, both
+        // already `Changes`-shaped), so merging into the shared `builder`
+        // above would just be needless field-by-field duplication for no
+        // arm that could ever run alongside it (each `Command::TimerFired`
+        // addresses exactly one `ClaimedTimer`, hence exactly one
+        // `TimerKind`).
+        (TimerKind::V2GuardTimer { record_id }, _) => {
+            let Some(record) = snapshot.concurrency_table().get(*record_id).cloned() else {
+                // Record no longer exists at all (fully retired and swept
+                // already) — stale fire, no-op besides consuming below.
+                return Ok(TransitionBuilder::new(snapshot.instance().clone())
+                    .timer_mutation(TimerMutation::Consume {
+                        timer_id: timer.timer_id(),
+                        claim_token: timer.claim_token(),
+                    })
+                    .build());
+            };
+            if record.state != RecordState::Armed || !matches!(record.kind, RecordKind::Guard { .. })
+            {
+                // Stale: already triggered/closed normally (Retired), or
+                // — should be unreachable past a verified program, since
+                // V2GuardArmTimer only ever binds a Guard-kind record —
+                // not actually a guard. Either way, not this deadline's
+                // job to act; no-op besides consuming.
+                return Ok(TransitionBuilder::new(snapshot.instance().clone())
+                    .timer_mutation(TimerMutation::Consume {
+                        timer_id: timer.timer_id(),
+                        claim_token: timer.claim_token(),
+                    })
+                    .build());
+            }
+            let interrupting = matches!(record.kind, RecordKind::Guard { interrupting: true });
+            let (mut changes, instance) = if record.rollback_domain_payload.is_some() {
+                // `V2GuardR`-opened: no `handler` to trigger (by
+                // construction — see `Instr::V2GuardR`'s doc comment), so
+                // firing runs the same automatic-rollback path a
+                // definitive job failure inside an interrupting
+                // rollback-capable guard already takes
+                // (`apply_job_failure`) — "all roads lead to Rome" for a
+                // third caller of `v2_rollback_guard_scope`.
+                apply_v2_guard_timer_rollback(workflow, snapshot, *record_id, &record, context)?
+            } else {
+                // `V2Guard`/`V2GuardN`: identical effect to a manually
+                // issued `Command::V2TriggerGuard` — same helper, same
+                // interrupting-unwind-and-spawn or non-interrupting
+                // re-arm-and-spawn behaviour, per ruling I's own text
+                // ("the arming trigger is what issues it").
+                (
+                    v2_trigger_guard_changes(snapshot, *record_id, context)?,
+                    snapshot.instance().clone(),
+                )
+            };
+            changes.events.push(RuntimeEvent::TimerFired {
+                timer_id: timer.timer_id(),
+                fiber_id: timer.fiber_id(),
+                fired_at,
+            });
+            // Post-close remediation (V&S §13 amendment v0.5, ruling A,
+            // restored to GUARD-TIMER>'s own timer-fire path — see
+            // `Instr::V2GuardTimerCycle`'s doc comment for the full
+            // rationale). `GUARD>`/`GUARD-R>` (interrupting) always
+            // `Consume`, unchanged from ruling I's original fire-once
+            // behaviour — their record retired above (via
+            // `v2_trigger_guard_changes`'s interrupting branch or the
+            // rollback path), so there is nothing left to re-arm against.
+            // `GUARD-N>` (non-interrupting) re-arms in the SAME transition
+            // per ruling A's default, reusing this timer's own `timer_id`
+            // (`TimerMutation::Rearm`, pre-existing generic timer-schedule
+            // infrastructure this is the first `V2*` word to populate) —
+            // bounded by `timer.repeat_spec()` (set at arm time by
+            // `V2GuardArmTimer`/narrowed by `V2GuardTimerCycle`) when
+            // present, decrementing `remaining` each fire; exhaustion
+            // (`remaining` reaching its last permitted fire) falls through
+            // to `Consume` instead — no further rearm, exactly
+            // `t_ni_3_cycle_exhausted_reverts_to_job`'s "reverts to job"
+            // shape: the guard scope continues with no further timer
+            // protection from that point on, behaving as if opened without
+            // a trigger at all.
+            let rearm = (!interrupting)
+                .then(|| timer.repeat_spec())
+                .flatten()
+                .filter(|spec| spec.remaining() > 1)
+                .map(|spec| TimerMutation::Rearm {
+                    timer_id: timer.timer_id(),
+                    claim_token: timer.claim_token(),
+                    due_at: fired_at.saturating_add(spec.interval_ms()),
+                    repeat_spec: TimerRepeatSpec::new(
+                        spec.interval_ms(),
+                        spec.remaining() - 1,
+                        spec.fired_count().saturating_add(1),
+                    ),
+                });
+            changes.timer_mutations.push(rearm.unwrap_or(TimerMutation::Consume {
+                timer_id: timer.timer_id(),
+                claim_token: timer.claim_token(),
+            }));
+            return Ok(changes.finish(instance));
+        }
         _ => {}
     }
-    if !rearmed {
-        builder = builder.timer_mutation(TimerMutation::Consume {
-            timer_id: timer.timer_id(),
-            claim_token: timer.claim_token(),
-        });
-    }
+    // V5.3 (§18, landed 2026-07-23): `rearmed` used to be set by v1's
+    // `TimerKind::Race` non-interrupting-cycle rearm branch, deleted this
+    // step along with `race_plan`/`boundary_map`. `TimerKind::V2Race`
+    // still never rearms (fire-once, per its own doc comment) and
+    // `TimerKind::V2GuardTimer` always returns early above (its own rearm
+    // decision — post-close remediation, `GUARD-N>` DOES rearm now, see
+    // that arm's doc comment — is self-contained and never falls through
+    // to here), so every path that actually reaches this point always
+    // consumes the fired timer — unconditionally now, not gated on a flag
+    // nothing sets any more.
+    builder = builder.timer_mutation(TimerMutation::Consume {
+        timer_id: timer.timer_id(),
+        claim_token: timer.claim_token(),
+    });
     Ok(builder.build())
-}
-
-fn set_post_cycle_wait(
-    fiber: &mut Fiber,
-    job_key: &Option<String>,
-    race_id: u32,
-    arm_index: usize,
-    fire_count: u32,
-) {
-    fiber.wait = if let Some(job_key) = job_key {
-        WaitState::Job {
-            job_key: job_key.clone(),
-        }
-    } else {
-        WaitState::Race {
-            race_id,
-            timer_deadline_ms: None,
-            job_key: None,
-            interrupting: false,
-            timer_arm_index: Some(arm_index),
-            cycle_remaining: Some(0),
-            cycle_fired_count: fire_count,
-        }
-    };
 }
 
 #[cfg(test)]
@@ -4126,13 +4123,38 @@ mod tests {
     fn fixture() -> (ExecutableWorkflow, Snapshot, DeterministicContext) {
         let program = bpmn_lite_types::legacy_program! {
             bytecode_version: [7u8; 32],
-            program: vec![Instr::Fork { targets: vec![Addr::new(1), Addr::new(2)].into() }, Instr::End, Instr::End],
+            // V5.3 (§18, landed 2026-07-23): migrated from v1 `Instr::Fork`
+            // to `Instr::V2Fork` — v1 `Fork`/`Join` are deleted entirely
+            // this step. This fixture's own base program is filler
+            // bytecode most of the 37 tests sharing `fixture()` never
+            // actually execute (they construct their own fibers/wait
+            // states and drive `apply` directly); the handful that DO run
+            // it via `Command::Tick` at pc 0 (e.g.
+            // `same_inputs_produce_byte_identical_transition`,
+            // `verified_fiber_limit_is_enforced_before_interpretation`)
+            // exercise generic determinism/limits properties equally well
+            // under `V2Fork`'s barrier-based fork as they did under v1
+            // `Fork`'s arrival-counted one — nothing about those
+            // properties is v1/v2-specific. Unlike v1 `Fork` (fire-and-
+            // forget, no control-stack obligation), `V2Fork` pushes a
+            // barrier handle onto each spawned child's control stack that
+            // V-1 requires a matching `V2Join` to pop on every path — a
+            // bare `[V2Fork, End, End]` is verifier-rejected (control
+            // stack non-empty at program end), so this uses the same
+            // minimal balanced shape `v2_fork_join_end_completes_
+            // instance_not_stuck_running`'s own fixture below establishes.
+            program: vec![
+                /* 0 */ Instr::V2Fork { targets: vec![Addr::new(1), Addr::new(3)].into(), pairing: Addr::new(0) },
+                /* 1 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 2 */ Instr::Jump { target: Addr::new(5) },
+                /* 3 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 4 */ Instr::Jump { target: Addr::new(5) },
+                /* 5 */ Instr::End,
+            ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4372,8 +4394,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4402,20 +4422,139 @@ mod tests {
             ProcessState::Completed { .. }
         ));
 
+        // §18 ruling J: zero-match now raises an Incident (via the same
+        // `fail_contract` helper `Instr::ForkInclusive`'s own zero-match
+        // arm already used, applied here for consistency) rather than
+        // aborting the whole transition with `TransitionError::RouteNotMatched`
+        // — the workflow COULDN'T decide which route to take, which is
+        // exactly what an Incident means; it is NOT the workflow deciding
+        // to stop (that's `END-TERMINATE`'s meaning, not this one).
         let mut instance = base_snapshot.instance().clone();
         instance.domain_payload = r#"{"kind":"unknown"}"#.into();
         instance.bind_placeholder_from_payload("@kind").unwrap();
         let snapshot = Snapshot::new(instance, base_snapshot.fibers().values().cloned());
-        assert!(matches!(
-            apply(
-                &workflow,
-                &snapshot,
-                &Command::Tick { fiber_id: None },
-                &context,
+        let t2 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: None },
+            &context,
+        )
+        .unwrap();
+        let incident_id = match t2.next_snapshot().state {
+            ProcessState::Incidented { incident_id } => incident_id,
+            ref other => panic!("expected Incidented (not Failed, not a new termination state), got {other:?}"),
+        };
+        assert_eq!(t2.incidents().len(), 1, "exactly one incident raised");
+        assert_eq!(t2.incidents()[0].incident_id, incident_id);
+        assert_eq!(
+            t2.fibers_upsert().len(),
+            1,
+            "the fibre survives, parked on the incident — not deleted"
+        );
+        let surviving = &t2.fibers_upsert()[0];
+        assert_eq!(
+            surviving.wait,
+            WaitState::Incident { incident_id },
+            "parked on exactly the incident just raised"
+        );
+        assert_eq!(
+            surviving.pc,
+            Addr::new(0),
+            "resumes by re-evaluating the SAME RoutePayload — pc was never advanced past it"
+        );
+
+        // Drive it further, don't just assert the parked shape: the
+        // operator amends the underlying data (ruling J's own text —
+        // "an operator amends the payload ... calls ResolveIncident, and
+        // the gateway re-evaluates"), resolves the incident, and the
+        // instance must actually resume and re-evaluate the route rather
+        // than staying stuck.
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
             ),
-            Err(TransitionError::RouteNotMatched(node)) if node == "route"
-        ));
+        );
+        let after_t2 =
+            materialize_snapshot(genesis.state(), &t2, workflow.envelope().abi_version(), 1);
+        let mut resolved_instance = after_t2.state().instance().clone();
+        resolved_instance.domain_payload = r#"{"kind":"fund"}"#.into();
+        resolved_instance.bind_placeholder_from_payload("@kind").unwrap();
+        let resolved_snapshot = Snapshot::new(
+            resolved_instance,
+            after_t2.state().fibers().values().cloned(),
+        )
+        .with_incidents(after_t2.state().incidents().values().cloned());
+        let context3 = DeterministicContext::new(301, Uuid::from_u128(302), 3);
+        let t3 = apply(
+            &workflow,
+            &resolved_snapshot,
+            &Command::ResolveIncident {
+                incident_id,
+                resolution: "operator corrected @kind".to_string(),
+            },
+            &context3,
+        )
+        .unwrap();
+        assert_eq!(
+            t3.next_snapshot().state,
+            ProcessState::Running,
+            "ResolveIncident restores Running"
+        );
+
+        let after_t3 =
+            materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 2);
+        let re_run_snapshot = Snapshot::new(
+            after_t3.state().instance().clone(),
+            after_t3.state().fibers().values().cloned(),
+        );
+        let context4 = DeterministicContext::new(302, Uuid::from_u128(303), 4);
+        let t4 = apply(
+            &workflow,
+            &re_run_snapshot,
+            &Command::Tick { fiber_id: None },
+            &context4,
+        )
+        .unwrap();
+        assert!(
+            matches!(t4.next_snapshot().state, ProcessState::Completed { .. }),
+            "resolving the incident and correcting the payload must let the gateway \
+             actually re-evaluate and complete, not stay stuck: {:?}",
+            t4.next_snapshot().state
+        );
     }
+
+    // V5.3 (§18, landed 2026-07-23): `fork_payload_zero_match_raises_
+    // incident_not_hard_error` (proving `Instr::ForkPayload`'s zero-match
+    // arm raised an Incident, the §18 ruling J shape) is deleted along
+    // with `Instr::ForkPayload` itself. Live-emission check, done before
+    // deleting: grepped both frontends — `bpmn-lite-compiler/src/dsl/
+    // frontend.rs` (the only would-be constructor of a DSL inclusive
+    // split) has emitted zero `ForkPayload`/`JoinDynamic` since the §18
+    // ruling I/item (e) landing (2026-07-23) switched DSL inclusive
+    // splits over to the `V2Fork`/`V2LoadPlaceholderMatch`/
+    // `V2RouteZeroMatch` shape unconditionally; `bpmn-lite-compiler/src/
+    // dsl/frontend.rs`'s own negative test (`dsl_inclusive_split_..._
+    // omits_zero_match_precheck`-family) already asserted this. The
+    // ratified plan doc's "deferred to v3 FORK-DYN" disposition for
+    // `ForkPayload` (5.2a, 2026-07-22) predates that landing and is
+    // superseded by it, not contradicted — item (e) delivered the v2
+    // inclusive-split lowering the deferral was waiting on, using the
+    // combination-enumeration `V2Fork` shape 5.2a's own text anticipated
+    // ("a combination-enumeration V2Fork/V2Join lowering would preserve
+    // V-3"). `ForkPayload`'s zero-match Incident behavior this test
+    // proved is superseded by `V2RouteZeroMatch`'s own coverage
+    // (`bpmn-lite-engine::tests::t_ig_v2_zero_match_no_default_raises_
+    // incident`, both frontends share one design per item (e)'s own
+    // writeup) — not a silent loss of coverage, the same property proven
+    // against the mechanism that actually runs today.
 
     /// V4.1 core scope words (`V2Guard`/`V2GuardEnd`/`V2Fork`/`V2Join`)
     /// reproduce the guard-wrapping-a-fork/barrier/join shape at the heart
@@ -4444,8 +4583,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4611,8 +4748,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4691,8 +4826,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4784,8 +4917,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -4896,8 +5027,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -5024,8 +5153,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -5178,8 +5305,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["NotifyCancelled".to_string()],
             error_route_map: BTreeMap::new(),
@@ -5366,8 +5491,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["NotifyCancelled".to_string()],
             error_route_map: BTreeMap::new(),
@@ -5599,8 +5722,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -5745,8 +5866,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -5893,8 +6012,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -5937,8 +6054,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -6025,8 +6140,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string(), "OtherTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6152,8 +6265,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6263,8 +6374,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6466,8 +6575,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6560,8 +6667,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6659,8 +6764,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -6768,8 +6871,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -6892,8 +6993,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -6981,8 +7080,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -7031,8 +7128,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -7130,8 +7225,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -7215,36 +7308,48 @@ mod tests {
         );
     }
 
-    /// V4 remediation companion: the general Ring 3 catch for the bug class
-    /// above, independent of `Instr::End` specifically. Exercises a
-    /// legitimate-looking but pathological v1 `Instr::Join` where the sole
-    /// remaining fibre arrives at a join whose static `expected` arity (2)
-    /// was never going to be met by a single fibre — the non-last-arrival
-    /// branch unconditionally deletes the arriving fibre and parks nothing
-    /// in its place, exactly the shape `Instr::End`'s old pre-transition
-    /// count would also have missed. Ring 3 must reject this: zero live
-    /// fibres post-transition, `ProcessState::Running` still non-terminal.
+    /// V-1's `EndTerminate` exemption (mirrors `Fail`'s pre-existing
+    /// treatment: neither is matched in `v2_verifier.rs`'s V-1 walk, both
+    /// fall through to the no-op `_` arm) — the K-invariant side of the
+    /// rider Adam's ruling attached to it: "the kernel must actually
+    /// retire all records and delete all fibres on `EndTerminate`." One
+    /// branch of a `V2Fork` reaches `EndTerminate` directly (no `V2Join`)
+    /// while its sibling branch is still live, mid-flight, with a SECOND
+    /// open record of its own (a `V2GuardN` scope) nested inside it — two
+    /// distinct `Armed` records must both retire in the same transition
+    /// `EndTerminate` fires in, not just the fork barrier. Without the
+    /// kernel-side fix, both records would survive forever as zero-member
+    /// `Armed` entries: a real K-1/K-2 orphaned-record defect, unguarded
+    /// by the verifier once V-1 stopped requiring the pop for
+    /// `EndTerminate` specifically.
     #[test]
-    fn ring3_rejects_zero_live_fibres_with_non_terminal_state() {
+    fn v2_endterminate_retires_every_live_sibling_record_not_just_the_terminating_branch() {
         let program = bpmn_lite_types::legacy_program! {
-            bytecode_version: [25u8; 32],
+            bytecode_version: [26u8; 32],
             program: vec![
-                /* 0 */ Instr::Join { id: 0, expected: 2, next: Addr::new(1) },
-                /* 1 */ Instr::End,
+                /* 0 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(2)]),
+                    pairing: Addr::new(0),
+                },
+                /* 1 */ Instr::EndTerminate, // branch A: terminates the whole instance
+                /* 2 */ Instr::V2GuardN { handler: Addr::new(6) }, // branch B: opens a 2nd record
+                /* 3 */ Instr::PushI64(1_000),
+                /* 4 */ Instr::V2WaitFor, // parks — branch B is mid-flight when A fires
+                /* 5 */ Instr::EndTerminate, // branch B's own reachable terminal (never
+                //       actually reached in this test — branch A fires first — but
+                //       must be statically present for V-11; exempt from popping
+                //       either the guard or fork handle, same as branch A's)
+                /* 6 */ Instr::V2GuardNEnd, // handler entry (post-push, unreached here) —
+                //       pops the guard's own re-armed token; the fork barrier from the
+                //       enclosing V2Fork is still on this path's inherited stack (handler
+                //       entry state inherits ancestors above the guard, per V4.1), so this
+                //       path terminates via EndTerminate (exempt) too, not End.
+                /* 7 */ Instr::EndTerminate,
             ],
             debug_map: BTreeMap::new(),
-            join_plan: BTreeMap::from([(
-                0u32,
-                bpmn_lite_types::JoinPlanEntry {
-                    expected: 2,
-                    next: Addr::new(1),
-                    reg_template: std::array::from_fn(|_| Value::I64(0)),
-                },
-            )]),
+            join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),
@@ -7253,23 +7358,356 @@ mod tests {
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4.3-ring3-zero-live-fibres").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program, "v-1-endterminate-exemption-k-invariant")
+                .unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        // Distinct contexts per tick (distinct `next_revision`), not one
+        // shared context — `derived_id` is `EffectId::for_command(command_id,
+        // next_revision, ordinal)`, so reusing the same context across ticks
+        // would derive the SAME record id for tick 2's `V2GuardN` open as
+        // tick 1's `V2Fork` open (both start their own local `ordinal` at 0).
+        let context1 = DeterministicContext::new(500, Uuid::from_u128(501), 1);
+        let context2 = DeterministicContext::new(501, Uuid::from_u128(502), 2);
+        let context3 = DeterministicContext::new(502, Uuid::from_u128(503), 3);
+
+        // Tick 1: V2Fork spawns both branches; root fibre dies.
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        assert_eq!(t1.fibers_delete(), &[root_fiber_id]);
+        assert_eq!(t1.fibers_upsert().len(), 2);
+        let barrier_id = t1
+            .concurrency_mutations()
+            .iter()
+            .find_map(|m| match m {
+                ConcurrencyMutation::Insert(record) => Some(record.id),
+                _ => None,
+            })
+            .expect("V2Fork must insert exactly one barrier record");
+        let (child_a, child_b) = (t1.fibers_upsert()[0].clone(), t1.fibers_upsert()[1].clone());
+        assert!(check_k_invariants(
+            &t1.fibers_upsert().iter().map(|f| (f.fiber_id, f.clone())).collect(),
+            &{
+                let mut table = bpmn_lite_types::concurrency::ConcurrencyTable::new();
+                for m in t1.concurrency_mutations() {
+                    if let ConcurrencyMutation::Insert(record) = m {
+                        table.insert(record.clone());
+                    }
+                }
+                table
+            }
+        )
+        .is_ok());
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        // Tick 2: branch B runs ahead — opens its own V2GuardN (a SECOND
+        // live record, distinct from the fork barrier) and parks on
+        // V2WaitFor, mid-flight.
+        let t2 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_b.fiber_id) },
+            &context2,
+        )
+        .unwrap();
+        let guard_id = t2
+            .concurrency_mutations()
+            .iter()
+            .find_map(|m| match m {
+                ConcurrencyMutation::Insert(record) => Some(record.id),
+                _ => None,
+            })
+            .expect("V2GuardN must insert its own record");
+        assert_ne!(guard_id, barrier_id, "two distinct live records must now be open");
+        let after_t2 = materialize_snapshot(after_t1.state(), &t2, workflow.envelope().abi_version(), 2);
+        assert_eq!(
+            after_t2.state().concurrency_table().get(barrier_id).unwrap().state,
+            RecordState::Armed
+        );
+        assert_eq!(
+            after_t2.state().concurrency_table().get(guard_id).unwrap().state,
+            RecordState::Armed
+        );
+        let snapshot = Snapshot::new(
+            after_t2.state().instance().clone(),
+            after_t2.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t2.state().concurrency_table().clone());
+
+        // Tick 3: branch A fires EndTerminate — accepted despite never
+        // reaching V2Join (V-1's new exemption) — and must retire BOTH
+        // still-`Armed` records (the fork barrier AND branch B's guard),
+        // not just clean up its own fibre.
+        let t3 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_a.fiber_id) },
+            &context3,
+        )
+        .unwrap();
+        assert!(matches!(
+            t3.next_snapshot().state,
+            ProcessState::Terminated { .. }
+        ));
+        let retired: std::collections::BTreeSet<RecordId> = t3
+            .concurrency_mutations()
+            .iter()
+            .filter_map(|m| match m {
+                ConcurrencyMutation::Retire(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            retired,
+            std::collections::BTreeSet::from([barrier_id, guard_id]),
+            "every Armed record must retire in the SAME transition EndTerminate fires in"
+        );
+
+        let after_t3 = materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 3);
+        assert!(
+            after_t3.state().fibers().is_empty(),
+            "zero live fibres after EndTerminate"
+        );
+        assert_eq!(
+            after_t3.state().concurrency_table().get(barrier_id).unwrap().state,
+            RecordState::Retired,
+            "fork barrier must not survive as a zero-member Armed record"
+        );
+        assert_eq!(
+            after_t3.state().concurrency_table().get(guard_id).unwrap().state,
+            RecordState::Retired,
+            "sibling branch's open guard must not survive as an orphaned Armed record"
+        );
+        assert!(
+            check_k_invariants(after_t3.state().fibers(), after_t3.state().concurrency_table()).is_ok(),
+            "no K-1/K-2 violation: zero fibres, and no live fibre references a retired record"
+        );
+    }
+
+    /// §18 v0.10 ruling H, hypothesis fixture (this step's own deliverable,
+    /// per Adam's brief — proven by construction, not by reasoning about
+    /// the abstract word table). Claim under test: `V2Fork`'s `targets`
+    /// array does NOT need to become an operand-stack-driven runtime count
+    /// to give "dynamic arity" — a branch that doesn't do real work can
+    /// simply jump straight to its own `V2Join` using ONLY existing
+    /// opcodes (`PushBool`/`BrIf`/`Jump`), and the barrier still retires
+    /// correctly because that branch still calls the SAME `V2Join`
+    /// instruction every other branch calls. `V2Fork` here has 3 STATIC
+    /// targets (unchanged shape, `targets.len() == 3`, exactly as every
+    /// other `V2Fork` fixture in this file) — two do trivial "real work"
+    /// (a `Jump` chain standing in for it), the third (`child_c`, spawned
+    /// at address 5) evaluates a condition and `BrIf`s straight past its
+    /// own nominal work at address 7 to the shared `V2Join` at address 8.
+    /// All three still physically execute a `V2Join`; K-3's `count/arity`
+    /// bookkeeping (`Instr::V2Fork`'s kernel handler, unmodified — see
+    /// this test's own diff, which touches no non-test code) never sees a
+    /// count other than 3, because 3 fibres really were spawned and all 3
+    /// really do arrive. `check_k_invariants`'s K-3 assertion (wired into
+    /// every `apply`/materialize path already, not specially invoked here)
+    /// is exercised implicitly at every tick below — a K-3 violation would
+    /// surface as `Err(Integrity(Ring3Runtime(..)))`, not as a silent pass.
+    #[test]
+    fn v2fork_mixed_real_work_and_skip_to_join_branches_retires_barrier_via_unmodified_mechanism() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [25u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(3), Addr::new(5)]),
+                    pairing: Addr::new(0),
+                },
+                /* 1 */ Instr::Jump { target: Addr::new(2) }, // branch A: "real work" stand-in
+                /* 2 */ Instr::Jump { target: Addr::new(8) }, // -> shared V2Join
+                /* 3 */ Instr::Jump { target: Addr::new(4) }, // branch B: "real work" stand-in
+                /* 4 */ Instr::Jump { target: Addr::new(8) },
+                /* 5 */ Instr::PushBool(true), // branch C: the skip condition
+                /* 6 */ Instr::BrIf { target: Addr::new(8) }, // skip STRAIGHT to V2Join —
+                //       no new opcode, this IS "dynamic arity" as a lowering
+                //       pattern, not a kernel mechanism change.
+                /* 7 */ Instr::Jump { target: Addr::new(8) }, // branch C's own "real work"
+                //       path — statically reachable (V-11 must still admit
+                //       it) but never taken at THIS runtime, since address 6
+                //       always evaluates true here.
+                /* 8 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 9 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v18-ruling-h-fork-skip-to-join").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, context) = fixture();
         let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
         let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
 
-        let result = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context);
-        assert!(
-            matches!(
-                &result,
-                Err(TransitionError::Integrity(bpmn_lite_types::IntegrityError::Ring3Runtime(msg)))
-                    if msg.contains("stuck by construction")
+        // Tick 1: V2Fork spawns all 3 branches (arity = count = targets.len()
+        // = 3, K-3's bound holds at birth exactly as it always has — no
+        // change to the kernel handler was made or needed), root fibre dies.
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        assert_eq!(t1.fibers_delete(), &[root_fiber_id]);
+        assert_eq!(t1.fibers_upsert().len(), 3);
+        let record = t1
+            .concurrency_mutations()
+            .iter()
+            .find_map(|mutation| match mutation {
+                bpmn_lite_types::concurrency::ConcurrencyMutation::Insert(record) => Some(record.clone()),
+                _ => None,
+            })
+            .expect("V2Fork must insert exactly one barrier record");
+        assert_eq!(
+            record.counters,
+            RecordCounters { arity: 3, count: 3 },
+            "arity/count must equal targets.len() (3), unchanged from the pre-existing \
+             fixed-arity mechanism — no operand-stack-driven runtime count exists or was added"
+        );
+        let (child_a, child_b, child_c) = (
+            t1.fibers_upsert()[0].clone(),
+            t1.fibers_upsert()[1].clone(),
+            t1.fibers_upsert()[2].clone(),
+        );
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
             ),
-            "expected a Ring 3 zero-live-fibres rejection, got {result:?}"
+        );
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        let snapshot = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        // Tick 2: child_a ("real work" branch) arrives at the shared V2Join
+        // via a Jump chain — 1st arrival, not last, parks.
+        let t2 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_a.fiber_id) },
+            &context,
+        )
+        .unwrap();
+        assert!(t2.fibers_delete().is_empty());
+        let after_t2 = materialize_snapshot(after_t1.state(), &t2, workflow.envelope().abi_version(), 2);
+        let snapshot = Snapshot::new(
+            after_t2.state().instance().clone(),
+            after_t2.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t2.state().concurrency_table().clone());
+
+        // Tick 3: child_b ("real work" branch) arrives — 2nd of 3, still not
+        // last, parks too. Barrier count now 2/3 live members, K-3 (0 <
+        // count <= arity) holds throughout — checked implicitly by every
+        // `apply` call above via `check_k_invariants`.
+        let t3 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_b.fiber_id) },
+            &context,
+        )
+        .unwrap();
+        assert!(t3.fibers_delete().is_empty());
+        let after_t3 = materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 3);
+        let snapshot = Snapshot::new(
+            after_t3.state().instance().clone(),
+            after_t3.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t3.state().concurrency_table().clone());
+
+        // Tick 4: child_c — the SKIP branch — evaluates PushBool(true) then
+        // BrIf straight to the SAME V2Join, never touching address 7's
+        // "real work". It is the 3rd and last arrival: sole survivor,
+        // continues past the join and falls straight into End in the same
+        // transition. All three fibres end up deleted (the two parked
+        // non-last-arrivals cancelled by the join retiring, child_c itself
+        // deleted by End) — the barrier retires via the UNMODIFIED V2Join
+        // mechanism, proving the skip-to-join branch is indistinguishable,
+        // from the barrier's point of view, from a "real work" branch.
+        let t4 = apply(
+            &workflow,
+            &snapshot,
+            &Command::Tick { fiber_id: Some(child_c.fiber_id) },
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            std::collections::BTreeSet::from_iter(t4.fibers_delete().iter().copied()),
+            std::collections::BTreeSet::from([child_a.fiber_id, child_b.fiber_id, child_c.fiber_id]),
+            "the skip branch's arrival must retire the barrier exactly like a real-work \
+             arrival would — all 3 members deleted at retirement, none left dangling"
+        );
+        assert!(t4.fibers_upsert().is_empty());
+        assert!(
+            matches!(t4.next_snapshot().state, ProcessState::Completed { .. }),
+            "expected Completed, got {:?} — the skip-to-join branch must complete the \
+             barrier and the instance exactly like an all-real-work fork would",
+            t4.next_snapshot().state
         );
     }
+
+    // V5.3 (§18, landed 2026-07-23): `ring3_rejects_zero_live_fibres_with_
+    // non_terminal_state` is deleted along with v1 `Instr::Join` — checked
+    // before deleting, not assumed harmless: this test's pathological
+    // vehicle depended specifically on v1 Join's own design flaw (its
+    // non-last-arrival branch unconditionally deletes the arriving fibre
+    // with NOTHING parked in its place — no fibre at all represents
+    // "waiting at the join," only the static `join_plan` counter does).
+    // `Instr::V2Join`'s non-last-arrival branch (`bpmn-lite-kernel/src/
+    // lib.rs`, `Instr::V2Join` match arm) cannot produce this shape by
+    // construction: on every non-last arrival it explicitly parks the
+    // real fibre via `fiber.wait = WaitState::V2Barrier { record_id:
+    // handle }` and pushes it to `fibers_upsert` before returning — there
+    // is no v1-Join-shaped "arrival that deletes without parking" path
+    // through V2Join's own honest code to hand-assemble a v2 fixture
+    // from. The Ring 3 hazard class this test targeted (zero live fibres
+    // post-transition, instance state stuck non-terminal) is not
+    // v1-specific and remains tested elsewhere without needing this
+    // vehicle: the `Instr::End` stuck-instance fix this test's own doc
+    // comment calls a "companion" to (V4's `apply_fiber_deltas`
+    // live-after-set fix, still in place and exercised by its own
+    // fixtures) and the `v2fork_mixed_real_work_and_skip_to_join_
+    // branches_retires_barrier_via_unmodified_mechanism` family, which
+    // drives `check_k_invariants` (Ring 3's own enforcement point) on
+    // every tick of a real `V2Fork`/`V2Join` program.
 
     /// Part 2 investigation (Adam's barrier-starvation hypothesis,
     /// 2026-07-22), **rescoped for A18 (2026-07-22)**: the original form of
@@ -7334,8 +7772,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -7478,8 +7914,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
             error_route_map: BTreeMap::new(),
@@ -7514,6 +7948,368 @@ mod tests {
     /// unwind path — the one most likely to desynchronize control stack
     /// from membership — is still exercised under random timing. Full
     /// external-event coverage is V4.5's golden-transition fixtures.
+    /// §18 v0.10 ruling I: a `GUARD-TIMER>`-armed `V2Guard` firing via
+    /// `Command::TimerFired` reproduces the exact same cascade a manual
+    /// `Command::V2TriggerGuard` produces — this is the whole point of the
+    /// ruling ("the arming trigger is what issues it"), so this is the
+    /// single fixture that must hold for the ruling to actually be true,
+    /// not just documented. Deliberately simpler than
+    /// `v2_trigger_guard_reproduces_oracle_cancellation_cascade` (single
+    /// fibre, no fork/race nesting) — that test already proves the
+    /// cascade mechanics themselves against `Command::V2TriggerGuard`
+    /// directly; this one's only job is proving the NEW wiring (arm ->
+    /// schedule -> `TimerFired` -> the same mechanism) is correct, not
+    /// re-proving the cascade itself.
+    #[test]
+    fn v2_guard_timer_trigger_fires_the_same_cascade_as_manual_v2_trigger_guard() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [21u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushI64(5_000),
+                /* 1 */ Instr::V2Guard { handler: Addr::new(7) },
+                /* 2 */ Instr::V2GuardArmTimer,
+                /* 3 */ Instr::PushI64(999_000),
+                /* 4 */ Instr::V2WaitFor,
+                /* 5 */ Instr::V2GuardEnd,
+                /* 6 */ Instr::End,
+                /* 7 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 8 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["NotifyGuardTimedOut".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "ruling-i-guard-timer-cascade").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: PushI64 -> V2Guard (opens the record) -> V2GuardArmTimer
+        // (pops 5_000, schedules a ScheduleTimer effect bound to the new
+        // record, TimerKind::V2GuardTimer — the actual new behaviour under
+        // test) -> PushI64 -> V2WaitFor parks (its own, unrelated, much
+        // longer timer — never fires in this test).
+        let context1 = DeterministicContext::new(500, Uuid::from_u128(501), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let guard_handle = t1.fibers_upsert()[0].control_stack[0];
+        // Two effects: GUARD-TIMER>'s own (the new behaviour under test)
+        // and V2WaitFor's unrelated, much-longer one — both words emit a
+        // durable timer effect, and GUARD-TIMER> does not suppress
+        // V2WaitFor's (arming is not parking).
+        assert_eq!(t1.effects().len(), 2);
+        let guard_timer_due_at = t1
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                bpmn_lite_types::DurableEffect::ScheduleTimer {
+                    due_at,
+                    kind: TimerKind::V2GuardTimer { record_id },
+                    ..
+                } if *record_id == guard_handle => Some(*due_at),
+                _ => None,
+            })
+            .expect("GUARD-TIMER> must schedule a ScheduleTimer effect bound to the guard record");
+        // due_at = context1's logical_time (500) + the popped duration (5_000).
+        assert_eq!(guard_timer_due_at, 5_500);
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+
+        // Fire the guard's own timer (NOT a hand-crafted V2TriggerGuard) —
+        // this is the mechanism under test.
+        let context2 = DeterministicContext::new(502, Uuid::from_u128(503), 2);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                after_t1.state().instance().instance_id,
+                root_fiber_id,
+            ),
+            5_000,
+            TimerKind::V2GuardTimer { record_id: guard_handle },
+            None,
+            Uuid::nil(),
+        );
+        let snapshot2 = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+        let t2 = apply(
+            &workflow,
+            &snapshot2,
+            &Command::TimerFired { timer: claimed_timer, fired_at: 5_000 },
+            &context2,
+        )
+        .unwrap();
+
+        // Exactly the interrupting-`V2Guard` cascade
+        // `v2_trigger_guard_reproduces_oracle_cancellation_cascade` proves
+        // against a manual `Command::V2TriggerGuard`: the sole member is
+        // cancelled, the guard record retires, the handler fibre spawns
+        // (pre-push entry state — empty control stack, since this guard
+        // had no enclosing scope).
+        assert_eq!(t2.fibers_delete(), &[root_fiber_id]);
+        assert_eq!(t2.fibers_upsert().len(), 1);
+        let handler_fiber = &t2.fibers_upsert()[0];
+        assert_eq!(handler_fiber.pc, Addr::new(7));
+        assert!(handler_fiber.control_stack.is_empty());
+        assert_eq!(t2.concurrency_mutations().len(), 1);
+        assert!(matches!(
+            &t2.concurrency_mutations()[0],
+            ConcurrencyMutation::Retire(id) if *id == guard_handle
+        ));
+        assert!(t2.events().iter().any(|event| matches!(
+            event,
+            RuntimeEvent::TimerFired { fiber_id, fired_at: 5_000, .. } if *fiber_id == root_fiber_id
+        )));
+        assert!(t2.events().iter().any(|event| matches!(
+            event,
+            RuntimeEvent::V2GuardTriggered { record_id, .. } if *record_id == guard_handle
+        )));
+        assert_eq!(
+            t2.timer_mutations(),
+            &[TimerMutation::Consume {
+                timer_id: EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                claim_token: Uuid::nil(),
+            }]
+        );
+    }
+
+    /// A guard's trigger is OPTIONAL, not mandatory — a `V2Guard` opened
+    /// without a following `V2GuardArmTimer` must schedule no durable
+    /// effect at all and behave exactly as every pre-ruling-I guard
+    /// fixture already proves (cement-locked, unchanged): this is the
+    /// explicit no-regression receipt the task asks for, not merely an
+    /// inference from "the existing tests still pass."
+    #[test]
+    fn v2_guard_opened_without_a_trigger_schedules_no_timer_effect() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [22u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Guard { handler: Addr::new(4) },
+                /* 1 */ Instr::PushI64(999_000),
+                /* 2 */ Instr::V2WaitFor,
+                /* 3 */ Instr::V2GuardEnd,
+                /* 4 */ Instr::End,
+                /* 5 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "ruling-i-guard-no-trigger").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot = Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+        let context = DeterministicContext::new(510, Uuid::from_u128(511), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        // Exactly one effect (V2WaitFor's own) — none bound to the guard
+        // record, since no GUARD-TIMER> ever ran.
+        assert_eq!(t1.effects().len(), 1);
+        assert!(
+            !t1.effects().iter().any(|effect| matches!(
+                effect,
+                bpmn_lite_types::DurableEffect::ScheduleTimer {
+                    kind: TimerKind::V2GuardTimer { .. },
+                    ..
+                }
+            )),
+            "an unarmed guard must schedule no V2GuardTimer effect at all"
+        );
+        assert!(matches!(
+            t1.fibers_upsert()[0].wait,
+            // deadline_ms = context's logical_time (510) + the popped duration (999_000).
+            WaitState::Timer { deadline_ms: 999_510 }
+        ));
+        assert_eq!(t1.fibers_upsert()[0].control_stack.len(), 1, "the guard still opened normally");
+    }
+
+    /// §18 v0.10 ruling I / V-10 interaction (reported, not silently
+    /// assumed benign — see `apply_v2_guard_timer_rollback`'s own doc
+    /// comment for the full reasoning): `V2GuardR` carries no `handler`
+    /// (A18), so a timer-armed `V2GuardR` firing cannot go through the
+    /// same `Command::V2TriggerGuard`-equivalent path the plain-guard test
+    /// above does — it must run the automatic-rollback path instead, with
+    /// no single failing job to anchor `RollbackCaller::Dies` against.
+    /// This fixture exercises the case worth a dedicated test: a
+    /// `V2GuardR` whose scope spans the instance's entire live fibre set
+    /// (a single-fibre workflow, the routine shape per §13's amendment) —
+    /// so firing the deadline must NOT simply kill the fibre and leave the
+    /// instance with zero live fibres; it must restore the A3 rollback set
+    /// AND park the fibre on an incident, exactly as
+    /// `definitive_job_failure_inside_interrupting_guard_and_spanning_the_whole_instance_parks_on_incident`
+    /// already proves for a job-failure-triggered rollback.
+    #[test]
+    fn v2_guard_r_timer_trigger_rolls_back_and_parks_on_incident_when_spanning_the_whole_instance() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [23u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushI64(9_000),
+                /* 1 */ Instr::V2GuardR,
+                /* 2 */ Instr::V2GuardArmTimer,
+                /* 3 */ Instr::PushI64(999_000),
+                /* 4 */ Instr::V2WaitFor,
+                /* 5 */ Instr::V2GuardREnd,
+                /* 6 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "ruling-i-guard-r-timer-spanning").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+
+        let flag_key: bpmn_lite_types::FlagKey = 9;
+        let mut base_instance = base_snapshot.instance().clone();
+        base_instance.flags.insert(flag_key, Value::Bool(false));
+        let original_payload = base_instance.domain_payload.to_string();
+        let original_flags = base_instance.flags.clone();
+        let snapshot = Snapshot::new(base_instance, [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: PushI64 -> V2GuardR (captures the A3 snapshot) ->
+        // V2GuardArmTimer (schedules the deadline) -> PushI64 -> V2WaitFor
+        // parks on its own, unrelated, much longer timer.
+        let context1 = DeterministicContext::new(520, Uuid::from_u128(521), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let guard_handle = t1.fibers_upsert()[0].control_stack[0];
+        // GUARD-TIMER>'s own effect plus V2WaitFor's unrelated one.
+        assert_eq!(t1.effects().len(), 2);
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+
+        // Mutate business state while the fibre sits parked inside the
+        // scope — this is what rollback must undo.
+        let mut resumed_instance = after_t1.state().instance().clone();
+        resumed_instance.domain_payload = "mutated-while-parked".to_string().into();
+        resumed_instance.domain_payload_hash = EffectId::content_hash(b"mutated-while-parked");
+        resumed_instance.flags.insert(flag_key, Value::Bool(true));
+        let snapshot2 = Snapshot::new(resumed_instance, after_t1.state().fibers().values().cloned())
+            .with_concurrency_table(after_t1.state().concurrency_table().clone());
+
+        // Fire the GUARD-R>'s own deadline.
+        let context2 = DeterministicContext::new(522, Uuid::from_u128(523), 2);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                snapshot2.instance().instance_id,
+                root_fiber_id,
+            ),
+            9_000,
+            TimerKind::V2GuardTimer { record_id: guard_handle },
+            None,
+            Uuid::nil(),
+        );
+        let t2 = apply(
+            &workflow,
+            &snapshot2,
+            &Command::TimerFired { timer: claimed_timer, fired_at: 9_000 },
+            &context2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            t2.next_snapshot().domain_payload.to_string(),
+            original_payload,
+            "A3: domain_payload must be restored by the timer-triggered rollback"
+        );
+        assert_eq!(
+            t2.next_snapshot().flags, original_flags,
+            "A3: business flags must be restored by the timer-triggered rollback"
+        );
+        assert!(
+            t2.fibers_delete().is_empty(),
+            "spanning case: the sole live fibre must be restored, not killed \
+             (killing it would leave zero live fibres and no way to resume)"
+        );
+        assert_eq!(t2.fibers_upsert().len(), 1);
+        let parked = &t2.fibers_upsert()[0];
+        assert_eq!(
+            parked.pc,
+            Addr::new(1),
+            "resume address is GUARD-R>'s own opening word (opened_at), not wherever \
+             the deadline caught the scope mid-execution"
+        );
+        let incident_id = match parked.wait {
+            WaitState::Incident { incident_id } => incident_id,
+            ref other => panic!("expected WaitState::Incident, got {other:?}"),
+        };
+        assert_eq!(
+            t2.next_snapshot().state,
+            ProcessState::Incidented { incident_id },
+            "spanning case sets the same state the ordinary incident path does"
+        );
+        assert_eq!(t2.incidents().len(), 1);
+        assert_eq!(t2.incidents()[0].incident_id, incident_id);
+        assert_eq!(t2.incidents()[0].error_class, ErrorClass::ContractViolation);
+        assert_eq!(t2.concurrency_mutations().len(), 1);
+        assert!(matches!(
+            &t2.concurrency_mutations()[0],
+            ConcurrencyMutation::Retire(id) if *id == guard_handle
+        ));
+        assert!(t2.events().iter().any(|event| matches!(
+            event,
+            RuntimeEvent::IncidentCreated { incident_id: id, .. } if *id == incident_id
+        )));
+    }
+
     mod k_invariant_properties {
         use super::*;
         use proptest::prelude::*;
@@ -7526,8 +8322,6 @@ mod tests {
                 join_plan: BTreeMap::new(),
                 wait_plan: BTreeMap::new(),
                 message_name_map: BTreeMap::new(),
-                race_plan: BTreeMap::new(),
-                boundary_map: BTreeMap::new(),
                 write_set: BTreeMap::new(),
                 task_manifest: vec!["NotifyCancelled".to_string()],
                 error_route_map: BTreeMap::new(),
@@ -7795,5 +8589,181 @@ mod tests {
                 run_k_invariant_fuzz(&workflow, steps.clone());
             }
         }
+    }
+
+    /// §18 ruling K: "an interrupting boundary event over the whole MI
+    /// construct is simply `V2Guard`/`V2GuardR` wrapping the fork
+    /// region — already fully covered by V-10 and the existing guard
+    /// machinery, no new mechanism needed for that case; do not build
+    /// anything extra for it, just confirm it composes correctly with a
+    /// test." This is that test — zero new guard-side code, a `V2Guard`
+    /// wrapping a 2-branch MI-shaped `V2Fork`/`V2Join` region built from
+    /// this ruling's own new opcodes (`V2MiArityCheck`/`V2MiIndexLive`),
+    /// with `Command::V2TriggerGuard` fired while both MI fibres are still
+    /// live (parked on their own jobs, neither having reached `V2Join`):
+    /// the SAME cascade `v2_guard_fork_join_reproduces_oracle_survivor_shape`
+    /// and `v2_trigger_guard_reproduces_oracle_cancellation_cascade` already
+    /// prove for a `V2Fork` built from plain `Jump`/`WaitFor`/`Race`
+    /// content — both MI fibres cancelled, the barrier and guard both
+    /// retire, the handler spawns. Nothing about the per-branch instruction
+    /// content (index/skip checks vs. plain jumps) is visible to the
+    /// guard/barrier machinery at all, which is the actual point being
+    /// proven: composition requires no MI-specific guard code because the
+    /// guard never inspects branch content in the first place.
+    #[test]
+    fn v2_guard_over_multi_instance_fork_composes_via_unmodified_guard_mechanism() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [26u8; 32],
+            program: vec![
+                /*  0 */ Instr::V2Guard { handler: Addr::new(14) },
+                /*  1 */ Instr::V2MiArityCheck { length_flag: 0, max: 2 },
+                /*  2 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(3), Addr::new(7)]),
+                    pairing: Addr::new(2),
+                },
+                /*  3 */ Instr::V2MiIndexLive { length_flag: 0, index: 0 },
+                /*  4 */ Instr::BrIfNot { target: Addr::new(11) },
+                /*  5 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /*  6 */ Instr::Jump { target: Addr::new(11) },
+                /*  7 */ Instr::V2MiIndexLive { length_flag: 0, index: 1 },
+                /*  8 */ Instr::BrIfNot { target: Addr::new(11) },
+                /*  9 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 10 */ Instr::Jump { target: Addr::new(11) },
+                /* 11 */ Instr::V2Join { pairing: Addr::new(2) },
+                /* 12 */ Instr::V2GuardEnd,
+                /* 13 */ Instr::End,
+                // Guard handler: V2Guard is opened BEFORE V2Fork (guard
+                // wraps the whole MI region), so the handler's inherited
+                // (pre-push) control stack is empty — no scope to close,
+                // matching `v2_trigger_guard_reproduces_oracle_cancellation_cascade`'s
+                // identically-nested handler shape (plain ExecNative+End,
+                // no V2Join).
+                /* 14 */ Instr::ExecNative { task_type: 1, argc: 0, retc: 0 },
+                /* 15 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["VerifyDoc".to_string(), "Escalate".to_string()],
+            error_route_map: BTreeMap::new(),
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v18-ruling-k-guard-over-mi").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        // Both MI indices (0, 1) live: `length_flag` (key 0) = 2.
+        let mut instance = base_snapshot.instance().clone();
+        instance.flags.insert(0, Value::I64(2));
+        let snapshot = Snapshot::new(instance, [Fiber::new(root_fiber_id, 0)]);
+
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: V2Guard + V2MiArityCheck (0 <= 2, passes) + V2Fork run in
+        // the same tick (none park) — spawns both MI fibres.
+        let context1 = DeterministicContext::new(500, Uuid::from_u128(501), 1);
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        assert_eq!(t1.fibers_delete(), &[root_fiber_id]);
+        assert_eq!(t1.fibers_upsert().len(), 2, "both declared_max=2 fibres spawn regardless of skip/live");
+        let (fiber_0, fiber_1) = (t1.fibers_upsert()[0].clone(), t1.fibers_upsert()[1].clone());
+        let guard_handle = fiber_0.control_stack[0];
+        let barrier_handle = fiber_0.control_stack[1];
+        let after_t1 = materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+
+        // Tick 2: fiber_0 runs V2MiIndexLive (0 < 2, live) -> real ExecNative,
+        // parks on a job. Neither branch reaches V2Join yet.
+        let context2 = DeterministicContext::new(500, Uuid::from_u128(502), 2);
+        let t2 = apply(
+            &workflow,
+            &Snapshot::new(after_t1.state().instance().clone(), after_t1.state().fibers().values().cloned())
+                .with_concurrency_table(after_t1.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(fiber_0.fiber_id) },
+            &context2,
+        )
+        .unwrap();
+        assert!(t2.jobs_enqueue().iter().any(|j| j.job_key.contains(':')));
+        let after_t2 = materialize_snapshot(after_t1.state(), &t2, workflow.envelope().abi_version(), 2);
+
+        // Tick 3: fiber_1 runs V2MiIndexLive (1 < 2, live) -> real
+        // ExecNative, parks on its own job too.
+        let context3 = DeterministicContext::new(500, Uuid::from_u128(503), 3);
+        let t3 = apply(
+            &workflow,
+            &Snapshot::new(after_t2.state().instance().clone(), after_t2.state().fibers().values().cloned())
+                .with_concurrency_table(after_t2.state().concurrency_table().clone()),
+            &Command::Tick { fiber_id: Some(fiber_1.fiber_id) },
+            &context3,
+        )
+        .unwrap();
+        let after_t3 = materialize_snapshot(after_t2.state(), &t3, workflow.envelope().abi_version(), 3);
+        let snapshot_before_trigger = Snapshot::new(
+            after_t3.state().instance().clone(),
+            after_t3.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t3.state().concurrency_table().clone());
+        assert_eq!(
+            snapshot_before_trigger.fibers().len(),
+            2,
+            "both MI fibres still live, parked on their own jobs, neither at V2Join"
+        );
+
+        // Trigger: neither MI fibre has reached V2Join — both are cancelled
+        // by the SAME interrupting-guard cascade the oracle-shaped fixtures
+        // above already prove, no MI-specific guard code involved.
+        let context4 = DeterministicContext::new(500, Uuid::from_u128(504), 4);
+        let trigger = apply(
+            &workflow,
+            &snapshot_before_trigger,
+            &Command::V2TriggerGuard { record_id: guard_handle },
+            &context4,
+        )
+        .unwrap();
+        assert_eq!(
+            trigger.fibers_delete().len(),
+            2,
+            "both MI fibres cancelled by the interrupting guard"
+        );
+        assert!(
+            trigger.fibers_delete().contains(&fiber_0.fiber_id)
+                && trigger.fibers_delete().contains(&fiber_1.fiber_id)
+        );
+        assert_eq!(trigger.fibers_upsert().len(), 1, "the handler fibre spawns");
+        assert!(
+            trigger.concurrency_mutations().iter().any(
+                |m| matches!(m, bpmn_lite_types::concurrency::ConcurrencyMutation::Retire(id) if *id == barrier_handle)
+            ),
+            "the MI barrier retires as part of the cascade"
+        );
+        assert!(
+            trigger.concurrency_mutations().iter().any(
+                |m| matches!(m, bpmn_lite_types::concurrency::ConcurrencyMutation::Retire(id) if *id == guard_handle)
+            ),
+            "the guard itself retires"
+        );
+
+        let after_trigger = materialize_snapshot(after_t3.state(), &trigger, workflow.envelope().abi_version(), 4);
+        assert_eq!(
+            after_trigger.state().concurrency_table().get(barrier_handle).unwrap().state,
+            RecordState::Retired,
+            "the MI barrier record is retired — no starvation, no live-but-abandoned record"
+        );
     }
 }

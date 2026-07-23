@@ -408,6 +408,16 @@ pub enum TimerKind {
         record_id: crate::concurrency::RecordId,
         resume_at: u32,
     },
+    /// §18 v0.10 ruling I: a `GUARD-TIMER>`-armed guard's own deadline.
+    /// `record_id` is the Guard/GuardN/GuardR-kind record it's bound to
+    /// (no `resume_at` — unlike a race arm, firing does not resume the
+    /// fibre at a static target; it issues the same effect as
+    /// `Command::V2TriggerGuard` for `V2Guard`/`V2GuardN`, or an automatic
+    /// rollback for `V2GuardR`, which carries no target address at all).
+    /// See `bpmn-lite-kernel`'s `apply_timer` for the fire-time dispatch.
+    V2GuardTimer {
+        record_id: crate::concurrency::RecordId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

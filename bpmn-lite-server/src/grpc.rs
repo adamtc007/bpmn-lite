@@ -632,9 +632,6 @@ impl BpmnLite for BpmnLiteService {
                     bpmn_lite_types::WaitState::Incident { incident_id } => {
                         ("INCIDENT".to_string(), incident_id.to_string())
                     }
-                    bpmn_lite_types::WaitState::Race { race_id, .. } => {
-                        ("RACE".to_string(), format!("race_{}", race_id))
-                    }
                     bpmn_lite_types::WaitState::Running => unreachable!(),
                 };
                 WaitInfo {

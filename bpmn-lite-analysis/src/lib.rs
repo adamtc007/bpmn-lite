@@ -237,8 +237,6 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
             error_route_map: BTreeMap::new(),

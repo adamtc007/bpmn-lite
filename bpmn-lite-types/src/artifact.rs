@@ -1,6 +1,6 @@
 use crate::{
-    Addr, CompiledProgram, ErrorRoute, FfiTaskDecl, FlagKey, Instr, JoinId, JoinPlanEntry, RaceId,
-    RacePlanEntry, WaitArm, WaitId, WaitPlanEntry,
+    Addr, CompiledProgram, ErrorRoute, FfiTaskDecl, FlagKey, Instr, JoinId, JoinPlanEntry, WaitId,
+    WaitPlanEntry,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -81,8 +81,6 @@ pub struct ArtifactMetadata {
     join_plan: BTreeMap<JoinId, JoinPlanEntry>,
     wait_plan: BTreeMap<WaitId, WaitPlanEntry>,
     message_name_map: BTreeMap<u32, String>,
-    race_plan: BTreeMap<RaceId, RacePlanEntry>,
-    boundary_map: BTreeMap<Addr, RaceId>,
     write_set: BTreeMap<String, BTreeSet<FlagKey>>,
     task_manifest: Vec<String>,
     error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
@@ -109,14 +107,6 @@ impl ArtifactMetadata {
 
     pub fn message_name_map(&self) -> &BTreeMap<u32, String> {
         &self.message_name_map
-    }
-
-    pub fn race_plan(&self) -> &BTreeMap<RaceId, RacePlanEntry> {
-        &self.race_plan
-    }
-
-    pub fn boundary_map(&self) -> &BTreeMap<Addr, RaceId> {
-        &self.boundary_map
     }
 
     pub fn write_set(&self) -> &BTreeMap<String, BTreeSet<FlagKey>> {
@@ -193,8 +183,6 @@ impl ArtifactEnvelope {
             join_plan: program.join_plan.clone(),
             wait_plan: program.wait_plan.clone(),
             message_name_map: program.message_name_map.clone(),
-            race_plan: program.race_plan.clone(),
-            boundary_map: program.boundary_map.clone(),
             write_set,
             task_manifest: program.task_manifest.clone(),
             error_route_map: program.error_route_map.clone(),
@@ -272,8 +260,6 @@ impl ExecutableWorkflow {
             join_plan: metadata.join_plan.clone(),
             wait_plan: metadata.wait_plan.clone(),
             message_name_map: metadata.message_name_map.clone(),
-            race_plan: metadata.race_plan.clone(),
-            boundary_map: metadata.boundary_map.clone(),
             write_set: metadata
                 .write_set
                 .iter()
@@ -318,19 +304,6 @@ fn verify_program(
     for address in metadata.debug_map.keys().copied() {
         require_address(address, len, address, "debug map")?;
     }
-    for (address, race_id) in &metadata.boundary_map {
-        require_address(*address, len, *address, "boundary map")?;
-        if !matches!(instructions[address.index()], Instr::ExecNative { .. }) {
-            return Err(ArtifactError::InvalidMetadata(format!(
-                "boundary address {address} is not ExecNative"
-            )));
-        }
-        if !metadata.race_plan.contains_key(race_id) {
-            return Err(ArtifactError::InvalidMetadata(format!(
-                "boundary address {address} references missing race {race_id}"
-            )));
-        }
-    }
     for address in metadata.ffi_task_decls.keys().copied() {
         require_address(address, len, address, "FFI task table")?;
         if !matches!(instructions[address.index()], Instr::ExecFfi { .. }) {
@@ -353,21 +326,8 @@ fn verify_program(
     for address in metadata.error_route_map.keys().copied() {
         require_address(address, len, address, "error route table")?;
     }
-    let mut referenced_races = BTreeSet::new();
-    let mut referenced_waits = BTreeSet::new();
-    let mut referenced_joins = BTreeSet::new();
-    // V-9, active check (V3 review remediation — confirmed a mixed v1/v2
-    // artifact IS type-level constructible: `Instr` is one enum
-    // containing both v1 and v2 variants, and nothing in the type system
-    // stops a `Vec<Instr>` from mixing them; a passing test alone would
-    // have been a vacuous "nothing populates this yet" observation, not
-    // an active guarantee). If this program contains any v2 instruction,
-    // it must carry none of the v1 side tables V-9 names.
-    let mut has_v2_instruction = false;
+    let referenced_joins: BTreeSet<JoinId> = BTreeSet::new();
     for (address, instruction) in instructions.iter().enumerate() {
-        if is_v2_instruction(instruction) {
-            has_v2_instruction = true;
-        }
         match instruction {
             Instr::ExecNative { task_type, .. } | Instr::ExecDslTask { task_type, .. }
                 if *task_type as usize >= metadata.task_manifest.len() =>
@@ -391,36 +351,19 @@ fn verify_program(
                     "{instruction:?} at address {address} has no v2 FFI effect declaration"
                 )));
             }
-            Instr::WaitMsg { wait_id, name, .. } => {
-                referenced_waits.insert(*wait_id);
-                if !metadata.message_name_map.contains_key(name) {
-                    return Err(ArtifactError::InvalidInstruction {
-                        address: Addr::from(address as u32),
-                        reason: format!("message name {name} has no side-table entry"),
-                    });
-                }
-            }
-            Instr::WaitAny { race_id, .. } => {
-                referenced_races.insert(*race_id);
-            }
-            // Static AND joins require a persisted register template. Inclusive
-            // joins derive their expected cardinality at runtime from the fork,
-            // so they intentionally have no static join-plan row.
-            Instr::Join { id, .. } => {
-                referenced_joins.insert(*id);
-            }
             _ => {}
         }
     }
-    referenced_races.extend(metadata.boundary_map.values().copied());
-    if referenced_races != metadata.race_plan.keys().copied().collect() {
+    // V5.3 (§18, landed 2026-07-23): v1 `Instr::WaitMsg`/`WaitAny` are
+    // deleted, along with `wait_plan`'s only producer and `race_plan`/
+    // `boundary_map` entirely — `wait_plan`/`join_plan` remain typed
+    // side tables (still populated by static v1 AND-join bookkeeping) but
+    // no live construction path populates a wait-plan row any more, so
+    // there is nothing left to reconcile a `referenced_waits` set against.
+    if metadata.wait_plan.keys().next().is_some() {
         return Err(ArtifactError::InvalidMetadata(
-            "race side table and instruction references are not bijective".to_string(),
-        ));
-    }
-    if referenced_waits != metadata.wait_plan.keys().copied().collect() {
-        return Err(ArtifactError::InvalidMetadata(
-            "wait side table and instruction references are not bijective".to_string(),
+            "wait side table is non-empty but no v1 instruction can populate it any more"
+                .to_string(),
         ));
     }
     if referenced_joins != metadata.join_plan.keys().copied().collect() {
@@ -428,18 +371,15 @@ fn verify_program(
             "static join side table and instruction references are not bijective".to_string(),
         ));
     }
-    if has_v2_instruction
-        && (!metadata.race_plan.is_empty()
-            || !metadata.join_plan.is_empty()
-            || !metadata.boundary_map.is_empty())
-    {
-        return Err(ArtifactError::InvalidMetadata(
-            "V-9: a v2-bearing artifact must carry none of the v1 race-plan/join-plan/\
-             boundary-route side tables — a mixed v1/v2 artifact with any of those \
-             populated is rejected outright, not silently tolerated"
-                .to_string(),
-        ));
-    }
+    // V5.3 (§18, landed 2026-07-23): the V-9 "a v2-bearing artifact must
+    // carry none of the v1 race-plan/join-plan/boundary-route side
+    // tables" active check that used to live here is retired along with
+    // `race_plan`/`boundary_map` (deleted entirely) and v1 `Fork`/`Join`
+    // (deleted, `join_plan`'s only producer) — there is no longer a v1
+    // side table any construction path can populate, on either side of
+    // the v1/v2 split, so the mixed-artifact hazard this check guarded
+    // against no longer has a way to occur. `join_plan`'s bijection check
+    // above already proves it stays empty.
 
     let mut heights = vec![None; len];
     heights[0] = Some(0u32);
@@ -466,14 +406,8 @@ fn verify_program(
         let next_height = height - pops + pushes;
         max_stack = max_stack.max(next_height);
         match instruction {
-            Instr::WaitMsg { corr_reg, .. } | Instr::PublishMessage { corr_reg, .. } => {
+            Instr::V2WaitMsg { corr_reg, .. } | Instr::PublishMessage { corr_reg, .. } => {
                 max_register = max_register.max(u32::from(*corr_reg) + 1);
-            }
-            Instr::Fork { targets } => {
-                max_fibers = max_fibers.saturating_add(targets.len() as u32);
-            }
-            Instr::ForkInclusive { branches, .. } => {
-                max_fibers = max_fibers.saturating_add(branches.len() as u32);
             }
             Instr::V2Fork { targets, .. } => {
                 max_fibers = max_fibers.saturating_add(targets.len() as u32);
@@ -485,17 +419,39 @@ fn verify_program(
             // on a legal program).
             Instr::V2Guard { .. } | Instr::V2GuardN { .. } => {
                 max_fibers = max_fibers.saturating_add(1);
+                // Post-close remediation (V&S §13 amendment v0.5 ruling A,
+                // restored): a `GUARD-N>` bounded by an immediately-
+                // following `GUARD-TIMER>`/`GUARD-TIMER-CYCLE>` pair can
+                // now spawn up to `max_fires` handler fibres from this ONE
+                // static site over the scope's lifetime, not just one —
+                // same undercounting shape as the comment above already
+                // names, extended the same way: the `+1` above already
+                // covers the first spawn, so add the remaining
+                // `max_fires - 1`. `max_fires` is a static embedded field
+                // (verifier-checkable, unlike an unbounded manual
+                // re-trigger via repeated `Command::V2TriggerGuard` — that
+                // gap is pre-existing, unaffected by this fix, and stays
+                // exactly what it already was: an approximate static
+                // bound backstopped by `validate_snapshot_limits`'s
+                // runtime `ResourceLimitExceeded`, not a hard compile-time
+                // guarantee). An UNBOUNDED `GUARD-TIMER>` (no
+                // `GUARD-TIMER-CYCLE>` following) gets no extra static
+                // credit here either, for the identical reason — the same
+                // runtime backstop applies to it that already applies to
+                // unbounded manual re-triggering today.
+                if let Some(Instr::V2GuardTimerCycle { max_fires }) =
+                    instructions.get(address + 2).filter(|_| {
+                        matches!(instructions.get(address + 1), Some(Instr::V2GuardArmTimer))
+                    })
+                {
+                    max_fibers = max_fibers.saturating_add(max_fires.saturating_sub(1));
+                }
             }
-            Instr::RoutePayload { branches, .. } | Instr::ForkPayload { branches, .. }
-                if branches.is_empty() =>
-            {
+            Instr::RoutePayload { branches, .. } if branches.is_empty() => {
                 return Err(ArtifactError::InvalidInstruction {
                     address: Addr::from(address as u32),
                     reason: "payload route has no branches".to_string(),
                 });
-            }
-            Instr::ForkPayload { branches, .. } => {
-                max_fibers = max_fibers.saturating_add(branches.len() as u32);
             }
             Instr::BrCounterLt { limit, target, .. } if *target < Addr::from(address as u32) => {
                 if *limit == 0 {
@@ -543,24 +499,14 @@ fn verify_program(
         ));
     }
 
-    // A non-interrupting boundary timer preserves its host fiber and creates a
-    // new escalation fiber on every firing. These fibers are not represented
-    // by a Fork instruction, so account for their verifier-bounded cycle count
-    // explicitly. This is intentionally conservative: escalation fibers may
-    // overlap if they themselves park before a later cycle fires.
-    for race in metadata.race_plan.values() {
-        for arm in &race.arms {
-            if let WaitArm::Timer {
-                interrupting: false,
-                cycle,
-                ..
-            } = arm
-            {
-                let spawned = cycle.as_ref().map_or(1, |spec| spec.max_fires);
-                max_fibers = max_fibers.saturating_add(spawned);
-            }
-        }
-    }
+    // V5.3 (§18, landed 2026-07-23): the v1 non-interrupting-boundary-
+    // timer escalation-fiber accounting that used to live here (walking
+    // `race_plan`) is deleted along with `race_plan`/`boundary_map`
+    // themselves — boundary timers now lower exclusively to `V2Guard`/
+    // `V2GuardN` + `GUARD-TIMER>`, whose escalation-fiber accounting is
+    // already covered above by the `Instr::V2Guard { .. } | Instr::V2GuardN
+    // { .. } => max_fibers.saturating_add(1)` arm (a guard's handler
+    // spawns exactly one fibre when triggered — `apply_v2_trigger_guard`).
 
     // V-7 (V&S §7): the dual-stack abstract interpreter's control-stack
     // half. A v1-only artifact has no D2 words, so this returns zeroed
@@ -580,6 +526,17 @@ fn verify_program(
     let control_stack_limits =
         crate::v2_verifier::verify_v2_control_stack(instructions, loop_multiplier)?;
 
+    // V-11 (§7, §18 ruling J): every reachable instruction must have a
+    // path to a terminal instruction. Deliberately sequenced AFTER the
+    // `verify_v2_control_stack` call above (which enforces V-8, backward
+    // v2 edges) and AFTER the height walk above it (which already
+    // rejected unbounded backward v1 `Jump`/`BrIf`/`BrIfNot` edges) — by
+    // this point the only backward edge that can still exist is a bounded
+    // `BrCounterLt` loop's own back-edge, which `verify_terminal_reachability`'s
+    // own doc comment explains is handled correctly by construction, not
+    // via a special case here.
+    crate::v2_verifier::verify_terminal_reachability(instructions)?;
+
     Ok(VerifiedLimits {
         max_stack,
         max_registers: max_register.max(8),
@@ -594,33 +551,20 @@ fn verify_program(
 /// V-9's active check needs to distinguish v2 words from v1 without
 /// depending on `v2_verifier`'s internals — a plain tag match, kept next
 /// to `Instr`'s own definition-adjacent helpers rather than duplicated.
-fn is_v2_instruction(instruction: &Instr) -> bool {
-    matches!(
-        instruction,
-        Instr::V2Guard { .. }
-            | Instr::V2GuardEnd
-            | Instr::V2GuardN { .. }
-            | Instr::V2GuardNEnd
-            | Instr::V2GuardR
-            | Instr::V2GuardREnd
-            | Instr::V2RaceOpen { .. }
-            | Instr::V2ArmTimer { .. }
-            | Instr::V2ArmMsg { .. }
-            | Instr::V2ArmEffect { .. }
-            | Instr::V2RaceClose
-            | Instr::V2Fork { .. }
-            | Instr::V2Join { .. }
-            | Instr::V2WaitFor
-            | Instr::V2WaitUntil
-            | Instr::V2WaitMsg { .. }
-            | Instr::V2AwaitEffect { .. }
-            | Instr::V2CancelScope
-    )
-}
-
 pub(crate) fn stack_effect(instruction: &Instr) -> (u32, u32) {
     match instruction {
         Instr::PushBool(_) | Instr::PushI64(_) | Instr::LoadFlag { .. } => (0, 1),
+        // `V2LoadPlaceholderMatch`'s stack effect mirrors `LoadFlag`'s
+        // `(0, 1)` exactly — the DSL-side placeholder-match analogue (see
+        // the `Instr` doc comment). `V2RouteZeroMatch` takes no operand at
+        // all (unconditional raise, not a conditional assert) — `(0, 0)`,
+        // covered by the catch-all below.
+        Instr::V2LoadPlaceholderMatch { .. } => (0, 1),
+        // `V2MiIndexLive` mirrors `V2LoadPlaceholderMatch`'s `(0, 1)`
+        // exactly — the MI-side index/skip analogue (§18 ruling K).
+        // `V2MiArityCheck` takes no operand and pushes nothing (a runtime
+        // assert, not a value producer) — covered by the catch-all below.
+        Instr::V2MiIndexLive { .. } => (0, 1),
         Instr::Pop | Instr::StoreFlag { .. } | Instr::BrIf { .. } | Instr::BrIfNot { .. } => (1, 0),
         Instr::ExecNative { argc, retc, .. } => (u32::from(*argc), u32::from(*retc)),
         Instr::ExecDslTask { .. } => (0, 0),
@@ -630,7 +574,9 @@ pub(crate) fn stack_effect(instruction: &Instr) -> (u32, u32) {
         // V2.7 addressing-review BLOCKING #2.4: duration/deadline pop from
         // the operand stack per §5's literal `( duration -- )` notation,
         // not an embedded field — see `V2ArmTimer`'s doc comment.
-        Instr::V2WaitFor | Instr::V2WaitUntil | Instr::V2ArmTimer { .. } => (1, 0),
+        Instr::V2WaitFor | Instr::V2WaitUntil | Instr::V2ArmTimer { .. } | Instr::V2GuardArmTimer => {
+            (1, 0)
+        }
         _ => (0, 0),
     }
 }
@@ -655,29 +601,6 @@ pub(crate) fn successors(
                 result.push(address + 1);
             }
         }
-        Instr::Fork { targets } => {
-            for target in targets.iter().copied() {
-                add(target, "fork")?;
-            }
-        }
-        Instr::Join { next, .. } | Instr::JoinDynamic { next, .. } => add(*next, "join")?,
-        Instr::WaitAny { arms, .. } => {
-            for arm in arms {
-                add(arm.resume_at(), "race arm")?;
-            }
-        }
-        Instr::ForkInclusive {
-            branches,
-            default_target,
-            ..
-        } => {
-            for branch in branches {
-                add(branch.target, "inclusive branch")?;
-            }
-            if let Some(target) = default_target {
-                add(*target, "inclusive default")?;
-            }
-        }
         Instr::RoutePayload {
             branches,
             default_target,
@@ -687,18 +610,6 @@ pub(crate) fn successors(
             }
             if let Some(target) = default_target {
                 add(*target, "payload route default")?;
-            }
-        }
-        Instr::ForkPayload {
-            branches,
-            default_target,
-            ..
-        } => {
-            for branch in branches {
-                add(branch.target, "payload fork")?;
-            }
-            if let Some(target) = default_target {
-                add(*target, "payload fork default")?;
             }
         }
         Instr::End | Instr::EndTerminate | Instr::Fail { .. } => {}
@@ -765,6 +676,14 @@ pub(crate) fn successors(
         // `CANCEL-SCOPE` unwinds and does not resume this fiber, matching
         // `End`/`EndTerminate`/`Fail`'s no-fallthrough treatment above.
         Instr::V2CancelScope => {}
+        // `V2RouteZeroMatch` unconditionally raises an Incident and never
+        // falls through — same no-fallthrough class as `Fail`/
+        // `V2CancelScope` (V-11's terminal set, `v2_verifier::is_terminal`,
+        // is amended to match). `V2LoadPlaceholderMatch` is deliberately
+        // NOT listed here — it is a plain operand-stack producer like
+        // `LoadFlag`, and falls through to the generic `address + 1` arm
+        // below exactly as `LoadFlag` does.
+        Instr::V2RouteZeroMatch => {}
 
         _ if address + 1 < len => result.push(address + 1),
         _ => {}
@@ -939,8 +858,6 @@ mod v2_fixtures {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: Vec::new(),
             error_route_map: BTreeMap::new(),
@@ -1079,6 +996,45 @@ mod v2_fixtures {
         assert_eq!(
             entry_depth[&addrs.msg_win], 0,
             "race handle must already be popped on entry to the msg-win arm target"
+        );
+    }
+
+    /// §18 v0.10 ruling H hypothesis fixture, `max_fibers` half. Companion
+    /// to `bpmn-lite-kernel`'s
+    /// `v2fork_mixed_real_work_and_skip_to_join_branches_retires_barrier_via_unmodified_mechanism`,
+    /// which proves the runtime side (barrier retirement); this proves
+    /// `VerifiedLimits::max_fibers` (computed at ~line 478 above,
+    /// `saturating_add(targets.len() as u32)` for `Instr::V2Fork`) already
+    /// correctly bounds a fork with a skip-to-join branch, with NO fix
+    /// needed — because `targets.len()` is 3 regardless of whether one of
+    /// those 3 spawned fibres does "real work" or immediately `BrIf`s to
+    /// its `V2Join`. The skip pattern changes what a fibre DOES, never how
+    /// many fibres `V2Fork` spawns, so the existing static
+    /// `targets.len()`-based accounting was never a quantity this ruling
+    /// needed to touch.
+    #[test]
+    fn max_fibers_already_accounts_for_a_v2fork_with_a_skip_to_join_branch() {
+        let instructions = vec![
+            /* 0 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(1), Addr::new(3), Addr::new(5)]),
+                pairing: Addr::new(0),
+            },
+            /* 1 */ Instr::Jump { target: Addr::new(2) }, // branch A: "real work" stand-in
+            /* 2 */ Instr::Jump { target: Addr::new(8) },
+            /* 3 */ Instr::Jump { target: Addr::new(4) }, // branch B: "real work" stand-in
+            /* 4 */ Instr::Jump { target: Addr::new(8) },
+            /* 5 */ Instr::PushBool(true), // branch C: skip condition
+            /* 6 */ Instr::BrIf { target: Addr::new(8) }, // skip straight to V2Join
+            /* 7 */ Instr::Jump { target: Addr::new(8) }, // branch C's own "real work"
+            /* 8 */ Instr::V2Join { pairing: Addr::new(0) },
+            /* 9 */ Instr::End,
+        ];
+        let envelope = assert_decodes_and_round_trips(instructions);
+        assert_eq!(
+            envelope.limits().max_fibers(),
+            4,
+            "1 (base/root fibre) + 3 (V2Fork's targets.len(), the static bound — \
+             unaffected by which of the 3 spawned fibres skips straight to V2Join)"
         );
     }
 

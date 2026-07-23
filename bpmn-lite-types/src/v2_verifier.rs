@@ -248,6 +248,138 @@ fn fibre_multiplicity(state: &AbstractStack, instructions: &[Instr]) -> u32 {
 /// too — kept unconditional per V3 review disposition; V5's frontends
 /// must confirm they can live with a hard "no backward v2 edge, ever"
 /// rule, since it is not narrowed here).
+/// Which instructions are `successors()`'s existing "no continuation"
+/// class — the terminal set V-11 proves reachability *to*. This is not a
+/// new taxonomy: `successors()` already groups `End`/`EndTerminate`/`Fail`
+/// under one arm (artifact.rs, "no fallthrough"), and its `V2CancelScope`
+/// arm's own doc comment says its no-successor treatment is "matching
+/// End/EndTerminate/Fail's no-fallthrough treatment above" — i.e. the
+/// codebase already treats these four as one equivalence class of "static
+/// dead end, by design." §18 ruling J's text names only `END`/
+/// `END-TERMINATE` (the v2-relevant case it was written against), but a
+/// literal reading that excludes `Fail`/`V2CancelScope` would reject
+/// existing, cement-locked fixtures that legitimately end a reachable path
+/// on one of them (`Fail`: `bpmn-lite-engine`'s `t_loop_3_counter_starts_at_zero`;
+/// `V2CancelScope`: `bpmn-lite-kernel`'s cancel-scope fixtures, which
+/// document it as "deliberately a dead end in the static CFG ... even
+/// though the kernel does continue the calling fibre past it dynamically").
+/// Adopting `successors()`'s own no-continuation grouping is the
+/// non-inventive resolution — flagged here, not silently decided, since
+/// it widens the ratified text rather than transcribing it verbatim.
+fn is_terminal(instruction: &Instr) -> bool {
+    matches!(
+        instruction,
+        Instr::End
+            | Instr::EndTerminate
+            | Instr::Fail { .. }
+            | Instr::V2CancelScope
+            // §18 ruling J's V5 lowering glue: `V2RouteZeroMatch`
+            // unconditionally raises an Incident and has no successors
+            // (`artifact::successors()`) — the same "static dead end, by
+            // design" class as `Fail`/`V2CancelScope`, not a new taxonomy.
+            | Instr::V2RouteZeroMatch
+    )
+}
+
+/// V-11 (§7, §18 ruling J): every instruction reachable from the program's
+/// entry point (address 0) must have a forward path to a terminal
+/// instruction — the dual of `verify_program`'s existing forward-
+/// reachability walk, which only proves *some* `End`/`EndTerminate` is
+/// reachable (a single boolean), not that every reachable node can get to
+/// one. Rejects any artifact containing a reachable instruction with no
+/// path to any terminal, naming the offending address.
+///
+/// **Must run after V-8** (structurally enforced by call order in
+/// `verify_program`: this is invoked only after `verify_v2_control_stack`
+/// — which enforces V-8 — has already returned `Ok`). This is what makes
+/// the V-8 interaction safe without any special-casing here: by the time
+/// this walk runs, the only backward edge that can still exist in
+/// `instructions` is a bounded `BrCounterLt` loop's own back-edge (every
+/// v2 backward edge, and every unbounded v1 `Jump`/`BrIf`/`BrIfNot`
+/// backward edge, was already rejected upstream). This function does
+/// ordinary directed-graph reachability over `successors()`'s edges,
+/// including that back-edge — and that is exactly correct, not merely
+/// tolerated: a bounded loop's back-edge participating as a normal graph
+/// edge does not manufacture false reachability, because reachability
+/// here is computed as "reverse-BFS from terminal nodes," not "the
+/// forward walk's own path." A loop with a forward exit has that exit
+/// edge lead somewhere that (transitively) reaches a terminal, so every
+/// node in the loop body reaches a terminal via the exit, back-edge or
+/// not. A loop with NO forward exit has no such edge at all, so no node
+/// in it is reverse-reachable from any terminal regardless of the
+/// back-edge — the failure mode the ruling flags (mistaking the back-edge
+/// itself for evidence of reachability) cannot occur in a reverse-BFS
+/// formulation, only in a formulation that tried to read reachability off
+/// the forward walk's own visitation order.
+pub(crate) fn verify_terminal_reachability(instructions: &[Instr]) -> Result<(), ArtifactError> {
+    let len = instructions.len();
+    if len == 0 {
+        // verify_program already rejects an empty instruction stream
+        // before this ever runs; nothing to walk.
+        return Ok(());
+    }
+
+    // Forward reachability from address 0, recording each visited
+    // address's own successor set so the reverse graph below doesn't need
+    // a second call to `successors()`.
+    let mut forward_reachable = vec![false; len];
+    let mut forward_edges: Vec<Vec<usize>> = vec![Vec::new(); len];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    forward_reachable[0] = true;
+    queue.push_back(0);
+    while let Some(address) = queue.pop_front() {
+        let succs = successors(address, &instructions[address], instructions, len)?;
+        for &next in &succs {
+            if !forward_reachable[next] {
+                forward_reachable[next] = true;
+                queue.push_back(next);
+            }
+        }
+        forward_edges[address] = succs;
+    }
+
+    // Reverse graph, built only from edges actually walked above.
+    let mut reverse_edges: Vec<Vec<usize>> = vec![Vec::new(); len];
+    for (from, tos) in forward_edges.iter().enumerate() {
+        for &to in tos {
+            reverse_edges[to].push(from);
+        }
+    }
+
+    // Reverse-BFS from every reachable terminal instruction.
+    let mut reaches_terminal = vec![false; len];
+    let mut rev_queue: VecDeque<usize> = VecDeque::new();
+    for address in 0..len {
+        if forward_reachable[address] && is_terminal(&instructions[address]) {
+            reaches_terminal[address] = true;
+            rev_queue.push_back(address);
+        }
+    }
+    while let Some(address) = rev_queue.pop_front() {
+        for &pred in &reverse_edges[address] {
+            if !reaches_terminal[pred] {
+                reaches_terminal[pred] = true;
+                rev_queue.push_back(pred);
+            }
+        }
+    }
+
+    for address in 0..len {
+        if forward_reachable[address] && !reaches_terminal[address] {
+            return Err(violation(
+                address,
+                "V-11",
+                format!(
+                    "instruction {:?} at address {address} has no path to any terminal \
+                     instruction (END/END-TERMINATE) — unreachable end-state",
+                    instructions[address]
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_v2_control_stack(
     instructions: &[Instr],
     loop_multiplier: u64,
@@ -424,6 +556,111 @@ pub(crate) fn verify_v2_control_stack(
                     propagate(&mut entry_states, &mut worklist, address, address + 1, popped)?;
                 }
             }
+            // §18 v0.10 ruling I: `GUARD-TIMER>` arms the guard scope it
+            // immediately follows. "Immediately" is enforced structurally
+            // here (`top.opened_at.index() + 1 == address`), not merely
+            // "some guard is open somewhere on the stack" — the ratified
+            // design is an arming trigger established "at guard-open
+            // time," and adjacency is the cheapest static proof of that
+            // without introducing per-record runtime bookkeeping. Legal
+            // after any of the three guard-kind opens (`V2Guard`/
+            // `V2GuardN`/`V2GuardR`) — arming composes uniformly across
+            // interrupting/non-interrupting/rollback, per the ruling's own
+            // text ("the guard doesn't care whether the work inside is
+            // synchronous... indifferent to disposition"). No state
+            // change (as `V2ArmTimer`'s identical arm below) — arming
+            // touches no concurrency record and no control stack.
+            Instr::V2GuardArmTimer => {
+                match state.last() {
+                    Some(top)
+                        if matches!(
+                            top.kind,
+                            ScopeKind::Guard | ScopeKind::GuardN | ScopeKind::GuardR
+                        ) && top.opened_at.index() + 1 == address =>
+                    {
+                        if address + 1 < len {
+                            propagate(&mut entry_states, &mut worklist, address, address + 1, state)?;
+                        }
+                    }
+                    Some(top) => {
+                        return Err(violation(
+                            address,
+                            "GUARD-TIMER>",
+                            format!(
+                                "must immediately follow the guard-open instruction it arms — \
+                                 top of stack is {:?}-kind, opened at {} (this instruction is \
+                                 not its immediate successor)",
+                                top.kind, top.opened_at
+                            ),
+                        ));
+                    }
+                    None => {
+                        return Err(violation(
+                            address,
+                            "GUARD-TIMER>",
+                            "no open guard scope to arm",
+                        ));
+                    }
+                }
+            }
+            // Post-close remediation (V&S §13 amendment v0.5 ruling A,
+            // restored — see `Instr::V2GuardTimerCycle`'s own doc comment
+            // for the full rationale). Two static shape requirements, both
+            // checked here rather than left to the kernel to discover at
+            // runtime (fail-closed, per CLAUDE.md): (1) must immediately
+            // follow the `V2GuardArmTimer` it bounds — checked by
+            // instruction identity at `address - 1`, not merely "some
+            // guard is open," since `V2GuardArmTimer` is itself optional
+            // and a `GUARD-N>` opened without one must not accept a
+            // dangling `GUARD-TIMER-CYCLE>` two addresses later by
+            // coincidence; (2) the guard it bounds must be `GUARD-N>`
+            // specifically — `GUARD>`/`GUARD-R>` retire their record on
+            // trigger (never rearm), so bounding a repeat count on either
+            // is meaningless, not merely unusual.
+            Instr::V2GuardTimerCycle { max_fires } => {
+                if *max_fires == 0 {
+                    return Err(violation(
+                        address,
+                        "GUARD-TIMER-CYCLE>",
+                        "max_fires must be >= 1 — a cycle that never fires once is not a cycle",
+                    ));
+                }
+                let immediate_predecessor_is_arm_timer =
+                    address > 0 && matches!(instructions.get(address - 1), Some(Instr::V2GuardArmTimer));
+                match state.last() {
+                    Some(top) if top.kind == ScopeKind::GuardN && immediate_predecessor_is_arm_timer => {
+                        if address + 1 < len {
+                            propagate(&mut entry_states, &mut worklist, address, address + 1, state)?;
+                        }
+                    }
+                    Some(top) if top.kind == ScopeKind::GuardN => {
+                        return Err(violation(
+                            address,
+                            "GUARD-TIMER-CYCLE>",
+                            "must immediately follow the GUARD-TIMER> instruction it bounds \
+                             (this instruction is not V2GuardArmTimer's immediate successor)",
+                        ));
+                    }
+                    Some(top) => {
+                        return Err(violation(
+                            address,
+                            "GUARD-TIMER-CYCLE>",
+                            format!(
+                                "only a GUARD-N> scope's timer may carry a repeat cycle — top \
+                                 of stack is {:?}-kind, opened at {}",
+                                top.kind, top.opened_at
+                            ),
+                        ));
+                    }
+                    None => {
+                        return Err(violation(
+                            address,
+                            "GUARD-TIMER-CYCLE>",
+                            "no open guard scope to bound",
+                        ));
+                    }
+                }
+            }
             Instr::V2RaceOpen { .. } => {
                 if address + 1 < len {
                     let mut pushed = state;
@@ -551,7 +788,7 @@ pub(crate) fn verify_v2_control_stack(
                     }
                 }
             }
-            Instr::End | Instr::EndTerminate => {
+            Instr::End => {
                 if !state.is_empty() {
                     return Err(violation(
                         address,
@@ -564,6 +801,23 @@ pub(crate) fn verify_v2_control_stack(
                     ));
                 }
             }
+            // `Instr::EndTerminate` is deliberately NOT matched here — same
+            // exemption `Instr::Fail` already gets (`Fail` is likewise
+            // absent from this match and falls through to the `_` arm
+            // below). Both kill the whole instance rather than completing
+            // one fibre's own scopes: V-1 exists to prevent an orphaned
+            // scope (a fibre ending while a record it opened stays live),
+            // which cannot happen when every fibre dies and every record
+            // retires with it. Falling through to `_` means the walk ends
+            // with no complaint about the open stack — `EndTerminate` has
+            // zero successors per the terminal grouping in `successors()`
+            // (matches `Fail`/`V2CancelScope`/`End`/`EndTerminate`), so the
+            // walk simply terminates here. The K-invariant side of this
+            // exemption (every concurrency-table record still `Armed` when
+            // `EndTerminate` fires must actually be retired) is enforced at
+            // the kernel level, not statically here — see
+            // `Instr::EndTerminate`'s kernel handler.
+            //
             // v1 instructions, and v2 words with no control-stack effect
             // (V2WaitFor/V2WaitUntil/V2WaitMsg/V2AwaitEffect — `None` per
             // `v2_control_stack_effect`, genuinely total for these, unlike
@@ -607,8 +861,6 @@ mod tests {
             join_plan: StdBTreeMap::new(),
             wait_plan: StdBTreeMap::new(),
             message_name_map: StdBTreeMap::new(),
-            race_plan: StdBTreeMap::new(),
-            boundary_map: StdBTreeMap::new(),
             write_set: StdBTreeMap::new(),
             task_manifest: Vec::new(),
             error_route_map: StdBTreeMap::new(),
@@ -848,6 +1100,170 @@ mod tests {
         assert!(format!("{err}").contains("V-8"), "{err}");
     }
 
+    // ─── V-11: terminal reachability (§18 ruling J) ────────────
+
+    fn admit_terminal_reachability(instructions: Vec<Instr>) {
+        verify_terminal_reachability(&instructions)
+            .expect("expected this program to be admitted by V-11")
+    }
+
+    fn reject_terminal_reachability(instructions: Vec<Instr>) -> ArtifactError {
+        verify_terminal_reachability(&instructions)
+            .expect_err("expected this program to be rejected by V-11")
+    }
+
+    /// V-11 positive: a plain forward path from `START` to `End` — the
+    /// simplest possible instance of "every reachable instruction has a
+    /// path to a terminal."
+    #[test]
+    fn v11_admits_a_straight_line_path_to_end() {
+        admit_terminal_reachability(vec![
+            /* 0 */ Instr::Jump { target: Addr::new(1) },
+            /* 1 */ Instr::End,
+        ]);
+    }
+
+    /// V-11 negative: address 3 is reachable (the `BrIf` target edge) but
+    /// is the LAST instruction in the stream and not terminal-kind — no
+    /// successor, no path to any `End`/`EndTerminate`/`Fail`/
+    /// `V2CancelScope`. Must be rejected, and the error must name address
+    /// 3 specifically (not just "some" instruction).
+    #[test]
+    fn v11_rejects_a_reachable_dead_end_naming_the_offending_address() {
+        let err = reject_terminal_reachability(vec![
+            /* 0 */ Instr::PushBool(true),
+            /* 1 */ Instr::BrIf { target: Addr::new(3) },
+            /* 2 */ Instr::End, // fallthrough branch: fine, reaches a terminal
+            /* 3 */ Instr::CancelWait { wait_id: 0 }, // taken branch: dead end
+        ]);
+        let msg = format!("{err}");
+        assert!(msg.contains("V-11"), "{msg}");
+        assert!(
+            msg.contains("address 3") || msg.contains(" 3 "),
+            "error must name the offending address (3): {msg}"
+        );
+        match err {
+            ArtifactError::InvalidInstruction { address, .. } => {
+                assert_eq!(address, Addr::new(3), "must name address 3, not merely reject");
+            }
+            other => panic!("expected InvalidInstruction naming an address, got {other}"),
+        }
+    }
+
+    /// An instruction unreachable from `START` (never targeted by any
+    /// edge) is outside V-11's scope entirely — this is the same "dual of
+    /// the start-reachability walk" framing: V-11 only obligates addresses
+    /// the forward walk actually visits, exactly as `verify_program`'s own
+    /// forward walk only ever visits (and therefore only ever validates)
+    /// reachable addresses. A stray, never-targeted dead-end instruction
+    /// must NOT cause a V-11 rejection.
+    #[test]
+    fn v11_ignores_an_instruction_unreachable_from_start() {
+        admit_terminal_reachability(vec![
+            /* 0 */ Instr::End,
+            /* 1 */ Instr::CancelWait { wait_id: 0 }, // never targeted by anything
+        ]);
+    }
+
+    /// V-11 + V-8 interaction (Adam's ruling explicitly asks for this
+    /// fixture): a bounded `IncCounter`/`BrCounterLt` loop whose ONLY exit
+    /// is `BrCounterLt`'s forward fallthrough edge into a terminal. The
+    /// loop's own back-edge (`BrCounterLt`'s `target: Addr::new(0)`) is a
+    /// real, legal, backward CFG edge — bounded loops are the one
+    /// backward-edge shape still standing by the time V-11 runs (V-8
+    /// forbids every OTHER backward edge unconditionally) — and this test
+    /// proves the walk treats that back-edge as an ordinary graph edge
+    /// rather than mistaking it for evidence of reachability: every node
+    /// in the loop body reaches `End` via the FORWARD exit edge, not via
+    /// the cycle.
+    #[test]
+    fn v11_admits_a_bounded_loop_whose_only_exit_is_a_forward_conditional_edge_to_end() {
+        admit_terminal_reachability(vec![
+            /* 0 */ Instr::IncCounter { counter_id: 0 },
+            /* 1 */ Instr::PushBool(true), // loop-body filler, keeps this a >1-instr body
+            /* 2 */ Instr::Pop,
+            /* 3 */ Instr::BrCounterLt { counter_id: 0, limit: 3, target: Addr::new(0) },
+            /* 4 */ Instr::End, // the loop's only exit: BrCounterLt's forward fallthrough
+        ]);
+    }
+
+    /// V-11 negative, the loop-shaped case: a bounded loop with NO forward
+    /// exit at all — `BrCounterLt` is the last instruction, so its
+    /// fallthrough edge doesn't exist, leaving only the backward edge.
+    /// Every node in the loop body can reach the loop head, but nothing
+    /// reaches a terminal — must be rejected, not admitted by mistaking
+    /// the cycle for a path out.
+    #[test]
+    fn v11_rejects_a_bounded_loop_with_no_forward_exit() {
+        let err = reject_terminal_reachability(vec![
+            /* 0 */ Instr::IncCounter { counter_id: 0 },
+            /* 1 */ Instr::BrCounterLt { counter_id: 0, limit: 3, target: Addr::new(0) }, // last instr: no fallthrough
+        ]);
+        assert!(format!("{err}").contains("V-11"), "{err}");
+    }
+
+    /// V-11 admitted through the REAL `ArtifactEnvelope::from_legacy_program`
+    /// path (not just the standalone function) — proves V-11 is actually
+    /// wired into `verify_program` and runs after V-8, using a full,
+    /// legally-verified bounded-loop-with-parallel-fork program (adapted
+    /// from `reentrant_fork_join_in_bounded_loop_is_admitted`, which only
+    /// exercises `verify_v2_control_stack` directly).
+    #[test]
+    fn v11_bounded_loop_with_fork_join_admitted_through_the_real_artifact_construction_path() {
+        let instructions = vec![
+            /* 0 */ Instr::IncCounter { counter_id: 0 },
+            /* 1 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(3), Addr::new(5)]),
+                pairing: Addr::new(1),
+            },
+            /* 2 */ Instr::V2CancelScope, // dead filler, never targeted
+            /* 3 */ Instr::V2Join { pairing: Addr::new(1) },
+            /* 4 */ Instr::Jump { target: Addr::new(7) },
+            /* 5 */ Instr::V2Join { pairing: Addr::new(1) },
+            /* 6 */ Instr::Jump { target: Addr::new(7) },
+            /* 7 */ Instr::BrCounterLt { counter_id: 0, limit: 3, target: Addr::new(0) },
+            /* 8 */ Instr::End, // the loop's only exit
+        ];
+        let program = empty_compiled_program(instructions);
+        let envelope = ArtifactEnvelope::from_legacy_program(program, "v11-test")
+            .expect("bounded loop with a forward-only exit to End must be admitted by V-11");
+        let bytes = envelope.canonical_bytes().unwrap();
+        ExecutableWorkflow::verify(&bytes).expect("must re-verify after round-trip");
+    }
+
+    /// V-11 rejected through the REAL `ArtifactEnvelope::from_legacy_program`
+    /// path — a `V2Fork` branch (B) whose `V2Join` is never wired to a
+    /// continuation: it is the LAST instruction in the stream, so it has
+    /// no successors at all (`successors()`'s generic fallthrough only
+    /// applies when a next address exists). Branch A wires its `V2Join`
+    /// forward to a real `End` and is fine on its own; branch B's
+    /// unreachable-end-state is exactly the "gateway branch with no route
+    /// to any END" shape V-11 exists to catch, proving V-11 is enforced
+    /// end to end (not merely reachable via the standalone function) and
+    /// that it inspects EVERY reachable instruction, not just whether
+    /// *some* End exists anywhere in the program (branch A's End would
+    /// already satisfy `verify_program`'s pre-existing single-boolean
+    /// `reachable_end` check on its own).
+    #[test]
+    fn v11_unreachable_end_state_rejected_through_the_real_artifact_construction_path() {
+        let instructions = vec![
+            /* 0 */ Instr::V2Fork {
+                targets: Box::new([Addr::new(2), Addr::new(5)]),
+                pairing: Addr::new(0),
+            },
+            /* 1 */ Instr::V2CancelScope, // dead filler, never targeted
+            /* 2 */ Instr::V2Join { pairing: Addr::new(0) }, // branch A -> addr3
+            /* 3 */ Instr::Jump { target: Addr::new(4) },
+            /* 4 */ Instr::End,
+            /* 5 */ Instr::V2Join { pairing: Addr::new(0) }, // branch B: last instruction, no
+            //       continuation wired at all — dead end.
+        ];
+        let program = empty_compiled_program(instructions);
+        let err = ArtifactEnvelope::from_legacy_program(program, "v11-test")
+            .expect_err("a fork branch with no path to a terminal must be rejected");
+        assert!(format!("{err}").contains("V-11"), "{err}");
+    }
+
     // ─── legal re-entrant FORK/JOIN must be ADMITTED ───────────
 
     #[test]
@@ -917,67 +1333,45 @@ mod tests {
     }
 
     /// V-9, structurally: a v2-only artifact carries none of the v1
-    /// race-plan/join-plan/boundary-route side tables. `ArtifactMetadata`
-    /// still HAS those fields (v1 hasn't been deleted yet — that's V5.3),
-    /// but nothing about compiling/hand-assembling a v2 program populates
-    /// them: `empty_compiled_program` never touches them, and
-    /// `verify_program`'s only writers into `referenced_races`/
-    /// `referenced_waits`/`referenced_joins` match v1 opcodes exclusively
-    /// (`Instr::WaitMsg`/`WaitAny`/`Join`, none of which a v2-only program
-    /// contains). This is the "v2 `ArtifactEnvelope` does not contain
-    /// race-plan/join/boundary-route tables" requirement made concrete for
-    /// a real fixture, not merely "true by construction and untested."
+    /// join-plan/wait-plan side tables. V5.3 (§18, landed 2026-07-23)
+    /// deleted `race_plan`/`boundary_map` (and their only producer, v1's
+    /// boundary-timer mechanism) entirely — `ArtifactMetadata` no longer
+    /// even has those fields, so the "carries none of the v1 race-plan/
+    /// boundary-route side tables" half of this requirement is now closed
+    /// at the type level (stronger than any runtime check: there is
+    /// nothing left to populate). `join_plan`/`wait_plan` remain typed
+    /// fields (their own v1 producers — `Instr::Join`/`WaitMsg` — are also
+    /// deleted this same step, but the side-table types themselves are
+    /// unrelated to this test's scope) and are checked here as before.
     #[test]
-    fn v9_v2_only_artifact_carries_no_v1_race_join_boundary_side_tables() {
+    fn v9_v2_only_artifact_carries_no_v1_join_wait_side_tables() {
         let program = empty_compiled_program(ex_oracle_program());
         let envelope = ArtifactEnvelope::from_legacy_program(program, "v3-test").unwrap();
         let metadata = envelope.metadata();
-        assert!(metadata.race_plan().is_empty());
         assert!(metadata.join_plan().is_empty());
-        assert!(metadata.boundary_map().is_empty());
         assert!(metadata.wait_plan().is_empty());
     }
 
-    /// V-9, active check (V3 review remediation — CONFIRM disposition:
-    /// a mixed v1/v2 artifact IS type-level constructible, since `Instr`
-    /// is one enum containing both v1 and v2 variants; nothing stops a
-    /// `Vec<Instr>` from mixing them. So V-9 needs an active rejection,
-    /// not just a passing test on a program nothing currently produces).
-    /// A genuinely mixed program: a real v1 `WaitAny` (with a bijective,
-    /// non-empty `race_plan` entry — so the PRE-EXISTING v1 bijectivity
-    /// check passes) alongside a `V2Guard` elsewhere in the same
-    /// instruction stream. Must be rejected by the NEW V-9 check, not
-    /// admitted just because the v1 side is internally consistent.
-    #[test]
-    fn v9_mixed_v1_v2_artifact_with_populated_race_plan_is_actively_rejected() {
-        use crate::types::{RaceId, RacePlanEntry, WaitArm};
-        use std::collections::BTreeMap as StdBTreeMap;
-
-        let instructions = vec![
-            /* 0 */ Instr::WaitAny {
-                race_id: 7,
-                arms: Box::new([WaitArm::Msg { name: 1, corr_reg: 0, resume_at: Addr::new(2) }]),
-            },
-            /* 1 */ Instr::End,
-            /* 2 */ Instr::V2Guard { handler: Addr::new(4) }, // the v2 side of the mix
-            /* 3 */ Instr::V2GuardEnd,
-            /* 4 */ Instr::End,
-        ];
-        let mut program = empty_compiled_program(instructions);
-        let mut race_plan: StdBTreeMap<RaceId, RacePlanEntry> = StdBTreeMap::new();
-        race_plan.insert(
-            7,
-            RacePlanEntry {
-                arms: vec![WaitArm::Msg { name: 1, corr_reg: 0, resume_at: Addr::new(2) }],
-                boundary_element_id: None,
-            },
-        );
-        program.race_plan = race_plan;
-
-        let err = crate::artifact::ArtifactEnvelope::from_legacy_program(program, "v3-test")
-            .expect_err("a v2-bearing artifact with a populated v1 race_plan must be rejected");
-        assert!(format!("{err}").contains("V-9"), "{err}");
-    }
+    // V5.3 (§18, landed 2026-07-23): the V-9 active-rejection test that used
+    // to sit here (`v9_mixed_v1_v2_artifact_with_populated_race_plan_is_
+    // actively_rejected`) proved a mixed v1/v2 artifact — a real v1
+    // `Instr::WaitAny` with a populated `race_plan` alongside a `V2Guard`
+    // in the same instruction stream — was actively rejected, not merely
+    // absent by construction, because "a mixed v1/v2 artifact IS
+    // type-level constructible" at the time it was written (this test's
+    // own doc comment said so explicitly: "since `Instr` is one enum
+    // containing both v1 and v2 variants, nothing stops a `Vec<Instr>`
+    // from mixing them"). That premise is no longer true: `Instr::WaitAny`
+    // and `race_plan`/`RaceId`/`RacePlanEntry`/`WaitArm` are deleted
+    // outright this step — there is no longer any way to construct the
+    // mixed program this test built, so the runtime check it exercised
+    // (`verify_program`'s old "v2-bearing artifact must carry none of the
+    // v1 side tables" active check) was deleted alongside it, per
+    // `bpmn-lite-types/src/artifact.rs`'s own in-place note. This isn't a
+    // silent loss of coverage — the property the test proved (a v1/v2 mix
+    // is impossible) now holds unconditionally, for every artifact, by
+    // construction, which is strictly stronger than "rejected by a
+    // targeted runtime check when someone tries."
 
     /// `docs/todo/EOP-EX-BPMN-ISA-002.md`'s draft oracle program — an
     /// interrupting guard over a `V2Fork` whose branch B contains a race
@@ -1193,6 +1587,10 @@ mod tests {
                 Just(Instr::V2GuardEnd),
                 addr.clone().prop_map(|a| Instr::V2GuardN { handler: a }),
                 Just(Instr::V2GuardNEnd),
+                Just(Instr::V2GuardR),
+                Just(Instr::V2GuardREnd),
+                Just(Instr::V2GuardArmTimer),
+                (0u32..4).prop_map(|n| Instr::V2GuardTimerCycle { max_fires: n }),
                 (0u16..4).prop_map(|n| Instr::V2RaceOpen { arm_count: n }),
                 addr.clone().prop_map(|a| Instr::V2ArmTimer { target: a }),
                 addr.clone().prop_map(|a| Instr::V2ArmMsg { target: a, name: 1, corr_reg: 0 }),
@@ -1207,6 +1605,13 @@ mod tests {
                 Just(Instr::PushI64(1)),
                 addr.clone().prop_map(|a| Instr::Jump { target: a }),
                 Just(Instr::End),
+                Just(Instr::V2RouteZeroMatch),
+                Just(Instr::V2LoadPlaceholderMatch {
+                    placeholder: "p".to_string(),
+                    expected_value: "v".to_string(),
+                }),
+                Just(Instr::V2MiIndexLive { length_flag: 0, index: 0 }),
+                Just(Instr::V2MiArityCheck { length_flag: 0, max: 1 }),
             ]
         }
 

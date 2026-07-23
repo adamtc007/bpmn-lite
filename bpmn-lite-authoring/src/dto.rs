@@ -163,6 +163,19 @@ pub enum NodeDto {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_code: Option<String>,
     },
+    /// §18 ruling K — a parallel multi-instance activity. See
+    /// `bpmn_lite_compiler::ir::IRNode::MultiInstance`'s doc comment for
+    /// the full design and the array/collection-value scope note.
+    MultiInstance {
+        id: String,
+        task_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bpmn_id: Option<String>,
+        /// Data-object/flag name carrying the actual runtime collection
+        /// length (an `I64` value) — not the collection itself.
+        length_flag: String,
+        declared_max: u32,
+    },
 }
 
 // ── RaceArm ──
@@ -206,6 +219,7 @@ impl NodeDto {
             NodeDto::RaceWait { id, .. } => id,
             NodeDto::BoundaryTimer { id, .. } => id,
             NodeDto::BoundaryError { id, .. } => id,
+            NodeDto::MultiInstance { id, .. } => id,
         }
     }
 }

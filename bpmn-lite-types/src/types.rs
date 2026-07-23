@@ -75,9 +75,6 @@ pub type JoinId = u32;
 /// Wait point identifier.
 pub type WaitId = u32;
 
-/// Race group identifier (compile-time constant, same width as WaitId).
-pub type RaceId = u32;
-
 /// Interned orch_flag name.
 pub type FlagKey = u32;
 
@@ -110,69 +107,6 @@ pub enum Value {
     Str(u32),
     /// Opaque handle into external stores.
     Ref(u32),
-}
-
-// ─── Cycle spec (non-interrupting timer repetition) ───────────
-
-/// Describes a repeating timer cycle (ISO 8601 `R<n>/PT<duration>`).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CycleSpec {
-    /// Interval between fires in milliseconds.
-    pub interval_ms: u64,
-    /// Maximum number of fires (0 = unlimited, but we cap at a sane default).
-    pub max_fires: u32,
-}
-
-// ─── Wait arms (race semantics) ───────────────────────────────
-
-/// Compile-time description of one arm in a WaitAny race.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum WaitArm {
-    /// Wall-clock timer (duration from now).
-    Timer {
-        duration_ms: u64,
-        resume_at: Addr,
-        /// If false, firing does NOT resolve the race (fork-on-fire).
-        interrupting: bool,
-        /// If Some, timer re-registers after each fire up to max_fires.
-        cycle: Option<CycleSpec>,
-    },
-    /// Wall-clock timer (absolute deadline).
-    Deadline { deadline_ms: u64, resume_at: Addr },
-    /// External message with correlation.
-    Msg {
-        name: u32,
-        corr_reg: u8,
-        resume_at: Addr,
-    },
-    /// Internal engine signal (e.g., job completion for boundary events — Phase 2).
-    Internal {
-        kind: u32,
-        key_reg: u8,
-        resume_at: Addr,
-    },
-}
-
-impl WaitArm {
-    pub fn resume_at(&self) -> Addr {
-        match self {
-            WaitArm::Timer { resume_at, .. }
-            | WaitArm::Deadline { resume_at, .. }
-            | WaitArm::Msg { resume_at, .. }
-            | WaitArm::Internal { resume_at, .. } => *resume_at,
-        }
-    }
-}
-
-// ─── Inclusive gateway branch descriptor ──────────────────────
-
-/// One branch of an inclusive (OR) gateway fork.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InclusiveBranch {
-    /// Flag to evaluate. `None` = unconditional (always taken).
-    pub condition_flag: Option<FlagKey>,
-    /// Bytecode address to spawn fiber at if condition is truthy.
-    pub target: Addr,
 }
 
 /// One deterministic branch in a DSL payload router.
@@ -253,14 +187,6 @@ pub enum Instr {
         default_target: Option<Addr>,
     },
 
-    /// Inclusive DSL split driven by placeholder state. Every matching branch
-    /// becomes a real fiber and the selected cardinality feeds `JoinDynamic`.
-    ForkPayload {
-        branches: Box<[PayloadRouteBranch]>,
-        join_id: JoinId,
-        default_target: Option<Addr>,
-    },
-
     // In-process FFI invocation (A2 dispatch model / A5 lowering target)
     /// Invoke a registered FFI execution owner in-process.
     ///
@@ -274,47 +200,20 @@ pub enum Instr {
         retc: u16,
     },
 
-    // Concurrency
-    Fork {
-        targets: Box<[Addr]>,
-    },
-    Join {
-        id: JoinId,
-        expected: u16,
-        next: Addr,
-    },
-
-    // Waits
-    WaitFor {
-        ms: u64,
-    },
-    WaitUntil {
-        deadline_ms: u64,
-    },
-    WaitMsg {
-        wait_id: WaitId,
-        name: u32,
-        corr_reg: u8,
-    },
-
     /// Publish a message into the engine's message buffer (BPMN Send Task).
     ///
     /// Fire-and-continue. The interned message `name` is paired with the value
     /// in register `corr_reg` (the correlation key) and inserted into the same
-    /// buffer that `WaitMsg`/`signal_inner` read from. No fiber parking, no
+    /// buffer that `V2WaitMsg`/`signal_inner` read from. No fiber parking, no
     /// reply expected; the next instruction executes on the same tick.
     PublishMessage {
         name: u32,
         corr_reg: u8,
     },
-
-    // Race semantics
-    /// Race: wait for the first of N arms to resolve.
-    WaitAny {
-        race_id: RaceId,
-        arms: Box<[WaitArm]>,
-    },
     /// Cancel a specific pending wait (used by engine after race resolution).
+    /// Retained as a kernel no-op (see `apply`'s handler) — no v2 word
+    /// supersedes this; no D2 scope covers per-wait cancellation, only
+    /// scope-level unwind (`V2CancelScope`/guard retirement).
     CancelWait {
         wait_id: WaitId,
     },
@@ -329,17 +228,6 @@ pub enum Instr {
         target: Addr,
     },
 
-    // Inclusive gateway (OR fork/join)
-    ForkInclusive {
-        branches: Box<[InclusiveBranch]>,
-        join_id: JoinId,
-        default_target: Option<Addr>,
-    },
-    JoinDynamic {
-        id: JoinId,
-        next: Addr,
-    },
-
     // Lifecycle
     End,
     EndTerminate,
@@ -352,19 +240,27 @@ pub enum Instr {
     // D2 word inventory, transcribed from `docs/todo/EOP-VS-BPMN-ISA-002.md`
     // §5 ("the stack effects ARE the spec — transcribe them, do not
     // reinterpret"). Every word below carries a `V2`-prefixed identifier by
-    // explicit, confirmed disposition (V2.7 entry amendment): the v1
-    // `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/`WaitAny`/`WaitArm`
-    // variants above are live, currently-executing v1 semantics that look
-    // name- or shape-adjacent to several D2 words but are NOT conformant
-    // (v1 `Fork`/`Join` use static `JoinId`+arrival-counting, not D2's
-    // dynamic-handle/activation-record model; v1 `WaitArm::Timer` encodes
-    // interrupting-vs-not as a `bool` flag, the exact anti-pattern D2's
-    // `GUARD>`/`GUARD-N>` rejects by using distinct opcodes; v1
-    // `WaitFor`/`WaitUntil`/`WaitMsg` are bare parks, but D2's words are
-    // durable-effect-emitting). Reusing a v1 identifier for v2 semantics
-    // would be a dual-path-by-stealth — the same variant meaning two things
-    // depending on which tranche's code touches it. Every v1 variant above
-    // stays byte-frozen; V5.3 deletes the entire v1 block as one unit.
+    // explicit, confirmed disposition (V2.7 entry amendment): v1's
+    // `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/`WaitAny`/`WaitArm`/
+    // `ForkInclusive`/`JoinDynamic` variants looked name- or shape-adjacent
+    // to several D2 words but were NOT conformant (v1 `Fork`/`Join` used
+    // static `JoinId`+arrival-counting, not D2's dynamic-handle/activation-
+    // record model; v1 `WaitArm::Timer` encoded interrupting-vs-not as a
+    // `bool` flag, the exact anti-pattern D2's `GUARD>`/`GUARD-N>` rejects
+    // by using distinct opcodes; v1 `WaitFor`/`WaitUntil`/`WaitMsg` were
+    // bare parks, but D2's words are durable-effect-emitting). Reusing a v1
+    // identifier for v2 semantics would have been a dual-path-by-stealth —
+    // the same variant meaning two things depending on which tranche's code
+    // touches it, so every v2 word got its own `V2`-prefixed identifier
+    // instead. **V5.3 (landed 2026-07-23) deleted the entire v1 concurrency
+    // block as one unit** — `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/
+    // `WaitAny`/`WaitArm`/`ForkInclusive`/`JoinDynamic`/`RaceId`/
+    // `RacePlanEntry` are gone; every real workflow now lowers exclusively
+    // to the `V2*` words below (plus the permanently-shared primitives —
+    // `Jump`/`BrIf`/`BrIfNot`, stack ops, flags, `ExecNative`/`ExecFfi`/
+    // `ExecDslTask`, `RoutePayload`, `PublishMessage`, `CancelWait`,
+    // `IncCounter`/`BrCounterLt`, `End`/`EndTerminate`/`Fail` — none of
+    // which are D2 concurrency-scope constructs, so none were superseded).
     //
     // Addressing (V2.7 7.2): guard handler extents, race arm resume
     // targets, and the FORK/JOIN static pairing annotation are all
@@ -417,6 +313,95 @@ pub enum Instr {
     /// `GUARD-R>`-opened handle is also the only legal `V2CancelScope`
     /// target among the three guard-kind opcodes.
     V2GuardREnd,
+
+    /// `GUARD-TIMER>` — `( duration -- )`. §18 v0.10 ruling I: guards carry
+    /// an arming trigger, timer as the first kind — a boundary timer is a
+    /// guard with a deadline, indifferent to whether the guarded work is
+    /// synchronous (`ExecNative`/`ExecFfi`), effect-based
+    /// (`AWAIT-EFFECT`), or a nested `FORK` region. Opcode-shape decision
+    /// (recorded here, not just in the plan doc, since the choice is a
+    /// per-word contract): a NEW, distinct instruction — mirroring how
+    /// `V2ArmTimer` arms an already-open `RACE{` record via
+    /// `fiber.control_stack.last()` — rather than an optional operand
+    /// folded onto `V2Guard`/`V2GuardN`/`V2GuardR` themselves. Rejected
+    /// alternative: a conditional/sentinel operand on the guard-open words
+    /// would make their stack effect depend on whether a trigger is
+    /// present, exactly the "flag on a word, not a distinct opcode"
+    /// anti-pattern V&S §5 already rejected for interrupting-vs-not
+    /// (`GUARD>` vs `GUARD-N>`) and rollback-vs-not (`GUARD-R>`) — the
+    /// guard-open words keep their existing zero-operand encoding
+    /// unconditionally, so a guard opened without this word is byte-for-
+    /// byte what it was before this ruling landed.
+    ///
+    /// Must immediately follow the guard-open instruction it arms
+    /// (verifier-enforced, `v2_verifier::verify_v2_control_stack`) — "at
+    /// guard-open time," not at any later point in the guarded body.
+    /// Applies uniformly to all three guard kinds (`V2Guard`/`V2GuardN`/
+    /// `V2GuardR`) — nothing about V-10's dominance constraint interacts
+    /// with arming; see the kernel's `apply_timer` doc comment for how a
+    /// timer-armed `V2GuardR` resolves (automatic rollback, since it
+    /// carries no `handler` to trigger). No control-stack or concurrency-
+    /// record change (as `V2ArmTimer`); pops `duration` from the operand
+    /// stack (V2.7 addressing-review BLOCKING #2.4 rider — a runtime-
+    /// computed duration must be representable) and emits
+    /// `DurableEffect::ScheduleTimer` (`TimerKind::V2GuardTimer`) bound to
+    /// the guard's own `RecordId`, using the same T5 deterministic
+    /// timer-ID derivation (`EffectId::for_instruction`) `V2ArmTimer`/
+    /// `WAIT-FOR` already use.
+    V2GuardArmTimer,
+
+    /// `GUARD-TIMER-CYCLE>` — `( -- )`. Post-close remediation, restoring
+    /// V&S §13 amendment v0.5 ruling A ("`GUARD-N>` re-arms after trigger
+    /// — the record stays `Armed`... This is the default") to
+    /// `GUARD-TIMER>`'s own timer-triggered path specifically: v0.5's
+    /// ruling was about the general trigger mechanism
+    /// (`Command::V2TriggerGuard`), which already re-arms unconditionally
+    /// (nothing to fix there); `GUARD-TIMER>` (ruling I, landed after
+    /// v0.5) was fire-once by construction and never inherited the same
+    /// default — this word is that fix's bounded-cycle rider, not a new
+    /// design. `GUARD-TIMER>`'s own timer fire against a `GUARD-N>`-kind
+    /// record now re-arms UNCONDITIONALLY by default (matching ruling A's
+    /// "nothing... expresses a non-re-arming variant" for GuardN
+    /// specifically) — this word narrows that default from unbounded to a
+    /// finite count, mirroring BPMN's own `timeCycle` bounded-repeat syntax
+    /// (`R<n>/PT<duration>`). Optional and additive: a `GUARD-TIMER>` with
+    /// no following `GUARD-TIMER-CYCLE>` is byte-for-byte what ruling I
+    /// already built, now simply re-arming forever for `GUARD-N>` (and
+    /// still never re-arming for `GUARD>`/`GUARD-R>`, whose triggers
+    /// retire the record on fire, per V-10's dominance/rollback treatment
+    /// — closing the record makes any repeat count moot for those two,
+    /// which is why the verifier restricts this word to a `GUARD-N>`
+    /// target only, not "any guard").
+    ///
+    /// Must immediately follow the `GUARD-TIMER>` instruction it bounds
+    /// (verifier-enforced by instruction shape, `v2_verifier::
+    /// verify_v2_control_stack`) — never merely "somewhere inside the
+    /// guarded body," same adjacency discipline `GUARD-TIMER>` itself
+    /// already applies to its own guard-open. `max_fires` is a static
+    /// embedded field (not an operand-stack value), same rationale as
+    /// `V2RaceOpen`'s `arm_count`: this is a verify-time-checkable shape
+    /// property (the verifier needs it to reject `max_fires == 0` as
+    /// meaningless — a cycle that never fires once is not a cycle), not a
+    /// runtime-computed quantity the way the duration it rides alongside
+    /// is.
+    ///
+    /// No control-stack or concurrency-record change; touches no `Instr`
+    /// operand stack at all — it patches the `DurableEffect::ScheduleTimer`
+    /// effect `GUARD-TIMER>` just pushed (guaranteed, by the same
+    /// adjacency the verifier enforces, to be the last element of this
+    /// tick's own `changes.effects`), attaching a `TimerRepeatSpec` whose
+    /// `remaining` field narrows from `GUARD-TIMER>`'s own default
+    /// (`u32::MAX`, "unbounded") to `max_fires`. `TimerRepeatSpec`/
+    /// `TimerMutation::Rearm` are pre-existing generic timer-scheduling
+    /// infrastructure (`bpmn-lite-types::transition`, `ClaimedTimer::
+    /// repeat_spec`) — this is the first `V2*` word to populate them; no
+    /// new type was needed. **Not ratified D2 vocabulary** — same class as
+    /// `V2RouteZeroMatch`/`V2MiIndexLive`: a kernel-level completion of an
+    /// already-ratified semantics gap (§18 v0.10's own plan-doc "GUARD-N>
+    /// cycle" finding), not new design.
+    V2GuardTimerCycle {
+        max_fires: u32,
+    },
 
     /// `RACE{` — `( n -- ) [ -- h ]`. Open a first-wins race record over
     /// the next `arm_count` arms. `arm_count` is a static embedded field
@@ -529,6 +514,106 @@ pub enum Instr {
     /// *terminate* semantics): unwind members innermost-first, run no
     /// handler. Cancel-events are encoded as guards (§5, "see Q4").
     V2CancelScope,
+
+    // ─── V5 dynamic-arity gateway lowering glue (§18 rulings H/J) ──────
+    //
+    // Neither word is in the V&S §5 D2 table — they are compiler-internal
+    // glue discovered while lowering inclusive gateways onto `V2Fork`'s
+    // proven skip-to-`V2Join` pattern (ruling H), not a runtime concept
+    // BPMN or the ISA needed named. Both are documented here at the same
+    // rigor as a ratified D2 word (V2.7 checklist, `docs/todo/
+    // EOP-PLAN-BPMN-ISA-002.md`'s V5 post-close writeup) per CLAUDE.md's
+    // "no trap doors" discipline — an unratified opcode is still a real
+    // opcode, not exempt from the checklist that governs `GUARD-TIMER>`.
+    /// `( -- bool )`. Push `instance.placeholder_matches(placeholder,
+    /// expected_value)`. The DSL-side analogue of `LoadFlag` — XML's
+    /// inclusive-gateway conditions are already flag-based (`LoadFlag`
+    /// reused as-is), but the DSL's inclusive split conditions are
+    /// `(placeholder, expected_value)` string-equality checks with no
+    /// existing operand-stack-producing primitive (`Instr::ForkPayload`'s
+    /// kernel handler evaluates them internally, never exposing a
+    /// bytecode-level "load and check" step). Needed so a DSL inclusive
+    /// gateway's per-branch skip check (`BrIfNot` after this word, mirroring
+    /// XML's `LoadFlag`+`BrIfNot`) and the zero-match precheck ahead of
+    /// `V2Fork` (see `V2RouteZeroMatch`) can be expressed as straight-line
+    /// bytecode instead of a second fat evaluate-and-branch instruction.
+    V2LoadPlaceholderMatch {
+        placeholder: String,
+        expected_value: String,
+    },
+    /// `( -- )`. Unconditionally raises an `Incident` (`fail_contract`,
+    /// `ErrorClass::ContractViolation`) naming the gateway via `debug_map`
+    /// — the same message shape and mechanism `RoutePayload`/`ForkPayload`/
+    /// `ForkInclusive`'s existing zero-match arms already use (§18 ruling
+    /// J). No successors (V-11 terminal, same class as `Fail`/
+    /// `V2CancelScope` — "static dead end, by design," not reached on any
+    /// path where a branch matched). Reachable only by falling through a
+    /// chain of `LoadFlag`/`V2LoadPlaceholderMatch` + `BrIf`-to-`V2Fork`
+    /// checks with none taken — the dual-arity `V2Fork` lowering's
+    /// synchronous pre-fork zero-match check (see the V5 plan-doc writeup
+    /// for why this runs BEFORE `V2Fork` rather than as a `V2Fork`
+    /// operand: `V2Fork` has no condition-evaluation or zero-match
+    /// capability of its own, by design — it is a dumb "always spawn N
+    /// static targets" instruction, and staying that way is what keeps
+    /// K-3/V-3 unchanged per ruling H).
+    V2RouteZeroMatch,
+
+    // ─── V5 dynamic-arity multi-instance lowering glue (§18 ruling K) ──
+    //
+    // Neither word is D2 vocabulary — same class as `V2RouteZeroMatch`/
+    // `V2LoadPlaceholderMatch` immediately above: compiler-internal glue
+    // discovered lowering parallel multi-instance onto `V2Fork`'s proven
+    // skip-to-`V2Join` pattern (ruling H), documented at the same rigor as
+    // a ratified D2 word per CLAUDE.md's "no trap doors" discipline. A
+    // real, reportable finding drove both: this codebase has NO
+    // array/collection-valued `Value`/`DataObjectType`/`BindingSource` at
+    // any layer (checked, not assumed — `ffi_bindings.rs`'s `PrimitiveType`
+    // is `Bool`/`I64`/`F64`/`String` only). Building one is a materially
+    // larger, separate feature (a new `Value::Array`, JSON-path array
+    // indexing, a new `BindingSource` shape) than MI's own arity/skip
+    // scaffolding needs. Scoped down, deliberately and visibly rather than
+    // silently: an MI activity's `inputCollection` is represented here by
+    // its RUNTIME LENGTH ONLY (an `I64`-valued flag the workflow populates
+    // before the fork runs) — enough to prove/check arity and to decide,
+    // per fibre, whether index `i` is live. Per-element VALUE access into
+    // the inner activity's own task body is NOT built by these two words
+    // and remains out of scope (see the V5 plan-doc writeup's fork note).
+    /// `( -- bool )`. Push `true` iff the static `index` is less than the
+    /// runtime value of `instance.flags[length_flag]` (missing key or a
+    /// non-`I64`/negative value defaults to length 0 — the same "legal
+    /// empty collection" default ruling K item (c) ratifies, not a special
+    /// case). The MI-side analogue of `LoadFlag`/`V2LoadPlaceholderMatch`:
+    /// each of a `V2Fork`'s `n` = declared-max synthesized branch headers
+    /// carries its own compile-time-constant `index`, checks liveness with
+    /// this word, and `BrIfNot`s straight to the shared `V2Join` if not
+    /// live — identical mechanism to a gateway's false-condition skip
+    /// (ruling H), applied to an index bound instead of a flag condition.
+    V2MiIndexLive {
+        length_flag: FlagKey,
+        index: u32,
+    },
+    /// `( -- )`. Runs once, straight-line, immediately before `V2Fork` (the
+    /// same "before, not inside, not after" placement `V2RouteZeroMatch`
+    /// uses and for the identical reason — `V2Fork` commits to spawning
+    /// `targets.len()` fibres unconditionally the moment it executes, so
+    /// there is no "spawn fewer" outcome to recover from afterward). If the
+    /// runtime length of `instance.flags[length_flag]` exceeds the
+    /// artifact-declared `max` (ruling K delta (a): a required static
+    /// ceiling, since Zeebe has none), returns
+    /// `TransitionError::ResourceLimitExceeded` — a hard, non-resumable
+    /// reject, the SAME shape `validate_snapshot_limits` already uses for
+    /// fiber-count/stack/register overflow, not the `Incident`/`fail_contract`
+    /// route `V2RouteZeroMatch` uses. Deliberately NOT unified with
+    /// zero-match's Incident mechanism: exceeding a declared capacity is an
+    /// artifact/input-data invariant violation (reject outright, per
+    /// CLAUDE.md's "fail closed; reject, don't skip"), not a routing gap a
+    /// human can resolve by amending payload and calling `ResolveIncident`
+    /// — there is no sense in which "wait, then re-decide" applies to
+    /// "this collection is bigger than the artifact declared it could be."
+    V2MiArityCheck {
+        length_flag: FlagKey,
+        max: u32,
+    },
 }
 
 /// One armed alternative of a v2 race, captured at runtime by
@@ -574,22 +659,6 @@ pub enum WaitState {
     },
     Join {
         join_id: JoinId,
-    },
-    /// Parked in a race — waiting for first arm to fire.
-    Race {
-        race_id: RaceId,
-        /// Absolute deadline (epoch ms) for the timer arm, if any.
-        timer_deadline_ms: Option<u64>,
-        /// Preserved from WaitState::Job during boundary timer promotion.
-        job_key: Option<String>,
-        /// If false, timer fires fork a new fiber instead of resolving the race.
-        interrupting: bool,
-        /// Index of the timer arm in the race_plan arms vec (computed, not hardcoded).
-        timer_arm_index: Option<usize>,
-        /// Remaining cycle fires (decremented each fire). None = no cycle.
-        cycle_remaining: Option<u32>,
-        /// How many times the timer has fired so far (for event numbering).
-        cycle_fired_count: u32,
     },
     Incident {
         incident_id: Uuid,
@@ -926,9 +995,6 @@ pub struct CompiledProgram {
     pub(crate) join_plan: BTreeMap<JoinId, JoinPlanEntry>,
     pub(crate) wait_plan: BTreeMap<WaitId, WaitPlanEntry>,
     pub(crate) message_name_map: BTreeMap<u32, String>,
-    pub(crate) race_plan: BTreeMap<RaceId, RacePlanEntry>,
-    /// ExecNative bytecode addr → RaceId for tasks with boundary timers.
-    pub(crate) boundary_map: BTreeMap<Addr, RaceId>,
     /// task_type → set of flags it may write.
     pub(crate) write_set: BTreeMap<String, HashSet<FlagKey>>,
     /// All task_type references in the program.
@@ -968,8 +1034,6 @@ pub type LegacyProgramParts = (
     BTreeMap<JoinId, JoinPlanEntry>,
     BTreeMap<WaitId, WaitPlanEntry>,
     BTreeMap<u32, String>,
-    BTreeMap<RaceId, RacePlanEntry>,
-    BTreeMap<Addr, RaceId>,
     BTreeMap<String, HashSet<FlagKey>>,
     Vec<String>,
     BTreeMap<Addr, Vec<ErrorRoute>>,
@@ -988,8 +1052,6 @@ impl CompiledProgram {
             join_plan,
             wait_plan,
             message_name_map,
-            race_plan,
-            boundary_map,
             write_set,
             task_manifest,
             error_route_map,
@@ -1004,8 +1066,6 @@ impl CompiledProgram {
             join_plan,
             wait_plan,
             message_name_map,
-            race_plan,
-            boundary_map,
             write_set,
             task_manifest,
             error_route_map,
@@ -1053,12 +1113,6 @@ impl CompiledProgram {
     pub fn message_name_map(&self) -> &BTreeMap<u32, String> {
         &self.message_name_map
     }
-    pub fn race_plan(&self) -> &BTreeMap<RaceId, RacePlanEntry> {
-        &self.race_plan
-    }
-    pub fn boundary_map(&self) -> &BTreeMap<Addr, RaceId> {
-        &self.boundary_map
-    }
     pub fn write_set(&self) -> &BTreeMap<String, HashSet<FlagKey>> {
         &self.write_set
     }
@@ -1088,8 +1142,6 @@ macro_rules! legacy_program {
         join_plan: $join_plan:expr,
         wait_plan: $wait_plan:expr,
         message_name_map: $message_name_map:expr,
-        race_plan: $race_plan:expr,
-        boundary_map: $boundary_map:expr,
         write_set: $write_set:expr,
         task_manifest: $task_manifest:expr,
         error_route_map: $error_route_map:expr,
@@ -1104,8 +1156,6 @@ macro_rules! legacy_program {
             $join_plan,
             $wait_plan,
             $message_name_map,
-            $race_plan,
-            $boundary_map,
             $write_set,
             $task_manifest,
             $error_route_map,
@@ -1135,14 +1185,6 @@ pub struct WaitPlanEntry {
     pub wait_type: WaitType,
     pub name: Option<u32>,
     pub corr_source: Option<u8>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RacePlanEntry {
-    pub arms: Vec<WaitArm>,
-    /// BPMN element ID of the boundary event (for audit events).
-    /// None for non-boundary races (e.g., WaitAny opcode).
-    pub boundary_element_id: Option<String>,
 }
 
 // ─── Incidents ────────────────────────────────────────────────

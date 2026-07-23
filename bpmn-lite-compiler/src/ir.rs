@@ -137,6 +137,39 @@ pub enum IRNode {
         /// time (mirrors `IRNode::MessageWait::corr_key_source`).
         corr_key_source: String,
     },
+
+    /// A parallel multi-instance activity (§18 ruling K) — Camunda 8's
+    /// "MI body wraps one inner activity" model, lowered onto ruling H's
+    /// `V2Fork`/`V2Join` dynamic-arity mechanism: `declared_max` static
+    /// synthesized branches, each running the inner activity's own
+    /// `task_type` if its index is live (`length_flag`'s runtime value),
+    /// skip-to-join otherwise. v2-only (`LoweringTarget::V2`) — no v1
+    /// lowering exists, matching inclusive gateways' and boundary timers'
+    /// own v1/v2 split. XML-only, same as boundary timers: no DSL AST hook
+    /// exists or is added by this construct (checked, not assumed — see
+    /// the V5 plan-doc writeup).
+    MultiInstance {
+        id: String,
+        name: String,
+        /// The inner activity's dispatch identity — same convention as
+        /// `ServiceTask::task_type` (external-job task type string). MI
+        /// wrapping an `FfiServiceTask`/`HumanWait`/other activity kind is
+        /// out of scope for this step.
+        task_type: String,
+        /// Name of the data-object/flag carrying the ACTUAL RUNTIME
+        /// collection length (an `I64` value) — NOT the collection's
+        /// elements. Same `flag_name` convention `ConditionExpr` already
+        /// uses for XOR/inclusive-gateway conditions, reused rather than
+        /// inventing a second name-reference shape. See `Instr::V2MiIndexLive`'s
+        /// doc comment for why this codebase has no array-valued
+        /// representation to reference instead.
+        length_flag_name: String,
+        /// The artifact-declared maximum instance count (ruling K delta
+        /// (a) — Zeebe has no such ceiling; this is a required, forced
+        /// deviation, not an oversight). `V2Fork`'s static `targets.len()`
+        /// equals this value exactly.
+        declared_max: u32,
+    },
 }
 
 // ── C-minimal expression language ────────────────────────────────────────────
@@ -200,6 +233,7 @@ impl IRNode {
             IRNode::DataObject { id, .. } => id,
             IRNode::FfiServiceTask { id, .. } => id,
             IRNode::SendTask { id, .. } => id,
+            IRNode::MultiInstance { id, .. } => id,
         }
     }
 }

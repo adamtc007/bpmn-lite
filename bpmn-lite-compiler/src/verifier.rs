@@ -510,29 +510,9 @@ pub fn verify_bytecode(program: &CompiledProgram) -> Vec<VerifyError> {
                 check_target(&mut errors, program, addr, *target, program_len);
                 // BrCounterLt is allowed to jump backward (it's bounded by limit)
             }
-            Instr::Fork { targets } => {
+            Instr::V2Fork { targets, .. } => {
                 for target in targets.iter().copied() {
                     check_target(&mut errors, program, addr, target, program_len);
-                }
-            }
-            Instr::Join { next, .. } | Instr::JoinDynamic { next, .. } => {
-                check_target(&mut errors, program, addr, *next, program_len);
-            }
-            Instr::WaitAny { arms, .. } => {
-                for arm in arms.iter() {
-                    check_target(&mut errors, program, addr, arm.resume_at(), program_len);
-                }
-            }
-            Instr::ForkInclusive {
-                branches,
-                default_target,
-                ..
-            } => {
-                for branch in branches.iter() {
-                    check_target(&mut errors, program, addr, branch.target, program_len);
-                }
-                if let Some(target) = default_target {
-                    check_target(&mut errors, program, addr, *target, program_len);
                 }
             }
             _ => {}

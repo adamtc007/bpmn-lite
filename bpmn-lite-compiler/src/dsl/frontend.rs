@@ -70,20 +70,6 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     let mut debug_map = BTreeMap::new();
     let mut task_manifest = Vec::new();
     let mut task_ids = BTreeMap::new();
-    let mut join_ids = BTreeMap::new();
-    let mut next_join_id = 0u32;
-    for node in plan.nodes.values() {
-        if let ExecutionNode::Split(split) = node {
-            // Parallel splits pair with their join via `V2Fork`/`V2Join`'s
-            // dynamic-handle + static-`Addr`-pairing mechanism (V-3) —
-            // `fork_pairing` below, not this v1-only numeric `join_id`
-            // side table, which V-9 forbids surviving into a v2 envelope.
-            if split.mode == SplitMode::Inclusive {
-                join_ids.insert(split.join.clone(), next_join_id);
-                next_join_id = next_join_id.saturating_add(1);
-            }
-        }
-    }
     let join_plan = BTreeMap::new();
     let mut fork_pairing: BTreeMap<String, Addr> = BTreeMap::new();
 
@@ -142,16 +128,31 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                         });
                         fork_pairing.insert(node.join.clone(), pairing);
                     }
+                    // V5 (§18 ruling H): DSL inclusive split lowers to
+                    // `V2Fork` using the same dynamic-arity skip-to-join
+                    // pattern as the XML frontend
+                    // (`lowering::lower_inclusive_diverging_v2`) —
+                    // unconditionally, not behind a `LoweringTarget` gate
+                    // (unlike the XML frontend's boundary-timer/inclusive-
+                    // gateway split): no test locks `lower_plan`'s v1
+                    // `ForkPayload`/`JoinDynamic` shape for
+                    // `SplitMode::Inclusive` (confirmed by grep across
+                    // `bpmn-lite-compiler`/`bpmn-lite-engine`'s test
+                    // suites — `bpmn_lite_authoring::publish::
+                    // compile_program_from_dto`, which DOES lock
+                    // `lowering::lower`'s v1 shape via T-AUTH-2, never
+                    // routes through this DSL frontend at all), so this
+                    // mirrors the precedent already set by `GatewayAnd`/
+                    // standalone `TimerWait` (V5.1/5.2): replace directly.
                     SplitMode::Inclusive => {
-                        let join_id = *join_ids
-                            .get(&node.join)
-                            .ok_or_else(|| FrontendError::MissingNode(node.join.clone()))?;
-                        let (branches, default_target) = routes(node, &addresses)?;
-                        instructions.push(Instr::ForkPayload {
-                            branches: branches.into_boxed_slice(),
-                            join_id,
-                            default_target,
-                        });
+                        let join_addr = target(&addresses, &node.join)?;
+                        lower_dsl_inclusive_diverging_v2(
+                            &node.flows,
+                            Addr::new(instructions.len() as u32),
+                            join_addr,
+                            &addresses,
+                            &mut instructions,
+                        )?;
                     }
                 }
             }
@@ -169,12 +170,18 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     });
                 }
                 JoinMode::Inclusive => {
-                    let join_id = *join_ids
-                        .get(&node.id)
-                        .ok_or_else(|| FrontendError::MissingNode(node.id.clone()))?;
-                    instructions.push(Instr::JoinDynamic {
-                        id: join_id,
-                        next: target(&addresses, &node.next)?,
+                    let ExecutionNode::Split(split) = &plan.nodes[&node.split] else {
+                        return Err(FrontendError::MissingNode(node.split.clone()));
+                    };
+                    let routing_task_len: u32 = if split.routing_socket.is_some() { 1 } else { 0 };
+                    let fork_block_base = addresses[&node.split] + routing_task_len;
+                    let pairing = fork_block_base + dsl_inclusive_precheck_len(&split.flows);
+                    instructions.push(Instr::V2Join { pairing });
+                    // `V2Join` carries no `next` field (continuation is
+                    // PC+1 on last arrival, per K-3) — same trailing-`Jump`
+                    // pattern as `JoinMode::Parallel` above.
+                    instructions.push(Instr::Jump {
+                        target: target(&addresses, &node.next)?,
                     });
                 }
             },
@@ -213,8 +220,6 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         join_plan: join_plan,
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: task_manifest,
         error_route_map: BTreeMap::new(),
@@ -231,14 +236,152 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
 fn instruction_count(node: &ExecutionNode) -> Result<u32, FrontendError> {
     match node {
         ExecutionNode::Task(_) => Ok(2),
+        // V5 (§18 ruling H): an inclusive split's own v2 block (zero-match
+        // precheck + `V2Fork` + per-branch headers — see
+        // `dsl_inclusive_diverging_len`) is variable-length, unlike every
+        // other split mode's fixed 1-or-2. The optional leading
+        // `routing_socket` task (any split mode may carry one) still costs
+        // exactly 1 instruction, ahead of the inclusive block.
+        ExecutionNode::Split(node) if node.mode == SplitMode::Inclusive => {
+            let routing_task_len: u32 = if node.routing_socket.is_some() { 1 } else { 0 };
+            Ok(routing_task_len + dsl_inclusive_diverging_len(&node.flows))
+        }
         ExecutionNode::Split(node) if node.routing_socket.is_some() => Ok(2),
         // V5.2 mechanical re-lowering: `V2Join` carries no `next` field
         // (kernel continuation is PC+1 on last arrival, per K-3) — an
         // explicit trailing `Jump` supplies what v1's embedded `next` used to.
-        ExecutionNode::Join(node) if node.mode == JoinMode::Parallel => Ok(2),
+        // V5 (§18 ruling H): `JoinMode::Inclusive` now lowers to the same
+        // `V2Join` + `Jump` pair as `JoinMode::Parallel`.
+        ExecutionNode::Join(node)
+            if node.mode == JoinMode::Parallel || node.mode == JoinMode::Inclusive =>
+        {
+            Ok(2)
+        }
         ExecutionNode::Loop(_) => Ok(3),
         _ => Ok(1),
     }
+}
+
+/// An inclusive-split flow is "always-live" (unconditional — always
+/// included in the fork's target set, matching XML's `InclusiveBranch::
+/// condition_flag: None` convention and the same code path as a DSL
+/// `default_target`, see `lower_dsl_inclusive_diverging_v2`'s doc comment)
+/// iff it carries neither a placeholder nor an expected value — the same
+/// `(None, None)` shape `routes()` already recognises as a default flow
+/// for `SplitMode::Exclusive`.
+fn dsl_flow_is_always_live(flow: &super::plan::SplitExecFlow) -> bool {
+    flow.placeholder.is_none() && flow.expected_value.is_none()
+}
+
+/// The zero-match precheck's own instruction count (§18 ruling J) — 0 when
+/// an always-live flow exists, otherwise 2 per conditional flow
+/// (`V2LoadPlaceholderMatch` + `BrIf`) plus 1 for `V2RouteZeroMatch`. The
+/// DSL-side mirror of `lowering::inclusive_precheck_len`, shared by the
+/// sizing pass (`dsl_inclusive_diverging_len`) and the `JoinMode::
+/// Inclusive` emission arm, which needs to resolve its paired `V2Fork`'s
+/// own address the same way.
+fn dsl_inclusive_precheck_len(flows: &[super::plan::SplitExecFlow]) -> u32 {
+    if flows.iter().any(dsl_flow_is_always_live) {
+        0
+    } else {
+        let conditional_count = flows.iter().filter(|flow| !dsl_flow_is_always_live(flow)).count() as u32;
+        conditional_count.saturating_mul(2) + 1
+    }
+}
+
+/// An inclusive split's total v2 block length: the zero-match precheck,
+/// `V2Fork` itself, and one per-flow header (3 instructions — see
+/// `lower_dsl_inclusive_diverging_v2` — for a conditional flow, 1 for an
+/// always-live one). The DSL-side mirror of
+/// `lowering::inclusive_diverging_instr_count`.
+fn dsl_inclusive_diverging_len(flows: &[super::plan::SplitExecFlow]) -> u32 {
+    let fork = 1;
+    let headers: u32 = flows
+        .iter()
+        .map(|flow| if dsl_flow_is_always_live(flow) { 1 } else { 3 })
+        .sum();
+    dsl_inclusive_precheck_len(flows) + fork + headers
+}
+
+/// V5 (§18 ruling H): lower a `SplitMode::Inclusive` node's flows to
+/// `V2Fork` using the dynamic-arity skip-to-join pattern — the DSL-side
+/// mirror of `lowering::lower_inclusive_diverging_v2`, differing only in
+/// condition representation: XML's inclusive-gateway conditions are
+/// flag-based (`LoadFlag`, reused as-is); the DSL's are
+/// `(placeholder, expected_value)` string-equality checks
+/// (`instance.placeholder_matches`), which have no existing operand-stack-
+/// producing bytecode primitive — `Instr::ForkPayload`'s v1 kernel handler
+/// evaluated them internally, never exposing a "load and check" step.
+/// `V2LoadPlaceholderMatch` (the DSL-side analogue of `LoadFlag`, added by
+/// this step) closes that gap; everything else about the shape — the
+/// zero-match precheck omitted when an always-live flow exists (a
+/// `(None, None)` flow, the same shape `routes()` already recognises as
+/// `SplitMode::Exclusive`'s default — this is DSL's complete answer to the
+/// brief's "default branch handling" requirement, structurally identical
+/// to XML's "no separate default concept beyond unconditional," not a
+/// partial one), the per-branch skip-check header, the shared `V2Join` —
+/// is identical to the XML lowering, see its doc comment for the full
+/// design rationale (zero-match-before-`V2Fork`, the two-new-opcode
+/// decision).
+fn lower_dsl_inclusive_diverging_v2(
+    flows: &[super::plan::SplitExecFlow],
+    fork_block_base: Addr,
+    join_addr: Addr,
+    addresses: &BTreeMap<String, Addr>,
+    instructions: &mut Vec<Instr>,
+) -> Result<(), FrontendError> {
+    for flow in flows {
+        if !(matches!((&flow.placeholder, &flow.expected_value), (Some(_), Some(_)))
+            || dsl_flow_is_always_live(flow))
+        {
+            return Err(FrontendError::InvalidRoute(flow.next.clone()));
+        }
+    }
+
+    let precheck_len = dsl_inclusive_precheck_len(flows);
+    let fork_addr = fork_block_base + precheck_len;
+
+    if precheck_len > 0 {
+        for flow in flows {
+            let placeholder = flow.placeholder.clone().expect("validated above");
+            let expected_value = flow.expected_value.clone().expect("validated above");
+            instructions.push(Instr::V2LoadPlaceholderMatch {
+                placeholder,
+                expected_value,
+            });
+            instructions.push(Instr::BrIf { target: fork_addr });
+        }
+        instructions.push(Instr::V2RouteZeroMatch);
+    }
+
+    let mut header_addr = fork_addr + 1u32;
+    let mut headers: Vec<Addr> = Vec::with_capacity(flows.len());
+    for flow in flows {
+        headers.push(header_addr);
+        header_addr += if dsl_flow_is_always_live(flow) { 1u32 } else { 3u32 };
+    }
+
+    instructions.push(Instr::V2Fork {
+        targets: headers.into_boxed_slice(),
+        pairing: fork_addr,
+    });
+
+    for flow in flows {
+        let real_target = target(addresses, &flow.next)?;
+        if dsl_flow_is_always_live(flow) {
+            instructions.push(Instr::Jump { target: real_target });
+        } else {
+            let placeholder = flow.placeholder.clone().expect("validated above");
+            let expected_value = flow.expected_value.clone().expect("validated above");
+            instructions.push(Instr::V2LoadPlaceholderMatch {
+                placeholder,
+                expected_value,
+            });
+            instructions.push(Instr::BrIfNot { target: join_addr });
+            instructions.push(Instr::Jump { target: real_target });
+        }
+    }
+    Ok(())
 }
 
 fn target(addresses: &BTreeMap<String, Addr>, node: &str) -> Result<Addr, FrontendError> {
@@ -701,7 +844,6 @@ mod tests {
                     );
                     Some(*pairing)
                 }
-                Instr::Fork { .. } => panic!("must not emit v1 Fork for a Parallel split"),
                 _ => None,
             })
             .expect("a V2Fork must be emitted");
@@ -713,10 +855,147 @@ mod tests {
                     assert_eq!(*pairing, fork_pairing, "V2Join must reference the V2Fork's pairing");
                     true
                 }
-                Instr::Join { .. } => panic!("must not emit v1 Join for a Parallel join"),
                 _ => false,
             })
             .count();
         assert_eq!(join_count, 1, "one shared V2Join, arrived at by both branches");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  V5 post-close (§18 ruling H) — DSL inclusive-split v2 lowering.
+    // ═══════════════════════════════════════════════════════════
+
+    /// `default_flow`: adds a third, unconditional (`(None, None)`) flow
+    /// to `always` — exercises the always-live/default-branch precheck
+    /// omission when `true`.
+    fn inclusive_plan(default_flow: bool) -> WorkflowExecutionPlan {
+        let mut plan = parallel_plan();
+        let mut flows = vec![
+            SplitExecFlow {
+                placeholder: Some("@kind".to_string()),
+                expected_value: Some("fund".to_string()),
+                next: "fund".to_string(),
+            },
+            SplitExecFlow {
+                placeholder: Some("@kind".to_string()),
+                expected_value: Some("trust".to_string()),
+                next: "trust".to_string(),
+            },
+        ];
+        if default_flow {
+            flows.push(SplitExecFlow {
+                placeholder: None,
+                expected_value: None,
+                next: "always".to_string(),
+            });
+            plan.nodes.insert(
+                "always".to_string(),
+                ExecutionNode::Task(TaskExecNode {
+                    id: "always".to_string(),
+                    plug: "ob-poc:always".to_string(),
+                    delivery_mode: DeliveryMode::GuaranteedAsync,
+                    static_args: HashMap::new(),
+                    next: "join".to_string(),
+                    produces_placeholder: None,
+                    consumes_placeholders: Vec::new(),
+                    span: None,
+                }),
+            );
+        }
+        plan.nodes.insert(
+            "split".to_string(),
+            ExecutionNode::Split(SplitExecNode {
+                id: "split".to_string(),
+                mode: SplitMode::Inclusive,
+                routing_socket: None,
+                flows,
+                join: "join".to_string(),
+                produces_placeholder: None,
+                span: None,
+            }),
+        );
+        plan.nodes.insert(
+            "join".to_string(),
+            ExecutionNode::Join(JoinExecNode {
+                id: "join".to_string(),
+                mode: JoinMode::Inclusive,
+                split: "split".to_string(),
+                next: "end".to_string(),
+                span: None,
+            }),
+        );
+        plan
+    }
+
+    /// A pure-conditional DSL inclusive split (no default/always-live
+    /// flow) lowers to a zero-match precheck ahead of `V2Fork`, a header
+    /// per branch, and a shared `V2Join` referencing the `V2Fork`'s own
+    /// (post-precheck) address — not v1 `ForkPayload`/`JoinDynamic`.
+    #[test]
+    fn dsl_inclusive_split_pure_conditional_lowers_to_v2_fork_with_zero_match_precheck() {
+        let plan = inclusive_plan(false);
+        let workflow =
+            DslFrontend::lower(&plan).expect("v2 inclusive split/join must be verifier-admitted");
+        let instructions = workflow.envelope().instructions();
+
+        assert!(
+            instructions
+                .iter()
+                .any(|i| matches!(i, Instr::V2RouteZeroMatch)),
+            "a pure-conditional DSL inclusive split must emit the zero-match precheck"
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|i| matches!(i, Instr::V2LoadPlaceholderMatch { .. })),
+            "DSL conditions must be evaluated via V2LoadPlaceholderMatch, not LoadFlag"
+        );
+        let fork_pairing = instructions
+            .iter()
+            .find_map(|i| match i {
+                Instr::V2Fork { targets, pairing } => {
+                    assert_eq!(targets.len(), 2, "two conditional flows → two V2Fork targets");
+                    Some(*pairing)
+                }
+                _ => None,
+            })
+            .expect("a V2Fork must be emitted");
+        let join_count = instructions
+            .iter()
+            .filter(|i| matches!(i, Instr::V2Join { pairing } if *pairing == fork_pairing))
+            .count();
+        assert_eq!(join_count, 1);
+        // `Instr::ForkPayload`/`JoinDynamic` (v1) are deleted entirely as
+        // of V5.3 (§18, landed 2026-07-23) — the negative assertions that
+        // used to sit here are now vacuous (there is no variant left to
+        // construct) and are removed rather than kept as dead code.
+    }
+
+    /// An always-live (default) flow makes the DSL inclusive split's fork
+    /// target set provably non-empty, so the zero-match precheck is
+    /// omitted — DSL's answer to the brief's "default branch handling"
+    /// requirement, structurally identical to the XML frontend's.
+    #[test]
+    fn dsl_inclusive_split_with_default_flow_omits_zero_match_precheck() {
+        let plan = inclusive_plan(true);
+        let workflow =
+            DslFrontend::lower(&plan).expect("v2 inclusive split/join must be verifier-admitted");
+        let instructions = workflow.envelope().instructions();
+
+        assert!(
+            !instructions
+                .iter()
+                .any(|i| matches!(i, Instr::V2RouteZeroMatch)),
+            "a default/always-live flow must make the zero-match precheck unreachable, \
+             so it must not be emitted at all"
+        );
+        let fork_targets = instructions
+            .iter()
+            .find_map(|i| match i {
+                Instr::V2Fork { targets, .. } => Some(targets.len()),
+                _ => None,
+            })
+            .expect("a V2Fork must be emitted");
+        assert_eq!(fork_targets, 3, "two conditional + one default → three targets");
     }
 }

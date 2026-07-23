@@ -4,35 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// Serializable description of a wait arm for the event log.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WaitArmDesc {
-    Timer { duration_ms: u64 },
-    Deadline { deadline_ms: u64 },
-    Msg { name: u32 },
-    Internal { kind: u32 },
-}
-
-impl From<&WaitArm> for WaitArmDesc {
-    fn from(arm: &WaitArm) -> Self {
-        match arm {
-            WaitArm::Timer {
-                duration_ms,
-                interrupting: _,
-                cycle: _,
-                ..
-            } => WaitArmDesc::Timer {
-                duration_ms: *duration_ms,
-            },
-            WaitArm::Deadline { deadline_ms, .. } => WaitArmDesc::Deadline {
-                deadline_ms: *deadline_ms,
-            },
-            WaitArm::Msg { name, .. } => WaitArmDesc::Msg { name: *name },
-            WaitArm::Internal { kind, .. } => WaitArmDesc::Internal { kind: *kind },
-        }
-    }
-}
-
 /// Runtime events — the durable audit trail for every process instance.
 /// 24 variants covering the full lifecycle.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -154,25 +125,6 @@ pub enum RuntimeEvent {
         child_instance_id: Uuid,
         incident_id: Uuid,
     },
-    RaceRegistered {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        arms: Vec<WaitArmDesc>,
-    },
-    RaceWon {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        winner_index: usize,
-        resume_at: Addr,
-    },
-    RaceCancelled {
-        race_id: RaceId,
-        cancelled_indices: Vec<usize>,
-    },
-    LateSignalIgnored {
-        race_id: RaceId,
-        arm_index: usize,
-    },
     WaitCancelled {
         fiber_id: Uuid,
         wait_desc: String,
@@ -180,27 +132,6 @@ pub enum RuntimeEvent {
     },
     SignalIgnored {
         signal_desc: String,
-    },
-    /// Non-interrupting boundary timer fired — spawned child fiber.
-    BoundaryFired {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        spawned_fiber_id: Uuid,
-        boundary_element_id: String,
-        resume_at: Addr,
-    },
-    /// One iteration of a timer cycle completed.
-    TimerCycleIteration {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        iteration: u32,
-        remaining: u32,
-    },
-    /// All iterations of a timer cycle have been consumed.
-    TimerCycleExhausted {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        total_fired: u32,
     },
     Cancelled {
         reason: String,

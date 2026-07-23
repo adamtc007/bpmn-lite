@@ -1010,7 +1010,7 @@ impl BpmnLiteEngine {
                     .values()
                     .filter(|fiber| fiber.wait == WaitState::Running)
                 {
-                    let Some(Instr::WaitMsg { name, corr_reg, .. }) =
+                    let Some(Instr::V2WaitMsg { name, corr_reg }) =
                         artifact.envelope().instructions().get(fiber.pc.index())
                     else {
                         continue;
