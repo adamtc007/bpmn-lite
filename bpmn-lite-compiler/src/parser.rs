@@ -1515,6 +1515,26 @@ mod tests {
         assert!(parse_iso_cycle("PT1H").is_err(), "Missing R prefix");
         assert!(parse_iso_cycle("R0/PT1H").is_err(), "Zero count");
         assert!(parse_iso_cycle("R3PT1H").is_err(), "Missing slash");
+
+        // GUARD-TIMER-CYCLE> frontend-wiring investigation (confirmed by
+        // direct test, not assumed): unbounded ISO-8601 recurring-interval
+        // syntax (`R/PT<duration>`, no repeat count — "repeat forever")
+        // is NOT supported by this parser today. `count_str` is empty
+        // ("" between 'R' and '/'), which fails the `u32` parse the same
+        // way any other non-numeric count would, producing a clear
+        // rejection rather than any sentinel value (no `u32::MAX`, no
+        // silently-treated-as-1). `TimerSpec::Cycle.max_fires` is a plain
+        // `u32` with no distinct "unbounded" representation, so admitting
+        // `R/PT...` would require a real design decision (a new
+        // TimerSpec variant, or a reserved sentinel with verifier
+        // support) — out of scope for wiring the already-ratified,
+        // already-bounded `GUARD-TIMER-CYCLE>` word through the frontend;
+        // flagged, not silently added.
+        assert!(
+            parse_iso_cycle("R/PT1H").is_err(),
+            "unbounded cycle syntax (no repeat count) must be rejected, not silently treated \
+             as a sentinel — TimerSpec::Cycle has no unbounded representation"
+        );
     }
 
     #[test]

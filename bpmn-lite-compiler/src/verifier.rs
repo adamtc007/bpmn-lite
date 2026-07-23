@@ -218,10 +218,25 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 spec,
             } = &graph[idx]
             {
-                // 7a. attached_to must reference an existing ServiceTask or HumanWait
+                // 7a. attached_to must reference an existing ServiceTask,
+                // FfiServiceTask, or HumanWait. `FfiServiceTask` was
+                // missing from this check pre-existing this fix — found
+                // while wiring `GUARD-TIMER-CYCLE>` through the frontend
+                // (`lowering.rs`'s `IRNode::FfiServiceTask` boundary-timer
+                // arm already fully lowers a boundary timer host on an
+                // FFI service task, but no BPMN XML could ever reach that
+                // code end-to-end, because this check rejected the
+                // BoundaryTimer's own `attachedToRef` before lowering ever
+                // ran). Not a design fork — `FfiServiceTask` is exactly as
+                // valid a boundary-timer host as `ServiceTask`, the
+                // lowering support for it already existed, and no test
+                // ever exercised the combination through the full
+                // pipeline to catch the omission.
                 let host_exists = graph.node_indices().any(|other| {
                     matches!(&graph[other],
-                        IRNode::ServiceTask { id: host_id, .. } | IRNode::HumanWait { id: host_id, .. }
+                        IRNode::ServiceTask { id: host_id, .. }
+                        | IRNode::FfiServiceTask { id: host_id, .. }
+                        | IRNode::HumanWait { id: host_id, .. }
                         if host_id == attached_to
                     )
                 });
@@ -765,6 +780,121 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Unclosed diverging GatewayAnd")),
             "the structural nesting check must catch the out-of-order pair"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  GUARD-TIMER-CYCLE> frontend wiring — §7b interrupting+Cycle
+    //  rejection (this rule already existed here before the frontend
+    //  wiring landed; these are its first tests).
+    // ═══════════════════════════════════════════════════════════
+
+    /// Build a minimal host-task + boundary-timer graph, parameterized on
+    /// `interrupting`/`spec` — mirrors `lowering.rs`'s own
+    /// `make_boundary_timer_graph` test helper (kept separate rather than
+    /// shared across crate-private test modules).
+    fn make_boundary_timer_verify_graph(interrupting: bool, spec: TimerSpec) -> IRGraph {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let host = graph.add_node(IRNode::ServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            task_type: "long_work".to_string(),
+        });
+        let normal_end = graph.add_node(IRNode::End {
+            id: "normal_end".to_string(),
+            terminate: false,
+        });
+        let boundary = graph.add_node(IRNode::BoundaryTimer {
+            id: "timeout".to_string(),
+            attached_to: "host".to_string(),
+            spec,
+            interrupting,
+        });
+        let escalate = graph.add_node(IRNode::ServiceTask {
+            id: "escalate".to_string(),
+            name: "Escalate".to_string(),
+            task_type: "escalate_work".to_string(),
+        });
+        let timeout_end = graph.add_node(IRNode::End {
+            id: "timeout_end".to_string(),
+            terminate: false,
+        });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(boundary, escalate, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(escalate, timeout_end, IREdge { id: "f4".to_string(), condition: None });
+
+        graph
+    }
+
+    /// §7b: an interrupting (`cancelActivity="true"`) boundary timer with
+    /// a `timeCycle` spec is rejected — an interrupting timer fires at
+    /// most once (it kills the host scope on trigger), so "repeat N
+    /// times, killing the scope" has no coherent meaning. This is the gate
+    /// the `GUARD-TIMER-CYCLE>` frontend-wiring fix relies on to guarantee
+    /// `lower_boundary_guarded_task_v2`/the `FfiServiceTask` boundary-timer
+    /// arm never see an interrupting + `Cycle` combination — a hard
+    /// compile-time rejection, not a silent single-fire fallback.
+    #[test]
+    fn test_interrupting_boundary_timer_with_cycle_rejected() {
+        let graph = make_boundary_timer_verify_graph(
+            true,
+            TimerSpec::Cycle {
+                interval_ms: 3_600_000,
+                max_fires: 3,
+            },
+        );
+        let errors = verify(&graph);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("cycle timers must be non-interrupting")),
+            "expected §7b rejection, got: {errors:?}"
+        );
+    }
+
+    /// Same interrupting + `Cycle` graph, through the full
+    /// `Compiler::lower` pipeline (`verify_or_err` + `lowering::lower`),
+    /// proving the rejection actually gates compilation end-to-end, not
+    /// merely the standalone `verify()` accumulator function above.
+    #[test]
+    fn test_interrupting_cycle_rejected_by_full_compiler_lower() {
+        let graph = make_boundary_timer_verify_graph(
+            true,
+            TimerSpec::Cycle {
+                interval_ms: 3_600_000,
+                max_fires: 3,
+            },
+        );
+        let err = crate::Compiler::lower(&graph)
+            .expect_err("interrupting + Cycle boundary timer must be rejected");
+        assert!(
+            err.to_string().contains("cycle timers must be non-interrupting"),
+            "expected §7b rejection in error, got: {err}"
+        );
+    }
+
+    /// Sanity counterpart: non-interrupting + `Cycle` is legal — §7b only
+    /// forbids the interrupting combination.
+    #[test]
+    fn test_non_interrupting_boundary_timer_with_cycle_admitted() {
+        let graph = make_boundary_timer_verify_graph(
+            false,
+            TimerSpec::Cycle {
+                interval_ms: 3_600_000,
+                max_fires: 3,
+            },
+        );
+        let errors = verify(&graph);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("cycle timers must be non-interrupting")),
+            "non-interrupting + Cycle must not trigger §7b, got: {errors:?}"
         );
     }
 }

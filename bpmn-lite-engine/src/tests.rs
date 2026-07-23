@@ -1630,6 +1630,135 @@ async fn t_ni_5_verifier_rejects_cycle_interrupting() {
     );
 }
 
+// ── T-NI-6: `timeCycle` XML → `GUARD-TIMER-CYCLE>` frontend wiring
+// (this landing's own gap-closer) — full `engine.compile(xml)` pipeline,
+// not hand-assembled bytecode like `setup_ni_cycle_guard` above. Proves
+// the frontend actually reaches the kernel mechanism `t_ni_2`/`t_ni_3`
+// already proved sound; does not re-prove the mechanism itself. ──
+
+const NI_CYCLE_XML_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                      xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+      <bpmn:process id="ni_cycle_xml_proc" isExecutable="true">
+        <bpmn:startEvent id="start" />
+        <bpmn:serviceTask id="long_task" name="Long Running Task">
+          <bpmn:extensionElements>
+            <zeebe:taskDefinition type="long_work" />
+          </bpmn:extensionElements>
+        </bpmn:serviceTask>
+        <bpmn:boundaryEvent id="reminder" attachedToRef="long_task" cancelActivity="false">
+          <bpmn:timerEventDefinition>
+            <bpmn:timeCycle>R3/PT1S</bpmn:timeCycle>
+          </bpmn:timerEventDefinition>
+        </bpmn:boundaryEvent>
+        <bpmn:serviceTask id="send_reminder" name="Send Reminder">
+          <bpmn:extensionElements>
+            <zeebe:taskDefinition type="send_reminder" />
+          </bpmn:extensionElements>
+        </bpmn:serviceTask>
+        <bpmn:endEvent id="end_normal" />
+        <bpmn:endEvent id="end_reminder" />
+        <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="long_task" />
+        <bpmn:sequenceFlow id="f2" sourceRef="long_task" targetRef="end_normal" />
+        <bpmn:sequenceFlow id="f3" sourceRef="reminder" targetRef="send_reminder" />
+        <bpmn:sequenceFlow id="f4" sourceRef="send_reminder" targetRef="end_reminder" />
+      </bpmn:process>
+    </bpmn:definitions>"#;
+
+#[tokio::test]
+async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Real XML frontend, not hand-assembled bytecode — this is the
+    // thing this landing actually fixes: `timeCycle` reaching
+    // `Instr::V2GuardTimerCycle` via `parser::parse_bpmn` +
+    // `lowering::lower`/`Compiler::lower`, not just the kernel's own
+    // already-proven handling of the word once emitted.
+    let cr = engine.compile(NI_CYCLE_XML_BPMN).await.unwrap();
+    let payload = r#"{"case":"ni-xml-cycle-test"}"#;
+    let hash = compute_hash(payload);
+    let iid = engine
+        .start("ni_cycle_xml_proc", cr.bytecode_version, payload, hash, "corr-ni6")
+        .await
+        .unwrap();
+
+    engine.tick_instance(iid).await.unwrap();
+
+    let jobs = engine
+        .activate_jobs(&["long_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert!(!jobs.is_empty(), "Expected job activation");
+    let job_key = jobs[0].job_key.clone();
+
+    let tenant = bpmn_lite_types::TenantId::new("default").unwrap();
+    let fibers = store.load_fibers(&tenant, iid).await.unwrap();
+    assert_eq!(fibers.len(), 1);
+    assert!(
+        matches!(&fibers[0].wait, WaitState::Job { job_key: jk } if *jk == job_key),
+        "Expected the host fiber parked on its own job, got {:?}",
+        fibers[0].wait
+    );
+
+    // Fire all 3 permitted iterations — same re-armed-timer-row pattern
+    // as `t_ni_2_cycle_fires_multiple_times`.
+    for i in 0..3u64 {
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        let applied = engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1, "iteration {i}: exactly one timer must fire");
+
+        // Host fiber is never touched by any of the 3 fires.
+        let fibers = store.load_fibers(&tenant, iid).await.unwrap();
+        assert!(
+            fibers
+                .iter()
+                .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)),
+            "iteration {i}: host fiber should still be parked on its own job"
+        );
+    }
+
+    // A 4th attempt must find nothing due — the cycle is exhausted after
+    // 3 fires (R3), proving `max_fires` actually reached the kernel via
+    // the XML frontend rather than being silently dropped to unbounded
+    // or to a single fire.
+    let fourth_fired_at = FAR_FUTURE_TIMER_MS + 3 * 100_000;
+    let applied = engine
+        .tick_due_timers("timer-test", fourth_fired_at, 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(applied, 0, "the cycle is exhausted — no 4th timer should be due");
+
+    // 3 distinct escalation handler fibres were spawned, one per fire —
+    // same event-based proof `t_ni_2` uses (job_key collision on the
+    // shared static pc makes job-queue activation counts unreliable
+    // here, see that test's own comment).
+    let events = store.read_events(&tenant, iid, 0).await.unwrap();
+    let timer_fired_count = events
+        .iter()
+        .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
+        .count();
+    assert_eq!(timer_fired_count, 3, "Expected 3 TimerFired events, one per cycle iteration");
+    let spawned_handlers: std::collections::BTreeSet<Uuid> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        spawned_handlers.len(),
+        3,
+        "Expected 3 distinct escalation handler fibres, one per fire, got: {events:?}"
+    );
+
+    let inspection = engine.inspect(iid).await.unwrap();
+    assert_eq!(inspection.state, ProcessState::Running);
+}
+
 // ── Phase 5.1: Terminate End Event tests ────────────────────────
 
 /// T-TERM-1: Single fiber hits EndTerminate → instance Terminated.

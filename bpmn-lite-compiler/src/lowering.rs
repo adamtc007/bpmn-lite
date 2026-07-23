@@ -677,6 +677,24 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                         });
                     }
                     instructions.push(Instr::V2GuardArmTimer);
+                    // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`)
+                    // must immediately follow `V2GuardArmTimer`
+                    // (verifier-enforced adjacency,
+                    // `v2_verifier::verify_v2_control_stack`) and only
+                    // ever bounds a `V2GuardN` target. `interrupting +
+                    // Cycle` is rejected earlier at `verify_or_err` time
+                    // (verifier.rs §7b: "cycle timers must be
+                    // non-interrupting"), so `spec` being `Cycle` here
+                    // guarantees `!interrupting` already — no silent
+                    // drop of `max_fires` to a fire-once fallback.
+                    if let TimerSpec::Cycle { max_fires, .. } = spec {
+                        debug_assert!(
+                            !interrupting,
+                            "interrupting boundary timer with a Cycle spec must have been \
+                             rejected by verify_or_err before lowering reaches this point"
+                        );
+                        instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+                    }
                     exec_addr = Addr::new(instructions.len() as u32);
                     instructions.push(Instr::ExecFfi {
                         template_id: *template_id,
@@ -691,7 +709,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let target_addr = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .unwrap_or(base + 6u32);
+                        .unwrap_or(Addr::new(instructions.len() as u32 + 1));
                     instructions.push(Instr::Jump { target: target_addr });
                 } else {
                     exec_addr = Addr::new(instructions.len() as u32);
@@ -1000,8 +1018,19 @@ fn instr_count_for(
     match &graph[node_idx] {
         IRNode::ServiceTask { id, .. } | IRNode::FfiServiceTask { id, .. } => {
             let base = estimate_instr_count(graph, node_idx); // ExecNative/ExecFfi + Jump
-            if boundary_lookup.contains_key(id) {
-                base + 4 // guard-open + PushI64 + V2GuardArmTimer + guard-end
+            if let Some((_, spec)) = boundary_lookup.get(id) {
+                // guard-open + PushI64 + V2GuardArmTimer + guard-end, plus
+                // one more for `V2GuardTimerCycle` when `spec` is
+                // `TimerSpec::Cycle` (`GUARD-TIMER-CYCLE>`, wiring BPMN's
+                // `timeCycle` through to the kernel's already-built
+                // bounded-repeat mechanism). An interrupting timer with a
+                // `Cycle` spec is rejected earlier, at `verify_or_err`
+                // time (verifier.rs §7b) — by the time this runs, every
+                // `Cycle` boundary timer reaching here is guaranteed
+                // non-interrupting, so no `interrupting` check is needed
+                // here to decide whether to size in the extra word.
+                let cycle_extra = if matches!(spec, TimerSpec::Cycle { .. }) { 1 } else { 0 };
+                base + 4 + cycle_extra
             } else {
                 base
             }
@@ -1156,6 +1185,22 @@ fn lower_boundary_guarded_task_v2(
         });
     }
     instructions.push(Instr::V2GuardArmTimer);
+    // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`) must immediately
+    // follow `V2GuardArmTimer` (verifier-enforced adjacency,
+    // `v2_verifier::verify_v2_control_stack`) and only ever bounds a
+    // `V2GuardN` target. `interrupting + Cycle` is rejected earlier at
+    // `verify_or_err` time (verifier.rs §7b: "cycle timers must be
+    // non-interrupting"), so `spec` being `Cycle` here guarantees
+    // `!interrupting` already — no silent drop of `max_fires` to a
+    // fire-once fallback.
+    if let TimerSpec::Cycle { max_fires, .. } = spec {
+        debug_assert!(
+            !interrupting,
+            "interrupting boundary timer with a Cycle spec must have been rejected by \
+             verify_or_err before lowering reaches this point"
+        );
+        instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+    }
     instructions.push(Instr::ExecNative {
         task_type: task_id,
         argc: 0,
@@ -1169,7 +1214,7 @@ fn lower_boundary_guarded_task_v2(
     let target = successors
         .first()
         .and_then(|s| node_addr.get(s).copied())
-        .unwrap_or(base + 6u32);
+        .unwrap_or(Addr::new(instructions.len() as u32 + 1));
     instructions.push(Instr::Jump { target });
     Ok(())
 }
@@ -2070,6 +2115,14 @@ mod tests {
     // ═══════════════════════════════════════════════════════════
 
     fn make_boundary_timer_graph(interrupting: bool) -> IRGraph {
+        make_boundary_timer_graph_with_spec(interrupting, TimerSpec::Duration { ms: 5000 })
+    }
+
+    /// Same shape as `make_boundary_timer_graph`, generalized to accept
+    /// any `TimerSpec` — added for the `GUARD-TIMER-CYCLE>` frontend-wiring
+    /// tests below, which need `TimerSpec::Cycle` on the boundary timer
+    /// node rather than the hard-coded `Duration`.
+    fn make_boundary_timer_graph_with_spec(interrupting: bool, spec: TimerSpec) -> IRGraph {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start {
             id: "start".to_string(),
@@ -2086,7 +2139,7 @@ mod tests {
         let boundary = graph.add_node(IRNode::BoundaryTimer {
             id: "timeout".to_string(),
             attached_to: "host".to_string(),
-            spec: TimerSpec::Duration { ms: 5000 },
+            spec,
             interrupting,
         });
         let escalate = graph.add_node(IRNode::ServiceTask {
@@ -2197,6 +2250,145 @@ mod tests {
             .program()
             .iter()
             .any(|i| matches!(i, Instr::ExecNative { .. })));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  GUARD-TIMER-CYCLE> frontend wiring: `TimerSpec::Cycle` boundary
+    //  timers now lower `max_fires` through to `Instr::V2GuardTimerCycle`,
+    //  instead of `timer_spec_duration_ms` silently discarding it down to
+    //  a single relative duration (the prior gap, recorded in
+    //  `timer_spec_duration_ms`'s own doc comment and
+    //  `bpmn-lite-engine/src/tests.rs`'s restoration-landing comment
+    //  block above `setup_ni_cycle_guard`).
+    // ═══════════════════════════════════════════════════════════
+
+    /// Non-interrupting `ServiceTask` boundary timer with a `Cycle` spec
+    /// lowers to `V2GuardN` + `PushI64(interval_ms)` + `V2GuardArmTimer` +
+    /// `V2GuardTimerCycle { max_fires }`, immediately adjacent — same
+    /// adjacency `GUARD-TIMER>` itself already requires of its own arming
+    /// pair, per `v2_verifier::verify_v2_control_stack`'s §immediate-
+    /// predecessor check for `V2GuardTimerCycle`.
+    #[test]
+    fn test_boundary_timer_lowering_v2_cycle_non_interrupting() {
+        let graph = make_boundary_timer_graph_with_spec(
+            false,
+            TimerSpec::Cycle {
+                interval_ms: 3_600_000,
+                max_fires: 3,
+            },
+        );
+        verifier::verify_or_err(&graph).unwrap();
+        let program = lower_v2(&graph).unwrap();
+        let instrs = program.program();
+
+        assert!(
+            instrs.iter().any(|i| matches!(i, Instr::PushI64(3_600_000))),
+            "the cycle's interval_ms (3_600_000) must be pushed before GUARD-TIMER>, not \
+             some other TimerSpec-derived value"
+        );
+        assert!(
+            instrs
+                .iter()
+                .any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
+            "GUARD-TIMER-CYCLE> must be emitted with the Cycle spec's max_fires (3), not \
+             silently dropped"
+        );
+
+        // Adjacency: `V2GuardTimerCycle` must immediately follow
+        // `V2GuardArmTimer` — assert by position, not just presence.
+        let arm_pos = instrs
+            .iter()
+            .position(|i| matches!(i, Instr::V2GuardArmTimer))
+            .expect("V2GuardArmTimer must be present");
+        assert!(
+            matches!(instrs.get(arm_pos + 1), Some(Instr::V2GuardTimerCycle { max_fires: 3 })),
+            "V2GuardTimerCycle must be the immediate successor of V2GuardArmTimer, got: {:?}",
+            instrs.get(arm_pos + 1)
+        );
+
+        // The full pipeline (verify -> lower -> verify_bytecode) must
+        // accept the resulting program — proves instr_count_for's sizing
+        // (+1 for the cycle word) keeps every downstream address correct.
+        crate::Compiler::lower_v2(&graph)
+            .expect("v2 boundary-timer Cycle lowering must verify end to end");
+    }
+
+    /// A plain (non-cycle) `Duration` boundary timer must NOT emit
+    /// `V2GuardTimerCycle` — the cycle word is additive, only present when
+    /// `TimerSpec::Cycle` is actually declared.
+    #[test]
+    fn test_boundary_timer_lowering_v2_duration_emits_no_cycle_word() {
+        let graph = make_boundary_timer_graph(false);
+        let program = lower_v2(&graph).unwrap();
+        assert!(
+            !program
+                .program()
+                .iter()
+                .any(|i| matches!(i, Instr::V2GuardTimerCycle { .. })),
+            "a plain Duration boundary timer must not emit GUARD-TIMER-CYCLE>"
+        );
+    }
+
+    /// `FfiServiceTask` boundary timer with a `Cycle` spec lowers the same
+    /// way as the `ServiceTask` case above — the inline `FfiServiceTask`
+    /// boundary-timer arm (`lowering.rs`'s `IRNode::FfiServiceTask` match
+    /// arm) is a separate code path from `lower_boundary_guarded_task_v2`
+    /// and needs its own coverage.
+    #[test]
+    fn test_boundary_timer_lowering_v2_cycle_ffi_service_task() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let host = graph.add_node(IRNode::FfiServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            template_id: [7u8; 32],
+            inputs: vec![],
+            outputs: vec![],
+        });
+        let normal_end = graph.add_node(IRNode::End {
+            id: "normal_end".to_string(),
+            terminate: false,
+        });
+        let boundary = graph.add_node(IRNode::BoundaryTimer {
+            id: "timeout".to_string(),
+            attached_to: "host".to_string(),
+            spec: TimerSpec::Cycle {
+                interval_ms: 1_800_000,
+                max_fires: 5,
+            },
+            interrupting: false,
+        });
+        let escalate = graph.add_node(IRNode::ServiceTask {
+            id: "escalate".to_string(),
+            name: "Escalate".to_string(),
+            task_type: "escalate_work".to_string(),
+        });
+        let timeout_end = graph.add_node(IRNode::End {
+            id: "timeout_end".to_string(),
+            terminate: false,
+        });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(boundary, escalate, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(escalate, timeout_end, IREdge { id: "f4".to_string(), condition: None });
+
+        verifier::verify_or_err(&graph).unwrap();
+        let program = lower_v2(&graph).unwrap();
+        let instrs = program.program();
+
+        assert!(
+            instrs
+                .iter()
+                .any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 5 })),
+            "GUARD-TIMER-CYCLE> must be emitted for an FfiServiceTask boundary timer's Cycle \
+             spec too, with max_fires=5"
+        );
+
+        crate::Compiler::lower_v2(&graph)
+            .expect("v2 FfiServiceTask boundary-timer Cycle lowering must verify end to end");
     }
 
     /// Build a diverging/converging `GatewayInclusive` pair with the given
