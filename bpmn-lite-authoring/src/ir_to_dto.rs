@@ -214,7 +214,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             id,
             name,
             task_type,
-            length_flag_name,
+            collection_flag_name,
             declared_max,
         } => {
             let bpmn_id = if name != id { Some(name.clone()) } else { None };
@@ -222,7 +222,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
                 id: id.clone(),
                 task_type: task_type.clone(),
                 bpmn_id,
-                length_flag: length_flag_name.clone(),
+                collection_flag: collection_flag_name.clone(),
                 declared_max: *declared_max,
             }
         }

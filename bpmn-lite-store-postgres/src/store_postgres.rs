@@ -87,6 +87,16 @@ fn value_key(v: &Value) -> String {
         Value::I64(n) => format!("i:{n}"),
         Value::Str(s) => format!("s:{s}"),
         Value::Ref(r) => format!("r:{r}"),
+        // §18 ruling K Part 2: `Value::Array` is new. Same "a:" + hex of
+        // canonical bytes convention as the other `value_key` copies in
+        // this workspace.
+        Value::Array(_) => format!(
+            "a:{}",
+            v.to_canonical_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     }
 }
 

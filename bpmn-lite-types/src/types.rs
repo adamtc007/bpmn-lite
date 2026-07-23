@@ -99,6 +99,36 @@ impl SourceSpan {
 // ─── Value ────────────────────────────────────────────────────
 
 /// A compact value on the orch stack or in flags. Never domain payload.
+///
+/// `Array` (added for §18 ruling K Part 2, the MI per-element-value-access
+/// landing) is the one variant that is not fixed-width. Container shape:
+/// `Vec<Value>`, not a boxed slice. `V2Fork`'s `targets: Box<[Addr]>` is
+/// *compile-time*-fixed — frozen once by the compiler, never mutated at
+/// runtime, so a boxed slice's "no spare capacity" shape is exactly right
+/// for it. A `Value::Array` is the opposite: it is *runtime*-constructed
+/// data (populated via `orch_flags` at spawn/resume, or by `StoreFlag`
+/// inside a running instance), the same runtime-mutable-data role every
+/// other `flags: BTreeMap<FlagKey, Value>` entry already plays. `Vec` is
+/// the container this codebase already uses for exactly that role
+/// (`Fiber::stack`, `Fiber::regs`'s backing before the fixed-size array
+/// conversion, `ConcurrencyRecord` member lists) — matching that
+/// convention rather than `V2Fork`'s unrelated compile-time-frozen one.
+///
+/// Nesting: **structurally permitted, not forbidden.** A `Value::Array` may
+/// contain another `Value::Array`. This was a deliberate choice, not an
+/// oversight: forbidding nesting would require either (a) making
+/// `CanonicalEncode::canonical_encode` fallible — a ~15-impl, trait-wide
+/// blast radius this landing does not warrant (see `canonical.rs`'s module
+/// doc comment: every impl in this module is infallible by construction,
+/// by design) — or (b) an unenforced "authors just don't do that"
+/// convention, which is exactly the trap-door shape CLAUDE.md's working
+/// contract forbids ("enforce the mechanism, not a word"). Allowing
+/// nesting keeps the existing infallible-encode invariant intact and is
+/// fully covered by round-trip tests (golden bytes + proptest), rather
+/// than being an implicit assumption that happens to work because nothing
+/// constructs one yet. See `MAX_VALUE_ARRAY_DEPTH`/`MAX_VALUE_ARRAY_LEN`
+/// below for the bound that keeps "structurally permitted" from becoming
+/// "unboundedly permitted."
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Value {
     Bool(bool),
@@ -107,6 +137,95 @@ pub enum Value {
     Str(u32),
     /// Opaque handle into external stores.
     Ref(u32),
+    /// A sequence of `Value`s, by-value (Adam's ratified MI-element-access
+    /// ruling: "by-value is simpler and matches the frame model... given
+    /// payload sizes here, I'd lean by-value with the declared-max cap
+    /// bounding the total"). Every other `Value` variant is fixed-width;
+    /// this one is not — see `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH`
+    /// for the explicit bound that keeps it from silently reopening the
+    /// "frame size proportional to live tokens" guarantee (§2 glossary,
+    /// "Frame") this ISA otherwise gets for free from every other variant
+    /// being fixed-width.
+    Array(Vec<Value>),
+}
+
+/// §18 ruling K Part 2 finding: unlike every other `Value` variant,
+/// `Array` can in principle be arbitrarily large or deeply nested — count
+/// alone (e.g. `V2MiArityCheck`'s existing collection-length bound) does
+/// not bound the *encoded size* of a single stack/register/flag slot once
+/// that slot can hold a `Value::Array`. Nothing in the pre-existing
+/// `VerifiedLimits` machinery (`max_stack`/`max_registers`, both slot
+/// *counts*, not per-slot byte sizes) covers this — checked, not assumed.
+/// These two constants are the explicit bound this landing adds to close
+/// that gap. Enforced at both boundaries capable of introducing an
+/// oversized/deep `Value::Array` into a live frame:
+/// - `bpmn-lite-types/src/canonical.rs`, `Value::canonical_decode` — the
+///   D3 Ring 2 replay/snapshot-load boundary; depth is checked *during*
+///   decode (before recursing into an `Array`'s elements), which is what
+///   actually prevents an adversarial-depth input from stack-overflowing
+///   the decoder itself, not merely rejecting the result after the fact.
+/// - `bpmn-lite-kernel/src/lib.rs`, `validate_snapshot_limits` — the
+///   runtime boundary, run on every `apply` call; walks `fiber.stack`,
+///   `fiber.regs`, and `instance.flags` values. This is also the boundary
+///   that (eventually, on the instance's first tick after spawn) catches
+///   an oversized/deep `Value::Array` supplied externally via `orch_flags`
+///   at spawn — see the plan-doc writeup for the residual gap this does
+///   NOT close (there is no intake-time check at the `orch_flags`-seeding
+///   call site itself, only at the next `apply`).
+pub const MAX_VALUE_ARRAY_LEN: usize = 4096;
+pub const MAX_VALUE_ARRAY_DEPTH: u32 = 8;
+
+/// Shared by both enforcement boundaries above so they can never drift
+/// apart on what "too large" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueLimitError {
+    TooDeep { max: u32 },
+    TooLong { actual: usize, max: usize },
+}
+
+impl std::fmt::Display for ValueLimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooDeep { max } => write!(f, "Value::Array nesting depth exceeds {max}"),
+            Self::TooLong { actual, max } => {
+                write!(f, "Value::Array length {actual} exceeds {max}")
+            }
+        }
+    }
+}
+
+impl Value {
+    /// Recursively checks `Value::Array` element-count and nesting-depth
+    /// bounds; `Ok(())` for every non-`Array` variant. Used by the kernel
+    /// runtime boundary (`validate_snapshot_limits`) — the canonical-decode
+    /// boundary enforces the same bounds inline, during decode, for the
+    /// stack-overflow-prevention reason documented on
+    /// `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` above, so it does not
+    /// call this method (checking after full decode would be too late for
+    /// the depth bound's actual purpose).
+    pub fn check_array_limits(&self) -> Result<(), ValueLimitError> {
+        self.check_array_limits_at_depth(0)
+    }
+
+    fn check_array_limits_at_depth(&self, depth: u32) -> Result<(), ValueLimitError> {
+        if let Value::Array(items) = self {
+            if depth >= MAX_VALUE_ARRAY_DEPTH {
+                return Err(ValueLimitError::TooDeep {
+                    max: MAX_VALUE_ARRAY_DEPTH,
+                });
+            }
+            if items.len() > MAX_VALUE_ARRAY_LEN {
+                return Err(ValueLimitError::TooLong {
+                    actual: items.len(),
+                    max: MAX_VALUE_ARRAY_LEN,
+                });
+            }
+            for item in items {
+                item.check_array_limits_at_depth(depth + 1)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One deterministic branch in a DSL payload router.
@@ -560,36 +679,76 @@ pub enum Instr {
 
     // ─── V5 dynamic-arity multi-instance lowering glue (§18 ruling K) ──
     //
-    // Neither word is D2 vocabulary — same class as `V2RouteZeroMatch`/
-    // `V2LoadPlaceholderMatch` immediately above: compiler-internal glue
-    // discovered lowering parallel multi-instance onto `V2Fork`'s proven
-    // skip-to-`V2Join` pattern (ruling H), documented at the same rigor as
-    // a ratified D2 word per CLAUDE.md's "no trap doors" discipline. A
-    // real, reportable finding drove both: this codebase has NO
-    // array/collection-valued `Value`/`DataObjectType`/`BindingSource` at
-    // any layer (checked, not assumed — `ffi_bindings.rs`'s `PrimitiveType`
-    // is `Bool`/`I64`/`F64`/`String` only). Building one is a materially
-    // larger, separate feature (a new `Value::Array`, JSON-path array
-    // indexing, a new `BindingSource` shape) than MI's own arity/skip
-    // scaffolding needs. Scoped down, deliberately and visibly rather than
-    // silently: an MI activity's `inputCollection` is represented here by
-    // its RUNTIME LENGTH ONLY (an `I64`-valued flag the workflow populates
-    // before the fork runs) — enough to prove/check arity and to decide,
-    // per fibre, whether index `i` is live. Per-element VALUE access into
-    // the inner activity's own task body is NOT built by these two words
-    // and remains out of scope (see the V5 plan-doc writeup's fork note).
+    // None of these three words is D2 vocabulary — same class as
+    // `V2RouteZeroMatch`/`V2LoadPlaceholderMatch` above: compiler-internal
+    // glue discovered lowering parallel multi-instance onto `V2Fork`'s
+    // proven skip-to-`V2Join` pattern (ruling H), documented at the same
+    // rigor as a ratified D2 word per CLAUDE.md's "no trap doors"
+    // discipline.
+    //
+    // **Revised for ruling K Part 2 (per-element value access, landed
+    // 2026-07-23; closes the gap the item-(d) landing explicitly flagged).**
+    // The prior landing represented `inputCollection` by its RUNTIME LENGTH
+    // ONLY (a separate `I64`-valued flag), because no array-valued `Value`
+    // existed yet. Now that `Value::Array` exists, that two-flag design
+    // (one `I64` length flag, kept manually in sync with the "real"
+    // collection data living somewhere else) was rejected as the landing
+    // choice here: it is a redundant-state footgun — nothing would catch
+    // the length flag and the actual collection silently disagreeing, and
+    // CLAUDE.md's working contract rejects exactly that shape ("no trap
+    // doors... enforce the mechanism, not a word"). Instead, `length_flag`
+    // is renamed `collection_flag` and now names a flag holding the
+    // collection's actual `Value::Array` directly — length is *derived*
+    // from `.len()`, a single source of truth, not tracked twice. This is
+    // also, independently, the more natural fit with this codebase's
+    // existing `flags: BTreeMap<FlagKey, Value>` convention (runtime data
+    // addressed by flag key) versus the alternative investigated and
+    // rejected: `domain_payload` (a JSON string, resolved via a
+    // `json_path`-style mechanism that does not exist anywhere in this
+    // codebase today — building it would be inventing a second,
+    // parallel runtime-data-access convention alongside the one that
+    // already exists and that MI's length signal already used).
     /// `( -- bool )`. Push `true` iff the static `index` is less than the
-    /// runtime value of `instance.flags[length_flag]` (missing key or a
-    /// non-`I64`/negative value defaults to length 0 — the same "legal
-    /// empty collection" default ruling K item (c) ratifies, not a special
-    /// case). The MI-side analogue of `LoadFlag`/`V2LoadPlaceholderMatch`:
-    /// each of a `V2Fork`'s `n` = declared-max synthesized branch headers
-    /// carries its own compile-time-constant `index`, checks liveness with
-    /// this word, and `BrIfNot`s straight to the shared `V2Join` if not
-    /// live — identical mechanism to a gateway's false-condition skip
-    /// (ruling H), applied to an index bound instead of a flag condition.
+    /// length of `instance.flags[collection_flag]`, read as a
+    /// `Value::Array` (missing key or a non-`Array` value defaults to
+    /// length 0 — the same "legal empty collection" default ruling K item
+    /// (c) ratifies, not a special case). The MI-side analogue of
+    /// `LoadFlag`/`V2LoadPlaceholderMatch`: each of a `V2Fork`'s `n` =
+    /// declared-max synthesized branch headers carries its own
+    /// compile-time-constant `index`, checks liveness with this word, and
+    /// `BrIfNot`s straight to the shared `V2Join` if not live — identical
+    /// mechanism to a gateway's false-condition skip (ruling H), applied to
+    /// an index bound instead of a flag condition. Deliberately unchanged
+    /// in stack effect (still `( -- bool )`, not `( -- bool value )`):
+    /// element delivery is a separate instruction, `V2MiLoadElement` below,
+    /// that runs only on the live path (after `BrIfNot` has already
+    /// filtered out the dead path) — this keeps this word's own
+    /// straight-line stack effect uniform across both branch outcomes,
+    /// which is what a per-PC static stack-height verifier needs; folding
+    /// value delivery into this word's own stack effect would have made it
+    /// conditional on a runtime outcome the verifier cannot see statically.
     V2MiIndexLive {
-        length_flag: FlagKey,
+        collection_flag: FlagKey,
+        index: u32,
+    },
+    /// `( -- value )`. Runs immediately after a live `V2MiIndexLive` +
+    /// `BrIfNot` pair falls through (i.e. only on the path where `index` is
+    /// confirmed `< length`) — never reached on the skip-to-join path.
+    /// Pushes a **clone** of `instance.flags[collection_flag]`'s `index`-th
+    /// element (by-value, per Adam's ratified MI-element-access ruling:
+    /// "by-value is simpler and matches the frame model... I'd lean
+    /// by-value with the declared-max cap bounding the total"). Because
+    /// this only ever runs after `V2MiIndexLive` has already confirmed
+    /// `index < length` against the SAME flag, a missing key / non-`Array`
+    /// value / out-of-bounds index here means the flag's value changed
+    /// between the two checks (impossible within one straight-line branch
+    /// — no instruction between them can mutate flags) or the collection
+    /// and the arity check disagree some other way; either is a genuine
+    /// invariant violation, not a normal "empty/short collection" case, so
+    /// it is a hard `TransitionError::MultiInstanceElementUnavailable`
+    /// reject (fail closed), not a silent default value.
+    V2MiLoadElement {
+        collection_flag: FlagKey,
         index: u32,
     },
     /// `( -- )`. Runs once, straight-line, immediately before `V2Fork` (the
@@ -597,8 +756,9 @@ pub enum Instr {
     /// uses and for the identical reason — `V2Fork` commits to spawning
     /// `targets.len()` fibres unconditionally the moment it executes, so
     /// there is no "spawn fewer" outcome to recover from afterward). If the
-    /// runtime length of `instance.flags[length_flag]` exceeds the
-    /// artifact-declared `max` (ruling K delta (a): a required static
+    /// length of `instance.flags[collection_flag]` (read as a
+    /// `Value::Array`, same default-to-0 rule as `V2MiIndexLive`) exceeds
+    /// the artifact-declared `max` (ruling K delta (a): a required static
     /// ceiling, since Zeebe has none), returns
     /// `TransitionError::ResourceLimitExceeded` — a hard, non-resumable
     /// reject, the SAME shape `validate_snapshot_limits` already uses for
@@ -610,8 +770,14 @@ pub enum Instr {
     /// human can resolve by amending payload and calling `ResolveIncident`
     /// — there is no sense in which "wait, then re-decide" applies to
     /// "this collection is bigger than the artifact declared it could be."
+    /// This bounds the *count* of elements; the total *encoded size* of the
+    /// collection (elements can themselves be large/nested `Value::Array`s)
+    /// is a separate concern, bounded independently by
+    /// `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` and
+    /// `validate_snapshot_limits`'s new per-flag-value check — not
+    /// re-solved here a second time.
     V2MiArityCheck {
-        length_flag: FlagKey,
+        collection_flag: FlagKey,
         max: u32,
     },
 }

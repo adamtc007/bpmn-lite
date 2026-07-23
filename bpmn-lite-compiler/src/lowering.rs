@@ -722,8 +722,9 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
             // §18 ruling K: v2-only. See `lower_multi_instance_v2`'s doc
             // comment for the emitted shape.
             IRNode::MultiInstance {
+                id,
                 task_type,
-                length_flag_name,
+                collection_flag_name,
                 declared_max,
                 ..
             } => {
@@ -731,8 +732,9 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     graph,
                     node_idx,
                     base,
+                    id,
                     task_type,
-                    length_flag_name,
+                    collection_flag_name,
                     *declared_max,
                     &node_addr,
                     &mut task_intern,
@@ -1019,14 +1021,16 @@ fn instr_count_for(
         } => 2, // V2Join + Jump — V2Join carries no `next` field
         // §18 ruling K: `V2MiArityCheck`(1) + `V2Fork`(1) + `declared_max`
         // synthesized branch headers, each `V2MiIndexLive`+`BrIfNot`+
-        // `ExecNative`+`Jump` (4) + `V2Join`(1) + trailing `Jump`(1). Fully
+        // `V2MiLoadElement`+`StoreFlag`+`ExecNative`+`Jump` (6 — grew from
+        // 4 in ruling K Part 2, which added the middle two for per-element
+        // value delivery) + `V2Join`(1) + trailing `Jump`(1). Fully
         // self-contained within this one node's block — unlike
         // `GatewayInclusive`'s diverging/converging node PAIR (whose
         // branches point at already-existing downstream graph nodes), MI
         // has exactly one incoming and one outgoing sequence flow and
         // synthesizes its own `declared_max` branches internally, so no
         // separate pairing-stack bookkeeping across graph nodes is needed.
-        IRNode::MultiInstance { declared_max, .. } => declared_max.saturating_mul(4) + 4,
+        IRNode::MultiInstance { declared_max, .. } => declared_max.saturating_mul(6) + 4,
         IRNode::End { .. } if guardn_close_before_end.contains(&node_idx) => {
             // +1 for the `V2GuardNEnd` a non-interrupting boundary timer's
             // escalation terminal must emit before its own `End`/
@@ -1312,21 +1316,69 @@ fn lower_inclusive_diverging_v2(
 /// sized to its `declared_max`, using the SAME skip-to-`V2Join` mechanism
 /// ruling H's dynamic-arity gateway lowering already proves sound
 /// (`lower_inclusive_diverging_v2`'s doc comment) — applied to an index
-/// bound instead of a per-branch flag condition:
+/// bound instead of a per-branch flag condition.
+///
+/// **Revised for ruling K Part 2 (per-element value access, landed
+/// 2026-07-23).** Each live branch now also delivers its own element's
+/// `Value` to the inner activity's job, via `V2MiLoadElement` +
+/// `StoreFlag` immediately before `ExecNative`:
 ///
 /// ```text
 /// base:
-///   V2MiArityCheck { length_flag, max: declared_max }  -- hard reject if
-///                                                          actual > declared_max
+///   V2MiArityCheck { collection_flag, max: declared_max }  -- hard reject
+///                                                              if actual > declared_max
 ///   V2Fork { targets: [h_0..h_{n-1}], pairing: base+1 }
-/// h_i:  V2MiIndexLive { length_flag, index: i }
+/// h_i:  V2MiIndexLive { collection_flag, index: i }
 ///       BrIfNot(join_addr)
+///       V2MiLoadElement { collection_flag, index: i }  -- ( -- value )
+///       StoreFlag { key: element_flag_i }              -- ( value -- )
 ///       ExecNative { task_type }             -- the inner activity's own work
 ///       Jump(join_addr)
 /// join_addr:
 ///   V2Join { pairing: base+1 }
 ///   Jump(next)
 /// ```
+///
+/// **Why `V2MiLoadElement` + the pre-existing `StoreFlag`, not a change to
+/// `ExecNative` itself — a real finding, checked before writing this,
+/// exactly per the landing brief's own instruction not to assume.**
+/// `ExecNative`'s `argc` field (`Instr::ExecNative { task_type, argc,
+/// retc }`) looks, from its name and its `stack_effect` table entry
+/// (`(argc, retc)`, `artifact.rs`), like the natural place to deliver an
+/// operand-stack value into the job. It is not: `argc` is set to `0` at
+/// **every** call site in this codebase (grep-verified — service tasks,
+/// FFI tasks, MI) and the kernel's `ExecNative` handler
+/// (`bpmn-lite-kernel/src/lib.rs`) destructures `{ task_type, retc, .. }`
+/// — it never reads `argc` and never pops any operand off `fiber.stack`
+/// before dispatching the job. The field is vestigial today; wiring MI
+/// element delivery through it would mean either (a) teaching `ExecNative`
+/// to actually pop and forward `argc` operands — a change to a mechanism
+/// every service task in the codebase shares, well outside this landing's
+/// scope, or (b) pushing a value `ExecNative` silently never consumes,
+/// leaving it dead on the fibre's own operand stack forever (a real,
+/// if harmless-to-K-invariants, leak — and pointless, since nothing
+/// downstream could read it either). Neither is the by-value delivery
+/// mechanism this landing needs.
+///
+/// What the external job actually receives is `orch_flags` — a snapshot
+/// of `instance.flags` at the moment `ExecNative` runs (`bpmn-lite-kernel`,
+/// `orch_flags: instance.flags.iter().map(...).collect()`), the SAME
+/// pipeline every existing service task's inputs already flow through.
+/// `V2MiLoadElement` (pushes the element `Value` — the existing MI-side
+/// analogue of `LoadFlag`) immediately followed by the pre-existing
+/// `StoreFlag` (pops it into a synthesized per-branch flag,
+/// `<node_id>_mi_element_<i>`) composes two already-proven primitives to
+/// route the value through that same existing pipeline, rather than
+/// inventing a new one. Per-branch-UNIQUE flag keys (not one shared
+/// scratch key reused across branches) were the deliberate choice here:
+/// a shared key would still be race-free in practice (one fibre's
+/// `StoreFlag`+`ExecNative` pair executes atomically within a single
+/// `apply()` transition, and `JobActivation.orch_flags` is a materialized
+/// clone at enqueue time, not a live reference — so even a reused key
+/// cannot leak one branch's element into another's already-enqueued job),
+/// but reasoning about that correctly requires understanding the tick
+/// model's atomicity; a unique key per branch needs no such argument at
+/// all. The extra `declared_max` interned flag keys are cheap.
 ///
 /// **Unlike `GatewayInclusive`'s diverging/converging node pair**, whose
 /// branches are edges to already-existing downstream graph nodes needing a
@@ -1352,8 +1404,9 @@ fn lower_multi_instance_v2(
     graph: &IRGraph,
     node_idx: NodeIndex,
     base: Addr,
+    node_id: &str,
     task_type: &str,
-    length_flag_name: &str,
+    collection_flag_name: &str,
     declared_max: u32,
     node_addr: &HashMap<NodeIndex, Addr>,
     task_intern: &mut HashMap<String, u32>,
@@ -1361,14 +1414,17 @@ fn lower_multi_instance_v2(
     flag_intern: &mut HashMap<String, FlagKey>,
     instructions: &mut Vec<Instr>,
 ) -> Result<()> {
-    let length_flag = intern_flag(flag_intern, length_flag_name);
+    let collection_flag = intern_flag(flag_intern, collection_flag_name);
     let task_id = intern_task(task_intern, task_manifest, task_type);
 
     let fork_addr = base + 1u32;
-    let join_addr = fork_addr + 1u32 + declared_max.saturating_mul(4);
+    // Each branch is now 6 instructions long: V2MiIndexLive, BrIfNot,
+    // V2MiLoadElement, StoreFlag, ExecNative, Jump (was 4 before ruling K
+    // Part 2 added the middle two).
+    let join_addr = fork_addr + 1u32 + declared_max.saturating_mul(6);
 
     instructions.push(Instr::V2MiArityCheck {
-        length_flag,
+        collection_flag,
         max: declared_max,
     });
     debug_assert_eq!(Addr::new(instructions.len() as u32), fork_addr);
@@ -1377,7 +1433,7 @@ fn lower_multi_instance_v2(
     let mut headers: Vec<Addr> = Vec::with_capacity(declared_max as usize);
     for _ in 0..declared_max {
         headers.push(header_addr);
-        header_addr += 4u32;
+        header_addr += 6u32;
     }
 
     instructions.push(Instr::V2Fork {
@@ -1386,11 +1442,17 @@ fn lower_multi_instance_v2(
     });
 
     for index in 0..declared_max {
+        let element_flag = intern_flag(flag_intern, &format!("{node_id}_mi_element_{index}"));
         instructions.push(Instr::V2MiIndexLive {
-            length_flag,
+            collection_flag,
             index,
         });
         instructions.push(Instr::BrIfNot { target: join_addr });
+        instructions.push(Instr::V2MiLoadElement {
+            collection_flag,
+            index,
+        });
+        instructions.push(Instr::StoreFlag { key: element_flag });
         instructions.push(Instr::ExecNative {
             task_type: task_id,
             argc: 0,
@@ -2304,7 +2366,7 @@ mod tests {
             id: "verify_docs".to_string(),
             name: "Verify Doc".to_string(),
             task_type: "verify_doc".to_string(),
-            length_flag_name: "doc_count".to_string(),
+            collection_flag_name: "doc_count".to_string(),
             declared_max,
         });
         let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
@@ -2355,6 +2417,78 @@ mod tests {
         assert!(instrs.iter().any(|i| matches!(i, Instr::V2Join { .. })));
 
         crate::Compiler::lower_v2(&graph).expect("v2 MI lowering must verify");
+    }
+
+    /// §18 ruling K Part 2: each branch also delivers its own element's
+    /// `Value` via `V2MiLoadElement` (one per branch, same index set as
+    /// `V2MiIndexLive`) immediately followed by a `StoreFlag` into a
+    /// per-branch-UNIQUE flag key — proves no two branches share a
+    /// scratch flag (the design this landing chose specifically to avoid
+    /// needing to reason about tick-atomicity to argue correctness).
+    #[test]
+    fn test_multi_instance_lowering_delivers_per_branch_element_value() {
+        let graph = make_multi_instance_graph(3);
+        let program = lower_v2(&graph).unwrap();
+        let instrs = program.program();
+
+        let load_element_indices: std::collections::BTreeSet<u32> = instrs
+            .iter()
+            .filter_map(|i| match i {
+                Instr::V2MiLoadElement { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            load_element_indices,
+            std::collections::BTreeSet::from([0, 1, 2]),
+            "one V2MiLoadElement per branch, same index set as V2MiIndexLive"
+        );
+
+        // Every V2MiLoadElement must be immediately followed by a StoreFlag
+        // (pops the loaded value into that branch's own element flag) —
+        // proves the composition is wired the way the doc comment claims,
+        // not merely that both instructions exist somewhere.
+        let mut store_flag_keys = Vec::new();
+        for (pc, instr) in instrs.iter().enumerate() {
+            if matches!(instr, Instr::V2MiLoadElement { .. }) {
+                match instrs.get(pc + 1) {
+                    Some(Instr::StoreFlag { key }) => store_flag_keys.push(*key),
+                    other => panic!(
+                        "V2MiLoadElement at pc {pc} must be immediately followed by \
+                         StoreFlag, got {other:?}"
+                    ),
+                }
+            }
+        }
+        assert_eq!(store_flag_keys.len(), 3);
+        let unique_keys: std::collections::BTreeSet<_> = store_flag_keys.iter().collect();
+        assert_eq!(
+            unique_keys.len(),
+            3,
+            "each branch must write its element into its OWN flag key, not a shared one"
+        );
+
+        // Every StoreFlag must be immediately followed by ExecNative — the
+        // element is written before the inner activity's job is
+        // dispatched, so the job's orch_flags snapshot includes it.
+        for (pc, instr) in instrs.iter().enumerate() {
+            if matches!(instr, Instr::StoreFlag { .. })
+                && load_element_indices_contains_predecessor(instrs, pc)
+            {
+                assert!(
+                    matches!(instrs.get(pc + 1), Some(Instr::ExecNative { .. })),
+                    "StoreFlag at pc {pc} (MI element write) must be immediately \
+                     followed by ExecNative"
+                );
+            }
+        }
+    }
+
+    /// Helper for the test above: true iff `instrs[pc - 1]` is a
+    /// `V2MiLoadElement` — i.e. this `StoreFlag` is the MI-element write,
+    /// not some other unrelated `StoreFlag` in the program.
+    fn load_element_indices_contains_predecessor(instrs: &[Instr], pc: usize) -> bool {
+        pc > 0 && matches!(instrs[pc - 1], Instr::V2MiLoadElement { .. })
     }
 
     // V5.3 (§18, landed 2026-07-23): relocked in place — `lower()` no

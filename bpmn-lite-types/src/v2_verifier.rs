@@ -1610,8 +1610,9 @@ mod tests {
                     placeholder: "p".to_string(),
                     expected_value: "v".to_string(),
                 }),
-                Just(Instr::V2MiIndexLive { length_flag: 0, index: 0 }),
-                Just(Instr::V2MiArityCheck { length_flag: 0, max: 1 }),
+                Just(Instr::V2MiIndexLive { collection_flag: 0, index: 0 }),
+                Just(Instr::V2MiLoadElement { collection_flag: 0, index: 0 }),
+                Just(Instr::V2MiArityCheck { collection_flag: 0, max: 1 }),
             ]
         }
 

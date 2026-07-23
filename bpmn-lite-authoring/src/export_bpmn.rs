@@ -240,7 +240,7 @@ pub fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
             NodeDto::MultiInstance {
                 task_type,
                 bpmn_id,
-                length_flag,
+                collection_flag,
                 declared_max,
                 ..
             } => {
@@ -260,7 +260,7 @@ pub fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
         </bpmn:extensionElements>
       </bpmn:multiInstanceLoopCharacteristics>
     </bpmn:serviceTask>"#,
-                    bid, name_attr, task_type, length_flag, declared_max
+                    bid, name_attr, task_type, collection_flag, declared_max
                 )?;
             }
         }

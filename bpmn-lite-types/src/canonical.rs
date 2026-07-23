@@ -142,6 +142,11 @@ impl CanonicalWriter {
 pub struct CanonicalReader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Live `Value::Array` nesting depth during `Value::canonical_decode`
+    /// recursion (§18 ruling K Part 2). Zero everywhere else. See
+    /// `types::MAX_VALUE_ARRAY_DEPTH`'s doc comment for why this is
+    /// checked mid-recursion rather than post-hoc.
+    array_depth: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -154,11 +159,19 @@ pub enum CanonicalDecodeError {
     UnknownTag { tag: u8, type_name: &'static str },
     #[error("canonical decode: {0} trailing bytes after decode")]
     TrailingBytes(usize),
+    #[error("canonical decode: Value::Array nesting depth exceeds {max}")]
+    ValueArrayTooDeep { max: u32 },
+    #[error("canonical decode: Value::Array length {actual} exceeds {max}")]
+    ValueArrayTooLong { actual: usize, max: usize },
 }
 
 impl<'a> CanonicalReader<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            pos: 0,
+            array_depth: 0,
+        }
     }
 
     /// Assert the reader consumed every byte — proves the encoder/decoder
@@ -490,7 +503,12 @@ impl CanonicalEncode for BTreeSet<crate::EffectId> {
     }
 }
 
-/// Tags: `0x00` Bool, `0x01` I64, `0x02` Str(interned id), `0x03` Ref(handle).
+/// Tags: `0x00` Bool, `0x01` I64, `0x02` Str(interned id), `0x03`
+/// Ref(handle), `0x04` Array (§18 ruling K Part 2). `Array` encodes as a
+/// `u32le` element count then each element recursively via `Value`'s own
+/// `CanonicalEncode` impl — genuinely recursive; nesting is structurally
+/// permitted (see `types::Value`'s doc comment for why), bounded by
+/// `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` on the decode side.
 impl CanonicalEncode for crate::types::Value {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
         match self {
@@ -510,6 +528,10 @@ impl CanonicalEncode for crate::types::Value {
                 w.write_u8(0x03);
                 w.write_u32(*id);
             }
+            Self::Array(items) => {
+                w.write_u8(0x04);
+                w.write_seq(items.iter(), |w, item| item.canonical_encode(w));
+            }
         }
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
@@ -518,6 +540,32 @@ impl CanonicalEncode for crate::types::Value {
             0x01 => Self::I64(r.read_u64()? as i64),
             0x02 => Self::Str(r.read_u32()?),
             0x03 => Self::Ref(r.read_u32()?),
+            0x04 => {
+                // Depth checked BEFORE recursing into elements — this is
+                // what actually bounds decoder stack depth against an
+                // adversarial-nesting input, not merely rejecting the
+                // fully-built result afterward (see `MAX_VALUE_ARRAY_DEPTH`'s
+                // doc comment).
+                r.array_depth += 1;
+                if r.array_depth > crate::types::MAX_VALUE_ARRAY_DEPTH {
+                    return Err(CanonicalDecodeError::ValueArrayTooDeep {
+                        max: crate::types::MAX_VALUE_ARRAY_DEPTH,
+                    });
+                }
+                let len = r.read_u32()? as usize;
+                if len > crate::types::MAX_VALUE_ARRAY_LEN {
+                    return Err(CanonicalDecodeError::ValueArrayTooLong {
+                        actual: len,
+                        max: crate::types::MAX_VALUE_ARRAY_LEN,
+                    });
+                }
+                let mut items = Vec::with_capacity(len.min(1 << 16));
+                for _ in 0..len {
+                    items.push(Self::canonical_decode(r)?);
+                }
+                r.array_depth -= 1;
+                Self::Array(items)
+            }
             tag => {
                 return Err(CanonicalDecodeError::UnknownTag {
                     tag,
@@ -1299,6 +1347,85 @@ mod tests {
         );
     }
 
+    /// §18 ruling K Part 2 golden-bytes fixture: `Value::Array`, tag
+    /// `0x04`. Two cases, committed bytes derived by hand from the wire
+    /// format documented on the `CanonicalEncode for Value` impl (tag,
+    /// then `u32le` count, then each element recursively):
+    /// - A non-trivial, non-nested array with mixed inner variants
+    ///   (`[Bool(true), I64(-1), Str(0x2A)]`).
+    /// - A nested case (`[Array([I64(7)]), Bool(false)]`), proving nesting
+    ///   is not merely "structurally possible in principle" but actually
+    ///   round-trips byte-for-byte, per this landing's own "allow nesting,
+    ///   but test it" decision.
+    #[test]
+    fn golden_bytes_value_array_variant() {
+        let mixed = crate::types::Value::Array(vec![
+            crate::types::Value::Bool(true),
+            crate::types::Value::I64(-1),
+            crate::types::Value::Str(0x2A),
+        ]);
+        assert_eq!(
+            mixed.to_canonical_bytes(),
+            vec![
+                0x04, // tag: Array
+                0x03, 0x00, 0x00, 0x00, // count = 3
+                0x00, 0x01, // Bool(true)
+                0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // I64(-1)
+                0x02, 0x2A, 0x00, 0x00, 0x00, // Str(0x2A)
+            ]
+        );
+
+        let nested = crate::types::Value::Array(vec![
+            crate::types::Value::Array(vec![crate::types::Value::I64(7)]),
+            crate::types::Value::Bool(false),
+        ]);
+        assert_eq!(
+            nested.to_canonical_bytes(),
+            vec![
+                0x04, // tag: outer Array
+                0x02, 0x00, 0x00, 0x00, // outer count = 2
+                0x04, // tag: inner Array
+                0x01, 0x00, 0x00, 0x00, // inner count = 1
+                0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // I64(7)
+                0x00, 0x00, // Bool(false)
+            ]
+        );
+    }
+
+    /// A `Value::Array` nested `MAX_VALUE_ARRAY_DEPTH` + 1 levels deep is a
+    /// typed decode error, not a stack overflow — proves the mid-recursion
+    /// depth check actually fires before unbounded recursion, not just
+    /// that a shallow case happens to pass.
+    #[test]
+    fn value_array_exceeding_max_depth_is_a_typed_decode_error() {
+        let mut v = crate::types::Value::I64(0);
+        for _ in 0..=crate::types::MAX_VALUE_ARRAY_DEPTH {
+            v = crate::types::Value::Array(vec![v]);
+        }
+        let bytes = v.to_canonical_bytes();
+        let err = crate::types::Value::from_canonical_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CanonicalDecodeError::ValueArrayTooDeep { .. }
+        ));
+    }
+
+    /// A claimed `Value::Array` length exceeding `MAX_VALUE_ARRAY_LEN` is
+    /// rejected from the length prefix alone, before attempting to decode
+    /// any (nonexistent) elements.
+    #[test]
+    fn value_array_exceeding_max_len_is_a_typed_decode_error() {
+        let mut w = CanonicalWriter::new();
+        w.write_u8(0x04);
+        w.write_u32((crate::types::MAX_VALUE_ARRAY_LEN as u32) + 1);
+        let bytes = w.into_bytes();
+        let err = crate::types::Value::from_canonical_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CanonicalDecodeError::ValueArrayTooLong { .. }
+        ));
+    }
+
     #[test]
     fn value_round_trips_byte_identically() {
         for value in [
@@ -1308,6 +1435,15 @@ mod tests {
             crate::types::Value::I64(i64::MAX),
             crate::types::Value::Str(7),
             crate::types::Value::Ref(7),
+            crate::types::Value::Array(vec![]),
+            crate::types::Value::Array(vec![
+                crate::types::Value::Bool(true),
+                crate::types::Value::I64(-42),
+            ]),
+            crate::types::Value::Array(vec![crate::types::Value::Array(vec![
+                crate::types::Value::Str(1),
+                crate::types::Value::Ref(2),
+            ])]),
         ] {
             let bytes = value.to_canonical_bytes();
             let decoded = crate::types::Value::from_canonical_bytes(&bytes).unwrap();
@@ -1693,10 +1829,33 @@ mod proptest_round_trip {
         prop_oneof![Just(RecordState::Armed), Just(RecordState::Retired)]
     }
 
+    /// §18 ruling K Part 2 fix: this module's `rollback_flags` generator
+    /// previously constructed only `Value::I64` directly, independent of
+    /// the `arb_value()` strategy in `proptest_round_trip_v2_1h` below —
+    /// exactly the kind of silent embedding-site gap the landing brief
+    /// warned about (a rollback-flags snapshot is a `BTreeMap<u32, Value>`
+    /// exactly like `flags` itself, so it can legitimately hold a
+    /// `Value::Array` now that the variant exists, and this proptest
+    /// module would never have generated one without this fix). Local
+    /// bounded recursive generator rather than importing the other
+    /// module's `arb_value()` — this module already duplicates `arb_uuid()`
+    /// rather than sharing it, matching that pre-existing convention.
+    fn arb_value_incl_array() -> impl Strategy<Value = crate::types::Value> {
+        let leaf = prop_oneof![
+            any::<bool>().prop_map(crate::types::Value::Bool),
+            any::<i64>().prop_map(crate::types::Value::I64),
+            any::<u32>().prop_map(crate::types::Value::Str),
+            any::<u32>().prop_map(crate::types::Value::Ref),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            pvec(inner, 0..8).prop_map(crate::types::Value::Array)
+        })
+    }
+
     fn arb_rollback_flags() -> impl Strategy<Value = Option<std::collections::BTreeMap<u32, crate::types::Value>>> {
         proptest::option::of(proptest::collection::btree_map(
             any::<u32>(),
-            any::<i64>().prop_map(crate::types::Value::I64),
+            arb_value_incl_array(),
             0..4,
         ))
     }
@@ -1821,13 +1980,31 @@ mod proptest_round_trip_v2_1h {
         arb_uuid().prop_map(crate::EffectId::from_uuid)
     }
 
+    /// §18 ruling K Part 2: extended to generate `Value::Array`, bounded
+    /// via proptest's standard `prop_recursive` combinator rather than a
+    /// hand-rolled depth counter — the documented pattern for a recursive
+    /// strategy over a recursive type, so an unbounded proptest run can't
+    /// generate a pathologically deep/large case and blow the test budget.
+    /// Bounds chosen well inside the real (`MAX_VALUE_ARRAY_DEPTH` = 8,
+    /// `MAX_VALUE_ARRAY_LEN` = 4096) production limits — proptest generates
+    /// small-but-real cases for shrinking/coverage, not adversarial ones
+    /// (those are exercised directly by
+    /// `value_array_exceeding_max_depth_is_a_typed_decode_error`/
+    /// `..._max_len_...` above, which need exact boundary values a
+    /// probabilistic strategy wouldn't reliably hit anyway).
     fn arb_value() -> impl Strategy<Value = Value> {
-        prop_oneof![
+        let leaf = prop_oneof![
             any::<bool>().prop_map(Value::Bool),
             any::<i64>().prop_map(Value::I64),
             any::<u32>().prop_map(Value::Str),
             any::<u32>().prop_map(Value::Ref),
-        ]
+        ];
+        leaf.prop_recursive(
+            4,  // max depth
+            64, // max total nodes
+            8,  // items per collection level
+            |inner| pvec(inner, 0..8).prop_map(Value::Array),
+        )
     }
 
     fn arb_wait_state() -> impl Strategy<Value = WaitState> {

@@ -57,7 +57,7 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
     // this serviceTask as a multi-instance activity — its value is
     // validated (must be false) at the serviceTask close tag.
     let mut mi_is_sequential: Option<bool> = None;
-    let mut mi_length_flag: Option<String> = None;
+    let mut mi_collection_flag: Option<String> = None;
     let mut mi_max: Option<u32> = None;
 
     let mut buf = Vec::new();
@@ -90,7 +90,7 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
                     &mut mi_is_sequential,
-                    &mut mi_length_flag,
+                    &mut mi_collection_flag,
                     &mut mi_max,
                 )?;
             }
@@ -119,7 +119,7 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
                     &mut mi_is_sequential,
-                    &mut mi_length_flag,
+                    &mut mi_collection_flag,
                     &mut mi_max,
                 )?;
             }
@@ -148,7 +148,7 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
                     &mut mi_is_sequential,
-                    &mut mi_length_flag,
+                    &mut mi_collection_flag,
                     &mut mi_max,
                 )?;
             }
@@ -228,7 +228,7 @@ fn handle_open_tag(
     in_ffi_task_definition: &mut bool,
     data_object_type_decl: &mut Option<(DataObjectType, DataObjectRole)>,
     mi_is_sequential: &mut Option<bool>,
-    mi_length_flag: &mut Option<String>,
+    mi_collection_flag: &mut Option<String>,
     mi_max: &mut Option<u32>,
 ) -> Result<()> {
     let local = local_name(e.name().as_ref());
@@ -278,7 +278,7 @@ fn handle_open_tag(
                 *current_element = Some(ElementContext::ServiceTask { id, name });
                 *extension_task_type = None;
                 *mi_is_sequential = None;
-                *mi_length_flag = None;
+                *mi_collection_flag = None;
                 *mi_max = None;
             }
         }
@@ -296,21 +296,27 @@ fn handle_open_tag(
         "loopCharacteristics" if *in_extension_elements => {
             // <zeebe:loopCharacteristics inputCollection="<flag>" maxInstances="<n>"/>
             // nested inside <bpmn:multiInstanceLoopCharacteristics>'s own
-            // <bpmn:extensionElements> — real Zeebe's `inputCollection` is
-            // a FEEL expression over an array; this codebase has no
-            // array-valued representation (a real, recorded finding — see
-            // `Instr::V2MiIndexLive`'s doc comment), so `inputCollection`
-            // is interpreted here as the NAME of a flag/data-object
-            // carrying the collection's RUNTIME LENGTH, not the elements.
-            // `maxInstances` is a non-standard, additive attribute on the
-            // same `zeebe:` extension element — Zeebe has no declared-max
-            // concept at all (ruling K delta (a): a forced deviation), and
-            // extending an existing `zeebe:`-namespaced element with one
-            // more attribute is the smallest reasonable addition, rather
-            // than inventing a new namespace or element for it.
+            // <bpmn:extensionElements>. `inputCollection` is interpreted
+            // here (as it was before ruling K Part 2) as the NAME of a
+            // flag/data-object, NOT a FEEL expression over an inline array
+            // literal — real Zeebe's own richer FEEL-expression form is
+            // out of scope. What's changed (ruling K Part 2): that named
+            // flag is now expected to hold the collection's actual
+            // `Value::Array` data at runtime (populated via `orch_flags`
+            // at spawn or `StoreFlag` in-workflow), not merely its `I64`
+            // length — see `Instr::V2MiIndexLive`'s doc comment for why
+            // the two-flag (length + data) design was rejected. The XML
+            // shape itself is unchanged; only the flag's expected runtime
+            // type changed. `maxInstances` is a non-standard, additive
+            // attribute on the same `zeebe:` extension element — Zeebe has
+            // no declared-max concept at all (ruling K delta (a): a forced
+            // deviation), and extending an existing `zeebe:`-namespaced
+            // element with one more attribute is the smallest reasonable
+            // addition, rather than inventing a new namespace or element
+            // for it.
             if let Some(coll) = get_attr_opt(e, "inputCollection") {
                 let stripped = coll.strip_prefix('=').unwrap_or(&coll).trim().to_string();
-                *mi_length_flag = Some(stripped);
+                *mi_collection_flag = Some(stripped);
             }
             if let Some(max_str) = get_attr_opt(e, "maxInstances") {
                 *mi_max = max_str.parse::<u32>().ok();
@@ -552,7 +558,7 @@ fn handle_close_tag(
     in_ffi_task_definition: &mut bool,
     data_object_type_decl: &mut Option<(DataObjectType, DataObjectRole)>,
     mi_is_sequential: &mut Option<bool>,
-    mi_length_flag: &mut Option<String>,
+    mi_collection_flag: &mut Option<String>,
     mi_max: &mut Option<u32>,
 ) -> Result<()> {
     match local {
@@ -601,11 +607,11 @@ fn handle_close_tag(
                             id
                         ));
                     }
-                    let length_flag_name = mi_length_flag.take().ok_or_else(|| {
+                    let collection_flag_name = mi_collection_flag.take().ok_or_else(|| {
                         anyhow!(
                             "serviceTask '{}': multiInstanceLoopCharacteristics has \
                              no <zeebe:loopCharacteristics inputCollection=\"...\"/> \
-                             — the runtime-length flag reference is required",
+                             — the collection flag reference is required",
                             id
                         )
                     })?;
@@ -636,7 +642,7 @@ fn handle_close_tag(
                         id: id.clone(),
                         name,
                         task_type,
-                        length_flag_name,
+                        collection_flag_name,
                         declared_max,
                     });
                     node_map.insert(id, idx);
@@ -1724,12 +1730,12 @@ mod tests {
         match &graph[idx] {
             IRNode::MultiInstance {
                 task_type,
-                length_flag_name,
+                collection_flag_name,
                 declared_max,
                 ..
             } => {
                 assert_eq!(task_type, "verify_doc");
-                assert_eq!(length_flag_name, "doc_count");
+                assert_eq!(collection_flag_name, "doc_count");
                 assert_eq!(*declared_max, 5);
             }
             other => panic!("expected IRNode::MultiInstance, got {:?}", other),

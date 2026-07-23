@@ -142,12 +142,25 @@ pub enum IRNode {
     /// "MI body wraps one inner activity" model, lowered onto ruling H's
     /// `V2Fork`/`V2Join` dynamic-arity mechanism: `declared_max` static
     /// synthesized branches, each running the inner activity's own
-    /// `task_type` if its index is live (`length_flag`'s runtime value),
-    /// skip-to-join otherwise. v2-only (`LoweringTarget::V2`) — no v1
-    /// lowering exists, matching inclusive gateways' and boundary timers'
-    /// own v1/v2 split. XML-only, same as boundary timers: no DSL AST hook
-    /// exists or is added by this construct (checked, not assumed — see
-    /// the V5 plan-doc writeup).
+    /// `task_type` if its index is live (`collection_flag_name`'s runtime
+    /// value), skip-to-join otherwise. v2-only (`LoweringTarget::V2`) — no
+    /// v1 lowering exists, matching inclusive gateways' and boundary
+    /// timers' own v1/v2 split. XML-only, same as boundary timers: no DSL
+    /// AST hook exists or is added by this construct (checked, not
+    /// assumed — see the V5 plan-doc writeup).
+    ///
+    /// **Revised for ruling K Part 2 (per-element value access, landed
+    /// 2026-07-23).** The prior landing's `length_flag_name` field named a
+    /// flag carrying the collection's runtime LENGTH ONLY (an `I64`)
+    /// because no array-valued `Value` existed. `Value::Array` now exists,
+    /// so `length_flag_name` is renamed `collection_flag_name` and now
+    /// names a flag carrying the collection's actual `Value::Array` data —
+    /// length is derived from it, not tracked separately (see
+    /// `Instr::V2MiIndexLive`'s doc comment for why a redundant length
+    /// flag was rejected as a footgun). The BPMN XML shape is unchanged
+    /// (`zeebe:loopCharacteristics inputCollection="<flag-name>"` still
+    /// names one flag); only the runtime type the parser/lowering expect
+    /// that flag to hold has changed.
     MultiInstance {
         id: String,
         name: String,
@@ -156,14 +169,11 @@ pub enum IRNode {
         /// wrapping an `FfiServiceTask`/`HumanWait`/other activity kind is
         /// out of scope for this step.
         task_type: String,
-        /// Name of the data-object/flag carrying the ACTUAL RUNTIME
-        /// collection length (an `I64` value) — NOT the collection's
-        /// elements. Same `flag_name` convention `ConditionExpr` already
-        /// uses for XOR/inclusive-gateway conditions, reused rather than
-        /// inventing a second name-reference shape. See `Instr::V2MiIndexLive`'s
-        /// doc comment for why this codebase has no array-valued
-        /// representation to reference instead.
-        length_flag_name: String,
+        /// Name of the data-object/flag carrying the collection's actual
+        /// `Value::Array` data. Same `flag_name` convention `ConditionExpr`
+        /// already uses for XOR/inclusive-gateway conditions, reused
+        /// rather than inventing a second name-reference shape.
+        collection_flag_name: String,
         /// The artifact-declared maximum instance count (ruling K delta
         /// (a) — Zeebe has no such ceiling; this is a required, forced
         /// deviation, not an oversight). `V2Fork`'s static `targets.len()`

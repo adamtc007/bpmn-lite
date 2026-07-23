@@ -171,9 +171,10 @@ pub enum NodeDto {
         task_type: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bpmn_id: Option<String>,
-        /// Data-object/flag name carrying the actual runtime collection
-        /// length (an `I64` value) — not the collection itself.
-        length_flag: String,
+        /// Data-object/flag name carrying the collection's actual
+        /// `Value::Array` data (§18 ruling K Part 2 — length is derived
+        /// from it, not tracked as a separate `I64` flag).
+        collection_flag: String,
         declared_max: u32,
     },
 }

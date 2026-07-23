@@ -189,6 +189,16 @@ pub fn encode_ffi_inputs(
                 Some(Value::I64(value)) => (*value).into(),
                 Some(Value::Str(value)) => (*value).into(),
                 Some(Value::Ref(value)) => (*value).into(),
+                // §18 ruling K Part 2: `Value::Array` is new and is not a
+                // valid FFI scalar input — this boundary is unrelated to
+                // MI element access (FFI bindings encode one JSON scalar
+                // per declared input field), so a flag holding an array is
+                // a real type mismatch here, not something to silently
+                // flatten/serialize. Fail closed, matching the existing
+                // `WrongType` used for a non-finite `F64` literal above.
+                Some(Value::Array(_)) => {
+                    return Err(FfiBindingError::WrongType(binding.target_field.clone()))
+                }
                 None => return Err(FfiBindingError::MissingValue(binding.target_field.clone())),
             },
             BindingSource::DomainPayloadRef(path) => read_json_path(&domain, path)

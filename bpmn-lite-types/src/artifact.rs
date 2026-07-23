@@ -565,6 +565,14 @@ pub(crate) fn stack_effect(instruction: &Instr) -> (u32, u32) {
         // `V2MiArityCheck` takes no operand and pushes nothing (a runtime
         // assert, not a value producer) — covered by the catch-all below.
         Instr::V2MiIndexLive { .. } => (0, 1),
+        // `V2MiLoadElement` (§18 ruling K Part 2): pushes the resolved MI
+        // element's `Value` — `(0, 1)`, the same shape as `LoadFlag`/
+        // `V2MiIndexLive`, matching this codebase's convention that a
+        // pure operand-stack producer always reports `(0, 1)` regardless
+        // of the pushed value's own runtime type/size (`max_stack` bounds
+        // slot *count*; `Value::Array`'s own size is bounded separately —
+        // see `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH`).
+        Instr::V2MiLoadElement { .. } => (0, 1),
         Instr::Pop | Instr::StoreFlag { .. } | Instr::BrIf { .. } | Instr::BrIfNot { .. } => (1, 0),
         Instr::ExecNative { argc, retc, .. } => (u32::from(*argc), u32::from(*retc)),
         Instr::ExecDslTask { .. } => (0, 0),

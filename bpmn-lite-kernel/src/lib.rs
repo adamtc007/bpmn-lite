@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
+use bpmn_lite_types::canonical::CanonicalEncode;
 use bpmn_lite_types::ffi_bindings::{apply_ffi_outputs, encode_ffi_inputs};
 use bpmn_lite_types::{
     Addr, BufferedMessageMutation, Command, CommandEnvelope, ConcurrencyMutation,
     ConcurrencyRecord, ControlStackDelta, DedupeWrite, DurableEffect, EffectId, EffectMutation,
-    EffectOutput, EffectTerminalState, ErrorClass, ExecutableWorkflow, Fiber, Incident, Instr,
-    JobActivation, JobMutation, JoinId, JoinMutation, JournalCommand, JournalRecord,
+    EffectOutput, EffectTerminalState, ErrorClass, ExecutableWorkflow, Fiber, FlagKey, Incident,
+    Instr, JobActivation, JobMutation, JoinId, JoinMutation, JournalCommand, JournalRecord,
     PersistedSnapshotState, ProcessInstance, ProcessState, RecordCounters, RecordId, RecordKind,
     RecordState, RuntimeEvent, Snapshot, SnapshotEnvelope, TerminalCleanup, TimerKind,
     TimerMutation, TimerRepeatSpec, Transition, TransitionBuilder, Uuid, Value, WaitState,
@@ -78,6 +79,15 @@ pub enum TransitionError {
     /// surface, not dead weight) since no call site constructs it
     /// anymore; retained for any external caller still matching on it.
     RouteNotMatched(String),
+    /// §18 ruling K Part 2. `Instr::V2MiLoadElement` runs only after
+    /// `Instr::V2MiIndexLive` has already confirmed `index < length`
+    /// against the same `collection_flag` — reaching this error means the
+    /// flag's value disagreed between the two checks despite no
+    /// flag-mutating instruction running in between, or the flag was
+    /// never a `Value::Array` at all. A genuine invariant violation, not a
+    /// normal "empty/short collection" outcome — fail closed rather than
+    /// substituting a default value.
+    MultiInstanceElementUnavailable { flag: FlagKey, index: u32 },
 }
 
 impl fmt::Display for TransitionError {
@@ -114,6 +124,12 @@ impl fmt::Display for TransitionError {
             Self::RouteNotMatched(node) => {
                 write!(formatter, "no deterministic route matched at {node}")
             }
+            Self::MultiInstanceElementUnavailable { flag, index } => write!(
+                formatter,
+                "multi-instance element {index} unavailable in flag {flag} \
+                 (collection changed between arity check and load, or is \
+                 not a Value::Array)"
+            ),
         }
     }
 }
@@ -632,6 +648,19 @@ fn ring3_shadow_check(
     Ok(())
 }
 
+/// §18 ruling K Part 2. Shared by `V2MiIndexLive`/`V2MiArityCheck`: the
+/// runtime length of an MI collection, read as `instance.flags[flag]`'s
+/// `Value::Array` length. A missing key or any non-`Array` value defaults
+/// to length 0 — the "legal empty collection" default ruling K item (c)
+/// already ratifies, applied uniformly now that both words read the same
+/// flag the same way instead of one reading an `I64` and one an `Array`.
+fn mi_collection_len(instance: &ProcessInstance, flag: &FlagKey) -> i64 {
+    match instance.flags.get(flag) {
+        Some(Value::Array(items)) => items.len() as i64,
+        _ => 0,
+    }
+}
+
 /// Pure transition function. It performs no I/O and obtains time and identity only
 /// from `DeterministicContext` or the durable command.
 pub fn apply(
@@ -640,7 +669,27 @@ pub fn apply(
     command: &Command,
     context: &DeterministicContext,
 ) -> Result<Transition, TransitionError> {
-    validate_snapshot_limits(workflow, snapshot)?;
+    // §18 ruling K Part 2 defense-in-depth (blind-review finding, see
+    // docs/todo/EOP-PLAN-BPMN-ISA-002.md "poisoned-instance" writeup):
+    // `Command::Cancel`/`Command::Terminate` both unconditionally overwrite
+    // `instance.state` (to `Cancelled`/`Terminated`) and emit a
+    // `TerminalCleanup` without ever reading `instance.flags` or any
+    // fiber's `stack`/`regs` contents (see their arms below — `Cancel`
+    // only reads `fiber.wait` to describe cancelled waits; `Terminate`
+    // only reads a fiber id from `snapshot.fibers().keys()`). Neither
+    // depends on `Value::Array` size/depth being within bounds, so an
+    // instance already poisoned by an oversized/deep `Value::Array` in a
+    // flag (via a path that predates or otherwise evades the gRPC-boundary
+    // check in `bpmn-lite-server/src/grpc.rs::check_orch_flags`) must
+    // still be able to reach `Cancelled`/`Terminated` — otherwise it is a
+    // permanent zombie with no exposed remedy (not `Incidented`, so
+    // `ResolveIncident` does not apply either). The exemption is scoped
+    // to exactly the array-size/depth portion of `validate_snapshot_limits`
+    // — fiber-count and per-fiber stack-length/register-count checks still
+    // run unconditionally for every command, `Cancel`/`Terminate` included,
+    // since those are unrelated to the poisoning and remain load-bearing.
+    let check_arrays = !matches!(command, Command::Cancel { .. } | Command::Terminate);
+    validate_snapshot_limits(workflow, snapshot, check_arrays)?;
     let transition = match command {
         Command::TimerFired { timer, fired_at } => {
             apply_timer(workflow, snapshot, timer, *fired_at, context)
@@ -788,9 +837,17 @@ pub fn apply(
     )))
 }
 
+/// `check_arrays` scopes the `Value::Array` size/depth walk (both the
+/// per-fiber stack/register scan and the `instance.flags` scan below); it
+/// is `false` only for `Command::Cancel`/`Command::Terminate` (see the
+/// call site in `apply` for why that exemption is safe). Fiber-count and
+/// per-fiber stack-length/register-count checks are NOT gated by this flag
+/// — they run for every command unconditionally, `Cancel`/`Terminate`
+/// included, since they are unrelated to `Value::Array` poisoning.
 fn validate_snapshot_limits(
     workflow: &ExecutableWorkflow,
     snapshot: &Snapshot,
+    check_arrays: bool,
 ) -> Result<(), TransitionError> {
     let limits = workflow.envelope().limits();
     if snapshot.fibers().len() > limits.max_fibers() as usize {
@@ -814,6 +871,67 @@ fn validate_snapshot_limits(
                 actual: fiber.regs.len(),
                 limit: u64::from(limits.max_registers()),
             });
+        }
+        // §18 ruling K Part 2 finding: `max_stack`/`max_registers` bound
+        // *slot count*, which was sufficient while every `Value` variant
+        // was fixed-width. `Value::Array` is not — a single stack/register
+        // slot can now hold an arbitrarily large/deep tree, so slot count
+        // alone no longer bounds this fibre's actual frame size. Walk
+        // every `Value` this fibre carries and reject any that exceeds
+        // `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH`. Skipped for
+        // `Cancel`/`Terminate` (`check_arrays == false`) — see doc comment
+        // above.
+        if check_arrays {
+            for value in fiber.stack.iter().chain(fiber.regs.iter()) {
+                if let Err(limit_error) = value.check_array_limits() {
+                    return Err(TransitionError::ResourceLimitExceeded {
+                        resource: "Value::Array size/depth",
+                        actual: match limit_error {
+                            bpmn_lite_types::types::ValueLimitError::TooLong { actual, .. } => {
+                                actual
+                            }
+                            bpmn_lite_types::types::ValueLimitError::TooDeep { max } => {
+                                max as usize
+                            }
+                        },
+                        limit: match limit_error {
+                            bpmn_lite_types::types::ValueLimitError::TooLong { max, .. } => {
+                                max as u64
+                            }
+                            bpmn_lite_types::types::ValueLimitError::TooDeep { max } => {
+                                u64::from(max)
+                            }
+                        },
+                    });
+                }
+            }
+        }
+    }
+    // Same bound, applied to `instance.flags` — this is the boundary that
+    // (on the instance's first `apply` call after spawn/resume) also
+    // catches an oversized/deep `Value::Array` supplied externally via
+    // `orch_flags`. The gRPC boundary (`bpmn-lite-server/src/grpc.rs`,
+    // `check_orch_flags`) now also rejects an oversized/deep array before
+    // it ever reaches `orch_flags`/`instance.flags` in the first place;
+    // this scan remains as the runtime backstop for any instance already
+    // poisoned before that fix landed, or via any other path. Skipped for
+    // `Cancel`/`Terminate` (`check_arrays == false`) — see doc comment
+    // above.
+    if check_arrays {
+        for value in snapshot.instance().flags.values() {
+            if let Err(limit_error) = value.check_array_limits() {
+                return Err(TransitionError::ResourceLimitExceeded {
+                    resource: "Value::Array size/depth (flag)",
+                    actual: match limit_error {
+                        bpmn_lite_types::types::ValueLimitError::TooLong { actual, .. } => actual,
+                        bpmn_lite_types::types::ValueLimitError::TooDeep { max } => max as usize,
+                    },
+                    limit: match limit_error {
+                        bpmn_lite_types::types::ValueLimitError::TooLong { max, .. } => max as u64,
+                        bpmn_lite_types::types::ValueLimitError::TooDeep { max } => u64::from(max),
+                    },
+                });
+            }
         }
     }
     Ok(())
@@ -1037,13 +1155,37 @@ fn apply_tick(
             // already uses for a missing bool flag, and exactly ruling K
             // item (c)'s "empty collection is legal" default, not a
             // special case bolted on here.
-            Instr::V2MiIndexLive { length_flag, index } => {
-                let length = match instance.flags.get(length_flag) {
-                    Some(Value::I64(n)) => *n,
-                    _ => 0,
-                };
+            // §18 ruling K Part 2: `collection_flag` now names a flag
+            // holding the collection's actual `Value::Array`, not a
+            // separate `I64` length — length is derived from `.len()`, a
+            // single source of truth (see the `Instr` doc comment for why
+            // the prior two-flag design was rejected).
+            Instr::V2MiIndexLive {
+                collection_flag,
+                index,
+            } => {
+                let length = mi_collection_len(&instance, collection_flag);
                 let live = i64::from(*index) < length;
                 fiber.stack.push(Value::Bool(live));
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // Only reached on the live path (`V2MiIndexLive` + `BrIfNot`
+            // already confirmed `index < length` against the same flag
+            // immediately before this runs, with no flag-mutating
+            // instruction in between within one straight-line branch).
+            Instr::V2MiLoadElement {
+                collection_flag,
+                index,
+            } => {
+                let element = match instance.flags.get(collection_flag) {
+                    Some(Value::Array(items)) => items.get(*index as usize).cloned(),
+                    _ => None,
+                };
+                let element = element.ok_or(TransitionError::MultiInstanceElementUnavailable {
+                    flag: *collection_flag,
+                    index: *index,
+                })?;
+                fiber.stack.push(element);
                 fiber.pc = fiber.pc.saturating_add(1);
             }
             // Runs once, straight-line, immediately before the MI
@@ -1053,12 +1195,13 @@ fn apply_tick(
             // `ResourceLimitExceeded` reject, not an `Incident` (ruling
             // K's own "not unified with zero-match" text, applied to a
             // different runtime-zero case: this one is over-capacity, not
-            // under).
-            Instr::V2MiArityCheck { length_flag, max } => {
-                let length = match instance.flags.get(length_flag) {
-                    Some(Value::I64(n)) => *n,
-                    _ => 0,
-                };
+            // under). Bounds element *count* only — total encoded size is
+            // bounded separately, see the `Instr` doc comment.
+            Instr::V2MiArityCheck {
+                collection_flag,
+                max,
+            } => {
+                let length = mi_collection_len(&instance, collection_flag);
                 if length > i64::from(*max) {
                     return Err(TransitionError::ResourceLimitExceeded {
                         resource: "multi-instance collection length",
@@ -3144,6 +3287,22 @@ fn value_key(value: &Value) -> String {
         Value::I64(value) => format!("i:{value}"),
         Value::Str(value) => format!("s:{value}"),
         Value::Ref(value) => format!("r:{value}"),
+        // §18 ruling K Part 2: `Value::Array` is new; this correlation-key
+        // dedup helper had no case for it (unreachable via MI itself — MI
+        // never puts a correlation key through this path — but genuinely
+        // reachable if a future caller sets `WaitState::Msg.corr_key` to
+        // an array). Deterministic, unambiguous ("a:" prefix, distinct
+        // from the scalar prefixes above) rather than a panic: hex of the
+        // value's own canonical bytes, which already fully and
+        // deterministically identifies the array's contents.
+        Value::Array(_) => format!(
+            "a:{}",
+            value
+                .to_canonical_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     }
 }
 
@@ -3898,6 +4057,11 @@ fn is_truthy(value: &Value) -> bool {
         Value::I64(value) => *value != 0,
         Value::Str(value) => *value != 0,
         Value::Ref(value) => *value != 0,
+        // §18 ruling K Part 2: non-empty-is-truthy, the same convention
+        // every other collection-bearing language construct in common use
+        // applies (and consistent with this codebase's own `*value != 0`
+        // "non-default is truthy" pattern for the scalar variants above).
+        Value::Array(items) => !items.is_empty(),
     }
 }
 
@@ -4240,6 +4404,149 @@ mod tests {
                 resource: "fiber count",
                 ..
             }
+        ));
+    }
+
+    /// §18 ruling K Part 2 finding: `max_stack`/`max_registers` bound slot
+    /// *count*, which stopped being sufficient the moment `Value::Array`
+    /// existed (a single slot/flag can now be arbitrarily large/deep).
+    /// This proves `validate_snapshot_limits`'s new walk actually rejects
+    /// an over-large `Value::Array` living in `instance.flags` — by TOTAL
+    /// ENCODED SIZE (element count here; see the sibling test below for
+    /// depth), not merely "some limit exists somewhere." A flag holding
+    /// `MAX_VALUE_ARRAY_LEN + 1` elements is a hard, typed reject, the
+    /// same `ResourceLimitExceeded` shape `verified_fiber_limit_is_enforced_before_interpretation`
+    /// above already proves for fiber count.
+    #[test]
+    fn oversized_value_array_in_a_flag_is_rejected_before_interpretation() {
+        let (workflow, snapshot, context) = fixture();
+        let mut instance = snapshot.instance().clone();
+        let oversized_array = Value::Array(
+            (0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_LEN as i64)
+                .map(Value::I64)
+                .collect(),
+        );
+        instance.flags.insert(0, oversized_array);
+        let oversized = Snapshot::new(instance, snapshot.fibers().values().cloned());
+        let error = apply(
+            &workflow,
+            &oversized,
+            &Command::Tick { fiber_id: None },
+            &context,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TransitionError::ResourceLimitExceeded {
+                resource: "Value::Array size/depth (flag)",
+                ..
+            }
+        ));
+    }
+
+    /// Same finding, the depth axis: a `Value::Array` nested deeper than
+    /// `MAX_VALUE_ARRAY_DEPTH` in a flag is rejected the same way, even
+    /// though its element COUNT at every level is tiny (1) — proving the
+    /// bound is genuinely on depth, not merely re-deriving the length
+    /// bound in a different shape.
+    #[test]
+    fn overly_deep_value_array_in_a_flag_is_rejected_before_interpretation() {
+        let (workflow, snapshot, context) = fixture();
+        let mut instance = snapshot.instance().clone();
+        let mut deep = Value::I64(0);
+        for _ in 0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_DEPTH {
+            deep = Value::Array(vec![deep]);
+        }
+        instance.flags.insert(0, deep);
+        let oversized = Snapshot::new(instance, snapshot.fibers().values().cloned());
+        let error = apply(
+            &workflow,
+            &oversized,
+            &Command::Tick { fiber_id: None },
+            &context,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TransitionError::ResourceLimitExceeded {
+                resource: "Value::Array size/depth (flag)",
+                ..
+            }
+        ));
+    }
+
+    /// §18 ruling K Part 2 defense-in-depth: an instance already poisoned
+    /// by an oversized `Value::Array` flag (simulating "poisoned before
+    /// the gRPC-boundary fix landed, or via any other path") must still
+    /// be reachable by `Command::Cancel` — this is the exact zombie
+    /// scenario the blind review found: `apply` used to reject EVERY
+    /// command, `Cancel` included, once `validate_snapshot_limits` saw
+    /// the poisoned flag, leaving no way out (not `Incidented`, so
+    /// `ResolveIncident` did not apply either). `Cancel` succeeds here,
+    /// proving the array-limit exemption (`check_arrays == false` for
+    /// `Cancel`/`Terminate`) actually closes that gap.
+    #[test]
+    fn cancel_succeeds_against_an_already_poisoned_instance() {
+        let (workflow, snapshot, context) = fixture();
+        let mut instance = snapshot.instance().clone();
+        let oversized_array = Value::Array(
+            (0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_LEN as i64)
+                .map(Value::I64)
+                .collect(),
+        );
+        instance.flags.insert(0, oversized_array);
+        let poisoned = Snapshot::new(instance, snapshot.fibers().values().cloned());
+
+        // Sanity: a non-exempt command still rejects against this snapshot
+        // (proves the poison is real, not a fixture mistake).
+        let tick_error = apply(
+            &workflow,
+            &poisoned,
+            &Command::Tick { fiber_id: None },
+            &context,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            tick_error,
+            TransitionError::ResourceLimitExceeded {
+                resource: "Value::Array size/depth (flag)",
+                ..
+            }
+        ));
+
+        let transition = apply(
+            &workflow,
+            &poisoned,
+            &Command::Cancel {
+                reason: "operator cancel".to_string(),
+            },
+            &context,
+        )
+        .expect("Cancel must succeed against an already-poisoned instance");
+        assert!(matches!(
+            transition.next_snapshot().state,
+            ProcessState::Cancelled { .. }
+        ));
+    }
+
+    /// Same finding, `Command::Terminate` — the other command a stuck
+    /// instance needs to be reachable by.
+    #[test]
+    fn terminate_succeeds_against_an_already_poisoned_instance() {
+        let (workflow, snapshot, context) = fixture();
+        let mut instance = snapshot.instance().clone();
+        let mut deep = Value::I64(0);
+        for _ in 0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_DEPTH {
+            deep = Value::Array(vec![deep]);
+        }
+        instance.flags.insert(0, deep);
+        let poisoned = Snapshot::new(instance, snapshot.fibers().values().cloned());
+
+        let transition = apply(&workflow, &poisoned, &Command::Terminate, &context)
+            .expect("Terminate must succeed against an already-poisoned instance");
+        assert!(matches!(
+            transition.next_snapshot().state,
+            ProcessState::Terminated { .. }
         ));
     }
 
@@ -8616,16 +8923,16 @@ mod tests {
             bytecode_version: [26u8; 32],
             program: vec![
                 /*  0 */ Instr::V2Guard { handler: Addr::new(14) },
-                /*  1 */ Instr::V2MiArityCheck { length_flag: 0, max: 2 },
+                /*  1 */ Instr::V2MiArityCheck { collection_flag: 0, max: 2 },
                 /*  2 */ Instr::V2Fork {
                     targets: Box::new([Addr::new(3), Addr::new(7)]),
                     pairing: Addr::new(2),
                 },
-                /*  3 */ Instr::V2MiIndexLive { length_flag: 0, index: 0 },
+                /*  3 */ Instr::V2MiIndexLive { collection_flag: 0, index: 0 },
                 /*  4 */ Instr::BrIfNot { target: Addr::new(11) },
                 /*  5 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
                 /*  6 */ Instr::Jump { target: Addr::new(11) },
-                /*  7 */ Instr::V2MiIndexLive { length_flag: 0, index: 1 },
+                /*  7 */ Instr::V2MiIndexLive { collection_flag: 0, index: 1 },
                 /*  8 */ Instr::BrIfNot { target: Addr::new(11) },
                 /*  9 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
                 /* 10 */ Instr::Jump { target: Addr::new(11) },
@@ -8658,9 +8965,11 @@ mod tests {
         .unwrap();
         let (_, base_snapshot, _context) = fixture();
         let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
-        // Both MI indices (0, 1) live: `length_flag` (key 0) = 2.
+        // Both MI indices (0, 1) live: `collection_flag` (key 0) holds a
+        // 2-element `Value::Array` (§18 ruling K Part 2 — length is derived
+        // from the array itself, no separate `I64` length flag).
         let mut instance = base_snapshot.instance().clone();
-        instance.flags.insert(0, Value::I64(2));
+        instance.flags.insert(0, Value::Array(vec![Value::I64(100), Value::I64(200)]));
         let snapshot = Snapshot::new(instance, [Fiber::new(root_fiber_id, 0)]);
 
         let genesis = SnapshotEnvelope::new(

@@ -3950,13 +3950,19 @@ fn multi_instance_v2_xml(declared_max: u32) -> String {
     )
 }
 
-async fn compile_multi_instance_v2(declared_max: u32) -> (Arc<MemoryStore>, [u8; 32], FlagKey) {
+/// Returns the workflow's `collection_flag` (the flag `V2MiIndexLive`/
+/// `V2MiArityCheck` read as a `Value::Array`, §18 ruling K Part 2 — was an
+/// `I64` length flag before this landing) plus the full artifact so
+/// per-branch element-flag keys can be looked up by name afterward.
+async fn compile_multi_instance_v2(
+    declared_max: u32,
+) -> (Arc<MemoryStore>, ExecutableWorkflow, FlagKey) {
     let store = Arc::new(MemoryStore::new());
     let xml = multi_instance_v2_xml(declared_max);
     let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
     let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
         .expect("v2 multi-instance lowering must verify");
-    let length_flag = *workflow
+    let collection_flag = *workflow
         .envelope()
         .metadata()
         .flag_symbol_table()
@@ -3965,16 +3971,43 @@ async fn compile_multi_instance_v2(declared_max: u32) -> (Arc<MemoryStore>, [u8;
         .map(|(key, _)| key)
         .expect("doc_count must be interned as a flag");
     store.store_artifact(&workflow).await.unwrap();
-    (store, workflow.hash().into_bytes(), length_flag)
+    (store, workflow, collection_flag)
 }
 
-async fn set_length_flag(store: &MemoryStore, instance_id: Uuid, length_flag: FlagKey, length: i64) {
+/// Looks up the `FlagKey` interned for MI branch `index`'s per-branch
+/// element flag (`<node_id>_mi_element_<index>`, `lowering.rs`'s
+/// `lower_multi_instance_v2`). The XML fixture's `serviceTask` id is
+/// `verify_docs`.
+fn mi_element_flag_key(workflow: &ExecutableWorkflow, index: u32) -> FlagKey {
+    let name = format!("verify_docs_mi_element_{index}");
+    *workflow
+        .envelope()
+        .metadata()
+        .flag_symbol_table()
+        .iter()
+        .find(|(_, n)| n.as_str() == name)
+        .map(|(key, _)| key)
+        .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+}
+
+/// Sets the MI collection to a `Value::Array` of `I64` elements (§18
+/// ruling K Part 2 — was `Value::I64(length)` before this landing; length
+/// is now derived from the array itself, not tracked separately).
+async fn set_collection(
+    store: &MemoryStore,
+    instance_id: Uuid,
+    collection_flag: FlagKey,
+    elements: &[i64],
+) {
     let mut inst = store
         .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
         .await
         .unwrap()
         .unwrap();
-    inst.flags.insert(length_flag, Value::I64(length));
+    inst.flags.insert(
+        collection_flag,
+        Value::Array(elements.iter().map(|n| Value::I64(*n)).collect()),
+    );
     bpmn_lite_store::store::commit_snapshot(store, "test", inst)
         .await
         .unwrap();
@@ -4004,14 +4037,15 @@ async fn drain_to_terminal(engine: &BpmnLiteEngine, store: &MemoryStore, instanc
 /// work, the barrier retires normally, the instance completes.
 #[tokio::test]
 async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
-    let (store, bytecode_version, length_flag) = compile_multi_instance_v2(3).await;
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
         .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-1")
         .await
         .unwrap();
-    set_length_flag(&store, instance_id, length_flag, 3).await;
+    set_collection(&store, instance_id, collection_flag, &[100, 200, 300]).await;
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -4037,20 +4071,96 @@ async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
     );
 }
 
+/// §18 ruling K Part 2 (the reason this landing exists): each branch must
+/// receive its OWN element's value, not merely know whether its index is
+/// live. Proven end to end through the real `orch_flags` job-dispatch
+/// pipeline (`ExecNative`'s handler snapshots `instance.flags` into
+/// `JobActivation.orch_flags` at the moment it runs) — not by inspecting
+/// kernel-internal state directly. Each branch's `ExecNative` sits at a
+/// distinct compiled address (branches are laid out at fixed, increasing
+/// offsets in index order), and no `debug_map` entry exists for it
+/// specifically (only the MI node's own `base` address is recorded), so
+/// the kernel's `service_task_id` fallback is `"pc_<address>"` — this is
+/// used here only to recover which job came from which branch index (by
+/// sorting on the numeric pc), not asserted as meaningful behavior in its
+/// own right.
+#[tokio::test]
+async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(2).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-elements")
+        .await
+        .unwrap();
+    let elements = [111i64, 222i64];
+    set_collection(&store, instance_id, collection_flag, &elements).await;
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let mut jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 2, "both branches must do real work (full collection)");
+
+    // Recover branch index via the "pc_<address>" service_task_id
+    // fallback — branch 0's ExecNative compiles to a lower address than
+    // branch 1's, since branches are synthesized in index order.
+    jobs.sort_by_key(|job| {
+        job.service_task_id
+            .strip_prefix("pc_")
+            .and_then(|n| n.parse::<u32>().ok())
+            .expect("MI branch ExecNative has no debug_map entry of its own, so service_task_id must be the pc_<addr> fallback")
+    });
+
+    for (index, job) in jobs.iter().enumerate() {
+        let element_flag = mi_element_flag_key(&workflow, index as u32);
+        let expected_key = format!("flag_{element_flag}");
+        assert_eq!(
+            job.orch_flags.get(&expected_key),
+            Some(&Value::I64(elements[index])),
+            "branch {index}'s job must carry its OWN element ({}) under {expected_key}, not \
+             some other branch's — got orch_flags = {:?}",
+            elements[index],
+            job.orch_flags
+        );
+    }
+    // The two branches' own element flags must differ — proving this
+    // isn't "some value arrived" but genuinely distinct per-branch
+    // delivery.
+    let flag_0 = mi_element_flag_key(&workflow, 0);
+    let flag_1 = mi_element_flag_key(&workflow, 1);
+    assert_ne!(flag_0, flag_1, "each branch must write its OWN element flag key");
+
+    for job in &jobs {
+        let payload = "{}";
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        engine
+            .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+            .await
+            .unwrap();
+    }
+    let inst = drain_to_terminal(&engine, &store, instance_id).await;
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
 /// (b) partial collection (length < declared_max): some fibres do real
 /// work, the rest skip straight to `V2Join` — the barrier still retires
 /// correctly on the reduced arrival count that matters (real-work count),
 /// and the instance completes.
 #[tokio::test]
 async fn t_mi_v2_partial_collection_some_fibres_skip() {
-    let (store, bytecode_version, length_flag) = compile_multi_instance_v2(3).await;
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
         .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-2")
         .await
         .unwrap();
-    set_length_flag(&store, instance_id, length_flag, 1).await;
+    set_collection(&store, instance_id, collection_flag, &[100]).await;
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -4080,14 +4190,15 @@ async fn t_mi_v2_partial_collection_some_fibres_skip() {
 /// the gateway-side behavior this must differ from.
 #[tokio::test]
 async fn t_mi_v2_empty_collection_completes_without_incident() {
-    let (store, bytecode_version, length_flag) = compile_multi_instance_v2(3).await;
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
         .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-3")
         .await
         .unwrap();
-    set_length_flag(&store, instance_id, length_flag, 0).await;
+    set_collection(&store, instance_id, collection_flag, &[]).await;
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
@@ -4115,14 +4226,15 @@ async fn t_mi_v2_empty_collection_completes_without_incident() {
 /// `Instr::V2MiArityCheck`'s doc comment).
 #[tokio::test]
 async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
-    let (store, bytecode_version, length_flag) = compile_multi_instance_v2(2).await;
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(2).await;
+    let bytecode_version = workflow.hash().into_bytes();
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
         .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-4")
         .await
         .unwrap();
-    set_length_flag(&store, instance_id, length_flag, 5).await;
+    set_collection(&store, instance_id, collection_flag, &[100, 200, 300, 400, 500]).await;
 
     let err = engine
         .tick_instance(instance_id)

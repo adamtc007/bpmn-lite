@@ -167,6 +167,18 @@ fn value_key(v: &Value) -> String {
         Value::I64(n) => format!("i:{n}"),
         Value::Str(s) => format!("s:{s}"),
         Value::Ref(r) => format!("r:{r}"),
+        // §18 ruling K Part 2: `Value::Array` is new. Same "a:" + hex of
+        // canonical bytes convention as `bpmn-lite-kernel`'s own
+        // `value_key` — deterministic and unambiguous, distinct from the
+        // scalar prefixes above, rather than a panic on an unreachable-
+        // until-now match arm.
+        Value::Array(_) => format!(
+            "a:{}",
+            v.to_canonical_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     }
 }
 
