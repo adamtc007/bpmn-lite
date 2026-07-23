@@ -436,11 +436,40 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
             }
         }
 
-        // v1 constraint: single inclusive pair per process
+        // At most one inclusive-gateway pair per process — NOT a v1-era
+        // holdover (v1 no longer exists in this codebase; §18 ruling H
+        // made dynamic-arity inclusive gateways IN for v2). Investigated
+        // 2026-07-23 (see `lowering.rs`'s
+        // `test_two_sequential_inclusive_pairs_lower_correctly` doc
+        // comment for the full writeup): `lowering.rs`'s
+        // `inclusive_pairing_stack` pairs a diverging `GatewayInclusive`
+        // with its converging counterpart via a stack popped in `lower()`'s
+        // BFS traversal order, not the graph's true nesting structure. For
+        // exactly one pair this is trivially correct (stack never holds
+        // more than one element). For two or more pairs, ANY topology
+        // where a second pair's diverging node is discovered before the
+        // first pair's converging node is reached — including something
+        // as simple as one inclusive pair nested in ONE branch of another,
+        // with the outer gateway's OTHER branch a plain shorter task —
+        // pops the wrong still-open diverging node and silently emits a
+        // `BrIfNot` header that skips to the wrong join address. Only
+        // fully sequential (non-overlapping) pairs are confirmed safe by
+        // hand construction; there is no structural check here (or
+        // anywhere else in this pipeline) that distinguishes "sequential"
+        // from "overlapping in BFS order," so the count-based rejection
+        // stays in place for the general case until either the pairing
+        // mechanism is replaced with something nesting-aware (mirroring
+        // `check_gateway_and_nesting`'s DFS-based approach, but computing
+        // fork↔join identity, not just validating counts) or a
+        // topology-aware "sequential pairs only" admission check is added
+        // — both are open design forks, not decided here.
         if diverging_count > 1 {
             errors.push(VerifyError {
                 message: format!(
-                    "Multiple diverging inclusive gateways ({}) not supported in v1",
+                    "Multiple diverging inclusive gateways ({}) not yet supported: \
+                     lower()'s BFS-order pairing stack can mispair overlapping/nested \
+                     GatewayInclusive pairs — see verifier.rs's \"9. Inclusive gateway \
+                     validation\" doc comment",
                     diverging_count
                 ),
                 element_id: None,
@@ -449,7 +478,10 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
         if converging_count > 1 {
             errors.push(VerifyError {
                 message: format!(
-                    "Multiple converging inclusive gateways ({}) not supported in v1",
+                    "Multiple converging inclusive gateways ({}) not yet supported: \
+                     lower()'s BFS-order pairing stack can mispair overlapping/nested \
+                     GatewayInclusive pairs — see verifier.rs's \"9. Inclusive gateway \
+                     validation\" doc comment",
                     converging_count
                 ),
                 element_id: None,
@@ -997,6 +1029,201 @@ mod tests {
                 .iter()
                 .any(|e| e.message.contains("does not reference a task")),
             "BoundaryError attached to a nonexistent host must still be rejected, got: {errors:?}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  V&S Q-inclusive-multi (investigated 2026-07-23, NOT lifted):
+    //  regression coverage locking the count-based §9 rejection to the
+    //  specific mispairing hazards it currently guards against. See
+    //  `lowering.rs`'s `test_two_sequential_inclusive_pairs_lower_
+    //  correctly` doc comment and this module's §9 doc comment for the
+    //  full writeup. A future fix that replaces this blanket rejection
+    //  with a topology-aware check MUST still reject both graphs below.
+    // ═══════════════════════════════════════════════════════════
+
+    /// Two `GatewayInclusive` pairs, one nested inside EACH branch of a
+    /// `GatewayAnd` fork (branch B deliberately longer than branch A, to
+    /// skew `lower()`'s BFS discovery order). Hand-confirmed to mispair
+    /// `inclusive_pairing_stack` when the §9 rejection is bypassed
+    /// (a branch-A `BrIfNot` header resolves to branch B's join address).
+    /// Must stay rejected.
+    #[test]
+    fn test_two_nested_inclusive_pairs_in_and_branches_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let and_fork = graph.add_node(IRNode::GatewayAnd {
+            id: "and_fork".to_string(), name: "AndFork".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let and_join = graph.add_node(IRNode::GatewayAnd {
+            id: "and_join".to_string(), name: "AndJoin".to_string(), direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+
+        let ig_fork_a = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_fork_a".to_string(), name: "ForkA".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let ig_join_a = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_join_a".to_string(), name: "JoinA".to_string(), direction: GatewayDirection::Converging,
+        });
+        let a1 = graph.add_node(IRNode::ServiceTask { id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
+        let a2 = graph.add_node(IRNode::ServiceTask { id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
+
+        let ig_fork_b = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_fork_b".to_string(), name: "ForkB".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let ig_join_b = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_join_b".to_string(), name: "JoinB".to_string(), direction: GatewayDirection::Converging,
+        });
+        let b1 = graph.add_node(IRNode::ServiceTask { id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
+        let b2 = graph.add_node(IRNode::ServiceTask { id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
+        let b3 = graph.add_node(IRNode::ServiceTask { id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
+        let b_pre = graph.add_node(IRNode::ServiceTask { id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
+
+        graph.add_edge(start, and_fork, IREdge { id: "f0".to_string(), condition: None });
+        graph.add_edge(and_fork, ig_fork_a, IREdge { id: "fa0".to_string(), condition: None });
+        graph.add_edge(ig_fork_a, a1, IREdge { id: "fa1".to_string(), condition: None });
+        graph.add_edge(ig_fork_a, a2, IREdge { id: "fa2".to_string(), condition: None });
+        graph.add_edge(a1, ig_join_a, IREdge { id: "fa3".to_string(), condition: None });
+        graph.add_edge(a2, ig_join_a, IREdge { id: "fa4".to_string(), condition: None });
+        graph.add_edge(ig_join_a, and_join, IREdge { id: "fa5".to_string(), condition: None });
+        graph.add_edge(and_fork, b_pre, IREdge { id: "fb_pre".to_string(), condition: None });
+        graph.add_edge(b_pre, ig_fork_b, IREdge { id: "fb0".to_string(), condition: None });
+        graph.add_edge(ig_fork_b, b1, IREdge { id: "fb1".to_string(), condition: None });
+        graph.add_edge(ig_fork_b, b2, IREdge { id: "fb2".to_string(), condition: None });
+        graph.add_edge(ig_fork_b, b3, IREdge { id: "fb3".to_string(), condition: None });
+        graph.add_edge(b1, ig_join_b, IREdge { id: "fb4".to_string(), condition: None });
+        graph.add_edge(b2, ig_join_b, IREdge { id: "fb5".to_string(), condition: None });
+        graph.add_edge(b3, ig_join_b, IREdge { id: "fb6".to_string(), condition: None });
+        graph.add_edge(ig_join_b, and_join, IREdge { id: "fb7".to_string(), condition: None });
+        graph.add_edge(and_join, end, IREdge { id: "fend".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors.iter().any(|e| e.message.contains("Multiple diverging inclusive gateways")),
+            "two independently-nested inclusive pairs must still be rejected, got: {errors:?}"
+        );
+    }
+
+    /// A `GatewayInclusive` pair nested inside ONE branch of an outer
+    /// `GatewayInclusive` pair, with the outer's OTHER branch a plain leaf
+    /// task. Hand-confirmed to mispair even though there is no sibling
+    /// `GatewayAnd` involved and no independent second gateway pair racing
+    /// it — the outer pair's own shorter leaf branch alone is enough to
+    /// skew BFS order ahead of the nested pair's join. Must stay rejected.
+    #[test]
+    fn test_inclusive_pair_nested_in_single_outer_branch_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let outer_fork = graph.add_node(IRNode::GatewayInclusive {
+            id: "outer_fork".to_string(), name: "OuterFork".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let outer_join = graph.add_node(IRNode::GatewayInclusive {
+            id: "outer_join".to_string(), name: "OuterJoin".to_string(), direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+        let leaf = graph.add_node(IRNode::ServiceTask { id: "leaf".to_string(), name: "Leaf".to_string(), task_type: "leaf".to_string() });
+        let inner_fork = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_fork".to_string(), name: "InnerFork".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let inner_join = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_join".to_string(), name: "InnerJoin".to_string(), direction: GatewayDirection::Converging,
+        });
+        let c1 = graph.add_node(IRNode::ServiceTask { id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
+        let c2 = graph.add_node(IRNode::ServiceTask { id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
+
+        let cond = |flag: &str| Some(ConditionExpr { flag_name: flag.to_string(), op: ConditionOp::Eq, literal: ConditionLiteral::Bool(true) });
+
+        graph.add_edge(start, outer_fork, IREdge { id: "f0".to_string(), condition: None });
+        graph.add_edge(outer_fork, leaf, IREdge { id: "f1".to_string(), condition: cond("flag_leaf") });
+        graph.add_edge(leaf, outer_join, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(outer_fork, inner_fork, IREdge { id: "f3".to_string(), condition: cond("flag_inner") });
+        graph.add_edge(inner_fork, c1, IREdge { id: "f4".to_string(), condition: cond("flag_c1") });
+        graph.add_edge(inner_fork, c2, IREdge { id: "f5".to_string(), condition: cond("flag_c2") });
+        graph.add_edge(c1, inner_join, IREdge { id: "f6".to_string(), condition: None });
+        graph.add_edge(c2, inner_join, IREdge { id: "f7".to_string(), condition: None });
+        graph.add_edge(inner_join, outer_join, IREdge { id: "f8".to_string(), condition: None });
+        graph.add_edge(outer_join, end, IREdge { id: "f9".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors.iter().any(|e| e.message.contains("Multiple diverging inclusive gateways")),
+            "inclusive pair nested in a single outer branch must still be rejected, got: {errors:?}"
+        );
+    }
+
+    /// Adjacent finding (out of scope to fix here, recorded so it isn't
+    /// lost): the SAME BFS-order-stack mispairing hazard the two tests
+    /// above lock down for `GatewayInclusive` ALSO pre-exists in
+    /// `fork_pairing`, `GatewayAnd`'s own analogous pairing mechanism —
+    /// confirmed by hand construction on the `GatewayAnd`-only version of
+    /// the sibling-nested-pairs graph above (a `V2Join.pairing` resolved
+    /// to the WRONG sibling branch's fork address). It happens to be
+    /// masked today: `check_gateway_and_nesting`'s DFS-second-visit SESE
+    /// check (§4a, immediately below) rejects that exact topology — but
+    /// for an unrelated/inaccurate reason ("Unmatched GatewayAnd
+    /// (converging): no open diverging GatewayAnd found"), not because it
+    /// detects the pairing hazard specifically;
+    /// the topology is in fact genuinely well-nested (SESE), just
+    /// misclassified as not by this DFS heuristic. This test locks that
+    /// current (accidental) protection in place — if a future fix to
+    /// `check_gateway_and_nesting` relaxes it to correctly ADMIT this
+    /// well-nested topology without ALSO fixing `fork_pairing`'s
+    /// underlying BFS-order defect, this test will start failing (no
+    /// error) and that is the point: it is a live-wire warning, not a
+    /// spurious one.
+    #[test]
+    fn test_two_nested_and_pairs_in_and_branches_currently_rejected_by_sese_check() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let outer_fork = graph.add_node(IRNode::GatewayAnd {
+            id: "outer_fork".to_string(), name: "OuterFork".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let outer_join = graph.add_node(IRNode::GatewayAnd {
+            id: "outer_join".to_string(), name: "OuterJoin".to_string(), direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+        let inner_fork_a = graph.add_node(IRNode::GatewayAnd {
+            id: "inner_fork_a".to_string(), name: "InnerForkA".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let inner_join_a = graph.add_node(IRNode::GatewayAnd {
+            id: "inner_join_a".to_string(), name: "InnerJoinA".to_string(), direction: GatewayDirection::Converging,
+        });
+        let a1 = graph.add_node(IRNode::ServiceTask { id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
+        let a2 = graph.add_node(IRNode::ServiceTask { id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
+        let inner_fork_b = graph.add_node(IRNode::GatewayAnd {
+            id: "inner_fork_b".to_string(), name: "InnerForkB".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let inner_join_b = graph.add_node(IRNode::GatewayAnd {
+            id: "inner_join_b".to_string(), name: "InnerJoinB".to_string(), direction: GatewayDirection::Converging,
+        });
+        let b1 = graph.add_node(IRNode::ServiceTask { id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
+        let b2 = graph.add_node(IRNode::ServiceTask { id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
+        let b3 = graph.add_node(IRNode::ServiceTask { id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
+        let b_pre = graph.add_node(IRNode::ServiceTask { id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
+
+        graph.add_edge(start, outer_fork, IREdge { id: "f0".to_string(), condition: None });
+        graph.add_edge(outer_fork, inner_fork_a, IREdge { id: "fa0".to_string(), condition: None });
+        graph.add_edge(inner_fork_a, a1, IREdge { id: "fa1".to_string(), condition: None });
+        graph.add_edge(inner_fork_a, a2, IREdge { id: "fa2".to_string(), condition: None });
+        graph.add_edge(a1, inner_join_a, IREdge { id: "fa3".to_string(), condition: None });
+        graph.add_edge(a2, inner_join_a, IREdge { id: "fa4".to_string(), condition: None });
+        graph.add_edge(inner_join_a, outer_join, IREdge { id: "fa5".to_string(), condition: None });
+        graph.add_edge(outer_fork, b_pre, IREdge { id: "fb_pre".to_string(), condition: None });
+        graph.add_edge(b_pre, inner_fork_b, IREdge { id: "fb0".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b1, IREdge { id: "fb1".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b2, IREdge { id: "fb2".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b3, IREdge { id: "fb3".to_string(), condition: None });
+        graph.add_edge(b1, inner_join_b, IREdge { id: "fb4".to_string(), condition: None });
+        graph.add_edge(b2, inner_join_b, IREdge { id: "fb5".to_string(), condition: None });
+        graph.add_edge(b3, inner_join_b, IREdge { id: "fb6".to_string(), condition: None });
+        graph.add_edge(inner_join_b, outer_join, IREdge { id: "fb7".to_string(), condition: None });
+        graph.add_edge(outer_join, end, IREdge { id: "fend".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors.iter().any(|e| e.message.contains("Unmatched GatewayAnd (converging)")),
+            "expected the current (accidental) SESE-check rejection, got: {errors:?}"
         );
     }
 }

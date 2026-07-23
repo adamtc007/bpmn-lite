@@ -167,7 +167,16 @@ pub fn validate_dto(dto: &WorkflowGraphDto) -> Vec<ValidationError> {
         }
     }
 
-    // V10: At most one InclusiveGateway pair
+    // V10: At most one InclusiveGateway pair. NOT a v1-era restriction (v1
+    // no longer exists in this codebase) — mirrors
+    // `bpmn-lite-compiler/src/verifier.rs`'s "9. Inclusive gateway
+    // validation" rejection at the DTO layer: `lowering.rs`'s
+    // `inclusive_pairing_stack` pairs fork/join identity via a stack
+    // popped in BFS-traversal order, which mispairs overlapping/nested
+    // GatewayInclusive pairs (confirmed 2026-07-23 by hand construction —
+    // see the compiler-side doc comment for the full writeup). Only fully
+    // sequential pairs are known-safe; there is no structural check
+    // distinguishing that from the general (unsafe) case yet.
     let inclusive_diverging = dto
         .nodes
         .iter()
@@ -197,7 +206,9 @@ pub fn validate_dto(dto: &WorkflowGraphDto) -> Vec<ValidationError> {
     if inclusive_diverging > 1 || inclusive_converging > 1 {
         errors.push(ValidationError {
             rule: "V10".to_string(),
-            message: "Multiple inclusive gateway pairs not supported (v1)".to_string(),
+            message: "Multiple inclusive gateway pairs not yet supported: the v2 lowering's \
+                BFS-order pairing stack can mispair overlapping/nested GatewayInclusive pairs"
+                .to_string(),
         });
     }
 

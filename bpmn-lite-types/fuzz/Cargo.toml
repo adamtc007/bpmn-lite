@@ -1,0 +1,30 @@
+[package]
+name = "bpmn-lite-types-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.bpmn-lite-types]
+path = ".."
+
+[[bin]]
+name = "canonical_decode"
+path = "fuzz_targets/canonical_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonical_decode_value"
+path = "fuzz_targets/canonical_decode_value.rs"
+test = false
+doc = false
+bench = false
