@@ -423,6 +423,14 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         });
         w.write_option(&self.rollback_session_stack, |w, s| w.write_str(s));
         w.write_option(&self.opened_at, |w, a| a.canonical_encode(w));
+        // BoundaryError v2 migration: armed error-match routes. Encoded
+        // structurally (length-prefixed sequence of `(Option<code>, Addr)`
+        // pairs), same convention `rollback_flags`/`rollback_join_expected`
+        // already use for their own structural Vec/Map content.
+        w.write_seq(self.error_routes.iter(), |w, (code, addr)| {
+            w.write_option(code, |w, c| w.write_str(c));
+            addr.canonical_encode(w);
+        });
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
         let id = crate::concurrency::RecordId::canonical_decode(r)?;
@@ -458,6 +466,11 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             .read_option(|r| r.read_str())?
             .map(String::into_boxed_str);
         let opened_at = r.read_option(crate::types::Addr::canonical_decode)?;
+        let error_routes = r.read_seq(|r| -> Result<(Option<Box<str>>, crate::types::Addr), CanonicalDecodeError> {
+            let code = r.read_option(|r| r.read_str())?.map(String::into_boxed_str);
+            let addr = crate::types::Addr::canonical_decode(r)?;
+            Ok((code, addr))
+        })?;
         Ok(Self {
             id,
             kind,
@@ -471,6 +484,7 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             rollback_join_expected,
             rollback_session_stack,
             opened_at,
+            error_routes,
         })
     }
 }
@@ -1263,6 +1277,8 @@ mod tests {
             0x00,
             // opened_at: None (V&S §15 v0.7 ruling F)
             0x00,
+            // error_routes: count = 0 (BoundaryError v2 migration)
+            0x00, 0x00, 0x00, 0x00,
             // -- record 2: id = Uuid::from_u128(2) --
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
@@ -1289,6 +1305,8 @@ mod tests {
             0x00,
             // opened_at: None (V&S §15 v0.7 ruling F)
             0x00,
+            // error_routes: count = 0 (BoundaryError v2 migration)
+            0x00, 0x00, 0x00, 0x00,
         ];
         assert_eq!(bytes, golden, "canonical encoding drifted from the committed golden bytes — this is exactly the R1 risk V2.1 exists to catch; any change here must be a reviewed, deliberate encoding change, not an incidental one");
     }
@@ -1321,10 +1339,64 @@ mod tests {
         // Presence tags for the three new A3 fields must all be 0x01
         // (Some), not 0x00 — the concrete receipt that `Some` content, not
         // merely a `None` tag, survived the round trip.
-        let flags_tag_and_beyond = &bytes[bytes.len() - 60..];
+        // Window widened by 4 bytes (was 60) to account for the trailing
+        // `error_routes: count = 0` u32 the BoundaryError v2 migration
+        // appended after `opened_at` — the 0x01 presence tags this
+        // assertion looks for now sit 4 bytes further from the end.
+        let flags_tag_and_beyond = &bytes[bytes.len() - 64..];
         assert!(
             flags_tag_and_beyond.contains(&0x01),
             "expected at least one 0x01 (Some) presence tag among the tail A3 fields"
+        );
+    }
+
+    /// BoundaryError v2 migration golden-bytes fixture: a record with a
+    /// POPULATED `error_routes` (one specific-code entry, one catch-all)
+    /// — the companion to `golden_bytes_concurrency_table`'s `count = 0`
+    /// case and `golden_bytes_concurrency_record_guard_r_rollback_set`'s
+    /// A3-fields-populated case, neither of which exercises non-empty
+    /// `error_routes` content. Independent blind review (2026-07-23) flagged
+    /// this as a real coverage gap: the proptest round-trip below proves
+    /// `encode(decode(x)) == x`, which can't catch a change that stays
+    /// self-consistent while silently altering the on-wire layout — only a
+    /// fixed-byte lock catches that, "exactly the R1 risk V2.1 exists to
+    /// catch."
+    #[test]
+    fn golden_bytes_concurrency_record_populated_error_routes() {
+        let mut record = ConcurrencyRecord::new(
+            RecordId::new(Uuid::from_u128(11)),
+            RecordKind::Guard { interrupting: true },
+        );
+        record.error_routes = vec![
+            (Some("SANCTIONS_HIT".to_string().into_boxed_str()), crate::types::Addr::new(6)),
+            (None, crate::types::Addr::new(8)),
+        ];
+
+        let bytes = record.to_canonical_bytes();
+        let decoded = ConcurrencyRecord::from_canonical_bytes(&bytes)
+            .expect("a freshly-encoded record with populated error_routes must always decode");
+        assert_eq!(decoded, record, "round-trip must be a fixed point");
+        assert_eq!(decoded.to_canonical_bytes(), bytes, "canonicalize(decode(b)) == b");
+
+        // Fixed-byte lock on the `error_routes` tail specifically: count
+        // (u32le = 2), then per-entry (`Option<Box<str>>` tag+content via
+        // `write_str`'s own u32le length prefix, `Addr` as u32le) in
+        // insertion order — specific-code entry first, catch-all second,
+        // matching what was actually pushed above. All multi-byte integers
+        // in this format are little-endian (`write_u32`/`write_bytes`).
+        let error_routes_tail = &bytes[bytes.len() - 31..];
+        let expected_tail: &[u8] = &[
+            0x02, 0x00, 0x00, 0x00, // error_routes: count = 2 (u32le)
+            0x01, // entry 0: Option tag = Some
+            0x0d, 0x00, 0x00, 0x00, // "SANCTIONS_HIT" length = 13 (u32le)
+            b'S', b'A', b'N', b'C', b'T', b'I', b'O', b'N', b'S', b'_', b'H', b'I', b'T',
+            0x06, 0x00, 0x00, 0x00, // Addr(6) (u32le)
+            0x00, // entry 1: Option tag = None
+            0x08, 0x00, 0x00, 0x00, // Addr(8) (u32le)
+        ];
+        assert_eq!(
+            error_routes_tail, expected_tail,
+            "canonical encoding of populated error_routes drifted from the committed golden bytes"
         );
     }
 
@@ -1864,6 +1936,26 @@ mod proptest_round_trip {
         proptest::option::of(proptest::collection::btree_map(any::<u32>(), any::<u16>(), 0..4))
     }
 
+    /// BoundaryError v2 migration: `ConcurrencyRecord::error_routes`
+    /// generator — a `Vec` of `(Option<code>, Addr)` pairs, same shape the
+    /// real field carries. Not sorted by this generator (the type itself
+    /// doesn't enforce catch-all-last ordering; that's a kernel/verifier
+    /// invariant on well-formed programs, not a canonical-encoding
+    /// constraint) — the round-trip law under test doesn't care about
+    /// element order, only that it survives unchanged.
+    fn arb_error_routes() -> impl Strategy<Value = Vec<(Option<Box<str>>, Addr)>> {
+        pvec(
+            (proptest::option::of(".{0,12}"), any::<u32>()),
+            0..4,
+        )
+        .prop_map(|entries| {
+            entries
+                .into_iter()
+                .map(|(code, addr)| (code.map(String::into_boxed_str), Addr::new(addr)))
+                .collect()
+        })
+    }
+
     fn arb_record() -> impl Strategy<Value = ConcurrencyRecord> {
         (
             (
@@ -1881,6 +1973,7 @@ mod proptest_round_trip {
             arb_rollback_join_expected(),
             proptest::option::of(".{0,16}"),
             proptest::option::of(any::<u32>()),
+            arb_error_routes(),
         )
             .prop_map(
                 |(
@@ -1889,6 +1982,7 @@ mod proptest_round_trip {
                     rollback_join_expected,
                     rollback_session_stack,
                     opened_at,
+                    error_routes,
                 )| {
                     ConcurrencyRecord {
                         id: RecordId::new(id),
@@ -1903,6 +1997,7 @@ mod proptest_round_trip {
                         rollback_join_expected,
                         rollback_session_stack: rollback_session_stack.map(String::into_boxed_str),
                         opened_at: opened_at.map(Addr::new),
+                        error_routes,
                     }
                 },
             )

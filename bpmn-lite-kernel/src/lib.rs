@@ -275,7 +275,7 @@ fn materialize_snapshot(
     let mut concurrency_table = prior.concurrency_table().clone();
     for mutation in transition.concurrency_mutations() {
         match mutation {
-            ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+            ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
             ConcurrencyMutation::Retire(id) => {
                 if let Some(record) = concurrency_table.get_mut(*id) {
                     record.state = RecordState::Retired;
@@ -478,7 +478,7 @@ fn derive_post_transition_frame(
     let mut table = snapshot.concurrency_table().clone();
     for mutation in transition.concurrency_mutations() {
         match mutation {
-            ConcurrencyMutation::Insert(record) => table.insert(record.clone()),
+            ConcurrencyMutation::Insert(record) => table.insert((**record).clone()),
             ConcurrencyMutation::Retire(id) => {
                 if let Some(record) = table.get_mut(*id) {
                     record.state = RecordState::Retired;
@@ -1689,7 +1689,7 @@ fn apply_tick(
                 record.members.insert(fiber.fiber_id);
                 changes
                     .concurrency_mutations
-                    .push(ConcurrencyMutation::Insert(record));
+                    .push(ConcurrencyMutation::Insert(Box::new(record)));
                 fiber.control_stack.push(record_id);
                 changes.control_stack_deltas.push(ControlStackDelta::Push {
                     fiber_id: fiber.fiber_id,
@@ -1772,7 +1772,7 @@ fn apply_tick(
                 });
                 changes
                     .concurrency_mutations
-                    .push(ConcurrencyMutation::Insert(record));
+                    .push(ConcurrencyMutation::Insert(Box::new(record)));
                 // K-1/K-2 (V4.2): the children inherit every ancestor
                 // handle already on the forking fibre's own stack (e.g. an
                 // enclosing `V2Guard`), and the forking fibre itself is
@@ -1872,7 +1872,7 @@ fn apply_tick(
                 } else {
                     changes
                         .concurrency_mutations
-                        .push(ConcurrencyMutation::Insert(record));
+                        .push(ConcurrencyMutation::Insert(Box::new(record)));
                     changes.events.push(RuntimeEvent::V2JoinArrived {
                         record_id: handle,
                         fiber_id: fiber.fiber_id,
@@ -1900,7 +1900,7 @@ fn apply_tick(
                 };
                 changes
                     .concurrency_mutations
-                    .push(ConcurrencyMutation::Insert(record));
+                    .push(ConcurrencyMutation::Insert(Box::new(record)));
                 fiber.control_stack.push(record_id);
                 changes.control_stack_deltas.push(ControlStackDelta::Push {
                     fiber_id: fiber.fiber_id,
@@ -2080,7 +2080,7 @@ fn apply_tick(
                 record.members.insert(fiber.fiber_id);
                 changes
                     .concurrency_mutations
-                    .push(ConcurrencyMutation::Insert(record));
+                    .push(ConcurrencyMutation::Insert(Box::new(record)));
                 fiber.control_stack.push(record_id);
                 changes.control_stack_deltas.push(ControlStackDelta::Push {
                     fiber_id: fiber.fiber_id,
@@ -2140,7 +2140,7 @@ fn apply_tick(
                 record.members.insert(fiber.fiber_id);
                 changes
                     .concurrency_mutations
-                    .push(ConcurrencyMutation::Insert(record));
+                    .push(ConcurrencyMutation::Insert(Box::new(record)));
                 fiber.control_stack.push(record_id);
                 changes.control_stack_deltas.push(ControlStackDelta::Push {
                     fiber_id: fiber.fiber_id,
@@ -2258,6 +2258,77 @@ fn apply_tick(
                     TimerKind::V2GuardTimer { record_id },
                     repeat_spec,
                 ));
+                fiber.pc = fiber.pc.saturating_add(1);
+            }
+            // §18 v0.10 ruling I, second arming-trigger kind (BoundaryError
+            // v2 migration): arms the guard this fibre just opened, exactly
+            // as `V2GuardArmTimer` resolves its own target — `record_id` is
+            // unambiguously `fiber.control_stack.last()` because the
+            // verifier enforces this instruction (and any run of sibling
+            // `V2GuardArmError`/`V2GuardArmTimer` arms) sits immediately
+            // after the guard-open it arms. Unlike `V2GuardArmTimer`, this
+            // instruction DOES mutate the concurrency record — it pushes
+            // `(error_code, handler)` onto the record's own `error_routes`
+            // — because error-match arming is data (N routes stored on the
+            // record), not a durable effect keyed by record id the way a
+            // timer is. The target record was opened earlier THIS SAME tick
+            // (verifier-enforced adjacency), so it exists only as an
+            // in-flight `ConcurrencyMutation::Insert` in `changes`, not yet
+            // materialized into `snapshot` — mutated in place there, same
+            // "check in-flight mutations first" reasoning `V2GuardArmTimer`
+            // already documents, except here it's the ONLY case (no
+            // already-materialized-in-snapshot fallback): `error_routes` is
+            // static per-guard configuration set once at open time, never
+            // re-armed on a `V2GuardN` re-open the way a timer effect is.
+            Instr::V2GuardArmError { error_code, handler } => {
+                let record_id = *fiber.control_stack.last().ok_or(
+                    TransitionError::InvalidCommand("V2GuardArmError: no open guard"),
+                )?;
+                let mut armed = false;
+                for mutation in changes.concurrency_mutations.iter_mut().rev() {
+                    if let ConcurrencyMutation::Insert(record) = mutation {
+                        if record.id != record_id {
+                            continue;
+                        }
+                        // Defensive, matching this codebase's existing style
+                        // elsewhere in `apply()` — verifier adjacency
+                        // guarantees this holds for any verified program;
+                        // this is the fail-closed backstop for a
+                        // hand-assembled/unverified one.
+                        if record.state != RecordState::Armed
+                            || !matches!(record.kind, RecordKind::Guard { .. })
+                        {
+                            return Err(TransitionError::InvalidCommand(
+                                "V2GuardArmError: target record is not an armed guard",
+                            ));
+                        }
+                        let route = (error_code.clone(), *handler);
+                        if route.0.is_none() {
+                            // Catch-all: always last (verifier enforces at
+                            // most one).
+                            record.error_routes.push(route);
+                        } else {
+                            // Specific code: insert before any existing
+                            // trailing catch-all, preserving
+                            // specific-first/catch-all-last order among
+                            // multiple `V2GuardArmError` arms stacked on one
+                            // guard-open.
+                            let insert_pos = record
+                                .error_routes
+                                .iter()
+                                .position(|(code, _)| code.is_none())
+                                .unwrap_or(record.error_routes.len());
+                            record.error_routes.insert(insert_pos, route);
+                        }
+                        armed = true;
+                        break;
+                    }
+                }
+                if !armed {
+                    return Err(TransitionError::InvalidCommand(
+                        "V2GuardArmError: no open guard record found to arm",
+                    ));
+                }
                 fiber.pc = fiber.pc.saturating_add(1);
             }
             // Post-close remediation (V&S §13 amendment v0.5 ruling A,
@@ -2622,43 +2693,104 @@ fn apply_job_failure(
         return Ok(changes.finish(snapshot.instance().clone()));
     }
 
-    let rejection_route = match error_class {
-        ErrorClass::BusinessRejection { rejection_code } => workflow
-            .envelope()
-            .metadata()
-            .error_route_map()
-            .get(&fiber.pc)
-            .and_then(|routes| {
-                routes.iter().find(|route| {
-                    route
-                        .error_code
-                        .as_deref()
-                        .map(|code| code == rejection_code)
-                        .unwrap_or(true)
-                })
+    // BoundaryError v2 migration: replaces the deleted `error_route_map`
+    // side-table lookup with a search over the fibre's OWN guard scopes —
+    // "structure consulted as state" was exactly the D1-class defect
+    // `error_route_map` shared with the already-deleted v1 `race_plan`/
+    // `boundary_map`; this is the fix. Modeled on the `innermost_guard`
+    // search a few dozen lines below (read that one's doc comment for the
+    // full "innermost guard, don't search past it" rationale — identical
+    // reasoning applies here: a boundary error only catches failures of its
+    // own attached task's guard scope, not an ancestor's). Walks
+    // `fiber.control_stack` innermost-first, stops at the first `Armed`
+    // `RecordKind::Guard{..}` record regardless of whether IT has a
+    // matching route (an outer guard's error route must never catch an
+    // inner guard's unmatched failure), and inside that one record's own
+    // `error_routes` (populated by `V2GuardArmError`, already sorted
+    // specific-code-first/catch-all-last) takes the first match.
+    let matched_error_route: Option<(String, Addr, RecordId)> = if let ErrorClass::BusinessRejection {
+        rejection_code,
+    } = error_class
+    {
+        // Two-step, not a single `find_map`: the search must stop at the
+        // innermost armed Guard-kind record unconditionally (a `None` from
+        // "this guard has no matching route" must NOT fall through to an
+        // outer guard's routes — that would let an outer boundary error
+        // catch an inner scope's unmatched failure, which is exactly the
+        // per-scope-only catching this migration's doc comment above
+        // promises and v1's per-host-task `error_route_map` granularity
+        // never violated). A single `find_map` over the whole walk conflates
+        // "not a guard, keep looking" with "is the guard, but no match" —
+        // both return `None` from the closure — which was the actual bug
+        // (independent blind review, 2026-07-23, live-repro'd against a
+        // nested-guard fixture: an outer catch-all wrongly caught an inner
+        // guard's unrelated-code rejection instead of falling through to an
+        // Incident).
+        fiber
+            .control_stack
+            .iter()
+            .rev()
+            .find_map(|id| {
+                let record = snapshot.concurrency_table().get(*id)?;
+                if record.state != RecordState::Armed {
+                    return None;
+                }
+                if !matches!(record.kind, RecordKind::Guard { .. }) {
+                    return None;
+                }
+                Some((*id, record))
             })
-            .map(|route| (rejection_code, route)),
-        _ => None,
+            .and_then(|(id, record)| {
+                record
+                    .error_routes
+                    .iter()
+                    .find(|(code, _)| {
+                        code.as_deref()
+                            .map(|c| c == rejection_code.as_str())
+                            .unwrap_or(true)
+                    })
+                    .map(|(_, handler)| (rejection_code.clone(), *handler, id))
+            })
+    } else {
+        None
     };
-    if let Some((rejection_code, route)) = rejection_route {
-        fiber.pc = route.resume_at;
-        fiber.wait = WaitState::Running;
-        changes.fibers_upsert.push(fiber);
+    if let Some((matched_code, matched_handler, matched_record_id)) = matched_error_route {
+        // `changes` is still `Changes::default()` here (every earlier
+        // branch in this function returns before reaching this point), so
+        // — matching `apply_timer`'s own `TimerKind::V2GuardTimer` fold
+        // pattern, which takes the helper's returned `Changes` as its base
+        // rather than merging into a separate pre-existing one — the fired
+        // guard's `Changes` simply becomes this transition's `changes`.
+        let mut changes = v2_trigger_guard_changes_with_target(
+            snapshot,
+            matched_record_id,
+            context,
+            matched_handler,
+        )?;
         if !job_key.is_empty() {
             changes.jobs_ack.push(job_key.to_string());
         }
+        // `boundary_id` no longer names a BPMN element (the side table that
+        // carried `boundary_element_id` is deleted) — nothing downstream
+        // consumes this field's exact content beyond logging (checked: only
+        // the kernel's own producer and `verifier.rs`'s unrelated
+        // `host_boundary_count`/`boundary_ids` naming touch this string;
+        // no test asserts on it), so a placeholder derived from the firing
+        // guard's own `RecordId` is used rather than threading a BPMN
+        // element id through `error_routes`/`V2GuardArmError` for no
+        // consumer.
         changes.events.push(RuntimeEvent::ErrorRouted {
             job_key: job_key.to_string(),
-            error_code: rejection_code.clone(),
-            boundary_id: route.boundary_element_id.clone(),
-            resume_at: route.resume_at,
+            error_code: matched_code,
+            boundary_id: format!("guard:{matched_record_id}"),
+            resume_at: matched_handler,
         });
         return Ok(changes.finish(snapshot.instance().clone()));
     }
 
     // Adam-ratified (V&S §13 amendment v0.5 ruling C, revised by §14
     // amendment v0.6 ruling D): a *definitive* job failure (reached here —
-    // no retry token left, no matching error_route_map entry) for a fibre
+    // no retry token left, no matching armed error route) for a fibre
     // sitting inside an armed *interrupting* V2Guard scope bypasses the v1
     // error-route/incident path — but only for `ErrorClass::ContractViolation`
     // (a technical fault). §13's original text said "no distinction between
@@ -3442,7 +3574,7 @@ fn v2_reconcile_ancestor_membership(
         // be found here first; only fall back to `snapshot` for a record
         // that predates this transition.
         let pending = changes.concurrency_mutations.iter().rev().find_map(|m| match m {
-            ConcurrencyMutation::Insert(record) if record.id == *handle => Some(record.clone()),
+            ConcurrencyMutation::Insert(record) if record.id == *handle => Some((**record).clone()),
             _ => None,
         });
         let Some(record) = touched
@@ -3465,7 +3597,7 @@ fn v2_reconcile_ancestor_membership(
         touched.insert(*handle, record);
     }
     for record in touched.into_values() {
-        changes.concurrency_mutations.push(ConcurrencyMutation::Insert(record));
+        changes.concurrency_mutations.push(ConcurrencyMutation::Insert(Box::new(record)));
     }
 }
 
@@ -3520,6 +3652,47 @@ fn v2_trigger_guard_changes(
         .ok_or(TransitionError::InvalidCommand(
             "V2TriggerGuard: unknown guard handle",
         ))?;
+    if !matches!(record.kind, RecordKind::Guard { .. }) {
+        return Err(TransitionError::InvalidCommand(
+            "V2TriggerGuard: handle is not a guard",
+        ));
+    }
+    if record.state != RecordState::Armed {
+        return Err(TransitionError::InvalidCommand(
+            "V2TriggerGuard: guard is not armed",
+        ));
+    }
+    let handler_target = record.handler.ok_or(TransitionError::InvalidCommand(
+        "V2TriggerGuard: guard has no handler address",
+    ))?;
+    v2_trigger_guard_changes_with_target(snapshot, record_id, context, handler_target)
+}
+
+/// The actual K-1/K-2 discharge, factored further out of
+/// `v2_trigger_guard_changes` so `apply_job_failure`'s `GUARD-ERROR>` match
+/// path (BoundaryError v2 migration) can fire a guard's handler at an
+/// explicit target — one of the record's own `error_routes` entries —
+/// instead of unconditionally reading `record.handler`. This is the
+/// deliberate, ratified, contained break of the "arm instructions never
+/// carry targets" convention documented on `Instr::V2GuardArmError`: every
+/// OTHER caller of this mechanism (`Command::V2TriggerGuard` via
+/// `v2_trigger_guard_changes`, `apply_timer`'s `TimerKind::V2GuardTimer`
+/// arm) still resolves its target from `record.handler`/the timer's own
+/// bookkeeping and reaches this function only through that thin wrapper —
+/// `record.handler` itself is untouched by this refactor.
+fn v2_trigger_guard_changes_with_target(
+    snapshot: &Snapshot,
+    record_id: RecordId,
+    context: &DeterministicContext,
+    handler_target: Addr,
+) -> Result<Changes, TransitionError> {
+    let record = snapshot
+        .concurrency_table()
+        .get(record_id)
+        .cloned()
+        .ok_or(TransitionError::InvalidCommand(
+            "V2TriggerGuard: unknown guard handle",
+        ))?;
     let interrupting = match record.kind {
         RecordKind::Guard { interrupting } => interrupting,
         _ => {
@@ -3533,9 +3706,6 @@ fn v2_trigger_guard_changes(
             "V2TriggerGuard: guard is not armed",
         ));
     }
-    let handler_target = record.handler.ok_or(TransitionError::InvalidCommand(
-        "V2TriggerGuard: guard has no handler address",
-    ))?;
 
     // V-4: interrupting `V2Guard`'s handler entry state is PRE-push (the
     // guard is being torn down, so the handler inherits whatever existed
@@ -4321,7 +4491,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -4703,7 +4872,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -4892,7 +5060,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5057,7 +5224,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5135,7 +5301,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5226,7 +5391,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5336,7 +5500,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5462,7 +5625,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5614,7 +5776,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["NotifyCancelled".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5800,7 +5961,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["NotifyCancelled".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6031,7 +6191,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6175,7 +6334,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6321,7 +6479,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6363,7 +6520,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6396,8 +6552,8 @@ mod tests {
     /// the guard-branch assertions below are otherwise unchanged from the
     /// original test.
     ///
-    /// A *definitive* job failure (no retry token, no error_route_map
-    /// match — the exact point v1 would otherwise create an `Incident`)
+    /// A *definitive* job failure (no retry token, no matching armed
+    /// error route — the exact point v1 would otherwise create an `Incident`)
     /// for a fibre inside an armed interrupting `V2Guard` scope bypasses
     /// the incident path entirely, restores the scope's rollback snapshot,
     /// and kills the fibre rather than continuing or auto-respawning.
@@ -6449,7 +6605,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string(), "OtherTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6574,7 +6729,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6683,7 +6837,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6884,7 +7037,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -6976,7 +7128,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7073,7 +7224,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7180,7 +7330,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7302,7 +7451,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7389,7 +7537,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7437,7 +7584,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7534,7 +7680,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7659,7 +7804,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -7701,7 +7845,7 @@ mod tests {
                 let mut table = bpmn_lite_types::concurrency::ConcurrencyTable::new();
                 for m in t1.concurrency_mutations() {
                     if let ConcurrencyMutation::Insert(record) = m {
-                        table.insert(record.clone());
+                        table.insert((**record).clone());
                     }
                 }
                 table
@@ -7865,7 +8009,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8081,7 +8224,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8223,7 +8365,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["SomeTask".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8288,7 +8429,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["NotifyGuardTimedOut".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8429,7 +8569,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8498,7 +8637,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -8631,7 +8769,6 @@ mod tests {
                 message_name_map: BTreeMap::new(),
                 write_set: BTreeMap::new(),
                 task_manifest: vec!["NotifyCancelled".to_string()],
-                error_route_map: BTreeMap::new(),
                 flag_symbol_table: BTreeMap::new(),
                 data_objects: BTreeMap::new(),
                 ffi_task_decls: BTreeMap::new(),
@@ -8954,7 +9091,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec!["VerifyDoc".to_string(), "Escalate".to_string()],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),

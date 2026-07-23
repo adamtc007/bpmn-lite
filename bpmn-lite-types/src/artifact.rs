@@ -1,5 +1,5 @@
 use crate::{
-    Addr, CompiledProgram, ErrorRoute, FfiTaskDecl, FlagKey, Instr, JoinId, JoinPlanEntry, WaitId,
+    Addr, CompiledProgram, FfiTaskDecl, FlagKey, Instr, JoinId, JoinPlanEntry, WaitId,
     WaitPlanEntry,
 };
 use serde::{Deserialize, Serialize};
@@ -83,7 +83,6 @@ pub struct ArtifactMetadata {
     message_name_map: BTreeMap<u32, String>,
     write_set: BTreeMap<String, BTreeSet<FlagKey>>,
     task_manifest: Vec<String>,
-    error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
     flag_symbol_table: BTreeMap<FlagKey, String>,
     data_objects: BTreeMap<String, crate::DataObjectDecl>,
     ffi_task_decls: BTreeMap<Addr, FfiTaskDecl>,
@@ -115,10 +114,6 @@ impl ArtifactMetadata {
 
     pub fn task_manifest(&self) -> &[String] {
         &self.task_manifest
-    }
-
-    pub fn error_route_map(&self) -> &BTreeMap<Addr, Vec<ErrorRoute>> {
-        &self.error_route_map
     }
 
     pub fn flag_symbol_table(&self) -> &BTreeMap<FlagKey, String> {
@@ -185,7 +180,6 @@ impl ArtifactEnvelope {
             message_name_map: program.message_name_map.clone(),
             write_set,
             task_manifest: program.task_manifest.clone(),
-            error_route_map: program.error_route_map.clone(),
             flag_symbol_table: program.flag_symbol_table.clone(),
             data_objects: program.data_objects.clone(),
             ffi_task_decls: program.ffi_task_decls.clone(),
@@ -266,7 +260,6 @@ impl ExecutableWorkflow {
                 .map(|(name, keys)| (name.clone(), keys.iter().copied().collect::<HashSet<_>>()))
                 .collect(),
             task_manifest: metadata.task_manifest.clone(),
-            error_route_map: metadata.error_route_map.clone(),
             flag_symbol_table: metadata.flag_symbol_table.clone(),
             data_objects: metadata.data_objects.clone(),
             ffi_task_decls: metadata.ffi_task_decls.clone(),
@@ -322,9 +315,6 @@ fn verify_program(
                 "v2 FFI effect declaration address {address} is not V2ArmEffect/V2AwaitEffect"
             )));
         }
-    }
-    for address in metadata.error_route_map.keys().copied() {
-        require_address(address, len, address, "error route table")?;
     }
     let referenced_joins: BTreeSet<JoinId> = BTreeSet::new();
     for (address, instruction) in instructions.iter().enumerate() {
@@ -641,6 +631,29 @@ pub(crate) fn successors(
                 result.push(address + 1);
             }
         }
+        // BoundaryError v2 migration: `GUARD-ERROR>` carries its OWN
+        // `handler` (the deliberate, ratified break of "arm instructions
+        // never carry targets" — see `Instr::V2GuardArmError`'s doc
+        // comment). Without an explicit arm here this fell through to the
+        // generic `_ if address + 1 < len` case below, which only pushes
+        // the fallthrough successor and never validates or registers
+        // `handler` as a reachable edge — silently swallowing the exact
+        // out-of-bounds-address check `V2Guard`/`V2GuardN` already get.
+        // Treated like `V2Guard`/`V2GuardN`'s own handler (a direct,
+        // immediately reachable edge), not like `V2ArmTimer`/`V2ArmMsg`/
+        // `V2ArmEffect`'s race-arm indirection through `}RACE` — there is
+        // no equivalent "resolving" instruction for a guard's error arms;
+        // each arm's handler is reachable the moment the arm executes, via
+        // `apply_job_failure`'s match, not via a later closing word. Also
+        // falls through to `address + 1` — arm words register, they don't
+        // transfer control (multiple `V2GuardArmError`s / the guarded host
+        // task's own instructions follow contiguously).
+        Instr::V2GuardArmError { handler, .. } => {
+            add(*handler, "guard error-arm handler")?;
+            if address + 1 < len {
+                result.push(address + 1);
+            }
+        }
         // V2.7 addressing-review CONCERN #2.3: an ARM-* word only
         // *registers* an alternative — it does not itself transfer
         // control. `}RACE` is where resolution happens (§5: "A command
@@ -868,7 +881,6 @@ mod v2_fixtures {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: Vec::new(),
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),

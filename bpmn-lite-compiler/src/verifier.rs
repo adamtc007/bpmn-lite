@@ -309,17 +309,26 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 error_code,
             } = &graph[idx]
             {
-                // 8a. attached_to must reference an existing ServiceTask
+                // 8a. attached_to must reference an existing ServiceTask or
+                // FfiServiceTask. `FfiServiceTask` was missing from this
+                // check pre-existing this fix — same class of bug as 7a's
+                // BoundaryTimer host-existence gap (fixed above): lowering
+                // (`lowering.rs`) already fully supports a boundary error
+                // attached to an FFI service task host, but no BPMN XML
+                // could ever reach that code end-to-end, because this check
+                // rejected the BoundaryError's own `attachedToRef` before
+                // lowering ever ran.
                 let host_exists = graph.node_indices().any(|other| {
                     matches!(&graph[other],
                         IRNode::ServiceTask { id: host_id, .. }
+                        | IRNode::FfiServiceTask { id: host_id, .. }
                         if host_id == attached_to
                     )
                 });
                 if !host_exists {
                     errors.push(VerifyError {
                         message: format!(
-                            "BoundaryError '{}' attachedToRef '{}' does not reference a ServiceTask",
+                            "BoundaryError '{}' attachedToRef '{}' does not reference a task",
                             id, attached_to
                         ),
                         element_id: Some(id.clone()),
@@ -895,6 +904,99 @@ mod tests {
                 .iter()
                 .any(|e| e.message.contains("cycle timers must be non-interrupting")),
             "non-interrupting + Cycle must not trigger §7b, got: {errors:?}"
+        );
+    }
+
+    fn make_boundary_error_verify_graph(host: IRNode) -> IRGraph {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host = graph.add_node(host);
+        let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
+        let boundary = graph.add_node(IRNode::BoundaryError {
+            id: "catch".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("SOME_ERROR".to_string()),
+        });
+        let escalate = graph.add_node(IRNode::ServiceTask {
+            id: "escalate".to_string(),
+            name: "Escalate".to_string(),
+            task_type: "escalate_work".to_string(),
+        });
+        let escalate_end = graph.add_node(IRNode::End { id: "escalate_end".to_string(), terminate: false });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(boundary, escalate, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(escalate, escalate_end, IREdge { id: "f4".to_string(), condition: None });
+
+        graph
+    }
+
+    /// 8a bug fix: a boundary error attached to an `FfiServiceTask` host
+    /// must NOT be rejected — this check previously only matched
+    /// `IRNode::ServiceTask`, the same class of omission as the sibling
+    /// BoundaryTimer 7a fix (a boundary error attached to an FFI task was
+    /// fully lowerable but could never compile from XML because this check
+    /// rejected its `attachedToRef` first).
+    #[test]
+    fn test_boundary_error_attached_to_ffi_service_task_is_admitted() {
+        let graph = make_boundary_error_verify_graph(IRNode::FfiServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            template_id: [3u8; 32],
+            inputs: vec![],
+            outputs: vec![],
+        });
+        let errors = verify(&graph);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("does not reference a task")),
+            "BoundaryError attached to FfiServiceTask must be admitted, got: {errors:?}"
+        );
+    }
+
+    /// Sanity counterpart: a boundary error attached to a plain
+    /// `ServiceTask` host remains admitted (unchanged behavior).
+    #[test]
+    fn test_boundary_error_attached_to_service_task_is_admitted() {
+        let graph = make_boundary_error_verify_graph(IRNode::ServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            task_type: "long_work".to_string(),
+        });
+        let errors = verify(&graph);
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("does not reference a task")),
+            "BoundaryError attached to ServiceTask must be admitted, got: {errors:?}"
+        );
+    }
+
+    /// Negative counterpart: a boundary error whose `attachedToRef` names
+    /// no task at all (neither ServiceTask nor FfiServiceTask) is still
+    /// correctly rejected — the fix widens the accepted host set, it does
+    /// not disable the check.
+    #[test]
+    fn test_boundary_error_attached_to_nonexistent_host_is_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let boundary = graph.add_node(IRNode::BoundaryError {
+            id: "catch".to_string(),
+            attached_to: "no_such_host".to_string(),
+            error_code: None,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+        graph.add_edge(start, end, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(boundary, end, IREdge { id: "f2".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("does not reference a task")),
+            "BoundaryError attached to a nonexistent host must still be rejected, got: {errors:?}"
         );
     }
 }

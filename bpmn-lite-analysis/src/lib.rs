@@ -239,7 +239,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),

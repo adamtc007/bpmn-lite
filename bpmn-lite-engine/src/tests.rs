@@ -771,7 +771,6 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         message_name_map: BTreeMap::from([(1, "case_arrived".to_string())]),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -885,7 +884,6 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         message_name_map: BTreeMap::from([(1, "1".to_string())]),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1303,7 +1301,6 @@ async fn setup_ni_cycle_guard() -> (BpmnLiteEngine, Arc<dyn WorkflowStore>, Uuid
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["long_work".to_string(), "send_reminder".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1783,7 +1780,6 @@ async fn t_term_1_single_fiber_terminate() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1906,7 +1902,6 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["slow_task".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2026,7 +2021,6 @@ async fn t_term_3_complete_job_after_terminate() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_x".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2154,46 +2148,56 @@ async fn t_err_1_business_error_routes_to_handler() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
+    // BoundaryError v2 migration: the host task is now wrapped in a
+    // `V2Guard`/`V2GuardArmError` scope (§18 v0.10 ruling I's second
+    // arming-trigger kind) instead of relying on the deleted
+    // `error_route_map` side table. A match now fires via the same
+    // spawn-a-new-handler-fiber mechanism `V2TriggerGuard`/timer-fire use
+    // (`v2_trigger_guard_changes_with_target`) — the ORIGINAL failing fibre
+    // is retired, not resumed in place, so assertions below check for A
+    // Running fibre at the handler pc, not the SAME fibre.
+    //
     // Bytecode:
-    // 0: ExecNative(sanctions_check)  — parks fiber
-    // 1: Jump(4)                      — normal continuation
-    // 2: ExecNative(enhanced_review)  — error handler path
-    // 3: End                          — error handler end
-    // 4: End                          — normal end
+    // 0: V2Guard { handler: 5 }                      — opens the guard
+    // 1: V2GuardArmError(SANCTIONS_HIT, handler: 5)   — arms the route
+    // 2: ExecNative(sanctions_check)                  — parks fiber
+    // 3: V2GuardEnd
+    // 4: Jump(6)                                       — normal continuation
+    // 5: ExecNative(enhanced_review)                   — error handler path
+    // 6: End                                           — error handler end
+    // 7: End                                           — normal end
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [50u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".to_string().into_boxed_str()),
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 4.into() }, // 1
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 7.into() }, // 4
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
-            }, // 2: error handler
-            Instr::End,                // 3
-            Instr::End,                // 4
+            }, // 5: error handler
+            Instr::End,                // 6
+            Instr::End,                // 7
         ],
         debug_map: BTreeMap::from([
-            (0.into(), "sanctions_check".to_string()),
-            (2.into(), "enhanced_review".to_string()),
+            (2.into(), "sanctions_check".to_string()),
+            (5.into(), "enhanced_review".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["sanctions_check".to_string(), "enhanced_review".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 2.into(),
-                boundary_element_id: "catch_sanctions".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2307,31 +2311,31 @@ async fn t_err_2_unmatched_error_creates_incident() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    // Same program but error_route_map only catches SANCTIONS_HIT
+    // Same guard shape as T-ERR-1 but only arms SANCTIONS_HIT — the fail
+    // below uses a non-matching code, so `V2GuardArmError`'s route never
+    // fires and this falls through to the ordinary incident path unchanged.
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [51u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 4.into() }, // 0 — never fired; must still be in-bounds (artifact verifier checks statically)
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".to_string().into_boxed_str()),
+                handler: 4.into(), // never fired — the fail below uses a non-matching code
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            },
-            Instr::End,
+            }, // 2
+            Instr::V2GuardEnd, // 3
+            Instr::End,        // 4
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 99.into(), // doesn't matter, won't be used
-                boundary_element_id: "catch_sanctions".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2411,29 +2415,27 @@ async fn t_err_3_catch_all_routes_any_business_error() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [52u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 3.into() }, // 1
-            Instr::End,                // 2: error handler end
-            Instr::End,                // 3: normal end
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 6.into() }, // 4: normal path
+            Instr::End,                // 5: error handler end
+            Instr::End,                // 6: normal end
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2501,28 +2503,26 @@ async fn t_err_4_transient_error_always_incident() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [53u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 4.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all — must NOT apply to Transient
+                handler: 4.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            },
-            Instr::End,
-            Instr::End, // error handler (won't be used)
+            }, // 2
+            Instr::V2GuardEnd, // 3
+            Instr::End,        // 4: error handler (won't be used)
+            Instr::End,        // 5: normal end
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2596,7 +2596,6 @@ async fn t_err_5_fail_job_on_terminated_instance() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2671,6 +2670,331 @@ async fn t_err_5_fail_job_on_terminated_instance() {
     assert!(has_ignored, "Should emit SignalIgnored for late fail_job");
 }
 
+/// T-ERR-6: multiple specific-code `V2GuardArmError` routes on ONE guard
+/// each route independently — proves the multi-arm mechanism (N armed
+/// routes on a single guard record, `ConcurrencyRecord.error_routes`), not
+/// just the single-arm case T-ERR-1 already covers. Two independent
+/// instances of the SAME program are each failed with a DIFFERENT specific
+/// code; each must resolve to its OWN handler, not the other's.
+#[tokio::test]
+async fn t_err_6_multiple_specific_routes_fire_independently() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Bytecode:
+    // 0: V2Guard { handler: 6 }
+    // 1: V2GuardArmError(CODE_A, handler: 6)
+    // 2: V2GuardArmError(CODE_B, handler: 8)
+    // 3: ExecNative(risky_task)
+    // 4: V2GuardEnd
+    // 5: Jump(10)                — normal path
+    // 6: ExecNative(handler_a)   — CODE_A's own handler
+    // 7: Jump(9)
+    // 8: ExecNative(handler_b)   — CODE_B's own handler
+    // 9: End
+    // 10: End
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [55u8; 32],
+        program: vec![
+            Instr::V2Guard { handler: 6.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("CODE_A".to_string().into_boxed_str()),
+                handler: 6.into(),
+            }, // 1
+            Instr::V2GuardArmError {
+                error_code: Some("CODE_B".to_string().into_boxed_str()),
+                handler: 8.into(),
+            }, // 2
+            Instr::ExecNative {
+                task_type: 0,
+                argc: 0,
+                retc: 0,
+            }, // 3
+            Instr::V2GuardEnd,                 // 4
+            Instr::Jump { target: 10.into() }, // 5
+            Instr::ExecNative {
+                task_type: 1,
+                argc: 0,
+                retc: 0,
+            }, // 6: handler for CODE_A
+            Instr::Jump { target: 9.into() }, // 7
+            Instr::ExecNative {
+                task_type: 2,
+                argc: 0,
+                retc: 0,
+            }, // 8: handler for CODE_B
+            Instr::End,  // 9
+            Instr::End,  // 10
+        ],
+        debug_map: BTreeMap::from([
+            (3.into(), "risky_task".to_string()),
+            (6.into(), "handler_a".to_string()),
+            (8.into(), "handler_b".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec![
+            "risky_task".to_string(),
+            "handler_a".to_string(),
+            "handler_b".to_string(),
+        ],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
+        .await
+        .unwrap();
+
+    // Instance 1: fail with CODE_A — must activate handler_a, never handler_b.
+    let instance_a = engine
+        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-a")
+        .await
+        .unwrap();
+    let jobs_a = engine.run_instance(instance_a).await.unwrap();
+    assert_eq!(jobs_a.len(), 1);
+    engine
+        .fail_job(
+            &jobs_a[0].job_key,
+            ErrorClass::BusinessRejection { rejection_code: "CODE_A".to_string() },
+            "attempt A",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_a).await.unwrap();
+    let handler_a_jobs = store
+        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(!handler_a_jobs.is_empty(), "CODE_A must activate handler_a's job");
+    let handler_b_jobs_after_a = store
+        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(
+        handler_b_jobs_after_a.is_empty(),
+        "CODE_A must NOT activate handler_b's job"
+    );
+
+    // Instance 2: fail with CODE_B — must activate handler_b, never handler_a.
+    let instance_b = engine
+        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-b")
+        .await
+        .unwrap();
+    let jobs_b = engine.run_instance(instance_b).await.unwrap();
+    assert_eq!(jobs_b.len(), 1);
+    engine
+        .fail_job(
+            &jobs_b[0].job_key,
+            ErrorClass::BusinessRejection { rejection_code: "CODE_B".to_string() },
+            "attempt B",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_b).await.unwrap();
+    let handler_b_jobs = store
+        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(!handler_b_jobs.is_empty(), "CODE_B must activate handler_b's job");
+    let handler_a_jobs_after_b = store
+        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(
+        handler_a_jobs_after_b.is_empty(),
+        "CODE_B must NOT activate handler_a's job"
+    );
+}
+
+/// T-ERR-7: nested guards — an outer catch-all must NOT catch an inner
+/// guard's unmatched failure. Regression for the independent blind-review
+/// finding (2026-07-23): `apply_job_failure`'s error-route search used a
+/// single `find_map` whose closure returned `None` for both "not a guard,
+/// keep looking outward" and "is the guard, but no matching route" —
+/// collapsing those two cases let the outward walk continue past the
+/// innermost armed guard to an outer one. Live-repro'd before the fix: a
+/// rejection code matching neither the inner guard's specific route nor
+/// (correctly) requiring a match wrongly activated the OUTER catch-all's
+/// handler instead of falling through to an `Incident`. The fix stops the
+/// search at the first armed `Guard`-kind record unconditionally (mirroring
+/// `innermost_guard`'s own "stop at the first Guard-kind record regardless"
+/// rule below in the same function) and only then looks for a match inside
+/// that one record — a miss there must mean Incident, never "try the next
+/// guard out."
+#[tokio::test]
+async fn t_err_7_nested_guard_miss_does_not_fall_through_to_outer_catch_all() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Bytecode — each of the three paths (normal, outer-handler,
+    // inner-handler) gets its own dedicated `End`: sharing a merge point
+    // across paths whose control-stack depth genuinely differs (the inner
+    // handler's static entry state, per V-4, inherits the outer guard's
+    // still-open token; the outer handler's does not) is a real V-2 CFG
+    // conflict, not a fixture-authoring convenience — so this fixture
+    // deliberately avoids any merge at all.
+    // 0: V2Guard(handler: 8)                       — outer, catch-all
+    // 1: V2GuardArmError(None, handler: 8)
+    // 2: V2Guard(handler: 10)                       — inner, specific only
+    // 3: V2GuardArmError(INNER_CODE, handler: 10)
+    // 4: ExecNative(risky_task)
+    // 5: V2GuardEnd                                 — close inner
+    // 6: V2GuardEnd                                 — close outer
+    // 7: End                                        — normal path
+    // 8: ExecNative(outer_handler)                  — must NEVER fire here
+    // 9: End
+    // 10: ExecNative(inner_handler)                 — must NEVER fire here
+    // 11: V2GuardEnd  — inner-handler entry (V-4: PRE-push relative to the
+    //                    inner guard only) still statically carries the
+    //                    outer guard's still-open token; must retire it
+    //                    before reaching a scope-external End (V-1).
+    // 12: End
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [56u8; 32],
+        program: vec![
+            Instr::V2Guard { handler: 8.into() }, // 0 — outer
+            Instr::V2GuardArmError {
+                error_code: None,
+                handler: 8.into(),
+            }, // 1 — outer catch-all
+            Instr::V2Guard { handler: 10.into() }, // 2 — inner
+            Instr::V2GuardArmError {
+                error_code: Some("INNER_CODE".to_string().into_boxed_str()),
+                handler: 10.into(),
+            }, // 3 — inner specific-only
+            Instr::ExecNative {
+                task_type: 0,
+                argc: 0,
+                retc: 0,
+            }, // 4
+            Instr::V2GuardEnd, // 5 — close inner
+            Instr::V2GuardEnd, // 6 — close outer
+            Instr::End,        // 7 — normal path
+            Instr::ExecNative {
+                task_type: 1,
+                argc: 0,
+                retc: 0,
+            }, // 8: outer catch-all handler — must never fire
+            Instr::End, // 9
+            Instr::ExecNative {
+                task_type: 2,
+                argc: 0,
+                retc: 0,
+            }, // 10: inner handler — must never fire (wrong code)
+            Instr::V2GuardEnd, // 11 — retire the still-open outer token
+            Instr::End,        // 12
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "risky_task".to_string()),
+            (8.into(), "outer_handler".to_string()),
+            (10.into(), "inner_handler".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec![
+            "risky_task".to_string(),
+            "outer_handler".to_string(),
+            "inner_handler".to_string(),
+        ],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
+        .await
+        .unwrap();
+
+    let instance_id = engine
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-7",
+        )
+        .await
+        .unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1);
+
+    // Fail with a code the INNER guard (innermost, so the only one
+    // consulted) does not arm — must fall through to Incident, never reach
+    // the outer catch-all.
+    engine
+        .fail_job(
+            &jobs[0].job_key,
+            ErrorClass::BusinessRejection {
+                rejection_code: "UNRELATED_CODE".to_string(),
+            },
+            "unrelated failure",
+        )
+        .await
+        .unwrap();
+
+    let outer_handler_jobs = store
+        .dequeue_jobs(
+            &["outer_handler".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
+        .await
+        .unwrap();
+    assert!(
+        outer_handler_jobs.is_empty(),
+        "an inner guard's miss must NOT fall through to an outer guard's catch-all"
+    );
+    let inner_handler_jobs = store
+        .dequeue_jobs(
+            &["inner_handler".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
+        .await
+        .unwrap();
+    assert!(
+        inner_handler_jobs.is_empty(),
+        "the inner guard itself has no matching route either"
+    );
+
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
+    let has_incident = events
+        .iter()
+        .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
+    assert!(has_incident, "unmatched-at-innermost-guard must create an Incident");
+    let has_routed = events
+        .iter()
+        .any(|(_, e)| matches!(e, RuntimeEvent::ErrorRouted { .. }));
+    assert!(!has_routed, "must not emit ErrorRouted for a miss at the innermost guard");
+
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(instance.state, ProcessState::Incidented { .. }));
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Phase 5.3: Bounded loops
 // ═══════════════════════════════════════════════════════════
@@ -2681,46 +3005,52 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    // Simulates: task_a fails → error route → IncCounter → BrCounterLt(limit=3) → retry or end
+    // Simulates: task_a fails → V2GuardArmError route → IncCounter →
+    // BrCounterLt(limit=3) → retry (loops back to guard-open, re-arming a
+    // FRESH guard scope each iteration) or end. BoundaryError v2 migration:
+    // a match fires by spawning a new handler fibre (retiring the failed
+    // one), not resuming the same fibre in place — see T-ERR-1's comment
+    // for the full mechanism.
     // Bytecode:
-    // 0: ExecNative(task_a)         — parks fiber
-    // 1: Jump(5)                    — normal end (skip error handler)
-    // 2: IncCounter(0)              — error handler: bump counter
-    // 3: BrCounterLt(0, 3, 0)      — if counter<3, retry task_a
-    // 4: End                        — counter exhausted, escalation end
-    // 5: End                        — normal end
+    // 0: V2Guard { handler: 5 }                — opens the guard
+    // 1: V2GuardArmError(RETRY_ME, handler: 5)  — arms the retry route
+    // 2: ExecNative(task_a)                     — parks fiber
+    // 3: V2GuardEnd
+    // 4: Jump(8)                                 — normal end (skip error handler)
+    // 5: IncCounter(0)                           — error handler: bump counter
+    // 6: BrCounterLt(0, 3, 0)                   — if counter<3, retry (reopens guard)
+    // 7: End                                     — counter exhausted, escalation end
+    // 8: End                                     — normal end
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [60u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("RETRY_ME".to_string().into_boxed_str()),
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 5.into() },           // 1
-            Instr::IncCounter { counter_id: 0 }, // 2
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 8.into() }, // 4
+            Instr::IncCounter { counter_id: 0 }, // 5
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 3,
                 target: 0.into(),
-            }, // 3
-            Instr::End,                          // 4
-            Instr::End,                          // 5
+            }, // 6
+            Instr::End,                          // 7
+            Instr::End,                          // 8
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("RETRY_ME".to_string()),
-                resume_at: 2.into(),
-                boundary_element_id: "catch_retry".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2834,35 +3164,33 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [61u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 5.into() },           // 1
-            Instr::IncCounter { counter_id: 0 }, // 2
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 8.into() }, // 4
+            Instr::IncCounter { counter_id: 0 }, // 5
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 2,
                 target: 0.into(),
-            }, // 3
-            Instr::End,                          // 4
-            Instr::End,                          // 5
+            }, // 6
+            Instr::End,                          // 7
+            Instr::End,                          // 8
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2940,7 +3268,6 @@ fn t_loop_3_counter_starts_at_zero() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -3010,7 +3337,6 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -3050,7 +3376,6 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
         message_name_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),

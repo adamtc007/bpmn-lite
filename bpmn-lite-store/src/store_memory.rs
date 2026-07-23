@@ -1181,7 +1181,7 @@ impl RuntimeStore for MemoryStore {
         let concurrency_table = w.concurrency_tables.entry(instance_id).or_default();
         for mutation in transition.concurrency_mutations() {
             match mutation {
-                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
                 ConcurrencyMutation::Retire(id) => {
                     if let Some(record) = concurrency_table.get_mut(*id) {
                         record.state = RecordState::Retired;

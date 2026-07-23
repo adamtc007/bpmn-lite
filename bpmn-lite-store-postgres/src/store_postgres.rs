@@ -2739,7 +2739,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .unwrap_or_default();
         for mutation in transition.concurrency_mutations() {
             match mutation {
-                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
                 ConcurrencyMutation::Retire(id) => {
                     if let Some(record) = concurrency_table.get_mut(*id) {
                         record.state = RecordState::Retired;
@@ -4804,7 +4804,6 @@ mod tests {
             message_name_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5563,7 +5562,7 @@ mod tests {
             record.opened_at = Some(guard_addr);
             record.state = RecordState::Retired;
             let transition = TransitionBuilder::new(instance.clone())
-                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
                 .delete_fiber(fiber_id)
                 .event(RuntimeEvent::V2ScopeCancelled {
                     record_id,
@@ -5618,7 +5617,7 @@ mod tests {
             record.opened_at = Some(guard_addr);
             record.state = RecordState::Retired;
             let transition = TransitionBuilder::new(instance.clone())
-                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
                 // No `.delete_fiber(surviving_fiber_id)` — the cancelling
                 // fibre continues in place (`RollbackCaller::Continues`).
                 .event(RuntimeEvent::V2ScopeCancelled {
@@ -5680,7 +5679,7 @@ mod tests {
             record.opened_at = Some(guard_addr);
             record.state = RecordState::Retired;
             let transition = TransitionBuilder::new(instance.clone())
-                .concurrency_mutation(ConcurrencyMutation::Insert(record))
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
                 .delete_fiber(fiber_id)
                 .event(RuntimeEvent::V2ScopeCancelled {
                     record_id,
@@ -5713,7 +5712,7 @@ mod tests {
         record.opened_at = Some(guard_addr);
         record.state = RecordState::Retired;
         let transition = TransitionBuilder::new(instance.clone())
-            .concurrency_mutation(ConcurrencyMutation::Insert(record))
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
             .event(RuntimeEvent::V2GuardRetired { record_id, fiber_id })
             .build();
         store.commit_transition(&claim, &transition).await.unwrap();

@@ -169,6 +169,14 @@ pub struct ConcurrencyRecord {
     /// for every other guard-kind record.
     pub rollback_session_stack: Option<Box<str>>,
     pub opened_at: Option<Addr>,
+    /// §18 v0.10 ruling I / BoundaryError v2 migration: armed error-match
+    /// routes for a `V2Guard`/`V2GuardN`/`V2GuardR` record, populated by
+    /// `V2GuardArmError`. Empty for a guard with no error arms (the common
+    /// case — most guards are timer-armed or unarmed). Sorted specific-code-
+    /// first, catch-all (`error_code: None`) last at construction time (same
+    /// precedence v1's deleted `error_route_map` used) so `apply_job_failure`'s
+    /// match walk is a plain `iter().find()`.
+    pub error_routes: Vec<(Option<Box<str>>, Addr)>,
 }
 
 impl ConcurrencyRecord {
@@ -186,6 +194,7 @@ impl ConcurrencyRecord {
             rollback_join_expected: None,
             rollback_session_stack: None,
             opened_at: None,
+            error_routes: Vec::new(),
         }
     }
 }
@@ -234,7 +243,15 @@ impl ConcurrencyTable {
 /// table. V1 declares the surface; V4's words are the sole producers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConcurrencyMutation {
-    Insert(ConcurrencyRecord),
+    /// Boxed (clippy `large_enum_variant`): `ConcurrencyRecord` grew past
+    /// the size-difference threshold against `Retire`/`Remove`'s bare
+    /// `RecordId` once the BoundaryError v2 migration added
+    /// `error_routes`. Every existing match site still works unchanged —
+    /// field access on a `&Box<ConcurrencyRecord>` binding auto-derefs;
+    /// only construction sites needed `Box::new(record)` and the few
+    /// `record.clone()` sites feeding a `ConcurrencyRecord`-typed sink
+    /// needed `(*record).clone()`.
+    Insert(Box<ConcurrencyRecord>),
     Retire(RecordId),
     Remove(RecordId),
 }

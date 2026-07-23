@@ -133,18 +133,14 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     // provably untouched by this block's presence.
     let inclusive_branches = collect_inclusive_branches(graph, &order);
 
-    // Reserve addresses in order
-    // We do two passes: first to assign addresses, then to emit instructions
-    // For simplicity, we emit instructions in a single pass with placeholder fixups
-
-    // Assign base address per node
-    let mut addr = Addr::new(0);
-    for &node_idx in &order {
-        node_addr.insert(node_idx, addr);
-        addr += instr_count_for(graph, node_idx, &boundary_lookup, &inclusive_branches, &guardn_close_before_end);
-    }
-
-    // Build boundary error lookup: host_task_id → Vec<(node_idx, error_code)>
+    // Build boundary error lookup: host_task_id → Vec<(node_idx, error_code)>.
+    // BoundaryError v2 migration: moved ahead of the address-assignment pass
+    // below (was previously built after it, when boundary errors were still
+    // zero-cost structural metadata resolved into the now-deleted
+    // `error_route_map` side table post-emission) — sizing now needs to
+    // know, per host task, how many error arms it must wrap BEFORE
+    // computing that task's own instruction count, exactly the same
+    // ordering reason `boundary_lookup` (timers) already documents above.
     let mut boundary_error_lookup: HashMap<String, Vec<(NodeIndex, Option<String>)>> =
         HashMap::new();
     for &node_idx in &order {
@@ -159,6 +155,24 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 .or_default()
                 .push((node_idx, error_code.clone()));
         }
+    }
+
+    // Reserve addresses in order
+    // We do two passes: first to assign addresses, then to emit instructions
+    // For simplicity, we emit instructions in a single pass with placeholder fixups
+
+    // Assign base address per node
+    let mut addr = Addr::new(0);
+    for &node_idx in &order {
+        node_addr.insert(node_idx, addr);
+        addr += instr_count_for(
+            graph,
+            node_idx,
+            &boundary_lookup,
+            &boundary_error_lookup,
+            &inclusive_branches,
+            &guardn_close_before_end,
+        );
     }
 
     // Pre-scan: pair each converging GatewayAnd (parallel join) with its
@@ -282,7 +296,15 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
         // Structural-only IR nodes intentionally emit no instruction. Recording
         // their shared/terminal address would create a dangling debug-map entry.
-        if instr_count_for(graph, node_idx, &boundary_lookup, &inclusive_branches, &guardn_close_before_end) > 0 {
+        if instr_count_for(
+            graph,
+            node_idx,
+            &boundary_lookup,
+            &boundary_error_lookup,
+            &inclusive_branches,
+            &guardn_close_before_end,
+        ) > 0
+        {
             debug_map.insert(base, node.id().to_string());
         }
 
@@ -321,6 +343,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     base,
                     &node_addr,
                     &boundary_lookup,
+                    &boundary_error_lookup,
                     &mut task_intern,
                     &mut task_manifest,
                     &mut instructions,
@@ -597,8 +620,15 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
             }
 
             IRNode::BoundaryError { .. } => {
-                // Structural metadata only — no instruction emitted.
-                // Lowering resolves boundary error successor to build error_route_map.
+                // Structural metadata only — no instruction emitted at THIS
+                // node's own IR-processing site. BoundaryError v2 migration:
+                // its bytecode (`V2GuardArmError`, one per attached error
+                // boundary) is emitted inline at the host task's own
+                // lowering site instead (`lower_boundary_guarded_task_v2` /
+                // the `FfiServiceTask` arm, via `push_error_guard_arms` and
+                // `boundary_error_lookup`) — no longer zero-cost the way it
+                // was under the deleted `error_route_map` side table, but
+                // still not this arm's own responsibility to emit.
             }
 
             IRNode::DataObject { .. } => {
@@ -641,60 +671,90 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 let successors = get_successors(graph, node_idx);
 
                 // `exec_addr` is wherever `ExecFfi` actually lands, NOT
-                // necessarily this node's own `base` — under
-                // `LoweringTarget::V2` with a boundary timer, guard-open +
-                // arm-timer instructions precede it (V5, ruling I).
+                // necessarily this node's own `base` — under a boundary
+                // timer and/or boundary error(s), guard-open + arm
+                // instructions precede it (V5 ruling I; BoundaryError v2
+                // migration).
                 let exec_addr;
 
-                if let Some((bt_node_idx, spec)) = boundary_lookup.get(id) {
-                    let interrupting = matches!(
-                        &graph[*bt_node_idx],
-                        IRNode::BoundaryTimer {
-                            interrupting: true,
-                            ..
-                        }
-                    );
-                    let escalation_addr = get_successors(graph, *bt_node_idx)
-                        .first()
-                        .and_then(|s| node_addr.get(s).copied())
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "boundary timer on '{id}' has no outgoing flow — its \
-                                 handler target cannot be resolved"
-                            )
-                        })?;
-                    // Same adjacency requirement as the `ServiceTask`
-                    // arm (`lower_boundary_guarded_task_v2`'s doc
-                    // comment) — `duration` pushed BEFORE guard-open.
-                    instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
-                    if interrupting {
-                        instructions.push(Instr::V2Guard {
-                            handler: escalation_addr,
-                        });
+                let timer_boundary = boundary_lookup.get(id);
+                let error_boundaries = boundary_error_lookup.get(id);
+                let has_errors = error_boundaries.map(|v| !v.is_empty()).unwrap_or(false);
+
+                if timer_boundary.is_some() || has_errors {
+                    // Error boundary events are always interrupting (BPMN
+                    // spec, no non-interrupting variant) — see
+                    // `lower_boundary_guarded_task_v2`'s doc comment for the
+                    // full rationale, mirrored here verbatim.
+                    let timer_interrupting = timer_boundary.map(|(bt_node_idx, _)| {
+                        matches!(
+                            &graph[*bt_node_idx],
+                            IRNode::BoundaryTimer {
+                                interrupting: true,
+                                ..
+                            }
+                        )
+                    });
+                    let interrupting = has_errors || timer_interrupting.unwrap_or(true);
+
+                    let handler = if let Some((bt_node_idx, _)) = timer_boundary {
+                        get_successors(graph, *bt_node_idx)
+                            .first()
+                            .and_then(|s| node_addr.get(s).copied())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "boundary timer on '{id}' has no outgoing flow — its \
+                                     handler target cannot be resolved"
+                                )
+                            })?
                     } else {
-                        instructions.push(Instr::V2GuardN {
-                            handler: escalation_addr,
-                        });
+                        let (first_boundary_idx, _) = error_boundaries
+                            .and_then(|v| v.first())
+                            .expect("has_errors implies error_boundaries is Some and non-empty");
+                        get_successors(graph, *first_boundary_idx)
+                            .first()
+                            .and_then(|s| node_addr.get(s).copied())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "boundary error on '{id}' has no outgoing flow — its \
+                                     handler target cannot be resolved"
+                                )
+                            })?
+                    };
+
+                    if let Some((_, spec)) = timer_boundary {
+                        // Same adjacency requirement as the `ServiceTask`
+                        // arm (`lower_boundary_guarded_task_v2`'s doc
+                        // comment) — `duration` pushed BEFORE guard-open.
+                        instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
                     }
-                    instructions.push(Instr::V2GuardArmTimer);
-                    // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`)
-                    // must immediately follow `V2GuardArmTimer`
-                    // (verifier-enforced adjacency,
-                    // `v2_verifier::verify_v2_control_stack`) and only
-                    // ever bounds a `V2GuardN` target. `interrupting +
-                    // Cycle` is rejected earlier at `verify_or_err` time
-                    // (verifier.rs §7b: "cycle timers must be
-                    // non-interrupting"), so `spec` being `Cycle` here
-                    // guarantees `!interrupting` already — no silent
-                    // drop of `max_fires` to a fire-once fallback.
-                    if let TimerSpec::Cycle { max_fires, .. } = spec {
-                        debug_assert!(
-                            !interrupting,
-                            "interrupting boundary timer with a Cycle spec must have been \
-                             rejected by verify_or_err before lowering reaches this point"
-                        );
-                        instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+                    if interrupting {
+                        instructions.push(Instr::V2Guard { handler });
+                    } else {
+                        instructions.push(Instr::V2GuardN { handler });
                     }
+                    if let Some((_, spec)) = timer_boundary {
+                        instructions.push(Instr::V2GuardArmTimer);
+                        // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`)
+                        // must immediately follow `V2GuardArmTimer`
+                        // (verifier-enforced adjacency,
+                        // `v2_verifier::verify_v2_control_stack`) and only
+                        // ever bounds a `V2GuardN` target. `interrupting +
+                        // Cycle` is rejected earlier at `verify_or_err` time
+                        // (verifier.rs §7b: "cycle timers must be
+                        // non-interrupting"), so `spec` being `Cycle` here
+                        // guarantees `!interrupting` already — no silent
+                        // drop of `max_fires` to a fire-once fallback.
+                        if let TimerSpec::Cycle { max_fires, .. } = spec {
+                            debug_assert!(
+                                !interrupting,
+                                "interrupting boundary timer with a Cycle spec must have been \
+                                 rejected by verify_or_err before lowering reaches this point"
+                            );
+                            instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+                        }
+                    }
+                    push_error_guard_arms(graph, id, &boundary_error_lookup, &node_addr, &mut instructions)?;
                     exec_addr = Addr::new(instructions.len() as u32);
                     instructions.push(Instr::ExecFfi {
                         template_id: *template_id,
@@ -764,39 +824,12 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         }
     }
 
-    // Build error_route_map from BoundaryError nodes
-    let mut error_route_map: BTreeMap<Addr, Vec<ErrorRoute>> = BTreeMap::new();
-    for (host_task_id, error_boundaries) in &boundary_error_lookup {
-        // Find the host task's bytecode address
-        let host_node_idx = graph.node_indices().find(|&idx| {
-            matches!(&graph[idx], IRNode::ServiceTask { id, .. } | IRNode::FfiServiceTask { id, .. } if id == host_task_id)
-        });
-        let Some(host_idx) = host_node_idx else {
-            continue; // verifier should have caught this
-        };
-        let host_addr = node_addr[&host_idx];
-
-        let mut routes = Vec::new();
-        for (boundary_node_idx, error_code) in error_boundaries {
-            // Find the boundary error node's sole outgoing successor
-            let successors: Vec<_> = graph.neighbors(*boundary_node_idx).collect();
-            let Some(&successor_idx) = successors.first() else {
-                continue; // verifier should have caught this
-            };
-            let resume_at = node_addr[&successor_idx];
-            let boundary_element_id = graph[*boundary_node_idx].id().to_string();
-
-            routes.push(ErrorRoute {
-                error_code: error_code.clone(),
-                resume_at,
-                boundary_element_id,
-            });
-        }
-
-        // Sort: specific error codes first, catch-all (None) last
-        routes.sort_by_key(|r| r.error_code.is_none());
-        error_route_map.insert(host_addr, routes);
-    }
+    // BoundaryError v2 migration: the deleted `error_route_map` side table
+    // this block used to construct is now emitted directly into the
+    // bytecode as `V2GuardArmError` arms, inline in each host task's own
+    // lowering (`lower_boundary_guarded_task_v2` / the `FfiServiceTask`
+    // arm above, both via `push_error_guard_arms`) — nothing left to build
+    // here as a post-emission pass.
 
     // Compute bytecode_version as BLAKE3 of serialized program (B14: unified with FFI template IDs)
     let serialized = serde_json::to_string(&instructions)?;
@@ -822,7 +855,6 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         message_name_map: message_name_map,
         write_set: write_set,
         task_manifest: task_manifest,
-        error_route_map: error_route_map,
         flag_symbol_table: flag_symbol_table,
         data_objects: data_objects,
         ffi_task_decls: ffi_task_decls,
@@ -1012,28 +1044,39 @@ fn instr_count_for(
     graph: &IRGraph,
     node_idx: NodeIndex,
     boundary_lookup: &HashMap<String, (NodeIndex, TimerSpec)>,
+    boundary_error_lookup: &HashMap<String, Vec<(NodeIndex, Option<String>)>>,
     inclusive_branches: &HashMap<NodeIndex, Vec<InclusiveBranchInfo>>,
     guardn_close_before_end: &HashSet<NodeIndex>,
 ) -> u32 {
     match &graph[node_idx] {
         IRNode::ServiceTask { id, .. } | IRNode::FfiServiceTask { id, .. } => {
             let base = estimate_instr_count(graph, node_idx); // ExecNative/ExecFfi + Jump
-            if let Some((_, spec)) = boundary_lookup.get(id) {
-                // guard-open + PushI64 + V2GuardArmTimer + guard-end, plus
-                // one more for `V2GuardTimerCycle` when `spec` is
-                // `TimerSpec::Cycle` (`GUARD-TIMER-CYCLE>`, wiring BPMN's
-                // `timeCycle` through to the kernel's already-built
-                // bounded-repeat mechanism). An interrupting timer with a
-                // `Cycle` spec is rejected earlier, at `verify_or_err`
-                // time (verifier.rs §7b) — by the time this runs, every
-                // `Cycle` boundary timer reaching here is guaranteed
-                // non-interrupting, so no `interrupting` check is needed
-                // here to decide whether to size in the extra word.
-                let cycle_extra = if matches!(spec, TimerSpec::Cycle { .. }) { 1 } else { 0 };
-                base + 4 + cycle_extra
-            } else {
-                base
+            let has_timer = boundary_lookup.contains_key(id);
+            let error_count = boundary_error_lookup.get(id).map(Vec::len).unwrap_or(0);
+            if !has_timer && error_count == 0 {
+                return base;
             }
+            // BoundaryError v2 migration: a host task's guard wrap is now
+            // sized generally — guard-open(1) + guard-close(1), plus
+            // `PushI64`(1) + `V2GuardArmTimer`(1) [+ `V2GuardTimerCycle`(1)
+            // if `TimerSpec::Cycle`] when a boundary timer is attached, plus
+            // one `V2GuardArmError` per attached boundary error (specific
+            // codes first, catch-all last — cardinality only, order doesn't
+            // change the count). An interrupting timer with a `Cycle` spec
+            // is rejected earlier, at `verify_or_err` time (verifier.rs
+            // §7b) — by the time this runs, every `Cycle` boundary timer
+            // reaching here is guaranteed non-interrupting, so no
+            // `interrupting` check is needed here to decide whether to size
+            // in the extra word.
+            let mut extra = 2; // guard-open + guard-close
+            if let Some((_, spec)) = boundary_lookup.get(id) {
+                extra += 2; // PushI64 + V2GuardArmTimer
+                if matches!(spec, TimerSpec::Cycle { .. }) {
+                    extra += 1; // V2GuardTimerCycle
+                }
+            }
+            extra += error_count as u32; // one V2GuardArmError per route
+            base + extra
         }
         IRNode::GatewayInclusive {
             direction: GatewayDirection::Diverging,
@@ -1105,18 +1148,73 @@ fn timer_spec_duration_ms(spec: &TimerSpec) -> u64 {
     }
 }
 
-/// V5 (§18 ruling I, `LoweringTarget::V2` only): lower a `ServiceTask` that
-/// may host a boundary timer. Without one, identical to the v1 arm minus
+/// BoundaryError v2 migration: emits one `V2GuardArmError` per entry in
+/// `error_boundaries` (specific error codes first, catch-all — `error_code:
+/// None` — last, same precedence the deleted v1 `error_route_map`
+/// construction used), resolving each boundary error node's sole outgoing
+/// successor to its bytecode `Addr` exactly as that deleted code did.
+/// Shared by both `lower_boundary_guarded_task_v2` (`ServiceTask`) and the
+/// `FfiServiceTask` emission arm, since both host kinds support boundary
+/// errors identically.
+fn push_error_guard_arms(
+    graph: &IRGraph,
+    host_id: &str,
+    boundary_error_lookup: &HashMap<String, Vec<(NodeIndex, Option<String>)>>,
+    node_addr: &HashMap<NodeIndex, Addr>,
+    instructions: &mut Vec<Instr>,
+) -> Result<()> {
+    let Some(boundaries) = boundary_error_lookup.get(host_id) else {
+        return Ok(());
+    };
+    let mut sorted: Vec<&(NodeIndex, Option<String>)> = boundaries.iter().collect();
+    sorted.sort_by_key(|(_, code)| code.is_none());
+    for (boundary_node_idx, error_code) in sorted {
+        let successor_idx = get_successors(graph, *boundary_node_idx)
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow!(
+                    "boundary error on '{host_id}' has no outgoing flow — its handler \
+                     target cannot be resolved"
+                )
+            })?;
+        let handler = node_addr.get(&successor_idx).copied().ok_or_else(|| {
+            anyhow!(
+                "boundary error on '{host_id}' successor has no assigned bytecode address"
+            )
+        })?;
+        instructions.push(Instr::V2GuardArmError {
+            error_code: error_code.clone().map(String::into_boxed_str),
+            handler,
+        });
+    }
+    Ok(())
+}
+
+/// V5 (§18 ruling I, `LoweringTarget::V2` only) / BoundaryError v2 migration:
+/// lower a `ServiceTask` that may host a boundary timer and/or one or more
+/// boundary errors. With neither attached, identical to the v1 arm minus
 /// the (never-populated, for this path) `race_plan`/`boundary_map` side
-/// effects: `ExecNative` + `Jump`. With one, the guard-wrapped shape ruling
-/// I ratifies: `V2Guard`/`V2GuardN` (interrupting per the BPMN boundary
-/// event's own flag) immediately followed by `GUARD-TIMER>`'s arming pair
-/// (`PushI64` + `V2GuardArmTimer`, verifier-enforced adjacency), then the
+/// effects: `ExecNative` + `Jump`. With either (or both) attached, the
+/// guard-wrapped shape: `V2Guard`/`V2GuardN` — interrupting per the BPMN
+/// boundary TIMER event's own flag when only a timer is attached; error
+/// boundary events are ALWAYS interrupting per the BPMN spec (no
+/// non-interrupting variant exists), so any attached boundary error forces
+/// `V2Guard` regardless of what a co-attached timer's own flag says — then
+/// `GUARD-TIMER>`'s arming pair (`PushI64` + `V2GuardArmTimer` [+
+/// `V2GuardTimerCycle`], verifier-enforced adjacency, only when a timer is
+/// attached) immediately followed by one `V2GuardArmError` per boundary
+/// error (only when errors are attached; `push_error_guard_arms`), then the
 /// task's own work, then the matching guard-close, then the normal-path
-/// `Jump`. The guard's `handler` is the boundary event's own outgoing
-/// flow's target address — "that outgoing flow IS the handler target"
-/// (this step's own brief) — resolved exactly as the v1 arm already
-/// resolves `escalation_addr`, reused verbatim.
+/// `Jump`. The timer guard's `handler` is the boundary TIMER event's own
+/// outgoing flow's target address, exactly as before this migration; when
+/// only boundary errors are attached (no timer), `V2Guard`'s `handler`
+/// field is still required by the opcode's shape but is never actually
+/// fired through — `V2GuardArmError` arms carry their OWN handler and
+/// bypass `record.handler` entirely (see `Instr::V2GuardArmError`'s doc
+/// comment) — so it is set to the FIRST error route's own handler as an
+/// inert placeholder, never consulted by `V2TriggerGuard`/timer-fire
+/// because nothing issues either against an error-only guard.
 #[allow(clippy::too_many_arguments)]
 fn lower_boundary_guarded_task_v2(
     graph: &IRGraph,
@@ -1126,16 +1224,19 @@ fn lower_boundary_guarded_task_v2(
     base: Addr,
     node_addr: &HashMap<NodeIndex, Addr>,
     boundary_lookup: &HashMap<String, (NodeIndex, TimerSpec)>,
+    boundary_error_lookup: &HashMap<String, Vec<(NodeIndex, Option<String>)>>,
     task_intern: &mut HashMap<String, u32>,
     task_manifest: &mut Vec<String>,
     instructions: &mut Vec<Instr>,
 ) -> Result<()> {
     let task_id = intern_task(task_intern, task_manifest, task_type);
     let successors = get_successors(graph, node_idx);
-    let boundary = boundary_lookup.get(id);
+    let timer_boundary = boundary_lookup.get(id);
+    let error_boundaries = boundary_error_lookup.get(id);
+    let has_errors = error_boundaries.map(|v| !v.is_empty()).unwrap_or(false);
 
-    let Some((bt_node_idx, spec)) = boundary else {
-        // No boundary timer: identical shape to v1's unguarded case.
+    if timer_boundary.is_none() && !has_errors {
+        // No boundary timer or error: identical shape to v1's unguarded case.
         instructions.push(Instr::ExecNative {
             task_type: task_id,
             argc: 0,
@@ -1147,60 +1248,92 @@ fn lower_boundary_guarded_task_v2(
             .unwrap_or(base + 2u32);
         instructions.push(Instr::Jump { target });
         return Ok(());
+    }
+
+    let timer_interrupting = timer_boundary.map(|(bt_node_idx, _)| {
+        matches!(
+            &graph[*bt_node_idx],
+            IRNode::BoundaryTimer {
+                interrupting: true,
+                ..
+            }
+        )
+    });
+    // Error boundary events are always interrupting (BPMN spec, no
+    // non-interrupting variant) — presence of any boundary error forces the
+    // combined guard interrupting, regardless of a co-attached timer's own
+    // flag.
+    let interrupting = has_errors || timer_interrupting.unwrap_or(true);
+
+    // Guard-open `handler`: the timer's own escalation address when a timer
+    // is attached (the only case anything actually fires through
+    // `record.handler`); otherwise an inert placeholder — the first error
+    // route's own handler — since an error-only guard is only ever fired
+    // via `V2GuardArmError`'s own explicit target (see this function's doc
+    // comment).
+    let handler = if let Some((bt_node_idx, _)) = timer_boundary {
+        get_successors(graph, *bt_node_idx)
+            .first()
+            .and_then(|s| node_addr.get(s).copied())
+            .ok_or_else(|| {
+                anyhow!(
+                    "boundary timer on '{id}' has no outgoing flow — its handler \
+                     target cannot be resolved"
+                )
+            })?
+    } else {
+        let (first_boundary_idx, _) = error_boundaries
+            .and_then(|v| v.first())
+            .expect("has_errors implies error_boundaries is Some and non-empty");
+        get_successors(graph, *first_boundary_idx)
+            .first()
+            .and_then(|s| node_addr.get(s).copied())
+            .ok_or_else(|| {
+                anyhow!(
+                    "boundary error on '{id}' has no outgoing flow — its handler \
+                     target cannot be resolved"
+                )
+            })?
     };
 
-    let interrupting = matches!(
-        &graph[*bt_node_idx],
-        IRNode::BoundaryTimer {
-            interrupting: true,
-            ..
-        }
-    );
-    let escalation_addr = get_successors(graph, *bt_node_idx)
-        .first()
-        .and_then(|s| node_addr.get(s).copied())
-        .ok_or_else(|| {
-            anyhow!(
-                "boundary timer on '{id}' has no outgoing flow — its handler \
-                 target cannot be resolved"
-            )
-        })?;
-
-    // `GUARD-TIMER>` must land at exactly `guard_open_addr + 1`
-    // (verifier-enforced adjacency, `v2_verifier::verify_v2_control_stack`)
-    // — so its own operand (`duration`) must be pushed BEFORE the guard
-    // opens, not between guard-open and arm (`V2Guard`/`V2GuardN` touch
-    // neither stack, so the pushed value survives across them untouched;
-    // see `bpmn-lite-kernel`'s own `v2_guard_timer_trigger_fires_the_same_
-    // cascade_as_manual_v2_trigger_guard` fixture, `PushI64` at index 0,
-    // guard-open at index 1, `V2GuardArmTimer` at index 2).
-    instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+    if let Some((_, spec)) = timer_boundary {
+        // `GUARD-TIMER>` must land at exactly `guard_open_addr + 1`
+        // (verifier-enforced adjacency, `v2_verifier::verify_v2_control_stack`)
+        // — so its own operand (`duration`) must be pushed BEFORE the guard
+        // opens, not between guard-open and arm (`V2Guard`/`V2GuardN` touch
+        // neither stack, so the pushed value survives across them untouched;
+        // see `bpmn-lite-kernel`'s own `v2_guard_timer_trigger_fires_the_same_
+        // cascade_as_manual_v2_trigger_guard` fixture, `PushI64` at index 0,
+        // guard-open at index 1, `V2GuardArmTimer` at index 2).
+        instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+    }
     if interrupting {
-        instructions.push(Instr::V2Guard {
-            handler: escalation_addr,
-        });
+        instructions.push(Instr::V2Guard { handler });
     } else {
-        instructions.push(Instr::V2GuardN {
-            handler: escalation_addr,
-        });
+        instructions.push(Instr::V2GuardN { handler });
     }
-    instructions.push(Instr::V2GuardArmTimer);
-    // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`) must immediately
-    // follow `V2GuardArmTimer` (verifier-enforced adjacency,
-    // `v2_verifier::verify_v2_control_stack`) and only ever bounds a
-    // `V2GuardN` target. `interrupting + Cycle` is rejected earlier at
-    // `verify_or_err` time (verifier.rs §7b: "cycle timers must be
-    // non-interrupting"), so `spec` being `Cycle` here guarantees
-    // `!interrupting` already — no silent drop of `max_fires` to a
-    // fire-once fallback.
-    if let TimerSpec::Cycle { max_fires, .. } = spec {
-        debug_assert!(
-            !interrupting,
-            "interrupting boundary timer with a Cycle spec must have been rejected by \
-             verify_or_err before lowering reaches this point"
-        );
-        instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+    if let Some((_, spec)) = timer_boundary {
+        instructions.push(Instr::V2GuardArmTimer);
+        // `GUARD-TIMER-CYCLE>` (`Instr::V2GuardTimerCycle`) must immediately
+        // follow `V2GuardArmTimer` (verifier-enforced adjacency,
+        // `v2_verifier::verify_v2_control_stack`) and only ever bounds a
+        // `V2GuardN` target. `interrupting + Cycle` is rejected earlier at
+        // `verify_or_err` time (verifier.rs §7b: "cycle timers must be
+        // non-interrupting"), so `spec` being `Cycle` here guarantees
+        // `!interrupting` already — no silent drop of `max_fires` to a
+        // fire-once fallback. (A co-attached boundary error would also force
+        // `interrupting` true, which would likewise make a `Cycle` spec here
+        // unreachable past `verify_or_err` — same guarantee, doubled up.)
+        if let TimerSpec::Cycle { max_fires, .. } = spec {
+            debug_assert!(
+                !interrupting,
+                "interrupting boundary timer with a Cycle spec must have been rejected by \
+                 verify_or_err before lowering reaches this point"
+            );
+            instructions.push(Instr::V2GuardTimerCycle { max_fires: *max_fires });
+        }
     }
+    push_error_guard_arms(graph, id, boundary_error_lookup, node_addr, instructions)?;
     instructions.push(Instr::ExecNative {
         task_type: task_id,
         argc: 0,
@@ -2389,6 +2522,177 @@ mod tests {
 
         crate::Compiler::lower_v2(&graph)
             .expect("v2 FfiServiceTask boundary-timer Cycle lowering must verify end to end");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  BoundaryError v2 migration (§18 v0.10 ruling I, second arming-
+    //  trigger kind) — `V2GuardArmError` frontend lowering.
+    // ═══════════════════════════════════════════════════════════
+
+    /// Build a host task (ServiceTask or FfiServiceTask, chosen by
+    /// `ffi`) with `error_codes.len()` specific-error-code boundary errors
+    /// plus one catch-all, each routing to its own distinct escalation
+    /// task — proves multi-route lowering (not just single-arm), and lets
+    /// callers assert each route's `V2GuardArmError.handler` resolves to
+    /// the RIGHT escalation task, independently.
+    fn make_boundary_error_graph(ffi: bool, error_codes: &[&str]) -> IRGraph {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host = if ffi {
+            graph.add_node(IRNode::FfiServiceTask {
+                id: "host".to_string(),
+                name: "Host".to_string(),
+                template_id: [9u8; 32],
+                inputs: vec![],
+                outputs: vec![],
+            })
+        } else {
+            graph.add_node(IRNode::ServiceTask {
+                id: "host".to_string(),
+                name: "Host".to_string(),
+                task_type: "risky_work".to_string(),
+            })
+        };
+        let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
+        graph.add_edge(start, host, IREdge { id: "f_start".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f_normal".to_string(), condition: None });
+
+        let mut next_id = 0u32;
+        let mut wire_boundary = |graph: &mut IRGraph, error_code: Option<String>, label: &str| {
+            let boundary = graph.add_node(IRNode::BoundaryError {
+                id: format!("err_{label}"),
+                attached_to: "host".to_string(),
+                error_code,
+            });
+            let escalate = graph.add_node(IRNode::ServiceTask {
+                id: format!("escalate_{label}"),
+                name: format!("Escalate {label}"),
+                task_type: format!("escalate_{label}"),
+            });
+            let end = graph.add_node(IRNode::End {
+                id: format!("end_{label}"),
+                terminate: false,
+            });
+            next_id += 1;
+            graph.add_edge(
+                boundary,
+                escalate,
+                IREdge { id: format!("f_boundary_{next_id}"), condition: None },
+            );
+            graph.add_edge(
+                escalate,
+                end,
+                IREdge { id: format!("f_escalate_{next_id}"), condition: None },
+            );
+        };
+        for code in error_codes {
+            wire_boundary(&mut graph, Some((*code).to_string()), code);
+        }
+        wire_boundary(&mut graph, None, "catch_all");
+
+        graph
+    }
+
+    /// (c) Multiple specific-code boundary errors on ONE host task each
+    /// lower to their own `V2GuardArmError`, and each one's `handler`
+    /// resolves to ITS OWN escalation task's address, not to a shared or
+    /// swapped one — proves the multi-arm mechanism, not just single-arm.
+    #[test]
+    fn test_boundary_error_lowering_v2_multiple_specific_routes_resolve_independently() {
+        let graph = make_boundary_error_graph(false, &["SPECIFIC_A", "SPECIFIC_B"]);
+        verifier::verify_or_err(&graph).unwrap();
+        let workflow = crate::Compiler::lower_v2(&graph)
+            .expect("multi-route boundary-error lowering must verify end to end");
+        let instrs = workflow.envelope().instructions();
+
+        let arm_error_instrs: Vec<(Option<String>, Addr)> = instrs
+            .iter()
+            .filter_map(|i| match i {
+                Instr::V2GuardArmError { error_code, handler } => {
+                    Some((error_code.as_ref().map(|s| s.to_string()), *handler))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            arm_error_instrs.len(),
+            3,
+            "expected 3 armed routes (2 specific + 1 catch-all), got {arm_error_instrs:?}"
+        );
+
+        // Specific-first, catch-all-last ordering.
+        assert!(arm_error_instrs[0].0.is_some());
+        assert!(arm_error_instrs[1].0.is_some());
+        assert!(
+            arm_error_instrs[2].0.is_none(),
+            "catch-all must be the last armed route"
+        );
+
+        // Each specific route's handler must resolve to ITS OWN escalation
+        // task, not a shared/swapped address.
+        let debug_map = workflow.envelope().metadata().debug_map();
+        for (code, handler) in &arm_error_instrs[..2] {
+            let code = code.as_ref().unwrap();
+            let expected_task_id = format!("escalate_{code}");
+            let resolved_id = debug_map.get(handler);
+            assert_eq!(
+                resolved_id,
+                Some(&expected_task_id),
+                "route for {code} must resolve to its own escalation task {expected_task_id}, \
+                 got {resolved_id:?}"
+            );
+        }
+        assert_ne!(
+            arm_error_instrs[0].1, arm_error_instrs[1].1,
+            "the two specific routes must resolve to DIFFERENT handler addresses"
+        );
+
+        // Host task is guard-wrapped (interrupting — error boundaries are
+        // always interrupting).
+        assert!(instrs.iter().any(|i| matches!(i, Instr::V2Guard { .. })));
+        assert!(instrs.iter().any(|i| matches!(i, Instr::V2GuardEnd)));
+    }
+
+    /// (e) FfiServiceTask verifier fix: a boundary error attached to an
+    /// FfiServiceTask host now compiles where it previously rejected
+    /// (verifier.rs 8a host-existence check omitted `IRNode::FfiServiceTask`
+    /// — the same class of bug as the sibling BoundaryTimer fix).
+    #[test]
+    fn test_boundary_error_on_ffi_service_task_host_compiles() {
+        let graph = make_boundary_error_graph(true, &["FFI_SPECIFIC"]);
+        verifier::verify_or_err(&graph)
+            .expect("boundary error attached to FfiServiceTask host must pass verification");
+        let workflow = crate::Compiler::lower_v2(&graph)
+            .expect("boundary error attached to FfiServiceTask host must lower and verify");
+        let instrs = workflow.envelope().instructions();
+        assert!(
+            instrs.iter().any(|i| matches!(i, Instr::V2GuardArmError { .. })),
+            "FfiServiceTask host must emit V2GuardArmError for its attached boundary error"
+        );
+        assert!(
+            instrs.iter().any(|i| matches!(i, Instr::ExecFfi { .. })),
+            "FfiServiceTask host's own ExecFfi must still be emitted, guard-wrapped"
+        );
+    }
+
+    /// Catch-all-only (no specific codes): still wraps the host and emits
+    /// exactly one `V2GuardArmError` with `error_code: None`.
+    #[test]
+    fn test_boundary_error_lowering_v2_catch_all_only() {
+        let graph = make_boundary_error_graph(false, &[]);
+        verifier::verify_or_err(&graph).unwrap();
+        let workflow = crate::Compiler::lower_v2(&graph).unwrap();
+        let arm_error_instrs: Vec<&Instr> = workflow
+            .envelope()
+            .instructions()
+            .iter()
+            .filter(|i| matches!(i, Instr::V2GuardArmError { .. }))
+            .collect();
+        assert_eq!(arm_error_instrs.len(), 1);
+        assert!(matches!(
+            arm_error_instrs[0],
+            Instr::V2GuardArmError { error_code: None, .. }
+        ));
     }
 
     /// Build a diverging/converging `GatewayInclusive` pair with the given

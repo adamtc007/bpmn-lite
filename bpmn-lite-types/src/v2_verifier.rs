@@ -661,6 +661,83 @@ pub(crate) fn verify_v2_control_stack(
                     }
                 }
             }
+            // §18 v0.10 ruling I, second arming-trigger kind (BoundaryError
+            // v2 migration): `GUARD-ERROR>` arms the guard scope it's part
+            // of an arming run for. Unlike `V2GuardArmTimer` (which may
+            // only ever be the FIRST instruction after guard-open — one
+            // timer per guard), `V2GuardArmError` instructions may stack N
+            // deep (multiple error routes on one guard), so adjacency is
+            // "immediately after guard-open, OR immediately after another
+            // arm instruction (`V2GuardArmTimer`/`V2GuardArmError`/
+            // `V2GuardTimerCycle`) that is itself part of the same
+            // contiguous arming run" — checking only the immediate
+            // predecessor is sufficient (not recursive) because that
+            // predecessor was already validated by this same rule when the
+            // verifier's forward walk reached it.
+            Instr::V2GuardArmError { error_code, .. } => {
+                let immediate_predecessor_is_arm = address > 0
+                    && matches!(
+                        instructions.get(address - 1),
+                        Some(Instr::V2GuardArmTimer)
+                            | Some(Instr::V2GuardArmError { .. })
+                            | Some(Instr::V2GuardTimerCycle { .. })
+                    );
+                match state.last() {
+                    Some(top)
+                        if matches!(
+                            top.kind,
+                            ScopeKind::Guard | ScopeKind::GuardN | ScopeKind::GuardR
+                        ) && (top.opened_at.index() + 1 == address
+                            || immediate_predecessor_is_arm) =>
+                    {
+                        // Bytecode-level duplicate-catch-all check (defense
+                        // in depth alongside `verifier.rs`'s IR-level 8d
+                        // check — lowering is not itself verified, and
+                        // hand-assembled bytecode fixtures bypass the IR
+                        // layer entirely): at most one `error_code: None`
+                        // arm per guard's arming run.
+                        if error_code.is_none() {
+                            let dup = (top.opened_at.index() + 1..address).any(|i| {
+                                matches!(
+                                    instructions.get(i),
+                                    Some(Instr::V2GuardArmError { error_code: None, .. })
+                                )
+                            });
+                            if dup {
+                                return Err(violation(
+                                    address,
+                                    "GUARD-ERROR>",
+                                    "at most one catch-all (error_code: None) GUARD-ERROR> arm \
+                                     is allowed per guard",
+                                ));
+                            }
+                        }
+                        if address + 1 < len {
+                            propagate(&mut entry_states, &mut worklist, address, address + 1, state)?;
+                        }
+                    }
+                    Some(top) => {
+                        return Err(violation(
+                            address,
+                            "GUARD-ERROR>",
+                            format!(
+                                "must immediately follow the guard-open instruction it arms, or \
+                                 another arm instruction arming the same guard — top of stack is \
+                                 {:?}-kind, opened at {} (this instruction is not part of that \
+                                 guard's arming run)",
+                                top.kind, top.opened_at
+                            ),
+                        ));
+                    }
+                    None => {
+                        return Err(violation(
+                            address,
+                            "GUARD-ERROR>",
+                            "no open guard scope to arm",
+                        ));
+                    }
+                }
+            }
             Instr::V2RaceOpen { .. } => {
                 if address + 1 < len {
                     let mut pushed = state;
@@ -863,7 +940,6 @@ mod tests {
             message_name_map: StdBTreeMap::new(),
             write_set: StdBTreeMap::new(),
             task_manifest: Vec::new(),
-            error_route_map: StdBTreeMap::new(),
             flag_symbol_table: StdBTreeMap::new(),
             data_objects: StdBTreeMap::new(),
             ffi_task_decls: StdBTreeMap::new(),

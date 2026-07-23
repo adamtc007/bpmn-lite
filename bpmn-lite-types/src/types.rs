@@ -522,6 +522,52 @@ pub enum Instr {
         max_fires: u32,
     },
 
+    /// `GUARD-ERROR>` — `( -- )`. §18 v0.10 ruling I's arming-trigger family,
+    /// second kind: error-match, alongside timer. Arms an already-open
+    /// `V2Guard`/`V2GuardN`/`V2GuardR` record (verifier-enforced adjacency to
+    /// the guard-open instruction it arms, same discipline as
+    /// `V2GuardArmTimer`) with a `BusinessRejection`-code match. Unlike every
+    /// other arm instruction in this family, this one carries its OWN
+    /// `handler` address rather than firing through the guard's own `handler`
+    /// field — deliberate and ratified: a single host task's error boundary
+    /// commonly has multiple simultaneous armed routes (BPMN allows N
+    /// specific-error-code boundary events plus one catch-all per task,
+    /// verifier-enforced in `verifier.rs`'s BoundaryError checks), each
+    /// resuming at its own address, and `ConcurrencyRecord.handler` is a
+    /// single field fixed at guard-open time. Multiple `GUARD-ERROR>`
+    /// instructions may follow one guard-open, each pushed onto that guard's
+    /// `ConcurrencyRecord.error_routes`; `error_code: None` is a catch-all
+    /// (matches any `BusinessRejection` code) — verifier enforces at most one
+    /// catch-all per guard, mirroring the existing per-host-task limit this
+    /// replaces (v1's `verifier.rs` §8d IR-level check; this is the same
+    /// invariant re-checked at the bytecode level since lowering's IR->
+    /// bytecode translation is not itself verified). Fire order at match
+    /// time is specific-code-first, catch-all-last (same precedence v1's
+    /// `error_route_map` used).
+    ///
+    /// This is a DELIBERATE, RATIFIED, CONTAINED break of the
+    /// "arm instructions never carry targets" convention `GUARD-TIMER>` set
+    /// — `V2GuardArmTimer` deliberately carries no target, relying entirely
+    /// on `record.handler`; `V2GuardArmError` deliberately does the
+    /// opposite. Do not silently normalize this away or "fix" it to match
+    /// `V2GuardArmTimer`'s shape — the two arm kinds have genuinely
+    /// different cardinality requirements (one timer vs. N error routes per
+    /// guard).
+    ///
+    /// No control-stack change. Does not schedule a `DurableEffect` (unlike
+    /// `V2GuardArmTimer`) — a `BusinessRejection` firing is not a durable
+    /// timer, it is `apply_job_failure` matching against the guard's own
+    /// `error_routes` directly; see the kernel's `apply_job_failure` doc
+    /// comment at the matched-route path for the full mechanism, and
+    /// `v2_trigger_guard_changes`'s `_with_target` variant for how firing
+    /// reuses the exact same handler-spawn/interrupting-unwind logic
+    /// `V2TriggerGuard`/timer-fire already use, just with an explicit target
+    /// instead of reading `record.handler`.
+    V2GuardArmError {
+        error_code: Option<Box<str>>,
+        handler: Addr,
+    },
+
     /// `RACE{` — `( n -- ) [ -- h ]`. Open a first-wins race record over
     /// the next `arm_count` arms. `arm_count` is a static embedded field
     /// (not an operand-stack value) because V-5's race-shape theorem needs
@@ -1165,8 +1211,6 @@ pub struct CompiledProgram {
     pub(crate) write_set: BTreeMap<String, HashSet<FlagKey>>,
     /// All task_type references in the program.
     pub(crate) task_manifest: Vec<String>,
-    /// ExecNative bytecode addr → ordered error routes (specific codes first, catch-all last).
-    pub(crate) error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
     /// Compile-time flag name → FlagKey mapping. Inverted from the lowering intern table;
     /// preserved so the FFI binding layer can resolve symbolic variable names to storage keys.
     pub(crate) flag_symbol_table: BTreeMap<FlagKey, String>,
@@ -1202,7 +1246,6 @@ pub type LegacyProgramParts = (
     BTreeMap<u32, String>,
     BTreeMap<String, HashSet<FlagKey>>,
     Vec<String>,
-    BTreeMap<Addr, Vec<ErrorRoute>>,
     BTreeMap<FlagKey, String>,
     BTreeMap<String, crate::ffi_bindings::DataObjectDecl>,
     BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
@@ -1220,7 +1263,6 @@ impl CompiledProgram {
             message_name_map,
             write_set,
             task_manifest,
-            error_route_map,
             flag_symbol_table,
             data_objects,
             ffi_task_decls,
@@ -1234,7 +1276,6 @@ impl CompiledProgram {
             message_name_map,
             write_set,
             task_manifest,
-            error_route_map,
             flag_symbol_table,
             data_objects,
             ffi_task_decls,
@@ -1285,9 +1326,6 @@ impl CompiledProgram {
     pub fn task_manifest(&self) -> &Vec<String> {
         &self.task_manifest
     }
-    pub fn error_route_map(&self) -> &BTreeMap<Addr, Vec<ErrorRoute>> {
-        &self.error_route_map
-    }
     pub fn flag_symbol_table(&self) -> &BTreeMap<FlagKey, String> {
         &self.flag_symbol_table
     }
@@ -1310,7 +1348,6 @@ macro_rules! legacy_program {
         message_name_map: $message_name_map:expr,
         write_set: $write_set:expr,
         task_manifest: $task_manifest:expr,
-        error_route_map: $error_route_map:expr,
         flag_symbol_table: $flag_symbol_table:expr,
         data_objects: $data_objects:expr,
         ffi_task_decls: $ffi_task_decls:expr $(,)?
@@ -1324,7 +1361,6 @@ macro_rules! legacy_program {
             $message_name_map,
             $write_set,
             $task_manifest,
-            $error_route_map,
             $flag_symbol_table,
             $data_objects,
             $ffi_task_decls,
@@ -1368,15 +1404,6 @@ pub struct Incident {
     pub created_at: Timestamp,
     pub resolved_at: Option<Timestamp>,
     pub resolution: Option<String>,
-}
-
-// ─── Error routing ────────────────────────────────────────────
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ErrorRoute {
-    pub error_code: Option<String>,
-    pub resume_at: Addr,
-    pub boundary_element_id: String,
 }
 
 #[cfg(test)]
