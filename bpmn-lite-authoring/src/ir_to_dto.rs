@@ -187,6 +187,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             attached_to,
             spec,
             interrupting,
+            ..
         } => {
             let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec);
             NodeDto::BoundaryTimer {
@@ -204,6 +205,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             id,
             attached_to,
             error_code,
+            ..
         } => NodeDto::BoundaryError {
             id: id.clone(),
             host: attached_to.clone(),

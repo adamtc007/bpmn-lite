@@ -499,6 +499,12 @@ fn handle_open_tag(
                     id,
                     attached_to,
                     cancel_activity,
+                    // V8 (§31) — per-guard failure budget; a non-standard,
+                    // additive `failureBudget` attribute (Zeebe has no
+                    // equivalent — a documented superset, §31). Absent or
+                    // non-numeric ⇒ inherit the workflow default.
+                    failure_budget: get_attr_opt(e, "failureBudget")
+                        .and_then(|value| value.trim().parse::<u32>().ok()),
                 });
                 *sub_event_type = None;
                 *timer_text = None;
@@ -773,6 +779,7 @@ fn handle_close_tag(
                 id,
                 attached_to,
                 cancel_activity,
+                failure_budget,
             }) = current_element.take()
             {
                 match sub_event_type.take() {
@@ -783,6 +790,7 @@ fn handle_close_tag(
                             attached_to,
                             spec,
                             interrupting: cancel_activity,
+                            failure_budget,
                         });
                         node_map.insert(id, idx);
                     }
@@ -796,6 +804,7 @@ fn handle_close_tag(
                             id: id.clone(),
                             attached_to,
                             error_code,
+                            failure_budget,
                         });
                         node_map.insert(id, idx);
                     }
@@ -854,6 +863,7 @@ enum ElementContext {
         id: String,
         attached_to: String,
         cancel_activity: bool,
+        failure_budget: Option<u32>,
     },
     EndEvent {
         id: String,

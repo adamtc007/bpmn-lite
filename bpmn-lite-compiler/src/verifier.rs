@@ -308,6 +308,7 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 attached_to,
                 interrupting,
                 spec,
+                failure_budget: _,
             } = &graph[idx]
             {
                 // 7a. attached_to must reference an existing ServiceTask,
@@ -407,6 +408,7 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 id,
                 attached_to,
                 error_code,
+                failure_budget: _,
             } = &graph[idx]
             {
                 // 8a. attached_to must reference an existing ServiceTask or
@@ -1240,6 +1242,7 @@ mod tests {
             attached_to: "host".to_string(),
             spec,
             interrupting,
+            failure_budget: None,
         });
         let escalate = graph.add_node(IRNode::ServiceTask {
             id: "escalate".to_string(),
@@ -1335,6 +1338,7 @@ mod tests {
             id: "catch".to_string(),
             attached_to: "host".to_string(),
             error_code: Some("SOME_ERROR".to_string()),
+            failure_budget: None,
         });
         let escalate = graph.add_node(IRNode::ServiceTask {
             id: "escalate".to_string(),
@@ -1405,6 +1409,7 @@ mod tests {
             id: "catch".to_string(),
             attached_to: "no_such_host".to_string(),
             error_code: None,
+            failure_budget: None,
         });
         let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
         graph.add_edge(start, end, IREdge { id: "f1".to_string(), condition: None });
@@ -1439,11 +1444,13 @@ mod tests {
             id: "catch_a".to_string(),
             attached_to: "host".to_string(),
             error_code: Some("SANCTIONS_HIT".to_string()),
+            failure_budget: None,
         });
         let boundary_b = graph.add_node(IRNode::BoundaryError {
             id: "catch_b".to_string(),
             attached_to: "host".to_string(),
             error_code: Some("SANCTIONS_HIT".to_string()),
+            failure_budget: None,
         });
         let handler_a = graph.add_node(IRNode::ServiceTask {
             id: "handler_a".to_string(),
@@ -1492,11 +1499,13 @@ mod tests {
             id: "catch_a".to_string(),
             attached_to: "host".to_string(),
             error_code: Some("SANCTIONS_HIT".to_string()),
+            failure_budget: None,
         });
         let boundary_b = graph.add_node(IRNode::BoundaryError {
             id: "catch_b".to_string(),
             attached_to: "host".to_string(),
             error_code: Some("TIMEOUT".to_string()),
+            failure_budget: None,
         });
         let handler_a = graph.add_node(IRNode::ServiceTask {
             id: "handler_a".to_string(),

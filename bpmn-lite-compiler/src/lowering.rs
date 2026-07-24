@@ -5,6 +5,16 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// V8 (§31) — the per-guard `failureBudget` (`max_failures`) declared on a
+/// boundary event node, if any; `None` inherits the workflow default.
+fn boundary_failure_budget(graph: &IRGraph, idx: NodeIndex) -> Option<u32> {
+    match &graph[idx] {
+        IRNode::BoundaryTimer { failure_budget, .. }
+        | IRNode::BoundaryError { failure_budget, .. } => *failure_budget,
+        _ => None,
+    }
+}
+
 /// V5.3 (§18, landed 2026-07-23): `lower()` now emits v2 words
 /// unconditionally for every construct, including inclusive gateways
 /// (`V2Fork`/`V2Join` + the dynamic-arity skip-to-join pattern, ruling H)
@@ -252,6 +262,10 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     // of the `V2WaitMsg`/`PublishMessage`/`V2ArmMsg` instruction they belong to.
     let mut v2_corr_sources: BTreeMap<Addr, bpmn_lite_types::ffi_bindings::BindingSource> =
         BTreeMap::new();
+    // V8 (§31): per-guard failure budgets, keyed by the guard-open
+    // instruction's address; populated at each V2Guard/V2GuardN emission from
+    // the boundary event's `failureBudget` annotation.
+    let mut v2_guard_budgets: BTreeMap<Addr, ScopeFailureBudget> = BTreeMap::new();
     for &node_idx in &order {
         if let IRNode::DataObject {
             id,
@@ -336,6 +350,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     &mut task_intern,
                     &mut task_manifest,
                     &mut instructions,
+                    &mut v2_guard_budgets,
                 )?;
             }
 
@@ -714,6 +729,26 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                         // comment) — `duration` pushed BEFORE guard-open.
                         instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
                     }
+                    // V8 (§31): the guard-open is at the current address (one
+                    // past the optional `PushI64` above). Record the boundary
+                    // event's per-guard budget keyed by that address; a timer
+                    // boundary's budget takes precedence, else the first error
+                    // boundary's. `failureBudget="0"` is a lowering-time reject.
+                    let guard_open_addr = Addr::new(instructions.len() as u32);
+                    let budget_max = timer_boundary
+                        .map(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
+                        .or_else(|| {
+                            error_boundaries
+                                .and_then(|v| v.first())
+                                .map(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
+                        })
+                        .flatten();
+                    if let Some(max_failures) = budget_max {
+                        let budget = ScopeFailureBudget::new(1, max_failures).map_err(|error| {
+                            anyhow!("boundary event on '{id}' has invalid failureBudget {max_failures}: {error}")
+                        })?;
+                        v2_guard_budgets.insert(guard_open_addr, budget);
+                    }
                     if interrupting {
                         instructions.push(Instr::V2Guard { handler });
                     } else {
@@ -845,7 +880,8 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         data_objects: data_objects,
         ffi_task_decls: ffi_task_decls,
     }
-    .with_v2_corr_sources(v2_corr_sources))
+    .with_v2_corr_sources(v2_corr_sources)
+    .with_v2_guard_budgets(v2_guard_budgets, ScopeFailureBudget::conservative_default()))
 }
 
 /// V5.3 (§18, landed 2026-07-23): thin alias, retained for the existing
@@ -1591,6 +1627,7 @@ fn lower_boundary_guarded_task_v2(
     task_intern: &mut HashMap<String, u32>,
     task_manifest: &mut Vec<String>,
     instructions: &mut Vec<Instr>,
+    v2_guard_budgets: &mut BTreeMap<Addr, ScopeFailureBudget>,
 ) -> Result<()> {
     let task_id = intern_task(task_intern, task_manifest, task_type);
     let successors = get_successors(graph, node_idx);
@@ -1669,6 +1706,23 @@ fn lower_boundary_guarded_task_v2(
         // cascade_as_manual_v2_trigger_guard` fixture, `PushI64` at index 0,
         // guard-open at index 1, `V2GuardArmTimer` at index 2).
         instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+    }
+    // V8 (§31): record the guard's per-boundary failure budget (see the
+    // identical logic on the FFI-task guard-open path).
+    let guard_open_addr = Addr::new(instructions.len() as u32);
+    let budget_max = timer_boundary
+        .map(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
+        .or_else(|| {
+            error_boundaries
+                .and_then(|v| v.first())
+                .map(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
+        })
+        .flatten();
+    if let Some(max_failures) = budget_max {
+        let budget = ScopeFailureBudget::new(1, max_failures).map_err(|error| {
+            anyhow!("boundary event on '{id}' has invalid failureBudget {max_failures}: {error}")
+        })?;
+        v2_guard_budgets.insert(guard_open_addr, budget);
     }
     if interrupting {
         instructions.push(Instr::V2Guard { handler });
@@ -2712,6 +2766,7 @@ mod tests {
             attached_to: "host".to_string(),
             spec,
             interrupting,
+            failure_budget: None,
         });
         let escalate = graph.add_node(IRNode::ServiceTask {
             id: "escalate".to_string(),
@@ -2775,6 +2830,43 @@ mod tests {
         // entirely — there is no field left on `CompiledProgram` to be
         // empty or populated, which is the stronger, type-level version
         // of the same guarantee this assertion used to prove at runtime.
+    }
+
+    /// V8 (§31): a boundary event's `failureBudget` lowers into the artifact's
+    /// per-guard budget table, keyed by the guard-open instruction's address;
+    /// a guard with no budget stays absent (inherits the workflow default).
+    #[test]
+    fn v8_boundary_failure_budget_lowers_into_v2_guard_budgets() {
+        let mut graph = make_boundary_timer_graph(true);
+        for idx in graph.node_indices() {
+            if let IRNode::BoundaryTimer { failure_budget, .. } = &mut graph[idx] {
+                *failure_budget = Some(3);
+            }
+        }
+        verifier::verify_or_err(&graph).unwrap();
+        let program = lower_v2(&graph).unwrap();
+
+        let guard_addr = program
+            .program()
+            .iter()
+            .position(|i| matches!(i, Instr::V2Guard { .. }))
+            .expect("interrupting boundary opens a V2Guard");
+        let budget = program
+            .v2_guard_budgets()
+            .get(&Addr::new(guard_addr as u32))
+            .expect("the guard address must carry the declared budget");
+        assert_eq!(budget.max_failures(), 3, "declared failureBudget must be lowered");
+        assert_eq!(
+            program.default_guard_budget().max_failures(),
+            5,
+            "the workflow default is the conservative compiled-in ceiling"
+        );
+
+        let unbudgeted = lower_v2(&make_boundary_timer_graph(true)).unwrap();
+        assert!(
+            unbudgeted.v2_guard_budgets().is_empty(),
+            "a guard with no failureBudget must not appear in the table"
+        );
     }
 
     /// V5 boundary-timer: non-interrupting case opens `V2GuardN`, closed by
@@ -2930,6 +3022,7 @@ mod tests {
                 max_fires: 5,
             },
             interrupting: false,
+            failure_budget: None,
         });
         let escalate = graph.add_node(IRNode::ServiceTask {
             id: "escalate".to_string(),
@@ -3001,6 +3094,7 @@ mod tests {
                 id: format!("err_{label}"),
                 attached_to: "host".to_string(),
                 error_code,
+                failure_budget: None,
             });
             let escalate = graph.add_node(IRNode::ServiceTask {
                 id: format!("escalate_{label}"),

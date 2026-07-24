@@ -83,11 +83,16 @@ pub enum IRNode {
         attached_to: String,
         spec: TimerSpec,
         interrupting: bool,
+        /// V8 (§31) — per-guard failure budget (`max_failures`) declared on
+        /// the boundary event; `None` inherits the workflow default.
+        failure_budget: Option<u32>,
     },
     BoundaryError {
         id: String,
         attached_to: String,
         error_code: Option<String>,
+        /// V8 (§31) — see `BoundaryTimer::failure_budget`.
+        failure_budget: Option<u32>,
     },
     GatewayInclusive {
         id: String,
