@@ -5480,6 +5480,148 @@ mod tests {
         assert_eq!(resumed.wait, WaitState::Running);
     }
 
+    /// T11 perf claim — a program of `waits` sequential `V2WaitUntil`s, each
+    /// preceded by `filler_pairs` stack-neutral `PushI64;Pop` pairs. Returns
+    /// the number of durable commits (one per `apply`, since each apply runs
+    /// a maximal deterministic burst and stops only at a park).
+    fn count_commits_for_wait_program(waits: usize, filler_pairs: usize) -> usize {
+        // Strictly-increasing deadlines so each successive V2WaitUntil parks:
+        // a WaitUntil whose deadline is already reached passes through.
+        let mut instrs = Vec::new();
+        let mut deadline = 5_000i64;
+        for _ in 0..waits {
+            for _ in 0..filler_pairs {
+                instrs.push(Instr::PushI64(0));
+                instrs.push(Instr::Pop);
+            }
+            instrs.push(Instr::PushI64(deadline));
+            instrs.push(Instr::V2WaitUntil);
+            deadline += 5_000;
+        }
+        for _ in 0..filler_pairs {
+            instrs.push(Instr::PushI64(0));
+            instrs.push(Instr::Pop);
+        }
+        instrs.push(Instr::End);
+
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [12u8; 32],
+            program: instrs,
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v2-perf-commits").unwrap(),
+        )
+        .unwrap();
+        let (_, base, context) = fixture();
+        let instance = base.instance().clone();
+        let tenant = bpmn_lite_types::TenantId::new(&instance.tenant_id).unwrap();
+        let instance_id = instance.instance_id;
+        let root = base.fibers().values().next().unwrap().fiber_id;
+        let abi = workflow.envelope().abi_version();
+        let bytecode_version = instance.bytecode_version;
+
+        let mut env = SnapshotEnvelope::new(
+            abi,
+            bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                instance,
+                [Fiber::new(root, 0)],
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let mut revision = 1u64;
+        let mut commits = 0usize;
+
+        // One apply == one durable commit. Each iteration either runs a
+        // Running fibre's burst to its next park/terminal (Tick), or wakes a
+        // timer-parked fibre (TimerFired); the instance is done when no fibre
+        // is Running or timer-parked.
+        loop {
+            let timer_park = env
+                .state()
+                .fibers()
+                .values()
+                .find(|fiber| matches!(fiber.wait, WaitState::Timer { .. }))
+                .cloned();
+            let command = if let Some(parked) = timer_park {
+                let deadline_ms = match parked.wait {
+                    WaitState::Timer { deadline_ms } => deadline_ms,
+                    _ => unreachable!("filtered to Timer waits above"),
+                };
+                // The fibre parks at WaitUntil_addr+1 but the scheduled
+                // timer's effect id keys on the WaitUntil's own address.
+                let wait_addr = u32::from(parked.pc).saturating_sub(1);
+                let timer = bpmn_lite_types::ClaimedTimer::new(
+                    bpmn_lite_types::ClaimedTimerIdentity::new(
+                        tenant.clone(),
+                        EffectId::for_instruction(instance_id, parked.fiber_id, wait_addr),
+                        instance_id,
+                        parked.fiber_id,
+                    ),
+                    deadline_ms,
+                    TimerKind::Wait,
+                    None,
+                    Uuid::nil(),
+                );
+                Command::TimerFired { timer, fired_at: deadline_ms }
+            } else if env
+                .state()
+                .fibers()
+                .values()
+                .any(|fiber| matches!(fiber.wait, WaitState::Running))
+            {
+                Command::Tick { fiber_id: None }
+            } else {
+                break;
+            };
+            let snapshot = env.state().to_runtime_snapshot();
+            let transition = apply(&workflow, &snapshot, &command, &context).unwrap();
+            commits += 1;
+            env = materialize_snapshot(env.state(), &transition, abi, revision);
+            revision += 1;
+            assert!(commits <= 10_000, "commit drive failed to terminate");
+        }
+        commits
+    }
+
+    /// V&S §1: "Commit frequency is proportional to *waits*, not to
+    /// instruction count." Proven directly: driving each wait to completion
+    /// takes a fixed wake+run commit pair, so commits(W, F) == 2·W + 1 with
+    /// no instruction-count term — inflating the non-wait instruction count
+    /// between waits by 20× (filler 5 → 100) does not change the total.
+    #[test]
+    fn v2_commits_scale_with_waits_not_instruction_count() {
+        for &waits in &[0usize, 1, 2, 4, 8] {
+            let baseline = count_commits_for_wait_program(waits, 0);
+            assert_eq!(
+                baseline,
+                2 * waits + 1,
+                "commit count must be linear in waits (waits={waits})"
+            );
+            for &filler in &[5usize, 25, 100] {
+                let commits = count_commits_for_wait_program(waits, filler);
+                assert_eq!(
+                    commits, baseline,
+                    "commit count must be independent of instruction count \
+                     (waits={waits}, filler_pairs={filler})"
+                );
+            }
+        }
+    }
+
     /// V4.1 race words (`V2RaceOpen`/`V2ArmTimer`/`V2ArmMsg`/`V2RaceClose`)
     /// reproduce the oracle's Scenario 1 message-wins shape: both a timer
     /// and a message alternative are armed, the message wins, the race
