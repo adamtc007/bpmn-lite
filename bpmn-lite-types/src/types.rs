@@ -1240,6 +1240,19 @@ pub struct CompiledProgram {
     /// shape and rationale as `v2_ffi_task_decls`; defaulted empty in
     /// `from_legacy_parts`, set via `with_v2_corr_sources`.
     pub(crate) v2_corr_sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
+
+    /// V8 (§31) — per-guard failure-budget ceilings, keyed by the guard's
+    /// `opened_at` address. The escalation *counter* stays store-side (§15);
+    /// only the ceiling it compares against is artifact-resident here, so a
+    /// budget change is an artifact change (re-hashed, re-pinned). Same
+    /// side-table shape as `v2_corr_sources`; defaulted empty in
+    /// `from_legacy_parts`, set via `with_v2_guard_budgets`. A guard absent
+    /// from this map inherits `default_guard_budget`.
+    pub(crate) v2_guard_budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
+
+    /// V8 (§31) — the workflow-level default budget for guards not named in
+    /// `v2_guard_budgets`. Defaults to `ScopeFailureBudget::conservative_default()`.
+    pub(crate) default_guard_budget: crate::transition::ScopeFailureBudget,
 }
 
 /// Field-less compatibility tuple used only while pre-T7 callers migrate.
@@ -1289,6 +1302,8 @@ impl CompiledProgram {
             ffi_task_decls,
             v2_ffi_task_decls: BTreeMap::new(),
             v2_corr_sources: BTreeMap::new(),
+            v2_guard_budgets: BTreeMap::new(),
+            default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
         }
     }
 
@@ -1320,6 +1335,27 @@ impl CompiledProgram {
 
     pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
         &self.v2_corr_sources
+    }
+
+    /// Set the per-guard failure-budget table and workflow default. Not part
+    /// of `LegacyProgramParts` — see field docs on `v2_guard_budgets`.
+    #[doc(hidden)]
+    pub fn with_v2_guard_budgets(
+        mut self,
+        budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
+        default_budget: crate::transition::ScopeFailureBudget,
+    ) -> Self {
+        self.v2_guard_budgets = budgets;
+        self.default_guard_budget = default_budget;
+        self
+    }
+
+    pub fn v2_guard_budgets(&self) -> &BTreeMap<Addr, crate::transition::ScopeFailureBudget> {
+        &self.v2_guard_budgets
+    }
+
+    pub fn default_guard_budget(&self) -> crate::transition::ScopeFailureBudget {
+        self.default_guard_budget
     }
 
     pub fn bytecode_version(&self) -> [u8; 32] {

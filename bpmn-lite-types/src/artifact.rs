@@ -87,6 +87,16 @@ pub struct ArtifactMetadata {
     /// V7 (§28) — message-correlation key sources. See doc on
     /// `CompiledProgram::v2_corr_sources`.
     v2_corr_sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
+    /// V8 (§31) — per-guard failure-budget ceilings + workflow default. See
+    /// doc on `CompiledProgram::v2_guard_budgets`.
+    #[serde(default = "default_guard_budgets_map")]
+    v2_guard_budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
+    #[serde(default = "crate::transition::ScopeFailureBudget::conservative_default")]
+    default_guard_budget: crate::transition::ScopeFailureBudget,
+}
+
+fn default_guard_budgets_map() -> BTreeMap<Addr, crate::transition::ScopeFailureBudget> {
+    BTreeMap::new()
 }
 
 impl ArtifactMetadata {
@@ -128,6 +138,14 @@ impl ArtifactMetadata {
 
     pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, FfiTaskDecl> {
         &self.v2_ffi_task_decls
+    }
+
+    pub fn v2_guard_budgets(&self) -> &BTreeMap<Addr, crate::transition::ScopeFailureBudget> {
+        &self.v2_guard_budgets
+    }
+
+    pub fn default_guard_budget(&self) -> crate::transition::ScopeFailureBudget {
+        self.default_guard_budget
     }
 
     pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
@@ -187,6 +205,8 @@ impl ArtifactEnvelope {
             ffi_task_decls: program.ffi_task_decls.clone(),
             v2_ffi_task_decls: program.v2_ffi_task_decls.clone(),
             v2_corr_sources: program.v2_corr_sources.clone(),
+            v2_guard_budgets: program.v2_guard_budgets.clone(),
+            default_guard_budget: program.default_guard_budget,
         };
         let limits = verify_program(&program.program, &metadata)?;
         Ok(Self {
@@ -268,6 +288,8 @@ impl ExecutableWorkflow {
             ffi_task_decls: metadata.ffi_task_decls.clone(),
             v2_ffi_task_decls: metadata.v2_ffi_task_decls.clone(),
             v2_corr_sources: metadata.v2_corr_sources.clone(),
+            v2_guard_budgets: metadata.v2_guard_budgets.clone(),
+            default_guard_budget: metadata.default_guard_budget,
         }
     }
 }
@@ -885,6 +907,8 @@ mod v2_fixtures {
             ffi_task_decls: BTreeMap::new(),
             v2_ffi_task_decls: BTreeMap::new(),
             v2_corr_sources: BTreeMap::new(),
+            v2_guard_budgets: BTreeMap::new(),
+            default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
         }
     }
 

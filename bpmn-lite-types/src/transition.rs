@@ -656,6 +656,13 @@ impl ScopeFailureBudget {
         Ok(Self { version, max_failures })
     }
 
+    /// The conservative compiled-in default budget, applied to a guard that
+    /// carries neither its own nor a workflow-level budget — the ceiling the
+    /// retired hardcoded placeholder used (§31).
+    pub const fn conservative_default() -> Self {
+        Self { version: 1, max_failures: 5 }
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }

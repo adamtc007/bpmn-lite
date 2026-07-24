@@ -970,6 +970,8 @@ mod tests {
             ffi_task_decls: StdBTreeMap::new(),
             v2_ffi_task_decls: StdBTreeMap::new(),
             v2_corr_sources: StdBTreeMap::new(),
+            v2_guard_budgets: StdBTreeMap::new(),
+            default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
         }
     }
 
