@@ -877,6 +877,21 @@ Fixed per `EOP-VS-BPMN-ISA-002.md` §14 (amendment v0.6, ruling D): `apply_job_f
 
   Files touched: `bpmn-lite-kernel/src/lib.rs`, `bpmn-lite-compiler/src/lowering.rs`, `bpmn-lite-compiler/src/parser.rs` (fixture), `bpmn-lite-store-postgres/src/store_postgres.rs`. Full receipts: `cargo build --workspace --all-features` clean; `cargo test -p bpmn-lite-compiler -p bpmn-lite-engine -p bpmn-lite-kernel -p bpmn-lite-types --all-features` — zero failures (`bpmn-lite-compiler` 128/128, `bpmn-lite-engine` 74/74, `bpmn-lite-kernel` 46/46, `bpmn-lite-types` 94/94); `cargo clippy -p bpmn-lite-store-postgres --all-targets --all-features -- -D warnings` clean. The two DB-bound integrity fixes are behind the Ring 1 load-guard, verified by construction + build/clippy rather than a live-DB regression test.
 
+## Tranche V7 — Content-Based Message Correlation (Camunda-8 parity) — CAREFUL
+
+Opened 2026-07-24 from §27's fork, ruled by Adam: content-based correlation, Camunda-8 message correlation as the minimum floor. ISA change to three ratified v2 words + the gRPC correlation wire contract. Design/decision record: `EOP-VS-BPMN-ISA-002.md` §28. The keystone-adjacent decision (the correlation *model*, and the single shared content-canonicalization contract that waiter/publisher/wire must all derive through) is fixed in §28; this tranche implements it, receipts per step.
+
+- [ ] 7.1 `correlation_key_string(&Value) -> Result<String>` + `resolve_correlation_value(&ProcessInstance, &BindingSource) -> Result<Value>` (`ffi_bindings.rs`, types crate). The one shared derivation; bool/i64/string/ref content, array/object rejected. Red→green unit tests.
+- [ ] 7.2 ISA change: drop `corr_reg` from `Instr::V2WaitMsg`/`PublishMessage`/`V2ArmMsg` and `V2RaceArm::Msg`; `WaitState::Msg.corr_key` `Value`→`String`; add `v2_corr_sources: BTreeMap<Addr, BindingSource>` metadata (mirror `v2_ffi_task_decls`). Update `canonical.rs` encodings + golden bytes + proptest. Delete `Fiber::regs`, its canonical encoding, `max_registers` (`artifact.rs`), and the register-count `VerifiedLimits` check.
+- [ ] 7.3 Kernel: `V2WaitMsg`/`V2ArmMsg`/`PublishMessage` resolve `v2_corr_sources[pc]` → content string at park/arm/publish, store the `String` in `WaitState::Msg`/race arm/buffer key; delivery match becomes pure string equality; all `fiber.regs` reads removed. Red→green kernel tests including dynamic-string discrimination (two instances, distinct keys, no cross-wake).
+- [ ] 7.4 Lowering (3 sites): `parse_corr_reg` → `resolve_expression(corr_key_source, data_objects)` into `v2_corr_sources` keyed by the instruction `Addr`; delete `parse_corr_reg`. Verifier (`verifier.rs`/`v2_verifier.rs`): a correlation `BindingSource` must resolve to a scalar — reject array/object-typed sources with a typed diagnostic.
+- [ ] 7.5 gRPC wire contract (`grpc.rs`): `proto_to_correlation_value` accepts raw string/i64/bool content, canonicalizes via `correlation_key_string`; retire the `str_<id>`/`ref_<id>` intern-id requirement (keep array rejection).
+- [ ] 7.6 End-to-end parity fixture (`bpmn-lite-engine`): XML→publish→correlate proving a dynamic string business key correlates two instances independently (the case inexpressible today). Full workspace build/test/clippy + `check-transition-read-safety.sh`; authorship-blind review of the correlation-model change (CAREFUL close); update V&S §28 / plan post-close with receipts; recompile corpus; commit/push per step.
+
+**Gate:** dynamic business-key correlation demonstrably works end-to-end; `Fiber::regs`/`max_registers` gone (kernel LOC net-negative); wire contract accepts raw content; blind review closed; zero ignored production-path tests.
+
+**Open boundary flagged to Adam (§28):** *message start events* (instantiate-by-message) are deferred as a process-instantiation concern outside the wait/publish word surface — the one stated edge of "Camunda-8 minimum," to confirm or pull in.
+
 ## Traceability
 
 | V&S decision | Tranches |

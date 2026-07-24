@@ -594,4 +594,30 @@ E6 (EOP meta-rule, "no success-by-default"): no failure class reaches correct ha
 
 ---
 
+## 28. Amendment v0.12 (2026-07-24) — §27's open fork resolved: content-based message correlation (Camunda-8 parity). ISA change to three ratified v2 words.
+
+§27 surfaced that named correlation-key resolution was unimplemented. Investigating the fix uncovered the real defect: the entire correlation *substrate* is vacuous, and the correlation *model* cannot express a dynamic business key.
+
+**What was found (the substrate is dead, and the model is too weak).**
+- `corr_reg` on `Instr::V2WaitMsg`/`PublishMessage`/`V2ArmMsg` and `V2RaceArm::Msg` indexes `Fiber::regs: [Value; 8]`. **`Fiber::regs` is written nowhere** — not by the XML frontend, not the DSL frontend, not the kernel. It is initialized to `[Bool(false); 8]` and only ever read by these `corr_reg` sites. Every XML-lowered wait/publish therefore correlates on the constant `value_key(Bool(false)) = "b:false"`: correlation does not discriminate at all today.
+- The correlation *model* is intern-scalar, not content-based. The external wire contract (`grpc.rs::proto_to_correlation_value`) requires a string correlation key to arrive as `str_<u32>`/`ref_<u32>` — an **intern id**, assigned at compile time. `Value::Str(u32)`/`Value::Ref(u32)` cannot represent a runtime-dynamic string (there is no runtime intern table). And `assign_storage` routes String/domain data objects to `domain_payload`, wholly outside this intern-scalar model. So a `case_id` arriving in a message payload — the ordinary Camunda business-key case — is inexpressible.
+
+**Ruling (Adam, 2026-07-24): implement content-based correlation, with Camunda-8 message correlation as the minimum feature floor.** This is an ISA change to three ratified, hash-frozen v2 words and a change to the gRPC correlation wire contract — recorded here as a v2 ISA amendment, per the keystone/hash-freeze discipline, before implementation.
+
+**The model (content, not intern id).**
+- **Correlation key = a content string, resolved from process data.** At lowering, a `correlationKey` FEEL expression (`=case_id`, `=`-prefix already stripped by the parser) is resolved by the existing `resolve_expression` into a `BindingSource` (`Literal` scalar / `FlagRef` / `DomainPayloadRef`) — the same abstraction the FFI binding layer already uses to turn a named data object into a runtime value. No new name-resolution mechanism.
+- **Carriage: a side table `v2_corr_sources: BTreeMap<Addr, BindingSource>`**, keyed by the wait/publish/arm instruction's own address, mirroring `v2_ffi_task_decls` exactly (V-9-compatible — V-9 forbids race-plan/join/boundary *control-flow* tables, not data-binding tables; the `v2_ffi_task_decls` precedent is explicit). The three `Instr` variants and `V2RaceArm::Msg` drop `corr_reg` entirely.
+- **Runtime resolution at park/arm/publish:** resolve the `BindingSource` against the instance (`flags` + `domain_payload`) to a scalar, then canonicalize to a correlation string via one shared `correlation_key_string(scalar) -> Result<String>` (bool → `"true"`/`"false"`, i64 → decimal, string → content verbatim; array/object → typed reject, matching the existing "correlation keys must be scalar" boundary). The single shared function is load-bearing: waiter, publisher, and wire must derive the key identically or matching silently fails — no second derivation path may exist.
+- **`WaitState::Msg.corr_key: Value` → `String`** (the resolved content key). Matching becomes pure string equality (it already compares against `correlation_key: String`). `V2RaceArm::Msg` likewise stores the resolved content string.
+- **Wire contract (gRPC):** `proto_to_correlation_value` accepts raw content (string / i64 / bool) and canonicalizes via the same `correlation_key_string`; the `str_<id>`/`ref_<id>` intern-id requirement is retired. An external publisher sends `correlationKey: "ACME-42"`, as Camunda 8 does.
+- **`Fiber::regs` is deleted** (dead storage): the field, its canonical encoding, the `max_registers` artifact metric, and the per-fiber register-count `VerifiedLimits` check. Net kernel/state simplification, serving the V6 "kernel LOC net-negative" gate.
+
+**Camunda-8 correlation scope committed as the floor** (what "done" means): correlation key from a process-variable expression; publish/correlate by message name + content correlation key + payload, with `msgId` dedup and TTL buffering (buffer already exists); subscriptions via intermediate catch / receive task / message boundary / send task; buffering until a subscription appears within TTL. **Explicitly deferred, flagged for Adam:** *message start events* (instantiate-a-new-instance-by-message) — a process-instantiation concern, not part of the wait/publish word surface being changed here; called out as the one boundary of "Camunda-8 minimum," to confirm or pull in.
+
+**Blast radius (implemented as Tranche V7, CAREFUL — blind review at close):** `types.rs` (3 `Instr` + `V2RaceArm::Msg` + `WaitState::Msg` + `v2_corr_sources` metadata); `canonical.rs` (those encodings + `Fiber` sans `regs` + golden bytes + proptest); `artifact.rs` (`max_registers` retired); `ffi_bindings.rs` (`correlation_key_string` + a `resolve_correlation_value`); kernel (three handlers + delivery match + `V2RaceArm::Msg` resolution + `regs` removal); `lowering.rs` (three sites: `parse_corr_reg` → `resolve_expression` into `v2_corr_sources`); `verifier.rs`/`v2_verifier.rs` (a correlation source must resolve to a scalar); `grpc.rs` (wire contract). REST carries no message-publish path (only parent/child `correlation_id`), so it is untouched.
+
+**Receipts (to be produced by V7):** red→green per step; a full XML→publish→correlate end-to-end fixture proving a dynamic string business key correlates two instances independently (the case that is inexpressible today); differential parity against Camunda-8 semantics for the committed scope; blind review of the correlation-model change.
+
+---
+
 *Ratification of D1–D4 unblocks EOP-EX-BPMN-ISA-002 (oracle) and EOP-PLAN-BPMN-ISA-002 (tranches V1–V6). Nothing in this document alters the KERNEL-001 durability substrate.*
