@@ -4407,6 +4407,17 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // FK-orphaned live tables — not reachable by any CASCADE, so a reused
+        // test DB would leak them across tests. Named here so the harness
+        // exercises the same completeness the cutover wipe script must have.
+        sqlx::query("TRUNCATE dsl_bus.inbox CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("TRUNCATE message_buffer")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         sqlx::query("TRUNCATE workflow_instances CASCADE")
             .execute(&pool)
@@ -5872,6 +5883,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pre_budget, 1, "seed must create a guard_failure_budget row");
+
+        // FK-orphaned live state (no FK path to workflow_instances, so CASCADE
+        // does NOT reach them) — must be named explicitly in the wipe script.
+        sqlx::query(
+            "INSERT INTO message_buffer (tenant_id, message_name, correlation_key, msg_id, payload, expires_at) \
+             VALUES ('default', 'msg', 'corr', 'm1', $1, now() + interval '1 hour')",
+        )
+        .bind(&[0u8][..])
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO dsl_bus.inbox (idempotency_key, source_domain, endpoint, tenant_id) \
+             VALUES ($1, 'src', 'invocation', 'default')",
+        )
+        .bind(Uuid::now_v7())
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        let pre_buffer: i64 = sqlx::query_scalar("SELECT count(*) FROM message_buffer")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        let pre_inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM dsl_bus.inbox")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            (pre_buffer, pre_inbox),
+            (1, 1),
+            "seeds must create the FK-orphaned rows (buffer={pre_buffer}, inbox={pre_inbox})"
+        );
         assert_eq!(
             store.verify_artifact_corpus().await.unwrap(),
             1,
@@ -5884,13 +5927,17 @@ mod tests {
             "/../scripts/cutover-wipe.sql"
         ))
         .unwrap();
-        for statement in sql.split(';') {
+        // Strip full-line `--` comments before splitting on `;` — psql's lexer
+        // ignores a `;` inside a comment, but this hand-rolled splitter would
+        // otherwise treat one as a statement terminator.
+        let sql_statements: String = sql
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for statement in sql_statements.split(';') {
             let trimmed = statement.trim();
-            if trimmed.is_empty()
-                || trimmed
-                    .lines()
-                    .all(|line| line.trim().is_empty() || line.trim_start().starts_with("--"))
-            {
+            if trimmed.is_empty() {
                 continue;
             }
             sqlx::query(trimmed).execute(&pool).await.unwrap();
@@ -5904,6 +5951,19 @@ mod tests {
         assert_eq!(
             post_budget, 0,
             "TRUNCATE workflow_instances CASCADE must clear guard_failure_budget"
+        );
+        let post_buffer: i64 = sqlx::query_scalar("SELECT count(*) FROM message_buffer")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        let post_inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM dsl_bus.inbox")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            (post_buffer, post_inbox),
+            (0, 0),
+            "the wipe must explicitly clear FK-orphaned live state (message_buffer, dsl_bus.inbox)"
         );
         assert_eq!(
             store.verify_artifact_corpus().await.unwrap(),
