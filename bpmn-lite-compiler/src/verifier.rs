@@ -393,6 +393,14 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
     {
         // Track catch-all count per host task
         let mut host_catch_all_count: HashMap<String, Vec<String>> = HashMap::new();
+        // Track specific-code count per (host task, error code) — a route
+        // whose code never appears twice is unambiguous; a second
+        // `BoundaryError` on the same host with the same code makes
+        // `record.error_routes`'s runtime `.find()` (kernel `lib.rs`) match
+        // only the first-armed one, leaving the second silently
+        // unreachable rather than rejected — the same failure class 8d
+        // already closes for catch-all, generalized to specific codes.
+        let mut host_specific_code_ids: HashMap<(String, String), Vec<String>> = HashMap::new();
 
         for idx in graph.node_indices() {
             if let IRNode::BoundaryError {
@@ -441,12 +449,21 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                     });
                 }
 
-                // 8c. Track catch-all (error_code: None) per host
-                if error_code.is_none() {
-                    host_catch_all_count
-                        .entry(attached_to.clone())
-                        .or_default()
-                        .push(id.clone());
+                // 8c. Track catch-all (error_code: None) per host, and
+                // specific codes per (host, code).
+                match error_code {
+                    None => {
+                        host_catch_all_count
+                            .entry(attached_to.clone())
+                            .or_default()
+                            .push(id.clone());
+                    }
+                    Some(code) => {
+                        host_specific_code_ids
+                            .entry((attached_to.clone(), code.clone()))
+                            .or_default()
+                            .push(id.clone());
+                    }
                 }
             }
         }
@@ -460,6 +477,22 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                         host_id,
                         catch_all_ids.len(),
                         catch_all_ids.join(", ")
+                    ),
+                    element_id: Some(host_id.clone()),
+                });
+            }
+        }
+
+        // 8e. At most 1 BoundaryError per (host task, specific error code)
+        for ((host_id, code), ids) in &host_specific_code_ids {
+            if ids.len() > 1 {
+                errors.push(VerifyError {
+                    message: format!(
+                        "Task '{}' has {} error boundaries for code '{}' (max 1): [{}]",
+                        host_id,
+                        ids.len(),
+                        code,
+                        ids.join(", ")
                     ),
                     element_id: Some(host_id.clone()),
                 });
@@ -1383,6 +1416,112 @@ mod tests {
                 .iter()
                 .any(|e| e.message.contains("does not reference a task")),
             "BoundaryError attached to a nonexistent host must still be rejected, got: {errors:?}"
+        );
+    }
+
+    /// 8e: two `BoundaryError` nodes on the same host with the SAME
+    /// specific error code compile and pair edges cleanly, but at runtime
+    /// `record.error_routes`'s `.find()` (kernel `apply_job_failure`) only
+    /// ever matches the first-armed route — the second is silently
+    /// unreachable, not rejected. Must be caught here, not discovered at
+    /// runtime.
+    #[test]
+    fn test_boundary_error_duplicate_specific_code_on_same_host_is_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host = graph.add_node(IRNode::ServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            task_type: "long_work".to_string(),
+        });
+        let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
+        let boundary_a = graph.add_node(IRNode::BoundaryError {
+            id: "catch_a".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("SANCTIONS_HIT".to_string()),
+        });
+        let boundary_b = graph.add_node(IRNode::BoundaryError {
+            id: "catch_b".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("SANCTIONS_HIT".to_string()),
+        });
+        let handler_a = graph.add_node(IRNode::ServiceTask {
+            id: "handler_a".to_string(),
+            name: "Handler A".to_string(),
+            task_type: "handle_a".to_string(),
+        });
+        let handler_b = graph.add_node(IRNode::ServiceTask {
+            id: "handler_b".to_string(),
+            name: "Handler B".to_string(),
+            task_type: "handle_b".to_string(),
+        });
+        let end_a = graph.add_node(IRNode::End { id: "end_a".to_string(), terminate: false });
+        let end_b = graph.add_node(IRNode::End { id: "end_b".to_string(), terminate: false });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(boundary_a, handler_a, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(handler_a, end_a, IREdge { id: "f4".to_string(), condition: None });
+        graph.add_edge(boundary_b, handler_b, IREdge { id: "f5".to_string(), condition: None });
+        graph.add_edge(handler_b, end_b, IREdge { id: "f6".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("SANCTIONS_HIT") && e.message.contains("max 1")),
+            "two BoundaryError nodes on one host with the same specific code must be rejected, got: {errors:?}"
+        );
+    }
+
+    /// Sanity counterpart: two `BoundaryError` nodes on the same host with
+    /// DIFFERENT specific codes remain admitted — 8e must not overreach
+    /// into rejecting the legitimate multi-arm case this migration exists
+    /// to support.
+    #[test]
+    fn test_boundary_error_distinct_specific_codes_on_same_host_is_admitted() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host = graph.add_node(IRNode::ServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            task_type: "long_work".to_string(),
+        });
+        let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
+        let boundary_a = graph.add_node(IRNode::BoundaryError {
+            id: "catch_a".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("SANCTIONS_HIT".to_string()),
+        });
+        let boundary_b = graph.add_node(IRNode::BoundaryError {
+            id: "catch_b".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("TIMEOUT".to_string()),
+        });
+        let handler_a = graph.add_node(IRNode::ServiceTask {
+            id: "handler_a".to_string(),
+            name: "Handler A".to_string(),
+            task_type: "handle_a".to_string(),
+        });
+        let handler_b = graph.add_node(IRNode::ServiceTask {
+            id: "handler_b".to_string(),
+            name: "Handler B".to_string(),
+            task_type: "handle_b".to_string(),
+        });
+        let end_a = graph.add_node(IRNode::End { id: "end_a".to_string(), terminate: false });
+        let end_b = graph.add_node(IRNode::End { id: "end_b".to_string(), terminate: false });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(boundary_a, handler_a, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(handler_a, end_a, IREdge { id: "f4".to_string(), condition: None });
+        graph.add_edge(boundary_b, handler_b, IREdge { id: "f5".to_string(), condition: None });
+        graph.add_edge(handler_b, end_b, IREdge { id: "f6".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            !errors.iter().any(|e| e.message.contains("max 1")),
+            "two BoundaryError nodes on one host with distinct codes must be admitted, got: {errors:?}"
         );
     }
 

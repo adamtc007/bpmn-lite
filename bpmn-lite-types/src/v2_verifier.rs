@@ -711,6 +711,31 @@ pub(crate) fn verify_v2_control_stack(
                                      is allowed per guard",
                                 ));
                             }
+                        } else {
+                            // Same defense-in-depth, generalized to a
+                            // specific code (`verifier.rs`'s IR-level 8e):
+                            // two arms for the same code on one guard would
+                            // silently leave the second unreachable at
+                            // runtime (`error_routes`'s `.find()` matches
+                            // only the first), not rejected.
+                            let dup = (top.opened_at.index() + 1..address).any(|i| {
+                                matches!(
+                                    instructions.get(i),
+                                    Some(Instr::V2GuardArmError { error_code: Some(other), .. })
+                                        if other == error_code.as_ref().unwrap()
+                                )
+                            });
+                            if dup {
+                                return Err(violation(
+                                    address,
+                                    "GUARD-ERROR>",
+                                    format!(
+                                        "at most one GUARD-ERROR> arm for error code '{}' is \
+                                         allowed per guard",
+                                        error_code.as_ref().unwrap()
+                                    ),
+                                ));
+                            }
                         }
                         if address + 1 < len {
                             propagate(&mut entry_states, &mut worklist, address, address + 1, state)?;
@@ -1047,6 +1072,59 @@ mod tests {
             /* 2 */ Instr::End,
             /* 3 */ Instr::V2GuardNEnd, // handler: pops the still-armed GuardN token
             /* 4 */ Instr::End,
+        ]);
+    }
+
+    // ─── GUARD-ERROR>: duplicate error-code arms ─────────────────
+
+    /// Bytecode-level counterpart to `verifier.rs`'s IR-level 8e: two
+    /// `V2GuardArmError` arms on one guard's arming run with the SAME
+    /// specific code must be rejected — a hand-assembled fixture bypasses
+    /// the IR layer entirely, so this is the only check standing between
+    /// it and the silent second-arm-unreachable hazard.
+    #[test]
+    fn guard_arm_error_duplicate_specific_code_rejected() {
+        let err = reject(vec![
+            /* 0 */ Instr::V2Guard { handler: Addr::new(5) },
+            /* 1 */
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".into()),
+                handler: Addr::new(5),
+            },
+            /* 2 */
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".into()),
+                handler: Addr::new(5),
+            },
+            /* 3 */ Instr::V2GuardEnd,
+            /* 4 */ Instr::End,
+            /* 5 */ Instr::End,
+        ]);
+        assert!(
+            err.to_string().contains("SANCTIONS_HIT"),
+            "expected the duplicate-code rejection to name the offending code, got: {err}"
+        );
+    }
+
+    /// Sanity counterpart: two `V2GuardArmError` arms with DIFFERENT
+    /// specific codes on one guard remain admitted.
+    #[test]
+    fn guard_arm_error_distinct_specific_codes_admitted() {
+        admit(vec![
+            /* 0 */ Instr::V2Guard { handler: Addr::new(5) },
+            /* 1 */
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".into()),
+                handler: Addr::new(5),
+            },
+            /* 2 */
+            Instr::V2GuardArmError {
+                error_code: Some("TIMEOUT".into()),
+                handler: Addr::new(5),
+            },
+            /* 3 */ Instr::V2GuardEnd,
+            /* 4 */ Instr::End,
+            /* 5 */ Instr::End,
         ]);
     }
 
