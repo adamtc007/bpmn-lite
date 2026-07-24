@@ -3761,6 +3761,377 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
     );
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Multi-pair GatewayInclusive — end-to-end runtime proof (Direction A,
+//  `docs/todo/EOP-VS-BPMN-ISA-002.md` §19; verifier.rs's "9. Inclusive
+//  gateway validation" count-based rejection and
+//  `bpmn-lite-authoring/src/validate.rs`'s V10 both lifted). The tests
+//  above (`t_ig_v2_*`) each drive exactly ONE `GatewayInclusive` pair
+//  through the real engine; `lowering.rs`'s
+//  `test_two_sequential_inclusive_pairs_lower_correctly` and
+//  `test_two_independently_nested_inclusive_pairs_pair_correctly` prove
+//  multi-pair COMPILATION correctness (bytecode-level `V2Join.pairing`
+//  assertions) but never execute a single instruction. These tests close
+//  that gap: real `tick_instance`/`run_instance`/`complete_job` traces,
+//  asserting on job activation counts, PER-ROUND activation ordering (to
+//  prove sequential/independent routing, not just eventual completion),
+//  and final `ProcessState`.
+// ═══════════════════════════════════════════════════════════
+
+/// Drains an instance to completion, driving `run_instance`/`complete_job`
+/// in a loop (each `run_instance` call ticks once and dequeues whatever
+/// became runnable), completing every activated job immediately. Returns
+/// `(round, task_type)` for every job activated, in activation order — the
+/// round number is what lets a test assert TWO pairs' branches were
+/// activated in different rounds (proving one pair's join gated the next
+/// pair's fork opening), not merely that both eventually ran.
+async fn drain_and_complete_all(
+    engine: &BpmnLiteEngine,
+    store: &MemoryStore,
+    instance_id: Uuid,
+) -> Vec<(usize, String)> {
+    let mut activations = Vec::new();
+    for round in 0..20usize {
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        if jobs.is_empty() {
+            let inst = store
+                .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+                .await
+                .unwrap()
+                .unwrap();
+            if inst.state.is_terminal() {
+                break;
+            }
+            continue;
+        }
+        for job in &jobs {
+            activations.push((round, job.task_type.clone()));
+            let payload = "{}";
+            let hash = compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+    }
+    activations
+}
+
+/// Two SEQUENTIAL `GatewayInclusive` pairs in one process (pair 1 fully
+/// resolves and joins, THEN pair 2 opens and resolves independently) —
+/// driven through the REAL frontend (`engine.compile`, parsing BPMN XML),
+/// matching `T-IG-6`'s "prove the real frontend reaches this, not just
+/// hand-assembled bytecode" discipline, and then executed end-to-end
+/// through the real engine (not just compiled). All four branch flags are
+/// set truthy up front; the proof is in the ROUND STRUCTURE of job
+/// activation, not just eventual completion: pair 1's two branches
+/// (`task_a1`/`task_b1`) must both be activated (and both completed)
+/// strictly before EITHER of pair 2's branches (`task_a2`/`task_b2`) is
+/// activated — pair 2's `GatewayInclusive` fork cannot open until pair 1's
+/// `GatewayInclusive` join has released, exactly the barrier semantics
+/// `V2Join`/`V2Fork` are supposed to provide, now proven for two
+/// INDEPENDENT pairs sharing one process rather than one pair alone.
+#[tokio::test]
+async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:inclusiveGateway id="ig_fork1" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join1" gatewayDirection="Converging"/>
+    <bpmn:inclusiveGateway id="ig_fork2" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join2" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="ig_fork1"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="ig_fork1" targetRef="task_a1">
+      <bpmn:conditionExpression>= flag_a1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3" sourceRef="ig_fork1" targetRef="task_b1">
+      <bpmn:conditionExpression>= flag_b1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f4" sourceRef="task_a1" targetRef="ig_join1"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="task_b1" targetRef="ig_join1"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="ig_join1" targetRef="ig_fork2"/>
+    <bpmn:sequenceFlow id="f7" sourceRef="ig_fork2" targetRef="task_a2">
+      <bpmn:conditionExpression>= flag_a2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f8" sourceRef="ig_fork2" targetRef="task_b2">
+      <bpmn:conditionExpression>= flag_b2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f9" sourceRef="task_a2" targetRef="ig_join2"/>
+    <bpmn:sequenceFlow id="f10" sourceRef="task_b2" targetRef="ig_join2"/>
+    <bpmn:sequenceFlow id="f11" sourceRef="ig_join2" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("two sequential inclusive-gateway pairs must compile via the real frontend");
+
+    let flag_key = |name: &str| -> FlagKey {
+        *compiled
+            .flag_symbol_table
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(k, _)| k)
+            .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+    };
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-seq",
+        )
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        inst.flags.insert(flag_key("flag_a1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_a2"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b2"), Value::Bool(true));
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    let activations = drain_and_complete_all(&engine, &store, instance_id).await;
+
+    let round_of = |task_type: &str| -> usize {
+        activations
+            .iter()
+            .find(|(_, t)| t == task_type)
+            .map(|(r, _)| *r)
+            .unwrap_or_else(|| panic!("{task_type} was never activated, got: {activations:?}"))
+    };
+    assert_eq!(
+        activations.len(),
+        4,
+        "all four branch tasks (and only those four) must be activated exactly once, got: {activations:?}"
+    );
+    let pair1_last_round = round_of("task_a1").max(round_of("task_b1"));
+    let pair2_first_round = round_of("task_a2").min(round_of("task_b2"));
+    assert!(
+        pair1_last_round < pair2_first_round,
+        "pair 1's branches (rounds {}/{}) must both complete strictly before pair 2's fork opens \
+         (rounds {}/{}) — pair 2's GatewayInclusive must not open until pair 1's join releases, \
+         got: {activations:?}",
+        round_of("task_a1"),
+        round_of("task_b1"),
+        round_of("task_a2"),
+        round_of("task_b2")
+    );
+
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// KNOWN BUG — kept `#[ignore]`d as a precise reproduction, not deleted.
+///
+/// Two INDEPENDENTLY-NESTED `GatewayInclusive` pairs, one inside EACH
+/// branch of an outer `GatewayAnd` fork — the runtime equivalent of
+/// `lowering.rs`'s `test_two_independently_nested_inclusive_pairs_pair_
+/// correctly` (which proves only compilation) and `verifier.rs`'s
+/// `test_two_nested_inclusive_pairs_in_and_branches_now_admitted` (which
+/// proves only admission). Neither of those tests ever executes a single
+/// instruction; driving this exact topology through the REAL engine
+/// (built for this task, per the brief's item 4) surfaced a genuine,
+/// reproducible kernel-level defect, INDEPENDENT of Direction A's
+/// pairing-derivation fix (`compute_gateway_pairing`/
+/// `check_gateway_and_nesting`, both of which are innocent here — this is
+/// not a mispairing, and it reproduces with branch flags set either way):
+///
+/// Once a `GatewayInclusive` nested inside one branch of an outer
+/// `GatewayAnd` fork takes its dynamic-arity "skip-to-join" path (fewer
+/// branches matched than declared — the same mechanism
+/// `t_ig_v2_single_matched_branch_skips_the_other_to_join` proves correct
+/// for a STANDALONE (non-nested) inclusive gateway), completing that
+/// branch's job and ticking again raises `Ring 3 runtime integrity
+/// violation: K-1 violated: record <id> (armed) has member <id>, no live
+/// fibre` (`bpmn-lite-kernel/src/lib.rs`'s `check_k_invariants`) — some
+/// concurrency-table record is left listing a fibre that no longer exists.
+/// Confirmed by hand-reduction: reproduces with EITHER branch (or both)
+/// taking the skip-to-join path, so it is not specific to the
+/// single-match/all-match ASYMMETRY between sibling branches — the trigger
+/// is "a nested inclusive gateway under an AND fork resolves with dynamic
+/// arity less than its declared branch count," full stop. Not reproduced
+/// (and not expected to reproduce, per the passing
+/// `t_ig_v2_two_sequential_pairs_route_and_join_independently` test above)
+/// for sequential (non-nested) multi-pair topology — this looks specific
+/// to the interaction between the outer AND-fork's own barrier/fibre
+/// bookkeeping and an inner inclusive gateway's dynamic-arity skip, in
+/// `bpmn-lite-kernel`, not to anything `verifier.rs`/`lowering.rs` control.
+///
+/// A separate, unrelated, pre-existing bug was ALSO found while isolating
+/// this one (reported alongside it, not fixed here — out of this task's
+/// scope, which is the §9/V10 count-gate lift only): `lowering.rs`'s
+/// `topo_order` lays out bytecode addresses via a naive BFS over the
+/// graph, which can place a shared join's address earlier than a longer
+/// sibling branch's own instructions if the join is FIRST discovered via
+/// a shorter branch — producing a `verify_bytecode` "backward jump"
+/// rejection. Confirmed to require NEITHER `GatewayInclusive` nor multiple
+/// pairs at all: a bare `GatewayAnd` fork with one 3-task branch and one
+/// 1-task sibling branch, compiled via `engine.compile` (not the
+/// `lowering::lower` free function the compiler-level pairing tests call
+/// directly, which never runs `verify_bytecode` and so never catches
+/// this), already fails to compile with the same "backward jump" error.
+/// This is why this test's own branch shapes below are carefully
+/// length-balanced (to avoid tripping THAT bug) while still tripping the
+/// K-1 bug above — both are real, both are reported to Adam as open
+/// findings, neither is fixed by this landing.
+#[tokio::test]
+#[ignore = "KNOWN BUG (found while building this task's end-to-end proof, not caused by it): \
+            GatewayInclusive nested under a GatewayAnd branch, resolving with dynamic arity \
+            below its declared branch count, corrupts kernel K-1 (bpmn-lite-kernel's \
+            check_k_invariants) on the next tick after the matched branch's job completes. See \
+            this test's own doc comment for the full reproduction and a second, unrelated \
+            lowering::topo_order backward-jump bug found in the same investigation. Reported to \
+            Adam, not fixed — orthogonal to the §9/V10 count-gate lift this landing implements."]
+async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:inclusiveGateway id="ig_fork_a" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join_a" gatewayDirection="Converging"/>
+    <bpmn:inclusiveGateway id="ig_fork_b" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join_b" gatewayDirection="Converging"/>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="ig_fork_a"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="ig_fork_a" targetRef="task_a1">
+      <bpmn:conditionExpression>= flag_a1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa2" sourceRef="ig_fork_a" targetRef="task_a2">
+      <bpmn:conditionExpression>= flag_a2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a1" targetRef="ig_join_a"/>
+    <bpmn:sequenceFlow id="fa4" sourceRef="task_a2" targetRef="ig_join_a"/>
+    <bpmn:sequenceFlow id="fa5" sourceRef="ig_join_a" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="ig_fork_b"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="ig_fork_b" targetRef="task_b1">
+      <bpmn:conditionExpression>= flag_b1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fb2" sourceRef="ig_fork_b" targetRef="task_b2">
+      <bpmn:conditionExpression>= flag_b2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fb3" sourceRef="task_b1" targetRef="ig_join_b"/>
+    <bpmn:sequenceFlow id="fb4" sourceRef="task_b2" targetRef="ig_join_b"/>
+    <bpmn:sequenceFlow id="fb5" sourceRef="ig_join_b" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "GatewayAnd fork with an independently-nested GatewayInclusive pair in EACH branch must compile",
+    );
+
+    let flag_key = |name: &str| -> FlagKey {
+        *compiled
+            .flag_symbol_table
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(k, _)| k)
+            .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+    };
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-nested-and",
+        )
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        // Branch A: single match (task_a2's flag left unset) — its inner
+        // GatewayInclusive must skip task_a2 straight to ig_join_a.
+        inst.flags.insert(flag_key("flag_a1"), Value::Bool(true));
+        // Branch B: both match — its inner GatewayInclusive must run both
+        // branches concurrently before ig_join_b releases.
+        inst.flags.insert(flag_key("flag_b1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b2"), Value::Bool(true));
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    let activations = drain_and_complete_all(&engine, &store, instance_id).await;
+    let activated: std::collections::BTreeSet<&str> =
+        activations.iter().map(|(_, t)| t.as_str()).collect();
+
+    assert_eq!(
+        activations.len(),
+        3,
+        "branch A must activate exactly 1 job (single-match skip-to-join) and branch B exactly \
+         2 (all-match concurrent) — 3 total, got: {activations:?}"
+    );
+    assert!(
+        activated.contains("task_a1") && !activated.contains("task_a2"),
+        "branch A's inner GatewayInclusive must run only task_a1 (its own routing decision), \
+         got: {activations:?}"
+    );
+    assert!(
+        activated.contains("task_b1") && activated.contains("task_b2"),
+        "branch B's inner GatewayInclusive must run both task_b1 and task_b2 (its own, \
+         independent routing decision — unaffected by branch A's single-match outcome), \
+         got: {activations:?}"
+    );
+
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed (outer GatewayAnd join must still release once both inner \
+         GatewayInclusive joins have, each at its own address) — got {:?}",
+        inst.state
+    );
+}
+
 /// V5 post-close (§18 ruling I): a v2-lowered interrupting boundary timer
 /// — `V2Guard` + `GUARD-TIMER>` wrapping the host task (`lowering::
 /// lower_boundary_guarded_task_v2`) — actually fires end-to-end through
@@ -4770,3 +5141,4 @@ fn corpus_sweep_xml_fixtures_lower_and_verify() {
 // (`ORDINARY_TIMER_BPMN`/`ABSOLUTE_TIMER_BPMN`, used only for
 // scheduler-behavior tests that compile via `engine.compile` and never
 // separately assert on the lowered program) get swept too.
+

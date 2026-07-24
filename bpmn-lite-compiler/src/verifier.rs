@@ -437,9 +437,6 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
 
     // 9. Inclusive gateway validation
     {
-        let mut diverging_count = 0u32;
-        let mut converging_count = 0u32;
-
         for idx in graph.node_indices() {
             match &graph[idx] {
                 IRNode::GatewayInclusive {
@@ -447,7 +444,6 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                     direction: GatewayDirection::Diverging,
                     ..
                 } => {
-                    diverging_count += 1;
                     let outgoing = graph
                         .edges_directed(idx, petgraph::Direction::Outgoing)
                         .count();
@@ -466,7 +462,6 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                     direction: GatewayDirection::Converging,
                     ..
                 } => {
-                    converging_count += 1;
                     let incoming = graph
                         .edges_directed(idx, petgraph::Direction::Incoming)
                         .count();
@@ -496,57 +491,43 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
             }
         }
 
-        // At most one inclusive-gateway pair per process — NOT a v1-era
-        // holdover (v1 no longer exists in this codebase; §18 ruling H
-        // made dynamic-arity inclusive gateways IN for v2). Investigated
-        // 2026-07-23 (see `lowering.rs`'s
-        // `test_two_sequential_inclusive_pairs_lower_correctly` doc
-        // comment for the full writeup): `lowering.rs`'s
-        // `inclusive_pairing_stack` pairs a diverging `GatewayInclusive`
-        // with its converging counterpart via a stack popped in `lower()`'s
-        // BFS traversal order, not the graph's true nesting structure. For
-        // exactly one pair this is trivially correct (stack never holds
-        // more than one element). For two or more pairs, ANY topology
-        // where a second pair's diverging node is discovered before the
-        // first pair's converging node is reached — including something
-        // as simple as one inclusive pair nested in ONE branch of another,
-        // with the outer gateway's OTHER branch a plain shorter task —
-        // pops the wrong still-open diverging node and silently emits a
-        // `BrIfNot` header that skips to the wrong join address. Only
-        // fully sequential (non-overlapping) pairs are confirmed safe by
-        // hand construction; there is no structural check here (or
-        // anywhere else in this pipeline) that distinguishes "sequential"
-        // from "overlapping in BFS order," so the count-based rejection
-        // stays in place for the general case until either the pairing
-        // mechanism is replaced with something nesting-aware (mirroring
-        // `check_gateway_and_nesting`'s DFS-based approach, but computing
-        // fork↔join identity, not just validating counts) or a
-        // topology-aware "sequential pairs only" admission check is added
-        // — both are open design forks, not decided here.
-        if diverging_count > 1 {
-            errors.push(VerifyError {
-                message: format!(
-                    "Multiple diverging inclusive gateways ({}) not yet supported: \
-                     lower()'s BFS-order pairing stack can mispair overlapping/nested \
-                     GatewayInclusive pairs — see verifier.rs's \"9. Inclusive gateway \
-                     validation\" doc comment",
-                    diverging_count
-                ),
-                element_id: None,
-            });
-        }
-        if converging_count > 1 {
-            errors.push(VerifyError {
-                message: format!(
-                    "Multiple converging inclusive gateways ({}) not yet supported: \
-                     lower()'s BFS-order pairing stack can mispair overlapping/nested \
-                     GatewayInclusive pairs — see verifier.rs's \"9. Inclusive gateway \
-                     validation\" doc comment",
-                    converging_count
-                ),
-                element_id: None,
-            });
-        }
+        // Multiple inclusive-gateway pairs per process are now admitted.
+        // History: this section used to reject `diverging_count > 1` /
+        // `converging_count > 1` outright, because `lowering.rs`'s old
+        // `inclusive_pairing_stack` paired fork↔join identity via a stack
+        // popped in `lower()`'s BFS traversal order, not the graph's true
+        // nesting structure — for two or more pairs, ANY topology where a
+        // second pair's diverging node was discovered before the first
+        // pair's converging node was reached (including one inclusive pair
+        // nested in a single branch of another) popped the wrong
+        // still-open diverging node and silently emitted a `BrIfNot`
+        // header skipping to the wrong join address. Only fully sequential
+        // pairs were known-safe, and nothing distinguished that from the
+        // unsafe general case, so the blanket count rejection stood in as
+        // the admission gate.
+        //
+        // Direction A (2026-07-24, `docs/todo/EOP-VS-BPMN-ISA-002.md` §19;
+        // see also `EOP-PLAN-BPMN-ISA-002.md`'s "Direction A" post-close
+        // entry) replaced the BFS-order stack with `lowering.rs`'s
+        // `compute_gateway_pairing`/`gateway_pairing_dfs`/
+        // `gateway_pairing_pop` — a DFS-recursive walk that clones the
+        // fork-identity stack per branch before recursing (mirroring
+        // `dsl::rpst::dfs_walk`), which derives fork↔join identity from the
+        // graph's true nesting rather than discovery order, on one unified
+        // kind-tagged stack covering both `GatewayAnd` and
+        // `GatewayInclusive`. `check_gateway_and_nesting` (§4a above) is the
+        // identical algorithm run on the admission side: it structurally
+        // rejects any topology `compute_gateway_pairing` could mispair
+        // (crossing gateway-kind boundaries, non-well-nested stack order,
+        // and — via `GatewayClosureTracker` — a branch that dangles without
+        // ever reaching its matching converging node), for any number of
+        // `GatewayAnd`/`GatewayInclusive` pairs, sequential, nested, or
+        // cross-kind-nested. §4a therefore now provides the real structural
+        // guarantee this count check used to stand in for, so the blanket
+        // "at most one pair" rejection is lifted — a well-nested N-pair
+        // topology is admitted; a mispairing-prone topology is caught
+        // structurally by §4a instead, with a precise diagnostic naming the
+        // offending node.
     }
 
     errors
@@ -1325,23 +1306,32 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  V&S Q-inclusive-multi (investigated 2026-07-23, NOT lifted):
-    //  regression coverage locking the count-based §9 rejection to the
-    //  specific mispairing hazards it currently guards against. See
+    //  V&S Q-inclusive-multi (investigated 2026-07-23, LIFTED 2026-07-24):
+    //  this section used to lock the count-based §9 rejection to the
+    //  specific mispairing hazards it guarded against (see
     //  `lowering.rs`'s `test_two_sequential_inclusive_pairs_lower_
     //  correctly` doc comment and this module's §9 doc comment for the
-    //  full writeup. A future fix that replaces this blanket rejection
-    //  with a topology-aware check MUST still reject both graphs below.
+    //  full writeup). Direction A (`docs/todo/EOP-VS-BPMN-ISA-002.md` §19)
+    //  replaced the mispairing-prone BFS-order pairing stack with a
+    //  DFS-recursive, clone-the-stack-per-branch mechanism
+    //  (`lowering.rs`'s `compute_gateway_pairing`) and extended this
+    //  module's `check_gateway_and_nesting` (§4a) to structurally validate
+    //  `GatewayInclusive` nesting the same way it already validated
+    //  `GatewayAnd` nesting — both graphs below are genuinely well-nested
+    //  (SESE) topology, so both must now be ADMITTED, mirroring
+    //  `test_two_nested_and_pairs_in_and_branches_now_admitted` below for
+    //  the `GatewayAnd` case.
     // ═══════════════════════════════════════════════════════════
 
     /// Two `GatewayInclusive` pairs, one nested inside EACH branch of a
-    /// `GatewayAnd` fork (branch B deliberately longer than branch A, to
-    /// skew `lower()`'s BFS discovery order). Hand-confirmed to mispair
-    /// `inclusive_pairing_stack` when the §9 rejection is bypassed
-    /// (a branch-A `BrIfNot` header resolves to branch B's join address).
-    /// Must stay rejected.
+    /// `GatewayAnd` fork (branch B deliberately longer than branch A, which
+    /// used to skew `lower()`'s BFS discovery order under the old pairing
+    /// mechanism). `compute_gateway_pairing`'s DFS-recursive, per-branch-
+    /// cloned stack derives each inner pair's fork↔join identity correctly
+    /// regardless of branch length; `check_gateway_and_nesting` admits this
+    /// topology structurally. Must now be admitted, not rejected.
     #[test]
-    fn test_two_nested_inclusive_pairs_in_and_branches_rejected() {
+    fn test_two_nested_inclusive_pairs_in_and_branches_now_admitted() {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
         let and_fork = graph.add_node(IRNode::GatewayAnd {
@@ -1392,19 +1382,23 @@ mod tests {
 
         let errors = verify(&graph);
         assert!(
-            errors.iter().any(|e| e.message.contains("Multiple diverging inclusive gateways")),
-            "two independently-nested inclusive pairs must still be rejected, got: {errors:?}"
+            !errors.iter().any(|e| e.message.contains("Unmatched GatewayInclusive")
+                || e.message.contains("Unclosed diverging gateway")
+                || e.message.contains("Crossing gateway-kind boundaries")),
+            "two independently-nested inclusive pairs must now be admitted, got: {errors:?}"
         );
     }
 
     /// A `GatewayInclusive` pair nested inside ONE branch of an outer
     /// `GatewayInclusive` pair, with the outer's OTHER branch a plain leaf
-    /// task. Hand-confirmed to mispair even though there is no sibling
-    /// `GatewayAnd` involved and no independent second gateway pair racing
-    /// it — the outer pair's own shorter leaf branch alone is enough to
-    /// skew BFS order ahead of the nested pair's join. Must stay rejected.
+    /// task. Used to mispair under the old BFS-order stack even with no
+    /// sibling `GatewayAnd` involved — the outer pair's own shorter leaf
+    /// branch alone was enough to skew BFS order ahead of the nested
+    /// pair's join. `compute_gateway_pairing`'s DFS-recursive walk is
+    /// immune to branch-length skew; this is genuinely well-nested (true
+    /// nested-OR, not merely OR-inside-AND) and must now be admitted.
     #[test]
-    fn test_inclusive_pair_nested_in_single_outer_branch_rejected() {
+    fn test_inclusive_pair_nested_in_single_outer_branch_now_admitted() {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
         let outer_fork = graph.add_node(IRNode::GatewayInclusive {
@@ -1439,8 +1433,10 @@ mod tests {
 
         let errors = verify(&graph);
         assert!(
-            errors.iter().any(|e| e.message.contains("Multiple diverging inclusive gateways")),
-            "inclusive pair nested in a single outer branch must still be rejected, got: {errors:?}"
+            !errors.iter().any(|e| e.message.contains("Unmatched GatewayInclusive")
+                || e.message.contains("Unclosed diverging gateway")
+                || e.message.contains("Crossing gateway-kind boundaries")),
+            "inclusive pair nested in a single outer branch must now be admitted, got: {errors:?}"
         );
     }
 

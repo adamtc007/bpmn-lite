@@ -3065,45 +3065,32 @@ mod tests {
             .any(|i| matches!(i, Instr::V2Fork { .. })));
     }
 
-    /// V&S Q-inclusive-multi (investigated 2026-07-23, NOT landed — see
-    /// `verifier.rs`'s "9. Inclusive gateway validation" and
-    /// `bpmn-lite-authoring/src/validate.rs`'s V10, both of which still
-    /// reject any process containing more than one `GatewayInclusive`
-    /// pair): this test PROVES `inclusive_pairing_stack`/`inclusive_join_
-    /// addr`/`inclusive_fork_addr` correctly pair two SEQUENTIAL
-    /// (sibling, non-overlapping — the first pair's converging node fully
-    /// precedes the second pair's diverging node in program order) v2
-    /// inclusive-gateway pairs in the same process. This is the ONE case
-    /// the investigation confirmed safe.
+    /// V&S Q-inclusive-multi (investigated 2026-07-23; count-based
+    /// rejection LIFTED 2026-07-24 — see `verifier.rs`'s "9. Inclusive
+    /// gateway validation" doc comment and `docs/todo/EOP-VS-BPMN-ISA-002.md`
+    /// §19 for the full record). This test proves `compute_gateway_pairing`
+    /// correctly pairs two SEQUENTIAL (sibling, non-overlapping — the first
+    /// pair's converging node fully precedes the second pair's diverging
+    /// node in program order) v2 inclusive-gateway pairs in the same
+    /// process — this was the ONE case safe under the OLD BFS-order
+    /// `inclusive_pairing_stack` mechanism this test originally targeted.
     ///
-    /// **What this test does NOT prove, and why the two-count rejection
-    /// stays in place regardless:** any topology where a second pair's
-    /// diverging node is pushed onto `inclusive_pairing_stack` before the
-    /// first pair's converging node pops it — e.g. two independently
-    /// nested pairs in sibling `GatewayAnd` branches, or even a single
-    /// inclusive pair nested inside ONE branch of an outer inclusive pair
-    /// while the outer's OTHER branch is a plain leaf task — silently
-    /// mispairs: `inclusive_pairing_stack.pop()` is LIFO over `lower()`'s
-    /// BFS traversal order, not the graph's true nesting structure, so a
-    /// shorter sibling branch reaching ITS join first pops the WRONG
-    /// still-open diverging node off the stack. Confirmed by hand
-    /// construction (not included in the permanent corpus — it lowers
-    /// wrong bytecode, not a proof-worthy behaviour): a `BrIfNot` header
-    /// inside the nested pair's own branch resolved to the OUTER pair's
-    /// join address instead of its own. This is a real, currently-latent
-    /// defect in the BFS-order stack model itself (this exact same defect
-    /// pre-exists in `fork_pairing`, the analogous mechanism `GatewayAnd`
-    /// already uses — masked there only because `verifier.rs` §4a's
-    /// `check_gateway_and_nesting` DFS check happens to reject the sibling
-    /// nested-AND-pairs shape, for an unrelated/inaccurate reason, not
-    /// because it correctly detects the pairing hazard; `GatewayInclusive`
-    /// has NO equivalent SESE check at all today — the blanket
-    /// count-based rejection is the only thing standing between this and
-    /// silently wrong bytecode). Lifting the count-based rejection without
-    /// first replacing the BFS-order stack with a true DFS-based (or
-    /// otherwise nesting-aware) pairing computation for BOTH gateway kinds
-    /// would be a K-3/V-3-relevant correctness regression — reported to
-    /// Adam as an open design fork, not decided here.
+    /// The general (overlapping/nested) case — e.g. two independently
+    /// nested pairs in sibling `GatewayAnd` branches, or an inclusive pair
+    /// nested inside one branch of an outer inclusive pair — used to
+    /// silently mispair under that BFS-order stack (confirmed by hand
+    /// construction: a `BrIfNot` header inside the nested pair's own branch
+    /// resolved to the OUTER pair's join address instead of its own), which
+    /// is why the blanket count-based rejection stood in as the admission
+    /// gate. `compute_gateway_pairing` (this module) and
+    /// `check_gateway_and_nesting` (`verifier.rs` §4a) now replace that
+    /// BFS-order stack with a DFS-recursive, clone-the-stack-per-branch
+    /// mechanism that derives fork↔join identity from the graph's true
+    /// nesting structure — see `test_two_independently_nested_and_pairs_
+    /// pair_correctly` below and `test_two_independently_nested_inclusive_
+    /// pairs_pair_correctly` for the `GatewayInclusive` proof of the
+    /// general (nested) case that this test's own sequential-only scope
+    /// used to leave uncovered.
     #[test]
     fn test_two_sequential_inclusive_pairs_lower_correctly() {
         let mut graph = IRGraph::new();
@@ -3141,12 +3128,9 @@ mod tests {
         graph.add_edge(b2, join2, IREdge { id: "f9".to_string(), condition: None });
         graph.add_edge(join2, end, IREdge { id: "f10".to_string(), condition: None });
 
-        // Bypasses `verifier::verify_or_err` deliberately (it currently
-        // rejects any >1-pair process) — this test targets `lower_v2`'s
-        // own pairing mechanism in isolation, not the full `Compiler::
-        // lower` pipeline, which the "not supported" gate still fully
-        // covers (see `bpmn-lite-compiler/src/verifier.rs`'s own locked
-        // test for that).
+        // Targets `lower_v2`'s own pairing mechanism directly (bypasses
+        // `verifier::verify_or_err`, which now admits this topology too —
+        // see the doc comment above).
         let program = lower_v2(&graph).expect("two sequential inclusive pairs must lower");
         let instrs = program.program();
         let debug_map = program.debug_map();
@@ -3275,10 +3259,6 @@ mod tests {
     /// `compute_gateway_pairing`'s unified kind-tagged stack correctly
     /// pairs BOTH kinds simultaneously without cross-contamination — the
     /// framing decision documented on `compute_gateway_pairing` itself.
-    /// Only one `GatewayInclusive` pair is used (verifier.rs §9's blanket
-    /// "≤1 GatewayInclusive pair" admission gate, untouched by this
-    /// landing, would otherwise reject a second one regardless of nesting
-    /// correctness).
     #[test]
     fn test_and_pair_with_nested_inclusive_pair_pair_correctly() {
         let mut graph = IRGraph::new();
@@ -3356,6 +3336,95 @@ mod tests {
             matches!(ig_fork_target, Instr::V2Fork { pairing, .. } if *pairing == ig_join_pairing),
             "ig_join must pair with the inclusive gateway's OWN V2Fork (self-referential pairing), not and_fork; got instruction {ig_fork_target:?} at {ig_join_pairing:?}"
         );
+    }
+
+    /// Two `GatewayInclusive` pairs, one nested inside EACH branch of an
+    /// outer `GatewayAnd` fork — the `GatewayInclusive` equivalent of
+    /// `test_two_independently_nested_and_pairs_pair_correctly` above, and
+    /// the exact graph shape `verifier.rs`'s
+    /// `test_two_nested_inclusive_pairs_in_and_branches_now_admitted`
+    /// already proves is admitted. This is the compilation-side half of
+    /// that proof: each inner join must reference its OWN inner fork's
+    /// address, never the sibling branch's — the mispairing hazard the
+    /// old BFS-order `inclusive_pairing_stack` was vulnerable to, now
+    /// closed by `compute_gateway_pairing`'s DFS-recursive, per-branch-
+    /// cloned stack.
+    #[test]
+    fn test_two_independently_nested_inclusive_pairs_pair_correctly() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let outer_fork = graph.add_node(IRNode::GatewayAnd {
+            id: "outer_fork".to_string(), name: "OuterFork".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let outer_join = graph.add_node(IRNode::GatewayAnd {
+            id: "outer_join".to_string(), name: "OuterJoin".to_string(), direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+
+        let inner_fork_a = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_fork_a".to_string(), name: "InnerForkA".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let inner_join_a = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_join_a".to_string(), name: "InnerJoinA".to_string(), direction: GatewayDirection::Converging,
+        });
+        let a1 = graph.add_node(IRNode::ServiceTask { id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
+        let a2 = graph.add_node(IRNode::ServiceTask { id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
+
+        let inner_fork_b = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_fork_b".to_string(), name: "InnerForkB".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let inner_join_b = graph.add_node(IRNode::GatewayInclusive {
+            id: "inner_join_b".to_string(), name: "InnerJoinB".to_string(), direction: GatewayDirection::Converging,
+        });
+        let b1 = graph.add_node(IRNode::ServiceTask { id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
+        let b2 = graph.add_node(IRNode::ServiceTask { id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
+        let b3 = graph.add_node(IRNode::ServiceTask { id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
+        let b_pre = graph.add_node(IRNode::ServiceTask { id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
+
+        graph.add_edge(start, outer_fork, IREdge { id: "f0".to_string(), condition: None });
+        graph.add_edge(outer_fork, inner_fork_a, IREdge { id: "fa0".to_string(), condition: None });
+        graph.add_edge(inner_fork_a, a1, IREdge { id: "fa1".to_string(), condition: None });
+        graph.add_edge(inner_fork_a, a2, IREdge { id: "fa2".to_string(), condition: None });
+        graph.add_edge(a1, inner_join_a, IREdge { id: "fa3".to_string(), condition: None });
+        graph.add_edge(a2, inner_join_a, IREdge { id: "fa4".to_string(), condition: None });
+        graph.add_edge(inner_join_a, outer_join, IREdge { id: "fa5".to_string(), condition: None });
+        graph.add_edge(outer_fork, b_pre, IREdge { id: "fb_pre".to_string(), condition: None });
+        graph.add_edge(b_pre, inner_fork_b, IREdge { id: "fb0".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b1, IREdge { id: "fb1".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b2, IREdge { id: "fb2".to_string(), condition: None });
+        graph.add_edge(inner_fork_b, b3, IREdge { id: "fb3".to_string(), condition: None });
+        graph.add_edge(b1, inner_join_b, IREdge { id: "fb4".to_string(), condition: None });
+        graph.add_edge(b2, inner_join_b, IREdge { id: "fb5".to_string(), condition: None });
+        graph.add_edge(b3, inner_join_b, IREdge { id: "fb6".to_string(), condition: None });
+        graph.add_edge(inner_join_b, outer_join, IREdge { id: "fb7".to_string(), condition: None });
+        graph.add_edge(outer_join, end, IREdge { id: "fend".to_string(), condition: None });
+
+        verifier::verify_or_err(&graph).expect("well-nested sibling INCLUSIVE-in-AND pairs must verify");
+        let program = lower(&graph).expect("well-nested sibling INCLUSIVE-in-AND pairs must lower");
+        let instrs = program.program();
+        let debug_map = program.debug_map();
+        let base_of = |id: &str| -> Addr {
+            *debug_map.iter().find(|(_, v)| v.as_str() == id).map(|(k, _)| k)
+                .unwrap_or_else(|| panic!("no debug_map entry for '{id}'"))
+        };
+
+        let joins: Vec<(usize, Addr)> = instrs.iter().enumerate().filter_map(|(i, instr)| match instr {
+            Instr::V2Join { pairing } => Some((i, *pairing)),
+            _ => None,
+        }).collect();
+        assert_eq!(joins.len(), 3, "outer join + 2 inner joins → 3 V2Join instructions");
+
+        let pairing_of = |id: &str| -> Addr {
+            joins.iter().find(|(i, _)| Addr::new(*i as u32) == base_of(id)).map(|(_, p)| *p)
+                .unwrap_or_else(|| panic!("no V2Join at '{id}'"))
+        };
+        // Both inner forks are unconditional (all branches always-live, no
+        // zero-match precheck), so each `V2Fork` sits at its diverging
+        // node's own base address — same self-referential-pairing
+        // invariant as the AND case.
+        assert_eq!(pairing_of("inner_join_a"), base_of("inner_fork_a"), "inner_join_a must pair with inner_fork_a, NOT the sibling branch's inner_fork_b");
+        assert_eq!(pairing_of("inner_join_b"), base_of("inner_fork_b"), "inner_join_b must pair with inner_fork_b, NOT the sibling branch's inner_fork_a");
+        assert_eq!(pairing_of("outer_join"), base_of("outer_fork"), "outer_join must pair with outer_fork");
     }
 
     // ═══════════════════════════════════════════════════════════
