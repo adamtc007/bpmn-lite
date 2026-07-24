@@ -1241,7 +1241,7 @@ fn apply_tick(
                     instance.instance_id, service_task_id, instruction_pc, fiber.loop_epoch
                 );
                 if let Some(completion) = snapshot.dedupe_completion(&job_key) {
-                    apply_completion(&mut instance, completion);
+                    apply_completion(&mut instance, completion)?;
                     for _ in 0..*retc {
                         fiber.stack.push(Value::Bool(true));
                     }
@@ -1314,7 +1314,7 @@ fn apply_tick(
                     instance.instance_id, service_task_id, instruction_pc, fiber.loop_epoch
                 );
                 if let Some(completion) = snapshot.dedupe_completion(&job_key) {
-                    apply_completion(&mut instance, completion);
+                    apply_completion(&mut instance, completion)?;
                     if let Some(placeholder) = produces_placeholder {
                         instance
                             .bind_placeholder_from_payload(placeholder)
@@ -3423,6 +3423,18 @@ fn parse_value_key(value: &str) -> Value {
     if let Some(raw) = value.strip_prefix("r:").and_then(|raw| raw.parse().ok()) {
         return Value::Ref(raw);
     }
+    // Must handle every prefix `value_key` can produce, including "a:"
+    // (Value::Array) — this used to fall through to Value::Bool(false)
+    // here, silently corrupting any array-valued correlation key.
+    if let Some(raw) = value.strip_prefix("a:") {
+        let bytes: Option<Vec<u8>> = (0..raw.len())
+            .step_by(2)
+            .map(|i| raw.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .collect();
+        if let Some(decoded) = bytes.and_then(|b| Value::from_canonical_bytes(&b).ok()) {
+            return decoded;
+        }
+    }
     Value::Bool(false)
 }
 
@@ -3462,7 +3474,7 @@ fn apply_job_completion(
         .ok_or(TransitionError::InvalidCommand("completion has no parked fiber"))?;
     let before = current_hash;
     let mut instance = snapshot.instance().clone();
-    apply_completion(&mut instance, completion);
+    apply_completion(&mut instance, completion)?;
     let mut changes = Changes::default();
     // V5.3 (§18, landed 2026-07-23): the v1 `race_plan`-consulting branch
     // that used to live here (a job racing a boundary timer via
@@ -4218,17 +4230,22 @@ fn fail_contract(
     Ok(changes.finish(instance))
 }
 
-fn apply_completion(instance: &mut ProcessInstance, completion: &bpmn_lite_types::JobCompletion) {
+fn apply_completion(
+    instance: &mut ProcessInstance,
+    completion: &bpmn_lite_types::JobCompletion,
+) -> Result<(), TransitionError> {
     instance.domain_payload = completion.domain_payload.clone().into();
     instance.domain_payload_hash = blake3_hash(completion.domain_payload.as_bytes());
     for (name, value) in &completion.orch_flags {
         let key = name
             .strip_prefix("flag_")
-            .and_then(|raw| raw.parse::<u32>().ok());
-        if let Some(key) = key {
-            instance.flags.insert(key, value.clone());
-        }
+            .and_then(|raw| raw.parse::<u32>().ok())
+            .ok_or(TransitionError::InvalidCommand(
+                "orch_flags key must be flag_<u32>",
+            ))?;
+        instance.flags.insert(key, value.clone());
     }
+    Ok(())
 }
 
 fn blake3_hash(bytes: &[u8]) -> [u8; 32] {
@@ -4469,6 +4486,76 @@ mod tests {
     use super::*;
     use bpmn_lite_types::{ArtifactEnvelope, session_stack::SessionStackState};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn value_key_round_trips_every_value_variant_including_array() {
+        let values = vec![
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::I64(-42),
+            Value::Str(7),
+            Value::Ref(9),
+            Value::Array(vec![Value::I64(1), Value::Bool(true)]),
+            Value::Array(vec![Value::Array(vec![Value::Str(3)])]),
+        ];
+        for v in values {
+            assert_eq!(parse_value_key(&value_key(&v)), v);
+        }
+    }
+
+    fn minimal_instance() -> ProcessInstance {
+        ProcessInstance {
+            instance_id: Uuid::from_u128(1),
+            tenant_id: "tenant-a".to_string(),
+            process_key: "p".to_string(),
+            bytecode_version: [0u8; 32],
+            domain_payload: "{}".into(),
+            domain_payload_hash: EffectId::content_hash(b"{}"),
+            session_stack: SessionStackState::default(),
+            flags: BTreeMap::new(),
+            counters: BTreeMap::new(),
+            join_expected: BTreeMap::new(),
+            state: ProcessState::Running,
+            correlation_id: "corr".to_string(),
+            entry_id: Uuid::nil(),
+            runbook_id: Uuid::nil(),
+            created_at: 1,
+            integrity_hash: None,
+            quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
+        }
+    }
+
+    #[test]
+    fn apply_completion_accepts_a_well_formed_flag_key() {
+        let mut instance = minimal_instance();
+        let mut orch_flags = BTreeMap::new();
+        orch_flags.insert("flag_5".to_string(), Value::Bool(true));
+        let completion = bpmn_lite_types::JobCompletion {
+            job_key: "job-1".to_string(),
+            domain_payload: "{}".to_string(),
+            expected_instance_payload_hash: [0u8; 32],
+            orch_flags,
+        };
+        apply_completion(&mut instance, &completion).unwrap();
+        assert_eq!(instance.flags.get(&5), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn apply_completion_rejects_a_malformed_flag_key() {
+        let mut instance = minimal_instance();
+        let mut orch_flags = BTreeMap::new();
+        orch_flags.insert("not_a_flag_key".to_string(), Value::Bool(true));
+        let completion = bpmn_lite_types::JobCompletion {
+            job_key: "job-1".to_string(),
+            domain_payload: "{}".to_string(),
+            expected_instance_payload_hash: [0u8; 32],
+            orch_flags,
+        };
+        assert!(apply_completion(&mut instance, &completion).is_err());
+    }
 
     fn fixture() -> (ExecutableWorkflow, Snapshot, DeterministicContext) {
         let program = bpmn_lite_types::legacy_program! {

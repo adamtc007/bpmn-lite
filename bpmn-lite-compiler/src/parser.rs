@@ -1415,14 +1415,14 @@ mod tests {
             <bpmn:intermediateCatchEvent id="wait_docs" name="docs_received">
               <bpmn:messageEventDefinition messageRef="msg_docs" />
               <bpmn:extensionElements>
-                <zeebe:subscription correlationKey="=case_id" />
+                <zeebe:subscription correlationKey="0" />
               </bpmn:extensionElements>
             </bpmn:intermediateCatchEvent>
 
             <bpmn:userTask id="reviewer_decision" name="Reviewer Decision">
               <bpmn:extensionElements>
                 <zeebe:taskDefinition type="reviewer_decision" />
-                <zeebe:subscription correlationKey="=case_id" />
+                <zeebe:subscription correlationKey="0" />
               </bpmn:extensionElements>
             </bpmn:userTask>
 

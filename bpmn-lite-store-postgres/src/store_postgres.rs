@@ -130,10 +130,14 @@ fn epoch_ms_to_datetime(epoch_ms: i64) -> chrono::DateTime<chrono::Utc> {
     use chrono::TimeZone;
     let secs = epoch_ms / 1000;
     let nanos = ((epoch_ms % 1000) * 1_000_000) as u32;
+    // Substituting `Utc::now()` here would silently write the wrong
+    // timestamp into a claim/lease/expiry column with no error signal —
+    // an out-of-range value means the caller computed a corrupt epoch_ms
+    // and that must fail the commit, not be papered over.
     chrono::Utc
         .timestamp_opt(secs, nanos)
         .single()
-        .unwrap_or_else(chrono::Utc::now)
+        .unwrap_or_else(|| panic!("epoch_ms_to_datetime: {epoch_ms} is out of representable range"))
 }
 
 fn datetime_to_epoch_ms(dt: chrono::DateTime<chrono::Utc>) -> i64 {
@@ -2732,9 +2736,22 @@ impl RuntimeStore for PostgresWorkflowStore {
         .await
         .map_err(|error| CommitError::Unavailable(error.to_string()))?
         .flatten();
-        let mut concurrency_table = prior_envelope_bytes
+        // A decode failure here means the persisted row exists but is
+        // corrupt — that must reject the commit, not be treated as if no
+        // prior snapshot existed (which would silently drop live
+        // concurrency records and desync the Ring 2 hash chain).
+        let prior_envelope: Option<SnapshotEnvelope> = prior_envelope_bytes
             .as_deref()
-            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
+            .map(|bytes| {
+                SnapshotEnvelope::decode(bytes).map_err(|error| {
+                    CommitError::Integrity(format!(
+                        "prior snapshot envelope failed to decode on commit: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let mut concurrency_table = prior_envelope
+            .as_ref()
             .map(|envelope| envelope.state().concurrency_table().clone())
             .unwrap_or_default();
         for mutation in transition.concurrency_mutations() {
@@ -2810,10 +2827,14 @@ impl RuntimeStore for PostgresWorkflowStore {
         let state_hash = snapshot_envelope
             .state_hash()
             .map_err(|error| CommitError::Integrity(error.to_string()))?;
-        let prior_state_hash = prior_envelope_bytes
-            .as_deref()
-            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
-            .and_then(|envelope| envelope.state_hash().ok())
+        let prior_state_hash = prior_envelope
+            .as_ref()
+            .map(|envelope| {
+                envelope
+                    .state_hash()
+                    .map_err(|error| CommitError::Integrity(error.to_string()))
+            })
+            .transpose()?
             .unwrap_or([0u8; 32]);
         let command = transition.command_envelope().cloned().unwrap_or_else(|| {
             transition.start_dedupe().map_or_else(

@@ -344,7 +344,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 let mut default_target = None;
                 for edge in &outgoing {
                     let target_idx = edge.target();
-                    let target_addr = node_addr.get(&target_idx).copied().unwrap_or(Addr::new(0));
+                    let target_addr = node_addr.get(&target_idx).copied().expect("lowering: successor has no assigned address");
 
                     if let Some(cond) = &edge.weight().condition {
                         let flag_key = intern_flag(&mut flag_intern, &cond.flag_name);
@@ -397,7 +397,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let successors = get_successors(graph, node_idx);
                     let targets: Box<[Addr]> = successors
                         .iter()
-                        .map(|s| node_addr.get(s).copied().unwrap_or(Addr::new(0)))
+                        .map(|s| node_addr.get(s).copied().expect("lowering: successor has no assigned address"))
                         .collect();
                     instructions.push(Instr::V2Fork {
                         targets,
@@ -432,7 +432,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     let next = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .unwrap_or(Addr::new(0));
+                        .expect("lowering: successor has no assigned address");
                     instructions.push(Instr::Jump { target: next });
                 }
             },
@@ -482,7 +482,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 let next = successors
                     .first()
                     .and_then(|s| node_addr.get(s).copied())
-                    .unwrap_or(Addr::new(0));
+                    .expect("lowering: successor has no assigned address");
                 instructions.push(Instr::Jump { target: next });
             }
 
@@ -535,7 +535,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // dropped `join_id`/`JoinPlanEntry`).
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source);
+                let corr_reg = parse_corr_reg(corr_key_source)?;
 
                 instructions.push(Instr::V2WaitMsg {
                     name: name_id,
@@ -544,7 +544,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
+                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -556,7 +556,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
             } => {
                 let name_id = intern_flag(&mut flag_intern, message_name);
                 message_name_map.insert(name_id, message_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source);
+                let corr_reg = parse_corr_reg(corr_key_source)?;
 
                 instructions.push(Instr::PublishMessage {
                     name: name_id,
@@ -565,7 +565,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
+                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -585,7 +585,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // metadata, not behavior-affecting.
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source);
+                let corr_reg = parse_corr_reg(corr_key_source)?;
 
                 instructions.push(Instr::V2WaitMsg {
                     name: name_id,
@@ -594,7 +594,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().unwrap_or(Addr::new(0));
+                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -1835,7 +1835,7 @@ fn lower_inclusive_diverging_v2(
         let real_target = node_addr
             .get(&branch.target_idx)
             .copied()
-            .unwrap_or(Addr::new(0));
+            .expect("lowering: successor has no assigned address");
         if branch.always_live {
             instructions.push(Instr::Jump { target: real_target });
         } else {
@@ -2007,7 +2007,7 @@ fn lower_multi_instance_v2(
     let next = successors
         .first()
         .and_then(|s| node_addr.get(s).copied())
-        .unwrap_or(Addr::new(0));
+        .expect("lowering: successor has no assigned address");
     instructions.push(Instr::Jump { target: next });
 
     Ok(())
@@ -2130,14 +2130,27 @@ fn intern_task(map: &mut HashMap<String, u32>, manifest: &mut Vec<String>, name:
     id
 }
 
-fn parse_corr_reg(source: &str) -> u8 {
-    source.parse::<u8>().unwrap_or(0)
+fn parse_corr_reg(source: &str) -> Result<u8> {
+    source
+        .parse::<u8>()
+        .map_err(|_| anyhow!("correlationKey must be a numeric register reference, got {source:?}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::verifier;
+
+    #[test]
+    fn parse_corr_reg_accepts_numeric_register_rejects_named_key() {
+        assert_eq!(parse_corr_reg("3").unwrap(), 3u8);
+        assert!(
+            parse_corr_reg("case_id").is_err(),
+            "a FEEL-expression-style correlationKey (variable name, not a \
+             register index) must be rejected, not silently treated as \
+             register 0"
+        );
+    }
 
     fn make_linear_graph() -> IRGraph {
         let mut graph = IRGraph::new();
