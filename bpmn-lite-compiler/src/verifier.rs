@@ -138,29 +138,89 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
         });
     }
 
-    // 4a. Parallel gateways: structural well-nestedness (SESE), not just
-    // matching counts. Adam, 2026-07-22: V5's XML->V2Fork/V2Join lowering
-    // pre-pass pairs each Converging GatewayAnd with a Diverging one via a
-    // stack, correct only for well-nested topology — a property this
+    // 4a. Parallel/inclusive gateways: structural well-nestedness (SESE),
+    // not just matching counts. Adam, 2026-07-22: V5's XML->V2Fork/V2Join
+    // lowering pre-pass pairs each Converging gateway with a Diverging one
+    // via a stack, correct only for well-nested topology — a property this
     // codebase has always called "SESE-only" (CLAUDE.md's settled
     // decision, never itself promoted into a V&S theorem) but which
     // nothing in this pipeline actually checked: `dto_to_ir` -> `verify`
     // -> `lower` never ran the DSL's `rpst::verify_sese_nesting` (that
     // lives on a separate importer path, into `WorkflowExecutionPlan`, not
     // `IRGraph`). Mirrors the DSL check's DFS-second-visit algorithm as
-    // closely as `IRNode::GatewayAnd`'s schema allows: `GatewayAnd` carries
-    // no explicit fork/join name reference (unlike the DSL's
-    // `JoinExecNode.split`), so this catches unmatched forks/joins and
-    // gross stack-order crossing structurally, but cannot independently
-    // cross-check a join against its *intended* fork by name the way the
-    // DSL's check does — a strictly weaker, not equivalent, guarantee.
+    // closely as `IRNode`'s schema allows: neither `GatewayAnd` nor
+    // `GatewayInclusive` carries an explicit fork/join name reference
+    // (unlike the DSL's `JoinExecNode.split`), so this catches unmatched
+    // forks/joins and gross stack-order/cross-kind crossing structurally,
+    // but cannot independently cross-check a join against its *intended*
+    // fork by name the way the DSL's check does — a strictly weaker, not
+    // equivalent, guarantee.
+    //
+    // V6 (2026-07-24): `check_gateway_and_nesting` used to thread a single
+    // `fork_stack` through the WHOLE recursion without cloning it before
+    // recursing into each of a branch point's neighbors — so a push/pop
+    // from one branch leaked into a sibling branch's traversal, causing
+    // this check to REJECT genuinely well-nested topology (two
+    // independently-nested `GatewayAnd` pairs in sibling branches of an
+    // outer fork, at different branch lengths) with a misleading "Unmatched
+    // GatewayAnd (converging)" message. Fixed by porting
+    // `dsl::rpst::dfs_walk`'s clone-the-stack-per-branch-before-recursing
+    // discipline (mirroring `lowering.rs`'s `compute_gateway_pairing`,
+    // fixed in the same landing for the analogous pairing-derivation bug).
+    // Also extended, in the same pass, to cover `GatewayInclusive` — it
+    // previously tracked ONLY `GatewayAnd` — using ONE unified stack tagged
+    // by kind (`GatewayKind`), not two independent per-kind stacks: see
+    // `lowering.rs`'s `compute_gateway_pairing` doc comment for the full
+    // framing-decision writeup (the two kinds can legally nest inside each
+    // other's branches today, and a unified stack is what lets this check
+    // also catch a genuine cross-kind crossing hazard, not just each kind's
+    // own internal mis-nesting). This does not interact with §9's
+    // blanket "≤1 `GatewayInclusive` pair" admission gate below — that
+    // gate's own count-based rejection logic is untouched; it still fires
+    // first (verifier errors are non-fatal-until-aggregated, all still
+    // collected here) whenever more than one `GatewayInclusive` pair is
+    // present, regardless of what this nesting check independently finds.
     if let Some(start_idx) = find_start(graph) {
         let mut visited = std::collections::HashSet::new();
-        let mut fork_stack: Vec<String> = Vec::new();
-        check_gateway_and_nesting(graph, start_idx, &mut visited, &mut fork_stack, &mut errors);
-        if !fork_stack.is_empty() {
+        let mut fork_stack: Vec<(GatewayKind, String, u32)> = Vec::new();
+        let mut tracker = GatewayClosureTracker::default();
+        check_gateway_and_nesting(
+            graph,
+            start_idx,
+            &mut visited,
+            &mut fork_stack,
+            &mut tracker,
+            &mut errors,
+        );
+        // `fork_stack.is_empty()` is NOT the closure check (see
+        // `GatewayClosureTracker`'s doc comment — the clone-per-branch fix
+        // means this top-level variable can never receive a push). The real
+        // check: every diverging gateway's EVERY immediate branch (`0..
+        // out_degree`) must have been closed by a matching-kind pop
+        // somewhere in that branch's own subtree — a diverging node with
+        // some but not all branches closed still dangles.
+        let mut unclosed: Vec<String> = tracker
+            .all_diverging
+            .iter()
+            .filter(|(id, out_degree)| {
+                (0..**out_degree).any(|branch_index| {
+                    !tracker.closed.contains(&((*id).clone(), branch_index))
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        unclosed.sort();
+        if !unclosed.is_empty() {
             errors.push(VerifyError {
-                message: format!("Unclosed diverging GatewayAnd node(s): [{}]", fork_stack.join(", ")),
+                message: format!(
+                    "Unclosed diverging gateway node(s) — a branch never reaches its \
+                     matching converging gateway: [{}]",
+                    unclosed
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 element_id: None,
             });
         }
@@ -492,51 +552,211 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
     errors
 }
 
-/// Structural well-nestedness (SESE) check for `GatewayAnd` fork/join
-/// pairs, mirroring `dsl::rpst::verify_sese_nesting`'s DFS-second-visit
-/// algorithm: entering a Diverging gateway pushes its element id; the
-/// *second* time DFS reaches a node (i.e. `visited.insert` returns
-/// `false`, meaning another path already explored it) is when a
-/// Converging gateway's pairing is checked and popped. Unlike the DSL's
-/// check, `IRNode::GatewayAnd` has no explicit fork/join name reference
-/// to cross-validate against, so this can only detect stack-order
-/// crossing and unmatched joins structurally — not verify a join closes
-/// the *specific* fork a BPMN author intended.
+/// Which gateway kind a `check_gateway_and_nesting` stack entry belongs to.
+/// Independent local type — not shared with `lowering.rs`'s
+/// `GatewayPairKind` — since this module's admission-side nesting check and
+/// `lowering.rs`'s pairing-DERIVATION are deliberately separate concerns
+/// that happen to need the same kind-tagging discriminator; see this
+/// function's doc comment and `lowering.rs`'s `compute_gateway_pairing` doc
+/// comment for the shared framing rationale.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GatewayKind {
+    And,
+    Inclusive,
+}
+
+impl std::fmt::Display for GatewayKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GatewayKind::And => write!(f, "GatewayAnd"),
+            GatewayKind::Inclusive => write!(f, "GatewayInclusive"),
+        }
+    }
+}
+
+/// Independent review finding (2026-07-24), confirmed by direct
+/// reproduction: the clone-per-branch fix above (`fork_stack` cloned before
+/// each recursion, never mutated on the caller's own copy) made the §4a
+/// call site's `if !fork_stack.is_empty() { "Unclosed diverging gateway" }`
+/// check permanently vacuous — that top-level variable can structurally
+/// never receive a push anymore, for ANY graph, so it can never be
+/// non-empty. This silently re-admitted a real defect the OLD (buggy,
+/// mispairing) code used to catch as an accidental side effect: a diverging
+/// gateway with a branch that dangles straight to `End` (or anywhere else)
+/// without ever reaching a matching converging node. That topology is
+/// genuinely non-well-nested — the corresponding `V2Fork` branch never
+/// arrives at its barrier, hanging the join forever at runtime — and
+/// nothing else in `verify()` catches it (§4's count check only sums global
+/// diverging/converging counts, no per-pair reachability).
+///
+/// Fix: closure must be tracked per ORIGINAL BRANCH of the diverging node,
+/// not merely "was it popped at least once anywhere" — a first cut at this
+/// (closure as a plain per-id set) turned out to be too weak: a 2-branch
+/// fork where only ONE branch reaches the join still records one successful
+/// pop, which a plain "popped at least once" check accepts even though the
+/// other branch dangled. Each diverging node's `push_entry` is therefore
+/// tagged with a `branch_index` (its position among the node's own
+/// immediate outgoing edges) — this tag is inherited unchanged through any
+/// FURTHER nested splitting inside that branch (cloning preserves it), so a
+/// pop anywhere downstream in that branch's subtree still credits the
+/// correct original branch, however deeply nested. `all_diverging` records
+/// each diverging node's id → its immediate out-degree (the branch count a
+/// complete closure requires); `closed` records exactly which
+/// `(id, branch_index)` pairs were ever actually popped. After the full
+/// walk, a diverging node is fully closed iff `closed` contains EVERY
+/// `branch_index` in `0..out_degree` for its id — computed at the §4a call
+/// site, not here (this struct only accumulates raw facts from the walk).
+#[derive(Default)]
+struct GatewayClosureTracker {
+    all_diverging: std::collections::HashMap<String, u32>,
+    closed: std::collections::HashSet<(String, u32)>,
+}
+
+/// Structural well-nestedness (SESE) check for `GatewayAnd` AND
+/// `GatewayInclusive` fork/join pairs (both kinds, tracked on one unified
+/// kind-tagged stack — see the §4a call site's doc comment for why),
+/// mirroring `dsl::rpst::verify_sese_nesting`'s DFS-second-visit algorithm:
+/// entering a Diverging gateway pushes `(kind, id)`; the *second* (and
+/// every later) time DFS reaches a node (i.e. `visited.insert` returns
+/// `false`, meaning another path already explored it) is when a Converging
+/// gateway's pairing is checked and popped — mirrored by the FIRST-visit
+/// case too, when the first-reached node IS itself a Converging gateway
+/// (see `check_gateway_nesting_pop`, called from both places). Unlike the
+/// DSL's check, neither `IRNode::GatewayAnd` nor `IRNode::GatewayInclusive`
+/// carries an explicit fork/join name reference to cross-validate against,
+/// so this can only detect stack-order crossing, cross-kind crossing, and
+/// unmatched joins structurally — not verify a join closes the *specific*
+/// fork a BPMN author intended.
+///
+/// The stack is CLONED before recursing into each of a branch point's
+/// (`>1` outgoing edge — `GatewayXor`/`GatewayAnd`/`GatewayInclusive`
+/// diverging, or any future multi-successor node) neighbors, ported from
+/// `dsl::rpst::dfs_walk`'s `Split` arm — this is the actual fix for the
+/// defect this function used to have (a single stack threaded through the
+/// whole recursion let one branch's pushes/pops leak into a sibling
+/// branch's traversal).
+#[allow(clippy::too_many_arguments)]
 fn check_gateway_and_nesting(
     graph: &IRGraph,
     curr: NodeIndex,
     visited: &mut std::collections::HashSet<NodeIndex>,
-    fork_stack: &mut Vec<String>,
+    fork_stack: &mut Vec<(GatewayKind, String, u32)>,
+    tracker: &mut GatewayClosureTracker,
     errors: &mut Vec<VerifyError>,
 ) {
     if !visited.insert(curr) {
-        if let IRNode::GatewayAnd {
-            direction: GatewayDirection::Converging,
-            ..
-        } = &graph[curr]
-        {
-            if fork_stack.pop().is_none() {
-                errors.push(VerifyError {
-                    message: "Unmatched GatewayAnd (converging): no open diverging \
-                        GatewayAnd found — non-well-nested parallel-gateway topology"
-                        .to_string(),
-                    element_id: Some(graph[curr].id().to_string()),
-                });
-            }
-        }
+        check_gateway_nesting_pop(graph, curr, fork_stack, tracker, errors);
         return;
     }
 
-    if let IRNode::GatewayAnd {
-        direction: GatewayDirection::Diverging,
-        ..
-    } = &graph[curr]
-    {
-        fork_stack.push(graph[curr].id().to_string());
-    }
+    // Is `curr` itself a Diverging gateway? If so, remember its kind/id —
+    // `branch_index` (which of `curr`'s own immediate outgoing edges a given
+    // clone descends from) is assigned per-neighbor below, not here; see
+    // `GatewayClosureTracker`'s doc comment for why the tag must travel with
+    // the branch, not the node.
+    let diverging_kind_id = match &graph[curr] {
+        IRNode::GatewayAnd {
+            direction: GatewayDirection::Diverging,
+            ..
+        } => Some((GatewayKind::And, graph[curr].id().to_string())),
+        IRNode::GatewayInclusive {
+            direction: GatewayDirection::Diverging,
+            ..
+        } => Some((GatewayKind::Inclusive, graph[curr].id().to_string())),
+        IRNode::GatewayAnd {
+            direction: GatewayDirection::Converging,
+            ..
+        }
+        | IRNode::GatewayInclusive {
+            direction: GatewayDirection::Converging,
+            ..
+        } => {
+            // First arrival at a converging node — pop-and-match now; the
+            // recursion below still walks on to its own (single) successor.
+            check_gateway_nesting_pop(graph, curr, fork_stack, tracker, errors);
+            None
+        }
+        _ => None,
+    };
 
-    for neighbor in graph.neighbors(curr) {
-        check_gateway_and_nesting(graph, neighbor, visited, fork_stack, errors);
+    let neighbors: Vec<NodeIndex> = graph.neighbors(curr).collect();
+    if diverging_kind_id.is_none() && neighbors.len() <= 1 {
+        // `push_entry`: what a Diverging gateway would push — but, mirroring
+        // `dsl::rpst::dfs_walk`'s `Split` arm precisely, it is pushed ONLY
+        // into each branch's own CLONE below (the `else` arm), never into
+        // the incoming `fork_stack` reference directly — this branch is
+        // reached only when `curr` is NOT itself diverging, so there is
+        // nothing to push here regardless.
+        for neighbor in neighbors {
+            check_gateway_and_nesting(graph, neighbor, visited, fork_stack, tracker, errors);
+        }
+    } else {
+        if let Some((_, id)) = &diverging_kind_id {
+            tracker
+                .all_diverging
+                .insert(id.clone(), neighbors.len() as u32);
+        }
+        for (branch_index, neighbor) in neighbors.iter().enumerate() {
+            let mut branch_stack = fork_stack.clone();
+            if let Some((kind, id)) = &diverging_kind_id {
+                branch_stack.push((*kind, id.clone(), branch_index as u32));
+            }
+            check_gateway_and_nesting(graph, *neighbor, visited, &mut branch_stack, tracker, errors);
+        }
+    }
+}
+
+/// Pop the top-of-stack entry for a converging gateway `curr` reached on
+/// one branch, and check it: `None` is an unmatched join; a kind mismatch
+/// is a cross-kind crossing hazard (see `check_gateway_and_nesting`'s doc
+/// comment); a matching kind records the popped diverging node's id in
+/// `tracker.closed` (see `GatewayClosureTracker`'s doc comment) and is
+/// otherwise silently accepted (this check cannot cross-validate the
+/// *specific* fork/join identity, only kind-tagged stack order — see the
+/// module-level doc comment above).
+fn check_gateway_nesting_pop(
+    graph: &IRGraph,
+    curr: NodeIndex,
+    fork_stack: &mut Vec<(GatewayKind, String, u32)>,
+    tracker: &mut GatewayClosureTracker,
+    errors: &mut Vec<VerifyError>,
+) {
+    let this_kind = match &graph[curr] {
+        IRNode::GatewayAnd {
+            direction: GatewayDirection::Converging,
+            ..
+        } => GatewayKind::And,
+        IRNode::GatewayInclusive {
+            direction: GatewayDirection::Converging,
+            ..
+        } => GatewayKind::Inclusive,
+        _ => return,
+    };
+    match fork_stack.pop() {
+        None => {
+            errors.push(VerifyError {
+                message: format!(
+                    "Unmatched {this_kind} (converging): no open diverging {this_kind} \
+                     found — non-well-nested gateway topology"
+                ),
+                element_id: Some(graph[curr].id().to_string()),
+            });
+        }
+        Some((open_kind, open_id, _)) if open_kind != this_kind => {
+            errors.push(VerifyError {
+                message: format!(
+                    "Crossing gateway-kind boundaries: {this_kind} (converging) '{}' \
+                     reached while a nested {open_kind} '{}' is still open — \
+                     non-well-nested gateway topology",
+                    graph[curr].id(),
+                    open_id
+                ),
+                element_id: Some(graph[curr].id().to_string()),
+            });
+        }
+        Some((_, open_id, branch_index)) => {
+            tracker.closed.insert((open_id, branch_index));
+        }
     }
 }
 
@@ -708,6 +928,62 @@ mod tests {
         assert!(errors.iter().any(|e| e.message.contains("No StartEvent")));
     }
 
+    /// Independent review finding (2026-07-24): the branch-clone fix that
+    /// stopped `check_gateway_and_nesting`'s false rejection of legal
+    /// nested topology (see `test_two_nested_and_pairs_in_and_branches_now_
+    /// admitted`) also made the old `fork_stack.is_empty()` "unclosed
+    /// diverging gateway" check permanently vacuous — the top-level
+    /// variable can never receive a push anymore. That check used to catch
+    /// (as an accidental side effect of the old, buggy code) a genuinely
+    /// non-well-nested topology: a fork with one branch that dangles
+    /// straight to `End` without ever reaching its own join. Confirmed by
+    /// direct reproduction (`cargo test` against the pre-fix code returned
+    /// zero errors for this exact graph). Fixed via `GatewayClosureTracker`
+    /// (branch-index-tagged closure, not a plain per-id set — a first cut
+    /// using a plain set was still too weak: it accepted this exact
+    /// topology too, since ONE of `fork1`'s two branches does successfully
+    /// reach `join1`, which a plain "popped at least once" check treats as
+    /// sufficient even though the sibling branch never arrives).
+    #[test]
+    fn test_dangling_and_branch_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let fork1 = graph.add_node(IRNode::GatewayAnd {
+            id: "fork1".to_string(), name: "Fork1".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let join1 = graph.add_node(IRNode::GatewayAnd {
+            id: "join1".to_string(), name: "Join1".to_string(), direction: GatewayDirection::Converging,
+        });
+        let a = graph.add_node(IRNode::ServiceTask { id: "a".to_string(), name: "A".to_string(), task_type: "a".to_string() });
+        let end_dangle = graph.add_node(IRNode::End { id: "end_dangle".to_string(), terminate: false });
+        let fork2 = graph.add_node(IRNode::GatewayAnd {
+            id: "fork2".to_string(), name: "Fork2".to_string(), direction: GatewayDirection::Diverging,
+        });
+        let join2 = graph.add_node(IRNode::GatewayAnd {
+            id: "join2".to_string(), name: "Join2".to_string(), direction: GatewayDirection::Converging,
+        });
+        let c1 = graph.add_node(IRNode::ServiceTask { id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
+        let c2 = graph.add_node(IRNode::ServiceTask { id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+
+        graph.add_edge(start, fork1, IREdge { id: "e0".to_string(), condition: None });
+        graph.add_edge(fork1, a, IREdge { id: "e1".to_string(), condition: None });
+        graph.add_edge(a, join1, IREdge { id: "e2".to_string(), condition: None });
+        graph.add_edge(fork1, end_dangle, IREdge { id: "e3".to_string(), condition: None }); // dangling branch: never reaches join1
+        graph.add_edge(join1, fork2, IREdge { id: "e4".to_string(), condition: None });
+        graph.add_edge(fork2, c1, IREdge { id: "e5".to_string(), condition: None });
+        graph.add_edge(fork2, c2, IREdge { id: "e6".to_string(), condition: None });
+        graph.add_edge(c1, join2, IREdge { id: "e7".to_string(), condition: None });
+        graph.add_edge(c2, join2, IREdge { id: "e8".to_string(), condition: None });
+        graph.add_edge(join2, end, IREdge { id: "e9".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors.iter().any(|e| e.message.contains("Unclosed diverging gateway") && e.message.contains("fork1")),
+            "dangling branch (fork1's second branch never reaches join1) must be rejected, got: {errors:?}"
+        );
+    }
+
     /// A4.T6: Verifier rejects unstructured parallel gateway
     #[test]
     fn test_unmatched_parallel_gateways() {
@@ -818,9 +1094,25 @@ mod tests {
             !errors.iter().any(|e| e.message.contains("Mismatched parallel gateways")),
             "counts are equal — the count check alone must not fire here"
         );
+        // V6 (2026-07-24): updated expected message. The OLD (buggy)
+        // `check_gateway_and_nesting` mutated the CALLER's own stack
+        // directly when pushing a diverging gateway's entry (rather than
+        // only the per-branch clones), so `fork_later`'s push leaked back
+        // up to the top-level "unclosed" check even though its own two
+        // branches (`end1`/`end2`) each terminate independently without
+        // ever reconverging — producing "Unclosed diverging GatewayAnd".
+        // The fixed version pushes only into branch-local clones (mirroring
+        // `dsl::rpst::dfs_walk`'s `Split` arm exactly, including that
+        // model's own same limitation: a diverging node whose branches
+        // never reconverge is not itself flagged "unclosed" by the
+        // top-level check). The out-of-order pair here is still correctly
+        // rejected — just via the MORE PRECISE error raised the moment
+        // `join_first` is reached with nothing open on its own branch's
+        // stack ("Unmatched GatewayAnd (converging)"), not a vague
+        // end-of-walk "unclosed" list.
         assert!(
-            errors.iter().any(|e| e.message.contains("Unclosed diverging GatewayAnd")),
-            "the structural nesting check must catch the out-of-order pair"
+            errors.iter().any(|e| e.message.contains("Unmatched GatewayAnd (converging)")),
+            "the structural nesting check must catch the out-of-order pair, got: {errors:?}"
         );
     }
 
@@ -1152,28 +1444,36 @@ mod tests {
         );
     }
 
-    /// Adjacent finding (out of scope to fix here, recorded so it isn't
-    /// lost): the SAME BFS-order-stack mispairing hazard the two tests
-    /// above lock down for `GatewayInclusive` ALSO pre-exists in
-    /// `fork_pairing`, `GatewayAnd`'s own analogous pairing mechanism —
-    /// confirmed by hand construction on the `GatewayAnd`-only version of
-    /// the sibling-nested-pairs graph above (a `V2Join.pairing` resolved
-    /// to the WRONG sibling branch's fork address). It happens to be
-    /// masked today: `check_gateway_and_nesting`'s DFS-second-visit SESE
-    /// check (§4a, immediately below) rejects that exact topology — but
-    /// for an unrelated/inaccurate reason ("Unmatched GatewayAnd
-    /// (converging): no open diverging GatewayAnd found"), not because it
-    /// detects the pairing hazard specifically;
-    /// the topology is in fact genuinely well-nested (SESE), just
-    /// misclassified as not by this DFS heuristic. This test locks that
-    /// current (accidental) protection in place — if a future fix to
-    /// `check_gateway_and_nesting` relaxes it to correctly ADMIT this
-    /// well-nested topology without ALSO fixing `fork_pairing`'s
-    /// underlying BFS-order defect, this test will start failing (no
-    /// error) and that is the point: it is a live-wire warning, not a
-    /// spurious one.
+    /// V6 (2026-07-24) — supersedes this test's prior framing. This used to
+    /// be `test_two_nested_and_pairs_in_and_branches_currently_rejected_by
+    /// _sese_check`, a deliberate masking-bug tripwire: it asserted this
+    /// exact topology (two independently-nested `GatewayAnd` pairs in
+    /// sibling branches of an outer fork, branch B deliberately longer to
+    /// skew BFS discovery order) was REJECTED by `check_gateway_and_nesting`
+    /// — correctly rejected in effect, but for the WRONG reason ("Unmatched
+    /// GatewayAnd (converging): no open diverging GatewayAnd found"), since
+    /// that check's own single-stack-threaded-without-cloning defect
+    /// (pushes/pops from one branch leaking into a sibling branch's
+    /// traversal) happened to also misfire here. That accidental rejection
+    /// was the ONLY thing standing between well-formed input and
+    /// `lower()`'s own analogous `fork_pairing` mispairing bug (same defect
+    /// class, in `lowering.rs`'s BFS-order pairing stack — see that
+    /// module's `test_two_independently_nested_and_pairs_pair_correctly`
+    /// for its own red/green proof).
+    ///
+    /// Both defects are now fixed in the same landing (`lowering.rs`'s
+    /// `compute_gateway_pairing` and this module's
+    /// `check_gateway_and_nesting`, both ported from `dsl::rpst::dfs_walk`'s
+    /// clone-the-stack-per-branch-before-recursing discipline). This
+    /// topology is genuinely well-nested (SESE) — two independent inner
+    /// fork/join pairs, each fully contained in its own outer-fork branch —
+    /// so it must now be ADMITTED, not rejected for any reason. This is
+    /// exactly the direction-A fix landing per Adam's ruling ("fix the
+    /// pairing mechanism first, then the false rejection it was masking
+    /// must also be fixed so legal topology is admitted, not left rejected
+    /// for a wrong reason once the real reason no longer applies").
     #[test]
-    fn test_two_nested_and_pairs_in_and_branches_currently_rejected_by_sese_check() {
+    fn test_two_nested_and_pairs_in_and_branches_now_admitted() {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
         let outer_fork = graph.add_node(IRNode::GatewayAnd {
@@ -1222,8 +1522,10 @@ mod tests {
 
         let errors = verify(&graph);
         assert!(
-            errors.iter().any(|e| e.message.contains("Unmatched GatewayAnd (converging)")),
-            "expected the current (accidental) SESE-check rejection, got: {errors:?}"
+            !errors.iter().any(|e| e.message.contains("Unmatched GatewayAnd")
+                || e.message.contains("Unclosed diverging gateway")
+                || e.message.contains("Crossing gateway-kind boundaries")),
+            "well-nested sibling-branch AND pairs must now be admitted, got: {errors:?}"
         );
     }
 }
