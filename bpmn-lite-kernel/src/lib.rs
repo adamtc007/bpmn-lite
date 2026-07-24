@@ -2392,19 +2392,22 @@ fn apply_tick(
             // K-1/K-2/K-3 (V4.2): as `V2WaitFor`.
             Instr::V2WaitMsg { name } => {
                 let corr_key = resolve_correlation_key_at(workflow, &instance, fiber.pc)?;
-                // V5.3 (§18, landed 2026-07-23): the `IRNode::MessageWait`/
-                // `HumanWait` migration to this word (from v1 `WaitMsg`,
-                // now deleted) carries over v1 `WaitMsg`'s own
-                // signal-before-wait check — a message already buffered
-                // for this correlation, delivered before the fibre ever
-                // parks, rather than requiring a real park+signal
-                // round-trip. Without this, a buffered message sent before
-                // the workflow reaches its wait point would sit unconsumed
-                // until *some* unrelated tick happened to run the
-                // buffered-message sweep, if one exists — v1 never
-                // depended on that; it checked inline, so this preserves
-                // that guarantee rather than silently narrowing it.
-                if let Some(buffered) = snapshot.buffered_messages().first() {
+                // Signal-before-wait: consume a message already buffered for
+                // THIS fibre's subscription. The match is on name AND the
+                // resolved content key — never `.first()`. `buffered_messages`
+                // is a per-instance list that may hold entries for sibling
+                // fibres parked on other names/keys (a parallel split with
+                // several concurrent message waits); taking the first would
+                // route a sibling's message here and strand that sibling.
+                let message_name_map =
+                    workflow.envelope().metadata().message_name_map();
+                if let Some(buffered) = snapshot.buffered_messages().iter().find(|buffered| {
+                    message_name_matches(
+                        message_name_map,
+                        &buffered.message.message_name,
+                        *name,
+                    ) && buffered.message.correlation_key == corr_key
+                }) {
                     if let Some(hash) = buffered.message.payload_hash {
                         let payload =
                             std::str::from_utf8(&buffered.message.payload).map_err(|_| {
@@ -5322,6 +5325,73 @@ mod tests {
             "must continue past V2WaitMsg (addr 0), not re-park at it"
         );
         assert_eq!(resumed.wait, WaitState::Running);
+    }
+
+    /// V7 blind-review Finding 1: the signal-before-wait branch of
+    /// `V2WaitMsg` must consume a buffered message only when its name AND
+    /// resolved content key match this fibre — never `.first()`. A buffered
+    /// message for a sibling subscription (parallel split, distinct keys) must
+    /// NOT be consumed by an unrelated fibre. Red before the fix: the fibre
+    /// consumed the mismatched message and advanced to `Addr::new(1)`.
+    #[test]
+    fn v2_wait_msg_ignores_a_buffered_message_with_a_mismatched_key() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [12u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2WaitMsg { name: 100 },
+                /* 1 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        // This wait resolves its correlation key to the content "false".
+        .with_v2_corr_sources(corr_false(&[0]));
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "v7-buffered-key-mismatch").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        // A buffered message with the right NAME ("100") but a mismatched
+        // correlation key ("other") — belongs to some other subscription.
+        let buffered = bpmn_lite_types::ClaimedBufferedMessage {
+            message: bpmn_lite_types::BufferedMessage {
+                tenant_id: base_snapshot.instance().tenant_id.clone(),
+                message_name: "100".to_string(),
+                correlation_key: "other".to_string(),
+                msg_id: "m-other".to_string(),
+                payload: b"{}".to_vec(),
+                payload_hash: None,
+                process_instance_id: Some(base_snapshot.instance().instance_id),
+                received_at: 0,
+                expires_at: i64::MAX,
+            },
+            claim_token: "tok".to_string(),
+            claim_until: i64::MAX,
+        };
+        let snapshot = Snapshot::new(
+            base_snapshot.instance().clone(),
+            [Fiber::new(root_fiber_id, 0)],
+        )
+        .with_buffered_messages(vec![buffered]);
+
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        let fiber = t1.fibers_upsert()[0].clone();
+        assert!(
+            matches!(&fiber.wait, WaitState::Msg { .. }),
+            "must park — the buffered message's key does not match this wait's key"
+        );
+        assert!(
+            t1.buffered_messages().is_empty(),
+            "the mismatched message must NOT be consumed"
+        );
     }
 
     /// V4 word-coverage audit (2026-07-22, following the `V2WaitMsg`
