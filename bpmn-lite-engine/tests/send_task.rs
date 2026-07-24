@@ -30,7 +30,12 @@ const SEND_TASK_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
   <bpmn:process id="send_proc">
     <bpmn:startEvent id="start"/>
-    <bpmn:sendTask id="send_msg" name="payment_requested"/>
+    <bpmn:dataObject id="ckey" name="ckey"></bpmn:dataObject>
+    <bpmn:sendTask id="send_msg" name="payment_requested">
+      <bpmn:extensionElements>
+        <zeebe:subscription correlationKey="=ckey" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"/>
+      </bpmn:extensionElements>
+    </bpmn:sendTask>
     <bpmn:endEvent id="end"/>
     <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="send_msg"/>
     <bpmn:sequenceFlow id="f2" sourceRef="send_msg" targetRef="end"/>
@@ -64,7 +69,7 @@ async fn send_task_publishes_message_and_advances() {
         .unwrap();
 
     // ── Start instance + tick to quiescence
-    let payload = r#"{"trigger":"calibration"}"#;
+    let payload = r#"{"trigger":"calibration","ckey":"pay-1"}"#;
     let hash = compute_hash(payload);
     let iid = engine
         .start(
@@ -97,13 +102,14 @@ async fn send_task_publishes_message_and_advances() {
         fibers.len()
     );
 
-    // ── 5: message actually buffered (correlation key = "b:false" because
-    //      register 0 is uninitialised → Value::Bool(false) at publish time)
+    // ── 5: message actually buffered — correlation key is the content of the
+    //      `ckey` process variable ("pay-1"), resolved from domain payload at
+    //      publish time (§28 content correlation).
     let claimed = store
         .claim_buffered_message(
             &bpmn_lite_types::TenantId::new("default").unwrap(),
             "payment_requested",
-            "b:false",
+            "pay-1",
             60_000,
         )
         .await

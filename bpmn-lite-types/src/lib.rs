@@ -25,6 +25,7 @@ pub mod persistence;
 pub mod session_stack;
 pub mod transition;
 pub mod types;
+pub(crate) mod v2_verifier;
 
 // Crate-prelude re-exports — every external consumer can `use
 // bpmn_lite_types::*` and get the full vocabulary, mirroring the

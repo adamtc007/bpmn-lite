@@ -167,6 +167,18 @@ fn value_key(v: &Value) -> String {
         Value::I64(n) => format!("i:{n}"),
         Value::Str(s) => format!("s:{s}"),
         Value::Ref(r) => format!("r:{r}"),
+        // §18 ruling K Part 2: `Value::Array` is new. Same "a:" + hex of
+        // canonical bytes convention as `bpmn-lite-kernel`'s own
+        // `value_key` — deterministic and unambiguous, distinct from the
+        // scalar prefixes above, rather than a panic on an unreachable-
+        // until-now match arm.
+        Value::Array(_) => format!(
+            "a:{}",
+            v.to_canonical_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     }
 }
 
@@ -488,7 +500,7 @@ impl RuntimeStore for MemoryStore {
         let r = self.inner.read().await;
         Ok(r.instances
             .iter()
-            .filter(|(_, inst)| !inst.state.is_terminal() && inst.tenant_id == tenant_id.as_str())
+            .filter(|(_, inst)| inst.state.is_schedulable() && inst.tenant_id == tenant_id.as_str())
             .map(|(id, _)| *id)
             .collect())
     }
@@ -740,7 +752,7 @@ impl RuntimeStore for MemoryStore {
                     claim_token,
                     ..
                 } => (*timer_id, *claim_token),
-                TimerMutation::CancelRace { .. } => continue,
+                TimerMutation::CancelRace { .. } | TimerMutation::V2CancelRace { .. } => continue,
             };
             let Some(timer) = w.timers.get(&timer_id) else {
                 return Ok(CommitOutcome::IdempotentNoOp);
@@ -1059,6 +1071,27 @@ impl RuntimeStore for MemoryStore {
                         }
                     }
                 }
+                TimerMutation::V2CancelRace {
+                    fiber_id,
+                    record_id,
+                    except,
+                } => {
+                    for (timer_id, timer) in &mut w.timers {
+                        let same_race = matches!(
+                            &timer.kind,
+                            TimerKind::V2Race { record_id: current, .. } if *current == *record_id
+                        );
+                        if *timer_id != *except
+                            && timer.instance_id == instance_id
+                            && timer.fiber_id == *fiber_id
+                            && same_race
+                            && timer.state == MemoryTimerState::Armed
+                        {
+                            timer.state = MemoryTimerState::Cancelled;
+                            timer.claim = None;
+                        }
+                    }
+                }
             }
         }
         for child in transition.child_starts() {
@@ -1148,7 +1181,7 @@ impl RuntimeStore for MemoryStore {
         let concurrency_table = w.concurrency_tables.entry(instance_id).or_default();
         for mutation in transition.concurrency_mutations() {
             match mutation {
-                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
                 ConcurrencyMutation::Retire(id) => {
                     if let Some(record) = concurrency_table.get_mut(*id) {
                         record.state = RecordState::Retired;
@@ -2482,7 +2515,7 @@ mod tests {
         fiber.wait = WaitState::Msg {
             wait_id: 1,
             name: 1,
-            corr_key: Value::Bool(false),
+            corr_key: "k".to_string(),
         };
         store.save_instance("default", &instance).await.unwrap();
         store.save_fiber(instance_id, &fiber).await.unwrap();
@@ -2971,5 +3004,49 @@ mod tests {
             .unwrap();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].1, RuntimeEvent::Completed { at: 12345 }));
+    }
+
+    /// `list_running_instances`/`claim_running_instances` filter on
+    /// `ProcessState::is_schedulable()`, not `!is_terminal()` — an
+    /// `Incidented` instance is not terminal (`ResolveIncident` revives
+    /// it) but must still be excluded from scheduler ticking. Regression
+    /// check on the common case: a genuinely `Running` instance must still
+    /// be picked up.
+    #[tokio::test]
+    async fn list_and_claim_running_instances_exclude_incidented_but_include_running() {
+        let store = MemoryStore::new();
+        let running_id = Uuid::now_v7();
+        let incidented_id = Uuid::now_v7();
+
+        let mut running_inst = make_instance(running_id);
+        running_inst.state = ProcessState::Running;
+        store.save_instance("default", &running_inst).await.unwrap();
+
+        let mut incidented_inst = make_instance(incidented_id);
+        incidented_inst.state = ProcessState::Incidented {
+            incident_id: Uuid::now_v7(),
+        };
+        store
+            .save_instance("default", &incidented_inst)
+            .await
+            .unwrap();
+
+        let tenant = TenantId::default();
+        let listed = store.list_running_instances(&tenant).await.unwrap();
+        assert!(
+            listed.contains(&running_id),
+            "a Running instance must still be scheduled"
+        );
+        assert!(
+            !listed.contains(&incidented_id),
+            "an Incidented instance must be excluded — it awaits ResolveIncident, not ticking"
+        );
+
+        let claimed = store
+            .claim_running_instances(&tenant, "owner-1", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(claimed.contains(&running_id));
+        assert!(!claimed.contains(&incidented_id));
     }
 }

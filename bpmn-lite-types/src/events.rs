@@ -4,35 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// Serializable description of a wait arm for the event log.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WaitArmDesc {
-    Timer { duration_ms: u64 },
-    Deadline { deadline_ms: u64 },
-    Msg { name: u32 },
-    Internal { kind: u32 },
-}
-
-impl From<&WaitArm> for WaitArmDesc {
-    fn from(arm: &WaitArm) -> Self {
-        match arm {
-            WaitArm::Timer {
-                duration_ms,
-                interrupting: _,
-                cycle: _,
-                ..
-            } => WaitArmDesc::Timer {
-                duration_ms: *duration_ms,
-            },
-            WaitArm::Deadline { deadline_ms, .. } => WaitArmDesc::Deadline {
-                deadline_ms: *deadline_ms,
-            },
-            WaitArm::Msg { name, .. } => WaitArmDesc::Msg { name: *name },
-            WaitArm::Internal { kind, .. } => WaitArmDesc::Internal { kind: *kind },
-        }
-    }
-}
-
 /// Runtime events — the durable audit trail for every process instance.
 /// 24 variants covering the full lifecycle.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -112,11 +83,11 @@ pub enum RuntimeEvent {
     WaitMsgSubscribed {
         fiber_id: Uuid,
         name: u32,
-        corr_key: Value,
+        corr_key: String,
     },
     MsgReceived {
         name: u32,
-        corr_key: Value,
+        corr_key: String,
         msg_ref: Option<Uuid>,
     },
     MessageBuffered {
@@ -154,25 +125,6 @@ pub enum RuntimeEvent {
         child_instance_id: Uuid,
         incident_id: Uuid,
     },
-    RaceRegistered {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        arms: Vec<WaitArmDesc>,
-    },
-    RaceWon {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        winner_index: usize,
-        resume_at: Addr,
-    },
-    RaceCancelled {
-        race_id: RaceId,
-        cancelled_indices: Vec<usize>,
-    },
-    LateSignalIgnored {
-        race_id: RaceId,
-        arm_index: usize,
-    },
     WaitCancelled {
         fiber_id: Uuid,
         wait_desc: String,
@@ -180,27 +132,6 @@ pub enum RuntimeEvent {
     },
     SignalIgnored {
         signal_desc: String,
-    },
-    /// Non-interrupting boundary timer fired — spawned child fiber.
-    BoundaryFired {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        spawned_fiber_id: Uuid,
-        boundary_element_id: String,
-        resume_at: Addr,
-    },
-    /// One iteration of a timer cycle completed.
-    TimerCycleIteration {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        iteration: u32,
-        remaining: u32,
-    },
-    /// All iterations of a timer cycle have been consumed.
-    TimerCycleExhausted {
-        race_id: RaceId,
-        fiber_id: Uuid,
-        total_fired: u32,
     },
     Cancelled {
         reason: String,
@@ -264,5 +195,96 @@ pub enum RuntimeEvent {
         /// "integrity_hash_mismatch"
         failure_reason: String,
         detected_at: Timestamp,
+    },
+
+    // ── V4 D2 word audit events ────────────────────────────────────────────
+    // V2-prefixed per the V2.7 coexistence rule (module docs on `Instr`):
+    // these carry `RecordId`, not v1's static `JoinId`, so they are not
+    // reuses of `Forked`/`JoinArrived`/`JoinReleased` even where the shape
+    // looks close. Not part of the canonical hash domain (audit log only —
+    // see `canonical.rs`, which has no `RuntimeEvent` impl).
+    /// `V2Guard` opened an interrupting-guard record.
+    V2GuardOpened {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        handler: Addr,
+    },
+    /// `V2GuardEnd`/`V2GuardREnd` retired a guard record on its normal
+    /// (non-triggered/non-rollback) path.
+    V2GuardRetired {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// A18: `V2GuardR` opened a rollback-capable interrupting-guard record.
+    /// Distinct from `V2GuardOpened` — carries no `handler` (see
+    /// `Instr::V2GuardR`'s doc comment: `GUARD-R>` never spawns a handler
+    /// fibre, so there is no `Addr` to report here).
+    V2GuardROpened {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// `V2Fork` allocated a barrier record and spawned member fibres.
+    V2Forked {
+        record_id: crate::concurrency::RecordId,
+        fork_fiber_id: Uuid,
+        child_fibers: Vec<Uuid>,
+        targets: Vec<Addr>,
+    },
+    /// `V2Join` arrived but was not the last member — parked.
+    V2JoinArrived {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// `V2Join`'s last arrival — barrier retired, `survivor_fiber_id`
+    /// continues in place, `cancelled_fibers` were deleted (V&S v0.4 ruling B).
+    V2JoinReleased {
+        record_id: crate::concurrency::RecordId,
+        survivor_fiber_id: Uuid,
+        next_pc: Addr,
+        cancelled_fibers: Vec<Uuid>,
+    },
+    /// `V2RaceOpen` allocated a race record.
+    V2RaceOpened {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        arm_count: u16,
+    },
+    /// `V2RaceClose` parked the fiber on its armed alternatives.
+    V2RaceClosed {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        arm_count: u16,
+    },
+    /// A v2 race resolved — `fiber_id`'s winning arm fired (message
+    /// delivery or timer). The race record retires in the same transition.
+    V2RaceWon {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+    },
+    /// An interrupting guard fired: every record nested under it (and
+    /// their member fibres) is cancelled in the same transition (V&S
+    /// v0.4 §4/§12 ruling A order — `cancelled_records` is listed
+    /// deepest-first), and the handler fibre spawns.
+    V2GuardTriggered {
+        record_id: crate::concurrency::RecordId,
+        handler_fiber_id: Uuid,
+        cancelled_records: Vec<crate::concurrency::RecordId>,
+        cancelled_fibers: Vec<Uuid>,
+    },
+    /// A non-interrupting guard (`GUARD-N>`) fired: the handler spawns,
+    /// nothing is cancelled, the record re-arms (V&S §13 amendment v0.5,
+    /// ruling A) — it was never retired, so there is nothing to re-`Insert`.
+    V2GuardNTriggered {
+        record_id: crate::concurrency::RecordId,
+        handler_fiber_id: Uuid,
+    },
+    /// `V2CancelScope` fired: nested records/fibres cancelled (as
+    /// `V2GuardTriggered`, no handler), and the instance's
+    /// `domain_payload` was restored to the scope's rollback snapshot.
+    V2ScopeCancelled {
+        record_id: crate::concurrency::RecordId,
+        fiber_id: Uuid,
+        cancelled_records: Vec<crate::concurrency::RecordId>,
+        cancelled_fibers: Vec<Uuid>,
     },
 }

@@ -401,6 +401,23 @@ pub enum TimerKind {
         boundary_element_id: Option<String>,
         arm_count: usize,
     },
+    /// A v2 `V2ArmTimer` alternative (V2.7 coexistence rule: distinct from
+    /// `Race` — no interrupting/cycle/boundary fields, since v2 races have
+    /// no non-interrupting-boundary-timer concept; first-wins only).
+    V2Race {
+        record_id: crate::concurrency::RecordId,
+        resume_at: u32,
+    },
+    /// §18 v0.10 ruling I: a `GUARD-TIMER>`-armed guard's own deadline.
+    /// `record_id` is the Guard/GuardN/GuardR-kind record it's bound to
+    /// (no `resume_at` — unlike a race arm, firing does not resume the
+    /// fibre at a static target; it issues the same effect as
+    /// `Command::V2TriggerGuard` for `V2Guard`/`V2GuardN`, or an automatic
+    /// rollback for `V2GuardR`, which carries no target address at all).
+    /// See `bpmn-lite-kernel`'s `apply_timer` for the fire-time dispatch.
+    V2GuardTimer {
+        record_id: crate::concurrency::RecordId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -462,6 +479,13 @@ pub enum EffectResponse {
     Failed {
         error_class: ErrorClass,
         message: String,
+        /// V&S §15 (v0.7) ruling E: how many attempts this effect had
+        /// consumed by the time it failed definitively. `0` where no
+        /// retry bookkeeping was ever consulted for this failure (an
+        /// honest "no history to report", not a lie) — populated with
+        /// real history only at the one site that runs `RetryPolicy`
+        /// decisions (`Engine::schedule_transient_effect`).
+        attempt: u32,
     },
 }
 
@@ -583,6 +607,80 @@ impl RetryPolicy {
         RetryDecision::At {
             attempt: next_attempt,
             due_at: retry_hint.map_or(computed_due, |hint| hint.max(computed_due)),
+        }
+    }
+}
+
+/// V&S §15 (v0.7) ruling F: the repeated-failure budget for a `Guard`
+/// scope's automatic-rollback-on-`ContractViolation` path (§13/§14 ruling
+/// C/D). Deliberately a **distinct type from `RetryPolicy`**, not a reuse
+/// of it — same shape (bounded, deterministic, terminating in escalation)
+/// but a different granularity and clock: `RetryPolicy` counts per-effect
+/// attempts with backoff/jitter; this counts per-scope re-runs with no
+/// backoff concept at all (an external actor decides when to re-run, not
+/// this budget). Keeping them distinct types means "attempt 3" can never
+/// be ambiguous between the two callers — a compile-time guarantee a
+/// shared type wouldn't give.
+///
+/// Store-side only (never touched by the pure kernel) — see
+/// `ConcurrencyRecord::opened_at`'s doc comment for why this is safe
+/// outside the hash domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeFailureBudget {
+    version: u32,
+    max_failures: u32,
+}
+
+/// The terminal action is always quarantine-and-surface (§15) — there is
+/// no `Terminal`/non-retriable-class distinction here the way
+/// `RetryDecision` has one, because this budget only ever sees one
+/// failure class (`ContractViolation` inside an interrupting guard,
+/// ruling D's sole rollback-eligible class) by construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScopeFailureDecision {
+    /// Still under budget. Carries the new failure count to persist.
+    Continue(u32),
+    /// Budget exhausted as of this failure. Carries the new failure count
+    /// (for the audit trail) — the caller quarantines the instance via
+    /// the existing `quarantine_instance` mechanism (T10.3's claim gate
+    /// already refuses claims for any quarantined instance; no new
+    /// claim-path code needed).
+    Exhausted(u32),
+}
+
+impl ScopeFailureBudget {
+    pub fn new(version: u32, max_failures: u32) -> Result<Self, &'static str> {
+        if version == 0 || max_failures == 0 {
+            return Err("invalid scope failure budget bounds");
+        }
+        Ok(Self { version, max_failures })
+    }
+
+    /// The conservative compiled-in default budget, applied to a guard that
+    /// carries neither its own nor a workflow-level budget — the ceiling the
+    /// retired hardcoded placeholder used (§31).
+    pub const fn conservative_default() -> Self {
+        Self { version: 1, max_failures: 5 }
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn max_failures(&self) -> u32 {
+        self.max_failures
+    }
+
+    /// `prior_failures` is the count persisted before this failure (`0`
+    /// for a guard's first-ever automatic rollback). Deterministic: no
+    /// jitter, no time input — this budget has no backoff concept, only
+    /// a ceiling.
+    pub fn decision(&self, prior_failures: u32) -> ScopeFailureDecision {
+        let next = prior_failures.saturating_add(1);
+        if next >= self.max_failures {
+            ScopeFailureDecision::Exhausted(next)
+        } else {
+            ScopeFailureDecision::Continue(next)
         }
     }
 }
@@ -774,6 +872,15 @@ pub enum TimerMutation {
         race_id: u32,
         except: EffectId,
     },
+    /// As `CancelRace`, for a v2 `RecordKind::Race` — kept as a distinct
+    /// variant (V2.7 coexistence rule) since v2 races are `RecordId`-keyed,
+    /// not v1's static `u32` race_id, and carry none of v1 Race's
+    /// interrupting/cycle/boundary baggage.
+    V2CancelRace {
+        fiber_id: Uuid,
+        record_id: crate::concurrency::RecordId,
+        except: EffectId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -804,6 +911,14 @@ pub enum Command {
         error_class: crate::ErrorClass,
         message: String,
         retry: Option<JobRetry>,
+        /// V&S §15 (v0.7) ruling E: attempt history at the moment of
+        /// this failure. `0` where no retry bookkeeping exists for this
+        /// call site (job-queue failures reported directly, restart-time
+        /// incidents) — an honest absence, not a lie. See
+        /// `EffectResponse::Failed::attempt`'s doc comment for the full
+        /// rationale; this field carries the same value through once an
+        /// `EffectResponse::Failed` becomes a `Command::EffectFailed`.
+        attempt: u32,
     },
     TimerFired {
         timer: ClaimedTimer,
@@ -834,6 +949,14 @@ pub enum Command {
         job_key: String,
         worker_id: String,
         claim_expires_at: Timestamp,
+    },
+    /// External signal resolving a v2 interrupting guard's trigger
+    /// condition (EOP-EX-BPMN-ISA-002 §3's cancellation cascade). V4.1:
+    /// the exact triggering mechanism (what upstream event maps to this)
+    /// is deliberately out of scope here — this `Command` only fixes the
+    /// kernel-side contract once something decides to fire.
+    V2TriggerGuard {
+        record_id: crate::concurrency::RecordId,
     },
 }
 
@@ -1563,5 +1686,28 @@ mod retry_policy_tests {
             policy.decision(2, None, &ErrorClass::Transient, 0, Uuid::nil()),
             RetryDecision::Exhausted
         );
+    }
+}
+
+/// V&S §15 (v0.7) ruling F.
+#[cfg(test)]
+mod scope_failure_budget_tests {
+    use super::*;
+
+    #[test]
+    fn continues_under_budget_then_exhausts_at_the_ceiling() {
+        let budget = ScopeFailureBudget::new(1, 3).unwrap();
+        assert_eq!(budget.decision(0), ScopeFailureDecision::Continue(1));
+        assert_eq!(budget.decision(1), ScopeFailureDecision::Continue(2));
+        assert_eq!(budget.decision(2), ScopeFailureDecision::Exhausted(3));
+        // Deterministic: same input, same output, every time (no jitter,
+        // no time input — unlike RetryPolicy, this budget has none).
+        assert_eq!(budget.decision(2), ScopeFailureDecision::Exhausted(3));
+    }
+
+    #[test]
+    fn rejects_a_zero_budget() {
+        assert!(ScopeFailureBudget::new(1, 0).is_err());
+        assert!(ScopeFailureBudget::new(0, 3).is_err());
     }
 }

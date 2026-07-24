@@ -75,9 +75,6 @@ pub type JoinId = u32;
 /// Wait point identifier.
 pub type WaitId = u32;
 
-/// Race group identifier (compile-time constant, same width as WaitId).
-pub type RaceId = u32;
-
 /// Interned orch_flag name.
 pub type FlagKey = u32;
 
@@ -102,6 +99,36 @@ impl SourceSpan {
 // ─── Value ────────────────────────────────────────────────────
 
 /// A compact value on the orch stack or in flags. Never domain payload.
+///
+/// `Array` (added for §18 ruling K Part 2, the MI per-element-value-access
+/// landing) is the one variant that is not fixed-width. Container shape:
+/// `Vec<Value>`, not a boxed slice. `V2Fork`'s `targets: Box<[Addr]>` is
+/// *compile-time*-fixed — frozen once by the compiler, never mutated at
+/// runtime, so a boxed slice's "no spare capacity" shape is exactly right
+/// for it. A `Value::Array` is the opposite: it is *runtime*-constructed
+/// data (populated via `orch_flags` at spawn/resume, or by `StoreFlag`
+/// inside a running instance), the same runtime-mutable-data role every
+/// other `flags: BTreeMap<FlagKey, Value>` entry already plays. `Vec` is
+/// the container this codebase already uses for exactly that role
+/// (`Fiber::stack`, `Fiber::regs`'s backing before the fixed-size array
+/// conversion, `ConcurrencyRecord` member lists) — matching that
+/// convention rather than `V2Fork`'s unrelated compile-time-frozen one.
+///
+/// Nesting: **structurally permitted, not forbidden.** A `Value::Array` may
+/// contain another `Value::Array`. This was a deliberate choice, not an
+/// oversight: forbidding nesting would require either (a) making
+/// `CanonicalEncode::canonical_encode` fallible — a ~15-impl, trait-wide
+/// blast radius this landing does not warrant (see `canonical.rs`'s module
+/// doc comment: every impl in this module is infallible by construction,
+/// by design) — or (b) an unenforced "authors just don't do that"
+/// convention, which is exactly the trap-door shape CLAUDE.md's working
+/// contract forbids ("enforce the mechanism, not a word"). Allowing
+/// nesting keeps the existing infallible-encode invariant intact and is
+/// fully covered by round-trip tests (golden bytes + proptest), rather
+/// than being an implicit assumption that happens to work because nothing
+/// constructs one yet. See `MAX_VALUE_ARRAY_DEPTH`/`MAX_VALUE_ARRAY_LEN`
+/// below for the bound that keeps "structurally permitted" from becoming
+/// "unboundedly permitted."
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Value {
     Bool(bool),
@@ -110,69 +137,95 @@ pub enum Value {
     Str(u32),
     /// Opaque handle into external stores.
     Ref(u32),
+    /// A sequence of `Value`s, by-value (Adam's ratified MI-element-access
+    /// ruling: "by-value is simpler and matches the frame model... given
+    /// payload sizes here, I'd lean by-value with the declared-max cap
+    /// bounding the total"). Every other `Value` variant is fixed-width;
+    /// this one is not — see `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH`
+    /// for the explicit bound that keeps it from silently reopening the
+    /// "frame size proportional to live tokens" guarantee (§2 glossary,
+    /// "Frame") this ISA otherwise gets for free from every other variant
+    /// being fixed-width.
+    Array(Vec<Value>),
 }
 
-// ─── Cycle spec (non-interrupting timer repetition) ───────────
+/// §18 ruling K Part 2 finding: unlike every other `Value` variant,
+/// `Array` can in principle be arbitrarily large or deeply nested — count
+/// alone (e.g. `V2MiArityCheck`'s existing collection-length bound) does
+/// not bound the *encoded size* of a single stack/register/flag slot once
+/// that slot can hold a `Value::Array`. Nothing in the pre-existing
+/// `VerifiedLimits` machinery (`max_stack`/`max_registers`, both slot
+/// *counts*, not per-slot byte sizes) covers this — checked, not assumed.
+/// These two constants are the explicit bound this landing adds to close
+/// that gap. Enforced at both boundaries capable of introducing an
+/// oversized/deep `Value::Array` into a live frame:
+/// - `bpmn-lite-types/src/canonical.rs`, `Value::canonical_decode` — the
+///   D3 Ring 2 replay/snapshot-load boundary; depth is checked *during*
+///   decode (before recursing into an `Array`'s elements), which is what
+///   actually prevents an adversarial-depth input from stack-overflowing
+///   the decoder itself, not merely rejecting the result after the fact.
+/// - `bpmn-lite-kernel/src/lib.rs`, `validate_snapshot_limits` — the
+///   runtime boundary, run on every `apply` call; walks `fiber.stack`,
+///   `fiber.regs`, and `instance.flags` values. This is also the boundary
+///   that (eventually, on the instance's first tick after spawn) catches
+///   an oversized/deep `Value::Array` supplied externally via `orch_flags`
+///   at spawn — see the plan-doc writeup for the residual gap this does
+///   NOT close (there is no intake-time check at the `orch_flags`-seeding
+///   call site itself, only at the next `apply`).
+pub const MAX_VALUE_ARRAY_LEN: usize = 4096;
+pub const MAX_VALUE_ARRAY_DEPTH: u32 = 8;
 
-/// Describes a repeating timer cycle (ISO 8601 `R<n>/PT<duration>`).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CycleSpec {
-    /// Interval between fires in milliseconds.
-    pub interval_ms: u64,
-    /// Maximum number of fires (0 = unlimited, but we cap at a sane default).
-    pub max_fires: u32,
+/// Shared by both enforcement boundaries above so they can never drift
+/// apart on what "too large" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueLimitError {
+    TooDeep { max: u32 },
+    TooLong { actual: usize, max: usize },
 }
 
-// ─── Wait arms (race semantics) ───────────────────────────────
-
-/// Compile-time description of one arm in a WaitAny race.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum WaitArm {
-    /// Wall-clock timer (duration from now).
-    Timer {
-        duration_ms: u64,
-        resume_at: Addr,
-        /// If false, firing does NOT resolve the race (fork-on-fire).
-        interrupting: bool,
-        /// If Some, timer re-registers after each fire up to max_fires.
-        cycle: Option<CycleSpec>,
-    },
-    /// Wall-clock timer (absolute deadline).
-    Deadline { deadline_ms: u64, resume_at: Addr },
-    /// External message with correlation.
-    Msg {
-        name: u32,
-        corr_reg: u8,
-        resume_at: Addr,
-    },
-    /// Internal engine signal (e.g., job completion for boundary events — Phase 2).
-    Internal {
-        kind: u32,
-        key_reg: u8,
-        resume_at: Addr,
-    },
-}
-
-impl WaitArm {
-    pub fn resume_at(&self) -> Addr {
+impl std::fmt::Display for ValueLimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WaitArm::Timer { resume_at, .. }
-            | WaitArm::Deadline { resume_at, .. }
-            | WaitArm::Msg { resume_at, .. }
-            | WaitArm::Internal { resume_at, .. } => *resume_at,
+            Self::TooDeep { max } => write!(f, "Value::Array nesting depth exceeds {max}"),
+            Self::TooLong { actual, max } => {
+                write!(f, "Value::Array length {actual} exceeds {max}")
+            }
         }
     }
 }
 
-// ─── Inclusive gateway branch descriptor ──────────────────────
+impl Value {
+    /// Recursively checks `Value::Array` element-count and nesting-depth
+    /// bounds; `Ok(())` for every non-`Array` variant. Used by the kernel
+    /// runtime boundary (`validate_snapshot_limits`) — the canonical-decode
+    /// boundary enforces the same bounds inline, during decode, for the
+    /// stack-overflow-prevention reason documented on
+    /// `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` above, so it does not
+    /// call this method (checking after full decode would be too late for
+    /// the depth bound's actual purpose).
+    pub fn check_array_limits(&self) -> Result<(), ValueLimitError> {
+        self.check_array_limits_at_depth(0)
+    }
 
-/// One branch of an inclusive (OR) gateway fork.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InclusiveBranch {
-    /// Flag to evaluate. `None` = unconditional (always taken).
-    pub condition_flag: Option<FlagKey>,
-    /// Bytecode address to spawn fiber at if condition is truthy.
-    pub target: Addr,
+    fn check_array_limits_at_depth(&self, depth: u32) -> Result<(), ValueLimitError> {
+        if let Value::Array(items) = self {
+            if depth >= MAX_VALUE_ARRAY_DEPTH {
+                return Err(ValueLimitError::TooDeep {
+                    max: MAX_VALUE_ARRAY_DEPTH,
+                });
+            }
+            if items.len() > MAX_VALUE_ARRAY_LEN {
+                return Err(ValueLimitError::TooLong {
+                    actual: items.len(),
+                    max: MAX_VALUE_ARRAY_LEN,
+                });
+            }
+            for item in items {
+                item.check_array_limits_at_depth(depth + 1)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One deterministic branch in a DSL payload router.
@@ -187,7 +240,23 @@ pub struct PayloadRouteBranch {
 
 // ─── Bytecode instructions ────────────────────────────────────
 
-/// The 18-opcode ISA for the BPMN-Lite VM.
+/// The 18-opcode ISA for the BPMN-Lite VM, plus the v2 D2 instruction set
+/// (EOP-BPMN-ISA-002 V2.7, `V2`-prefixed variants below the v1 block).
+///
+/// V2.7 7.2 addressing-wall proof: every v2 `Instr` addressing field is
+/// typed `Addr`, never `bpmn_lite_types::concurrency::RecordId` — the same
+/// activation-law wall `Addr` itself documents (V1.1). This is a hard
+/// compiler error, not a lint, since `Addr`/`RecordId` have no `From`/
+/// `Into` between them.
+///
+/// ```compile_fail
+/// use bpmn_lite_types::concurrency::RecordId;
+/// use bpmn_lite_types::types::Instr;
+///
+/// let _bad = Instr::V2Guard {
+///     handler: RecordId::new(uuid::Uuid::nil()),
+/// };
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instr {
     // Control flow
@@ -237,14 +306,6 @@ pub enum Instr {
         default_target: Option<Addr>,
     },
 
-    /// Inclusive DSL split driven by placeholder state. Every matching branch
-    /// becomes a real fiber and the selected cardinality feeds `JoinDynamic`.
-    ForkPayload {
-        branches: Box<[PayloadRouteBranch]>,
-        join_id: JoinId,
-        default_target: Option<Addr>,
-    },
-
     // In-process FFI invocation (A2 dispatch model / A5 lowering target)
     /// Invoke a registered FFI execution owner in-process.
     ///
@@ -258,47 +319,20 @@ pub enum Instr {
         retc: u16,
     },
 
-    // Concurrency
-    Fork {
-        targets: Box<[Addr]>,
-    },
-    Join {
-        id: JoinId,
-        expected: u16,
-        next: Addr,
-    },
-
-    // Waits
-    WaitFor {
-        ms: u64,
-    },
-    WaitUntil {
-        deadline_ms: u64,
-    },
-    WaitMsg {
-        wait_id: WaitId,
-        name: u32,
-        corr_reg: u8,
-    },
-
     /// Publish a message into the engine's message buffer (BPMN Send Task).
     ///
-    /// Fire-and-continue. The interned message `name` is paired with the value
-    /// in register `corr_reg` (the correlation key) and inserted into the same
-    /// buffer that `WaitMsg`/`signal_inner` read from. No fiber parking, no
+    /// Fire-and-continue. The interned message `name` is paired with the
+    /// correlation key resolved from process data at publish time (this
+    /// instruction's `v2_corr_sources` entry, §28) and inserted into the same
+    /// buffer that `V2WaitMsg`/`signal_inner` read from. No fiber parking, no
     /// reply expected; the next instruction executes on the same tick.
     PublishMessage {
         name: u32,
-        corr_reg: u8,
-    },
-
-    // Race semantics
-    /// Race: wait for the first of N arms to resolve.
-    WaitAny {
-        race_id: RaceId,
-        arms: Box<[WaitArm]>,
     },
     /// Cancel a specific pending wait (used by engine after race resolution).
+    /// Retained as a kernel no-op (see `apply`'s handler) — no v2 word
+    /// supersedes this; no D2 scope covers per-wait cancellation, only
+    /// scope-level unwind (`V2CancelScope`/guard retirement).
     CancelWait {
         wait_id: WaitId,
     },
@@ -313,22 +347,505 @@ pub enum Instr {
         target: Addr,
     },
 
-    // Inclusive gateway (OR fork/join)
-    ForkInclusive {
-        branches: Box<[InclusiveBranch]>,
-        join_id: JoinId,
-        default_target: Option<Addr>,
-    },
-    JoinDynamic {
-        id: JoinId,
-        next: Addr,
-    },
-
     // Lifecycle
     End,
     EndTerminate,
     Fail {
         code: u32,
+    },
+
+    // ─── v2 ISA (EOP-BPMN-ISA-002 V2.7) ────────────────────────
+    //
+    // D2 word inventory, transcribed from `docs/todo/EOP-VS-BPMN-ISA-002.md`
+    // §5 ("the stack effects ARE the spec — transcribe them, do not
+    // reinterpret"). Every word below carries a `V2`-prefixed identifier by
+    // explicit, confirmed disposition (V2.7 entry amendment): v1's
+    // `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/`WaitAny`/`WaitArm`/
+    // `ForkInclusive`/`JoinDynamic` variants looked name- or shape-adjacent
+    // to several D2 words but were NOT conformant (v1 `Fork`/`Join` used
+    // static `JoinId`+arrival-counting, not D2's dynamic-handle/activation-
+    // record model; v1 `WaitArm::Timer` encoded interrupting-vs-not as a
+    // `bool` flag, the exact anti-pattern D2's `GUARD>`/`GUARD-N>` rejects
+    // by using distinct opcodes; v1 `WaitFor`/`WaitUntil`/`WaitMsg` were
+    // bare parks, but D2's words are durable-effect-emitting). Reusing a v1
+    // identifier for v2 semantics would have been a dual-path-by-stealth —
+    // the same variant meaning two things depending on which tranche's code
+    // touches it, so every v2 word got its own `V2`-prefixed identifier
+    // instead. **V5.3 (landed 2026-07-23) deleted the entire v1 concurrency
+    // block as one unit** — `Fork`/`Join`/`WaitFor`/`WaitUntil`/`WaitMsg`/
+    // `WaitAny`/`WaitArm`/`ForkInclusive`/`JoinDynamic`/`RaceId`/
+    // `RacePlanEntry` are gone; every real workflow now lowers exclusively
+    // to the `V2*` words below (plus the permanently-shared primitives —
+    // `Jump`/`BrIf`/`BrIfNot`, stack ops, flags, `ExecNative`/`ExecFfi`/
+    // `ExecDslTask`, `RoutePayload`, `PublishMessage`, `CancelWait`,
+    // `IncCounter`/`BrCounterLt`, `End`/`EndTerminate`/`Fail` — none of
+    // which are D2 concurrency-scope constructs, so none were superseded).
+    //
+    // Addressing (V2.7 7.2): guard handler extents, race arm resume
+    // targets, and the FORK/JOIN static pairing annotation are all
+    // `Addr`-space, never `RecordId` (`bpmn_lite_types::concurrency::RecordId`)
+    // — proof material for the verifier (V-3's arity check), never runtime
+    // execution state. Runtime `V2Join` resolution is exclusively via the
+    // dynamically-inherited handle minted by `V2Fork`, "never by static
+    // identity" (§5). See the compile-fail doctest below.
+    /// `GUARD>` — `( -- ) [ -- h ]`. Allocate an interrupting-guard record,
+    /// push its handle onto the control stack. `handler` is a verified code
+    /// address (never a `RecordId` — see module-level addressing note).
+    V2Guard {
+        handler: Addr,
+    },
+    /// `<GUARD` — `( -- ) [ h -- ]`. Pop and retire the guard. Verifier:
+    /// must match its `V2Guard` on every path (V-1).
+    V2GuardEnd,
+    /// `GUARD-N>` — as `V2Guard`, non-interrupting: on trigger, spawn the
+    /// handler fibre without unwinding members. Distinct opcode from
+    /// `V2Guard`, not a flag — "the distinction must be visible to static
+    /// analysis at the opcode level" (§5, review-ratified).
+    V2GuardN {
+        handler: Addr,
+    },
+    /// `<GUARD-N` — retire a non-interrupting guard.
+    V2GuardNEnd,
+
+    /// `GUARD-R>` — `( -- ) [ -- h ]`. Allocate an interrupting,
+    /// rollback-capable guard record and push its handle. A18 (ratified):
+    /// `GUARD>`'s control disposition (unwind members, spawn handler) and
+    /// a rollback's data disposition (restore the A3 rollback-set
+    /// snapshot on cancellation) are orthogonal — bundling both onto one
+    /// opcode was the defect A18 corrects. `GUARD-R>` deliberately carries
+    /// NO `handler` field (unlike `V2Guard`/`V2GuardN`): its only closes
+    /// are the normal `<GUARD-R` pairing and an unwind triggered by
+    /// `V2CancelScope` or automatic rollback-on-definitive-failure
+    /// (`apply_job_failure`) — never `V2TriggerGuard`, which requires a
+    /// handler address to spawn and rejects a handle that has none.
+    /// Verifier V-10 (dominance): `GUARD-R>`'s scope must dominate any
+    /// `FORK` within its extent — it may contain a complete `FORK`/`JOIN`
+    /// region, but must never itself be opened while already nested
+    /// inside one (rolling back shared instance-wide state —
+    /// `domain_payload`/`flags`/`join_expected`/session stack — while
+    /// sibling fork branches keep running concurrently is exactly the
+    /// barrier-starvation hazard V-10 forecloses).
+    V2GuardR,
+    /// `<GUARD-R` — `( -- ) [ h -- ]`. Pop and retire a `GUARD-R>` record
+    /// on its normal (non-rollback) path. Verifier: must match its
+    /// `V2GuardR` on every path (V-1); per V-10's companion check, a
+    /// `GUARD-R>`-opened handle is also the only legal `V2CancelScope`
+    /// target among the three guard-kind opcodes.
+    V2GuardREnd,
+
+    /// `GUARD-TIMER>` — `( duration -- )`. §18 v0.10 ruling I: guards carry
+    /// an arming trigger, timer as the first kind — a boundary timer is a
+    /// guard with a deadline, indifferent to whether the guarded work is
+    /// synchronous (`ExecNative`/`ExecFfi`), effect-based
+    /// (`AWAIT-EFFECT`), or a nested `FORK` region. Opcode-shape decision
+    /// (recorded here, not just in the plan doc, since the choice is a
+    /// per-word contract): a NEW, distinct instruction — mirroring how
+    /// `V2ArmTimer` arms an already-open `RACE{` record via
+    /// `fiber.control_stack.last()` — rather than an optional operand
+    /// folded onto `V2Guard`/`V2GuardN`/`V2GuardR` themselves. Rejected
+    /// alternative: a conditional/sentinel operand on the guard-open words
+    /// would make their stack effect depend on whether a trigger is
+    /// present, exactly the "flag on a word, not a distinct opcode"
+    /// anti-pattern V&S §5 already rejected for interrupting-vs-not
+    /// (`GUARD>` vs `GUARD-N>`) and rollback-vs-not (`GUARD-R>`) — the
+    /// guard-open words keep their existing zero-operand encoding
+    /// unconditionally, so a guard opened without this word is byte-for-
+    /// byte what it was before this ruling landed.
+    ///
+    /// Must immediately follow the guard-open instruction it arms
+    /// (verifier-enforced, `v2_verifier::verify_v2_control_stack`) — "at
+    /// guard-open time," not at any later point in the guarded body.
+    /// Applies uniformly to all three guard kinds (`V2Guard`/`V2GuardN`/
+    /// `V2GuardR`) — nothing about V-10's dominance constraint interacts
+    /// with arming; see the kernel's `apply_timer` doc comment for how a
+    /// timer-armed `V2GuardR` resolves (automatic rollback, since it
+    /// carries no `handler` to trigger). No control-stack or concurrency-
+    /// record change (as `V2ArmTimer`); pops `duration` from the operand
+    /// stack (V2.7 addressing-review BLOCKING #2.4 rider — a runtime-
+    /// computed duration must be representable) and emits
+    /// `DurableEffect::ScheduleTimer` (`TimerKind::V2GuardTimer`) bound to
+    /// the guard's own `RecordId`, using the same T5 deterministic
+    /// timer-ID derivation (`EffectId::for_instruction`) `V2ArmTimer`/
+    /// `WAIT-FOR` already use.
+    V2GuardArmTimer,
+
+    /// `GUARD-TIMER-CYCLE>` — `( -- )`. Post-close remediation, restoring
+    /// V&S §13 amendment v0.5 ruling A ("`GUARD-N>` re-arms after trigger
+    /// — the record stays `Armed`... This is the default") to
+    /// `GUARD-TIMER>`'s own timer-triggered path specifically: v0.5's
+    /// ruling was about the general trigger mechanism
+    /// (`Command::V2TriggerGuard`), which already re-arms unconditionally
+    /// (nothing to fix there); `GUARD-TIMER>` (ruling I, landed after
+    /// v0.5) was fire-once by construction and never inherited the same
+    /// default — this word is that fix's bounded-cycle rider, not a new
+    /// design. `GUARD-TIMER>`'s own timer fire against a `GUARD-N>`-kind
+    /// record now re-arms UNCONDITIONALLY by default (matching ruling A's
+    /// "nothing... expresses a non-re-arming variant" for GuardN
+    /// specifically) — this word narrows that default from unbounded to a
+    /// finite count, mirroring BPMN's own `timeCycle` bounded-repeat syntax
+    /// (`R<n>/PT<duration>`). Optional and additive: a `GUARD-TIMER>` with
+    /// no following `GUARD-TIMER-CYCLE>` is byte-for-byte what ruling I
+    /// already built, now simply re-arming forever for `GUARD-N>` (and
+    /// still never re-arming for `GUARD>`/`GUARD-R>`, whose triggers
+    /// retire the record on fire, per V-10's dominance/rollback treatment
+    /// — closing the record makes any repeat count moot for those two,
+    /// which is why the verifier restricts this word to a `GUARD-N>`
+    /// target only, not "any guard").
+    ///
+    /// Must immediately follow the `GUARD-TIMER>` instruction it bounds
+    /// (verifier-enforced by instruction shape, `v2_verifier::
+    /// verify_v2_control_stack`) — never merely "somewhere inside the
+    /// guarded body," same adjacency discipline `GUARD-TIMER>` itself
+    /// already applies to its own guard-open. `max_fires` is a static
+    /// embedded field (not an operand-stack value), same rationale as
+    /// `V2RaceOpen`'s `arm_count`: this is a verify-time-checkable shape
+    /// property (the verifier needs it to reject `max_fires == 0` as
+    /// meaningless — a cycle that never fires once is not a cycle), not a
+    /// runtime-computed quantity the way the duration it rides alongside
+    /// is.
+    ///
+    /// No control-stack or concurrency-record change; touches no `Instr`
+    /// operand stack at all — it patches the `DurableEffect::ScheduleTimer`
+    /// effect `GUARD-TIMER>` just pushed (guaranteed, by the same
+    /// adjacency the verifier enforces, to be the last element of this
+    /// tick's own `changes.effects`), attaching a `TimerRepeatSpec` whose
+    /// `remaining` field narrows from `GUARD-TIMER>`'s own default
+    /// (`u32::MAX`, "unbounded") to `max_fires`. `TimerRepeatSpec`/
+    /// `TimerMutation::Rearm` are pre-existing generic timer-scheduling
+    /// infrastructure (`bpmn-lite-types::transition`, `ClaimedTimer::
+    /// repeat_spec`) — this is the first `V2*` word to populate them; no
+    /// new type was needed. **Not ratified D2 vocabulary** — same class as
+    /// `V2RouteZeroMatch`/`V2MiIndexLive`: a kernel-level completion of an
+    /// already-ratified semantics gap (§18 v0.10's own plan-doc "GUARD-N>
+    /// cycle" finding), not new design.
+    V2GuardTimerCycle {
+        max_fires: u32,
+    },
+
+    /// `GUARD-ERROR>` — `( -- )`. §18 v0.10 ruling I's arming-trigger family,
+    /// second kind: error-match, alongside timer. Arms an already-open
+    /// `V2Guard`/`V2GuardN`/`V2GuardR` record (verifier-enforced adjacency to
+    /// the guard-open instruction it arms, same discipline as
+    /// `V2GuardArmTimer`) with a `BusinessRejection`-code match. Unlike every
+    /// other arm instruction in this family, this one carries its OWN
+    /// `handler` address rather than firing through the guard's own `handler`
+    /// field — deliberate and ratified: a single host task's error boundary
+    /// commonly has multiple simultaneous armed routes (BPMN allows N
+    /// specific-error-code boundary events plus one catch-all per task,
+    /// verifier-enforced in `verifier.rs`'s BoundaryError checks), each
+    /// resuming at its own address, and `ConcurrencyRecord.handler` is a
+    /// single field fixed at guard-open time. Multiple `GUARD-ERROR>`
+    /// instructions may follow one guard-open, each pushed onto that guard's
+    /// `ConcurrencyRecord.error_routes`; `error_code: None` is a catch-all
+    /// (matches any `BusinessRejection` code) — verifier enforces at most one
+    /// catch-all per guard, mirroring the existing per-host-task limit this
+    /// replaces (v1's `verifier.rs` §8d IR-level check; this is the same
+    /// invariant re-checked at the bytecode level since lowering's IR->
+    /// bytecode translation is not itself verified). Fire order at match
+    /// time is specific-code-first, catch-all-last (same precedence v1's
+    /// `error_route_map` used).
+    ///
+    /// This is a DELIBERATE, RATIFIED, CONTAINED break of the
+    /// "arm instructions never carry targets" convention `GUARD-TIMER>` set
+    /// — `V2GuardArmTimer` deliberately carries no target, relying entirely
+    /// on `record.handler`; `V2GuardArmError` deliberately does the
+    /// opposite. Do not silently normalize this away or "fix" it to match
+    /// `V2GuardArmTimer`'s shape — the two arm kinds have genuinely
+    /// different cardinality requirements (one timer vs. N error routes per
+    /// guard).
+    ///
+    /// No control-stack change. Does not schedule a `DurableEffect` (unlike
+    /// `V2GuardArmTimer`) — a `BusinessRejection` firing is not a durable
+    /// timer, it is `apply_job_failure` matching against the guard's own
+    /// `error_routes` directly; see the kernel's `apply_job_failure` doc
+    /// comment at the matched-route path for the full mechanism, and
+    /// `v2_trigger_guard_changes`'s `_with_target` variant for how firing
+    /// reuses the exact same handler-spawn/interrupting-unwind logic
+    /// `V2TriggerGuard`/timer-fire already use, just with an explicit target
+    /// instead of reading `record.handler`.
+    V2GuardArmError {
+        error_code: Option<Box<str>>,
+        handler: Addr,
+    },
+
+    /// `RACE{` — `( n -- ) [ -- h ]`. Open a first-wins race record over
+    /// the next `arm_count` arms. `arm_count` is a static embedded field
+    /// (not an operand-stack value) because V-5's race-shape theorem needs
+    /// to count `V2Arm*` words statically, mirroring v1 `Fork`'s embedded
+    /// arity convention.
+    V2RaceOpen {
+        arm_count: u16,
+    },
+    /// `ARM-TIMER` — `( duration -- ) [ h ]`. Arm a timer alternative.
+    /// `target` is the static resume address if this arm wins (V2.7 7.2
+    /// addressing decision) — verifier-checkable, and genuinely static
+    /// (V-5 needs it verify-time-known). `duration`, per §5's literal
+    /// notation, is popped from the **operand stack** — deliberately NOT
+    /// embedded as a static field (V2.7 addressing-review BLOCKING #2.4:
+    /// an embedded `u64` cannot carry a duration computed at runtime from
+    /// a BPMN data object, which V5's frontends must be able to lower; a
+    /// compile-time-constant duration is simply `PushI64(const); ArmTimer`
+    /// — the constant case costs nothing, the dynamic case is now
+    /// representable). Do not conflate this with `arm_count`/`pairing`,
+    /// which stay static because they are genuinely compile-time-known,
+    /// unlike a duration. Execution emits `DurableEffect::ScheduleTimer`
+    /// with `TimerKind::Race` (§5: "per T5") — an effect-emitting word,
+    /// not a bare park; this is the specific behaviour v1's
+    /// `WaitArm::Timer` does not provide as a standalone instruction.
+    V2ArmTimer {
+        target: Addr,
+    },
+    /// `ARM-MSG` — `( correlation -- ) [ h ]`. Arm a message alternative.
+    /// `target` as above. The correlation key is resolved from process data
+    /// at arm time via this instruction's `v2_corr_sources` entry (§28).
+    V2ArmMsg {
+        target: Addr,
+        name: u32,
+    },
+    /// `ARM-EFFECT` — `( effect-desc -- ) [ h ]`. Arm an external-effect
+    /// alternative; emits `DurableEffect::Invoke` on arming. Shape mirrors
+    /// `ExecFfi`'s existing FFI-invocation convention (`template_id` +
+    /// operand-stack `argc`/`retc`).
+    V2ArmEffect {
+        target: Addr,
+        template_id: [u8; 32],
+        argc: u16,
+        retc: u16,
+    },
+    /// `}RACE` — `( -- ) [ h -- ]`. Park on the race. A command addressed
+    /// to an armed alternative resolves it: winner continuation runs at
+    /// its arm's `target`; other arms' pending effects consumed/cancelled;
+    /// losing members cancelled in fibre-ID order — one transition (§5).
+    V2RaceClose,
+
+    /// `FORK n` — `( addr1..addrn n -- ) [ s ]`. Allocate a fresh barrier
+    /// *activation record*; create fibres at `targets`, each inheriting
+    /// the parent's control stack **with the barrier handle pushed on
+    /// top**. Re-entry (a bounded loop containing this instruction)
+    /// allocates a fresh activation per execution. `pairing` is a static
+    /// `Addr`-space identity (this instruction's own address) that the
+    /// matching `V2Join`(s) reference — proof material for V-3's arity
+    /// check only; runtime resolution is exclusively via the dynamically
+    /// inherited handle, never by `pairing` (§5: "never by static
+    /// identity").
+    V2Fork {
+        targets: Box<[Addr]>,
+        pairing: Addr,
+    },
+    /// `JOIN` — `( -- ) [ h -- ]`. Pop the inherited barrier handle;
+    /// decrement that activation; park unless last arrival; last arrival
+    /// continues and retires it. `pairing` matches the allocating
+    /// `V2Fork`'s `pairing` field (verifier-only, see above) — resolution
+    /// itself is by dynamic handle only.
+    V2Join {
+        pairing: Addr,
+    },
+
+    /// `WAIT-FOR` — `( duration -- )`. Pops `duration` from the operand
+    /// stack (V2.7 addressing-review BLOCKING #2.4 — not an embedded
+    /// field; see `V2ArmTimer`'s doc comment for the full rationale: a
+    /// static field cannot carry a runtime-computed duration, which V5
+    /// must be able to lower a dynamic BPMN timer expression to). Parks +
+    /// emits `DurableEffect::ScheduleTimer` (`TimerKind::Wait`) bound to
+    /// this instruction's `(instance, fibre, pc)` per T5's deterministic
+    /// derivation (`EffectId::for_instruction`). Deliberately distinct
+    /// from v1 `WaitFor` (see module-level note) — the difference is
+    /// behavioural: this word MUST append the effect, v1's `WaitFor` is a
+    /// bare park.
+    V2WaitFor,
+    /// `WAIT-UNTIL` — as `V2WaitFor`, absolute deadline popped from the
+    /// operand stack.
+    V2WaitUntil,
+    /// `WAIT-MSG` — `( correlation -- )`. Park + register message
+    /// correlation. No durable effect (message arrival is external, not
+    /// kernel-scheduled) — matches v1 `WaitMsg`'s shape but kept as a
+    /// distinct identifier per the coexistence rule.
+    V2WaitMsg {
+        name: u32,
+    },
+    /// `AWAIT-EFFECT` — `( effect-desc -- )`. Emit
+    /// `DurableEffect::Invoke` + park on completion; effect-ID derivation
+    /// is the word's responsibility (§5, E5). Shape mirrors
+    /// `ExecFfi`/`V2ArmEffect`'s `template_id`+`argc`/`retc` convention.
+    V2AwaitEffect {
+        template_id: [u8; 32],
+        argc: u16,
+        retc: u16,
+    },
+
+    /// `CANCEL-SCOPE` — `( -- ) [ h ]`. Explicit cancellation (BPMN
+    /// *terminate* semantics): unwind members innermost-first, run no
+    /// handler. Cancel-events are encoded as guards (§5, "see Q4").
+    V2CancelScope,
+
+    // ─── V5 dynamic-arity gateway lowering glue (§18 rulings H/J) ──────
+    //
+    // Neither word is in the V&S §5 D2 table — they are compiler-internal
+    // glue discovered while lowering inclusive gateways onto `V2Fork`'s
+    // proven skip-to-`V2Join` pattern (ruling H), not a runtime concept
+    // BPMN or the ISA needed named. Both are documented here at the same
+    // rigor as a ratified D2 word (V2.7 checklist, `docs/todo/
+    // EOP-PLAN-BPMN-ISA-002.md`'s V5 post-close writeup) per CLAUDE.md's
+    // "no trap doors" discipline — an unratified opcode is still a real
+    // opcode, not exempt from the checklist that governs `GUARD-TIMER>`.
+    /// `( -- bool )`. Push `instance.placeholder_matches(placeholder,
+    /// expected_value)`. The DSL-side analogue of `LoadFlag` — XML's
+    /// inclusive-gateway conditions are already flag-based (`LoadFlag`
+    /// reused as-is), but the DSL's inclusive split conditions are
+    /// `(placeholder, expected_value)` string-equality checks with no
+    /// existing operand-stack-producing primitive (`Instr::ForkPayload`'s
+    /// kernel handler evaluates them internally, never exposing a
+    /// bytecode-level "load and check" step). Needed so a DSL inclusive
+    /// gateway's per-branch skip check (`BrIfNot` after this word, mirroring
+    /// XML's `LoadFlag`+`BrIfNot`) and the zero-match precheck ahead of
+    /// `V2Fork` (see `V2RouteZeroMatch`) can be expressed as straight-line
+    /// bytecode instead of a second fat evaluate-and-branch instruction.
+    V2LoadPlaceholderMatch {
+        placeholder: String,
+        expected_value: String,
+    },
+    /// `( -- )`. Unconditionally raises an `Incident` (`fail_contract`,
+    /// `ErrorClass::ContractViolation`) naming the gateway via `debug_map`
+    /// — the same message shape and mechanism `RoutePayload`/`ForkPayload`/
+    /// `ForkInclusive`'s existing zero-match arms already use (§18 ruling
+    /// J). No successors (V-11 terminal, same class as `Fail`/
+    /// `V2CancelScope` — "static dead end, by design," not reached on any
+    /// path where a branch matched). Reachable only by falling through a
+    /// chain of `LoadFlag`/`V2LoadPlaceholderMatch` + `BrIf`-to-`V2Fork`
+    /// checks with none taken — the dual-arity `V2Fork` lowering's
+    /// synchronous pre-fork zero-match check (see the V5 plan-doc writeup
+    /// for why this runs BEFORE `V2Fork` rather than as a `V2Fork`
+    /// operand: `V2Fork` has no condition-evaluation or zero-match
+    /// capability of its own, by design — it is a dumb "always spawn N
+    /// static targets" instruction, and staying that way is what keeps
+    /// K-3/V-3 unchanged per ruling H).
+    V2RouteZeroMatch,
+
+    // ─── V5 dynamic-arity multi-instance lowering glue (§18 ruling K) ──
+    //
+    // None of these three words is D2 vocabulary — same class as
+    // `V2RouteZeroMatch`/`V2LoadPlaceholderMatch` above: compiler-internal
+    // glue discovered lowering parallel multi-instance onto `V2Fork`'s
+    // proven skip-to-`V2Join` pattern (ruling H), documented at the same
+    // rigor as a ratified D2 word per CLAUDE.md's "no trap doors"
+    // discipline.
+    //
+    // **Revised for ruling K Part 2 (per-element value access, landed
+    // 2026-07-23; closes the gap the item-(d) landing explicitly flagged).**
+    // The prior landing represented `inputCollection` by its RUNTIME LENGTH
+    // ONLY (a separate `I64`-valued flag), because no array-valued `Value`
+    // existed yet. Now that `Value::Array` exists, that two-flag design
+    // (one `I64` length flag, kept manually in sync with the "real"
+    // collection data living somewhere else) was rejected as the landing
+    // choice here: it is a redundant-state footgun — nothing would catch
+    // the length flag and the actual collection silently disagreeing, and
+    // CLAUDE.md's working contract rejects exactly that shape ("no trap
+    // doors... enforce the mechanism, not a word"). Instead, `length_flag`
+    // is renamed `collection_flag` and now names a flag holding the
+    // collection's actual `Value::Array` directly — length is *derived*
+    // from `.len()`, a single source of truth, not tracked twice. This is
+    // also, independently, the more natural fit with this codebase's
+    // existing `flags: BTreeMap<FlagKey, Value>` convention (runtime data
+    // addressed by flag key) versus the alternative investigated and
+    // rejected: `domain_payload` (a JSON string, resolved via a
+    // `json_path`-style mechanism that does not exist anywhere in this
+    // codebase today — building it would be inventing a second,
+    // parallel runtime-data-access convention alongside the one that
+    // already exists and that MI's length signal already used).
+    /// `( -- bool )`. Push `true` iff the static `index` is less than the
+    /// length of `instance.flags[collection_flag]`, read as a
+    /// `Value::Array` (missing key or a non-`Array` value defaults to
+    /// length 0 — the same "legal empty collection" default ruling K item
+    /// (c) ratifies, not a special case). The MI-side analogue of
+    /// `LoadFlag`/`V2LoadPlaceholderMatch`: each of a `V2Fork`'s `n` =
+    /// declared-max synthesized branch headers carries its own
+    /// compile-time-constant `index`, checks liveness with this word, and
+    /// `BrIfNot`s straight to the shared `V2Join` if not live — identical
+    /// mechanism to a gateway's false-condition skip (ruling H), applied to
+    /// an index bound instead of a flag condition. Deliberately unchanged
+    /// in stack effect (still `( -- bool )`, not `( -- bool value )`):
+    /// element delivery is a separate instruction, `V2MiLoadElement` below,
+    /// that runs only on the live path (after `BrIfNot` has already
+    /// filtered out the dead path) — this keeps this word's own
+    /// straight-line stack effect uniform across both branch outcomes,
+    /// which is what a per-PC static stack-height verifier needs; folding
+    /// value delivery into this word's own stack effect would have made it
+    /// conditional on a runtime outcome the verifier cannot see statically.
+    V2MiIndexLive {
+        collection_flag: FlagKey,
+        index: u32,
+    },
+    /// `( -- value )`. Runs immediately after a live `V2MiIndexLive` +
+    /// `BrIfNot` pair falls through (i.e. only on the path where `index` is
+    /// confirmed `< length`) — never reached on the skip-to-join path.
+    /// Pushes a **clone** of `instance.flags[collection_flag]`'s `index`-th
+    /// element (by-value, per Adam's ratified MI-element-access ruling:
+    /// "by-value is simpler and matches the frame model... I'd lean
+    /// by-value with the declared-max cap bounding the total"). Because
+    /// this only ever runs after `V2MiIndexLive` has already confirmed
+    /// `index < length` against the SAME flag, a missing key / non-`Array`
+    /// value / out-of-bounds index here means the flag's value changed
+    /// between the two checks (impossible within one straight-line branch
+    /// — no instruction between them can mutate flags) or the collection
+    /// and the arity check disagree some other way; either is a genuine
+    /// invariant violation, not a normal "empty/short collection" case, so
+    /// it is a hard `TransitionError::MultiInstanceElementUnavailable`
+    /// reject (fail closed), not a silent default value.
+    V2MiLoadElement {
+        collection_flag: FlagKey,
+        index: u32,
+    },
+    /// `( -- )`. Runs once, straight-line, immediately before `V2Fork` (the
+    /// same "before, not inside, not after" placement `V2RouteZeroMatch`
+    /// uses and for the identical reason — `V2Fork` commits to spawning
+    /// `targets.len()` fibres unconditionally the moment it executes, so
+    /// there is no "spawn fewer" outcome to recover from afterward). If the
+    /// length of `instance.flags[collection_flag]` (read as a
+    /// `Value::Array`, same default-to-0 rule as `V2MiIndexLive`) exceeds
+    /// the artifact-declared `max` (ruling K delta (a): a required static
+    /// ceiling, since Zeebe has none), returns
+    /// `TransitionError::ResourceLimitExceeded` — a hard, non-resumable
+    /// reject, the SAME shape `validate_snapshot_limits` already uses for
+    /// fiber-count/stack/register overflow, not the `Incident`/`fail_contract`
+    /// route `V2RouteZeroMatch` uses. Deliberately NOT unified with
+    /// zero-match's Incident mechanism: exceeding a declared capacity is an
+    /// artifact/input-data invariant violation (reject outright, per
+    /// CLAUDE.md's "fail closed; reject, don't skip"), not a routing gap a
+    /// human can resolve by amending payload and calling `ResolveIncident`
+    /// — there is no sense in which "wait, then re-decide" applies to
+    /// "this collection is bigger than the artifact declared it could be."
+    /// This bounds the *count* of elements; the total *encoded size* of the
+    /// collection (elements can themselves be large/nested `Value::Array`s)
+    /// is a separate concern, bounded independently by
+    /// `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` and
+    /// `validate_snapshot_limits`'s new per-flag-value check — not
+    /// re-solved here a second time.
+    V2MiArityCheck {
+        collection_flag: FlagKey,
+        max: u32,
+    },
+}
+
+/// One armed alternative of a v2 race, captured at runtime by
+/// `V2ArmTimer`/`V2ArmMsg` as they execute (V&S §5 — a v2-bearing artifact
+/// carries no static `race_plan` side table, V-9's structural check
+/// forbids it; every alternative's resolution data must live in runtime
+/// state instead). `target` is each arm's own winning-resume address.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum V2RaceArm {
+    Timer { target: Addr },
+    /// `corr_key` is the content correlation key resolved from process data
+    /// at arm time (§28), stored inline on the arm — the race resolution runs
+    /// off runtime state only, never a static register/side-table read.
+    Msg { target: Addr, name: u32, corr_key: String },
+    /// Captured by `V2ArmEffect` — the effect's own `effect_id` (derived at
+    /// arm time from `(instance, fiber, pc)`, same as `V2AwaitEffect`) is
+    /// the resolution key; `apply_ffi_completion` matches it against this
+    /// arm the same way message delivery matches `Msg`'s `name`/`corr_key`.
+    Effect {
+        target: Addr,
+        effect_id: crate::EffectId,
+        template_id: [u8; 32],
     },
 }
 
@@ -344,7 +861,9 @@ pub enum WaitState {
     Msg {
         wait_id: WaitId,
         name: u32,
-        corr_key: Value,
+        /// Content correlation key resolved from process data at park time
+        /// (§28). Matching is string equality against the published key.
+        corr_key: String,
     },
     /// Parked waiting for ob-poc worker completion (NEW in v0.9).
     Job {
@@ -356,24 +875,31 @@ pub enum WaitState {
     Join {
         join_id: JoinId,
     },
-    /// Parked in a race — waiting for first arm to fire.
-    Race {
-        race_id: RaceId,
-        /// Absolute deadline (epoch ms) for the timer arm, if any.
-        timer_deadline_ms: Option<u64>,
-        /// Preserved from WaitState::Job during boundary timer promotion.
-        job_key: Option<String>,
-        /// If false, timer fires fork a new fiber instead of resolving the race.
-        interrupting: bool,
-        /// Index of the timer arm in the race_plan arms vec (computed, not hardcoded).
-        timer_arm_index: Option<usize>,
-        /// Remaining cycle fires (decremented each fire). None = no cycle.
-        cycle_remaining: Option<u32>,
-        /// How many times the timer has fired so far (for event numbering).
-        cycle_fired_count: u32,
-    },
     Incident {
         incident_id: Uuid,
+    },
+    /// Parked at a v2 `JOIN` (non-last arrival), waiting for the barrier
+    /// record to retire (V&S v0.4 §5/§12 ruling B). `record_id` is the
+    /// dynamic handle — v2 barriers are `RecordId`-identified, not the v1
+    /// static `JoinId`, so this cannot reuse `WaitState::Join` (V2.7's
+    /// coexistence rule: distinct identifier, never reuse a v1-shaped
+    /// variant for v2 semantics even where it looks close).
+    V2Barrier {
+        record_id: crate::concurrency::RecordId,
+    },
+    /// Parked at a v2 `}RACE` — waiting for the first of `arms` to
+    /// resolve (a message delivery matching an armed `V2ArmMsg`, or the
+    /// armed `V2ArmTimer`'s durable timer firing). `record_id` is the
+    /// `RecordKind::Race` handle on the fiber's own control stack (V4.1
+    /// design note, Adam-ratified: race-arm data lives here, on the
+    /// fiber's `WaitState`, not on the shared `ConcurrencyRecord` — arms
+    /// are single-fiber-owned per V-5, so nothing else ever needs to see
+    /// them, and this mirrors v1 `WaitState::Race`'s own inline-data
+    /// shape exactly rather than forcing a race-only payload onto the
+    /// already-frozen `ConcurrencyRecord`).
+    V2Race {
+        record_id: crate::concurrency::RecordId,
+        arms: Vec<V2RaceArm>,
     },
 }
 
@@ -383,7 +909,6 @@ pub struct Fiber {
     pub fiber_id: Uuid,
     pub pc: Addr,
     pub stack: Vec<Value>,
-    pub regs: [Value; 8],
     pub wait: WaitState,
     /// Monotonic counter incremented by IncCounter. Used in job_key derivation.
     pub loop_epoch: u32,
@@ -399,7 +924,6 @@ impl Fiber {
             fiber_id,
             pc: pc.into(),
             stack: Vec::new(),
-            regs: std::array::from_fn(|_| Value::Bool(false)),
             wait: WaitState::Running,
             loop_epoch: 0,
             control_stack: Vec::new(),
@@ -423,7 +947,19 @@ pub enum ProcessState {
     Terminated {
         at: Timestamp,
     },
+    /// Genuinely, permanently dead — no `Incident` record exists to resolve
+    /// and no command revives this instance. Distinct from `Incidented`
+    /// (see below); do not conflate the two — that conflation is exactly
+    /// the defect this variant split fixes.
     Failed {
+        incident_id: Uuid,
+    },
+    /// Parked on an open `Incident`, waiting for a human/operator to call
+    /// `Command::ResolveIncident`. Not terminal — `ResolveIncident`
+    /// demonstrably revives this back to `Running`
+    /// (`bpmn-lite-kernel/src/lib.rs`). Also not schedulable — the
+    /// scheduler must not tick an instance parked on an incident.
+    Incidented {
         incident_id: Uuid,
     },
     WaitingOnSubmission {
@@ -437,15 +973,47 @@ pub enum ProcessState {
 }
 
 impl ProcessState {
-    /// Returns true if the process is in a terminal state (no further progress possible).
+    /// Returns true if the process is in a terminal state (no further
+    /// progress possible). Written as an explicit exhaustive match (no
+    /// wildcard arm, no `matches!` macro — `matches!` desugars to an
+    /// implicit `_ => false`, which would silently absorb a future
+    /// variant instead of forcing it to be classified here) so that
+    /// adding a future `ProcessState` variant is a compile error until
+    /// this predicate deliberately answers for it. Companion predicate:
+    /// `is_schedulable()`, below — see V&S §14's meta-rule (no variant
+    /// reaches either question by falling through a wildcard).
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
+        match self {
+            ProcessState::Running => false,
+            ProcessState::Completed { .. } => true,
+            ProcessState::Cancelled { .. } => true,
+            ProcessState::Terminated { .. } => true,
+            ProcessState::Failed { .. } => true,
+            ProcessState::Incidented { .. } => false,
+            ProcessState::WaitingOnSubmission { .. } => false,
+            ProcessState::WaitingOnInvocation { .. } => false,
+        }
+    }
+
+    /// Returns true if the scheduler should attempt to tick this instance.
+    /// Explicit exhaustive match, no wildcard — same reasoning as
+    /// `is_terminal()`. `true` for exactly one variant: `Running`.
+    /// `Completed`/`Cancelled`/`Terminated`/`Failed`/`Incidented` are all
+    /// `false` because none of them make forward progress via ordinary
+    /// scheduler ticking; `WaitingOnSubmission`/`WaitingOnInvocation` are
+    /// `false` because they resolve exclusively via the external
+    /// `Command::StartChildResult` signal, never via ticking.
+    pub fn is_schedulable(&self) -> bool {
+        match self {
+            ProcessState::Running => true,
             ProcessState::Completed { .. }
-                | ProcessState::Cancelled { .. }
-                | ProcessState::Terminated { .. }
-                | ProcessState::Failed { .. }
-        )
+            | ProcessState::Cancelled { .. }
+            | ProcessState::Terminated { .. }
+            | ProcessState::Failed { .. }
+            | ProcessState::Incidented { .. }
+            | ProcessState::WaitingOnSubmission { .. }
+            | ProcessState::WaitingOnInvocation { .. } => false,
+        }
     }
 }
 
@@ -640,15 +1208,10 @@ pub struct CompiledProgram {
     pub(crate) join_plan: BTreeMap<JoinId, JoinPlanEntry>,
     pub(crate) wait_plan: BTreeMap<WaitId, WaitPlanEntry>,
     pub(crate) message_name_map: BTreeMap<u32, String>,
-    pub(crate) race_plan: BTreeMap<RaceId, RacePlanEntry>,
-    /// ExecNative bytecode addr → RaceId for tasks with boundary timers.
-    pub(crate) boundary_map: BTreeMap<Addr, RaceId>,
     /// task_type → set of flags it may write.
     pub(crate) write_set: BTreeMap<String, HashSet<FlagKey>>,
     /// All task_type references in the program.
     pub(crate) task_manifest: Vec<String>,
-    /// ExecNative bytecode addr → ordered error routes (specific codes first, catch-all last).
-    pub(crate) error_route_map: BTreeMap<Addr, Vec<ErrorRoute>>,
     /// Compile-time flag name → FlagKey mapping. Inverted from the lowering intern table;
     /// preserved so the FFI binding layer can resolve symbolic variable names to storage keys.
     pub(crate) flag_symbol_table: BTreeMap<FlagKey, String>,
@@ -661,6 +1224,35 @@ pub struct CompiledProgram {
     /// Populated by the A5 lowering pass; empty for processes with no
     /// `<bpmn:taskDefinition implementation="...">` annotations.
     pub(crate) ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    /// V4 D2 — compiled FFI task declarations for `V2ArmEffect`/`V2AwaitEffect`,
+    /// indexed by the bytecode address of the corresponding v2 instruction.
+    /// Kept as a separate table from `ffi_task_decls` because V-9 requires
+    /// every `ffi_task_decls` address to be `Instr::ExecFfi` — mixing v1/v2
+    /// addresses into one table would violate that pairing check. Not part
+    /// of `LegacyProgramParts`/`legacy_program!`: defaulted to empty in
+    /// `from_legacy_parts` so none of the existing macro call sites break;
+    /// set via `with_v2_ffi_task_decls` for programs that need it.
+    pub(crate) v2_ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    /// V7 (§28) — resolved message-correlation key sources, indexed by the
+    /// bytecode address of the `V2WaitMsg`/`PublishMessage`/`V2ArmMsg`
+    /// instruction they belong to. Each entry is resolved at runtime against
+    /// the instance's data to a content correlation key. Same side-table
+    /// shape and rationale as `v2_ffi_task_decls`; defaulted empty in
+    /// `from_legacy_parts`, set via `with_v2_corr_sources`.
+    pub(crate) v2_corr_sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
+
+    /// V8 (§31) — per-guard failure-budget ceilings, keyed by the guard's
+    /// `opened_at` address. The escalation *counter* stays store-side (§15);
+    /// only the ceiling it compares against is artifact-resident here, so a
+    /// budget change is an artifact change (re-hashed, re-pinned). Same
+    /// side-table shape as `v2_corr_sources`; defaulted empty in
+    /// `from_legacy_parts`, set via `with_v2_guard_budgets`. A guard absent
+    /// from this map inherits `default_guard_budget`.
+    pub(crate) v2_guard_budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
+
+    /// V8 (§31) — the workflow-level default budget for guards not named in
+    /// `v2_guard_budgets`. Defaults to `ScopeFailureBudget::conservative_default()`.
+    pub(crate) default_guard_budget: crate::transition::ScopeFailureBudget,
 }
 
 /// Field-less compatibility tuple used only while pre-T7 callers migrate.
@@ -673,11 +1265,8 @@ pub type LegacyProgramParts = (
     BTreeMap<JoinId, JoinPlanEntry>,
     BTreeMap<WaitId, WaitPlanEntry>,
     BTreeMap<u32, String>,
-    BTreeMap<RaceId, RacePlanEntry>,
-    BTreeMap<Addr, RaceId>,
     BTreeMap<String, HashSet<FlagKey>>,
     Vec<String>,
-    BTreeMap<Addr, Vec<ErrorRoute>>,
     BTreeMap<FlagKey, String>,
     BTreeMap<String, crate::ffi_bindings::DataObjectDecl>,
     BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
@@ -693,11 +1282,8 @@ impl CompiledProgram {
             join_plan,
             wait_plan,
             message_name_map,
-            race_plan,
-            boundary_map,
             write_set,
             task_manifest,
-            error_route_map,
             flag_symbol_table,
             data_objects,
             ffi_task_decls,
@@ -709,15 +1295,67 @@ impl CompiledProgram {
             join_plan,
             wait_plan,
             message_name_map,
-            race_plan,
-            boundary_map,
             write_set,
             task_manifest,
-            error_route_map,
             flag_symbol_table,
             data_objects,
             ffi_task_decls,
+            v2_ffi_task_decls: BTreeMap::new(),
+            v2_corr_sources: BTreeMap::new(),
+            v2_guard_budgets: BTreeMap::new(),
+            default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
         }
+    }
+
+    /// Set the v2 FFI-effect binding table (`V2ArmEffect`/`V2AwaitEffect`).
+    /// Not part of `LegacyProgramParts` — see field doc on `v2_ffi_task_decls`.
+    #[doc(hidden)]
+    pub fn with_v2_ffi_task_decls(
+        mut self,
+        decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    ) -> Self {
+        self.v2_ffi_task_decls = decls;
+        self
+    }
+
+    pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl> {
+        &self.v2_ffi_task_decls
+    }
+
+    /// Set the v2 message-correlation source table. Not part of
+    /// `LegacyProgramParts` — see field doc on `v2_corr_sources`.
+    #[doc(hidden)]
+    pub fn with_v2_corr_sources(
+        mut self,
+        sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
+    ) -> Self {
+        self.v2_corr_sources = sources;
+        self
+    }
+
+    pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
+        &self.v2_corr_sources
+    }
+
+    /// Set the per-guard failure-budget table and workflow default. Not part
+    /// of `LegacyProgramParts` — see field docs on `v2_guard_budgets`.
+    #[doc(hidden)]
+    pub fn with_v2_guard_budgets(
+        mut self,
+        budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
+        default_budget: crate::transition::ScopeFailureBudget,
+    ) -> Self {
+        self.v2_guard_budgets = budgets;
+        self.default_guard_budget = default_budget;
+        self
+    }
+
+    pub fn v2_guard_budgets(&self) -> &BTreeMap<Addr, crate::transition::ScopeFailureBudget> {
+        &self.v2_guard_budgets
+    }
+
+    pub fn default_guard_budget(&self) -> crate::transition::ScopeFailureBudget {
+        self.default_guard_budget
     }
 
     pub fn bytecode_version(&self) -> [u8; 32] {
@@ -742,20 +1380,11 @@ impl CompiledProgram {
     pub fn message_name_map(&self) -> &BTreeMap<u32, String> {
         &self.message_name_map
     }
-    pub fn race_plan(&self) -> &BTreeMap<RaceId, RacePlanEntry> {
-        &self.race_plan
-    }
-    pub fn boundary_map(&self) -> &BTreeMap<Addr, RaceId> {
-        &self.boundary_map
-    }
     pub fn write_set(&self) -> &BTreeMap<String, HashSet<FlagKey>> {
         &self.write_set
     }
     pub fn task_manifest(&self) -> &Vec<String> {
         &self.task_manifest
-    }
-    pub fn error_route_map(&self) -> &BTreeMap<Addr, Vec<ErrorRoute>> {
-        &self.error_route_map
     }
     pub fn flag_symbol_table(&self) -> &BTreeMap<FlagKey, String> {
         &self.flag_symbol_table
@@ -777,11 +1406,8 @@ macro_rules! legacy_program {
         join_plan: $join_plan:expr,
         wait_plan: $wait_plan:expr,
         message_name_map: $message_name_map:expr,
-        race_plan: $race_plan:expr,
-        boundary_map: $boundary_map:expr,
         write_set: $write_set:expr,
         task_manifest: $task_manifest:expr,
-        error_route_map: $error_route_map:expr,
         flag_symbol_table: $flag_symbol_table:expr,
         data_objects: $data_objects:expr,
         ffi_task_decls: $ffi_task_decls:expr $(,)?
@@ -793,11 +1419,8 @@ macro_rules! legacy_program {
             $join_plan,
             $wait_plan,
             $message_name_map,
-            $race_plan,
-            $boundary_map,
             $write_set,
             $task_manifest,
-            $error_route_map,
             $flag_symbol_table,
             $data_objects,
             $ffi_task_decls,
@@ -826,14 +1449,6 @@ pub struct WaitPlanEntry {
     pub corr_source: Option<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RacePlanEntry {
-    pub arms: Vec<WaitArm>,
-    /// BPMN element ID of the boundary event (for audit events).
-    /// None for non-boundary races (e.g., WaitAny opcode).
-    pub boundary_element_id: Option<String>,
-}
-
 // ─── Incidents ────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -851,11 +1466,102 @@ pub struct Incident {
     pub resolution: Option<String>,
 }
 
-// ─── Error routing ────────────────────────────────────────────
+#[cfg(test)]
+mod process_state_predicate_tests {
+    use super::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ErrorRoute {
-    pub error_code: Option<String>,
-    pub resume_at: Addr,
-    pub boundary_element_id: String,
+    fn representative_instances() -> Vec<(&'static str, ProcessState, bool, bool)> {
+        // (label, state, expected is_terminal, expected is_schedulable)
+        let uid = Uuid::from_u128(1);
+        vec![
+            ("Running", ProcessState::Running, false, true),
+            (
+                "Completed",
+                ProcessState::Completed { at: 0 },
+                true,
+                false,
+            ),
+            (
+                "Cancelled",
+                ProcessState::Cancelled {
+                    reason: "r".to_string(),
+                    at: 0,
+                },
+                true,
+                false,
+            ),
+            (
+                "Terminated",
+                ProcessState::Terminated { at: 0 },
+                true,
+                false,
+            ),
+            (
+                "Failed",
+                ProcessState::Failed { incident_id: uid },
+                true,
+                false,
+            ),
+            (
+                "Incidented",
+                ProcessState::Incidented { incident_id: uid },
+                false,
+                false,
+            ),
+            (
+                "WaitingOnSubmission",
+                ProcessState::WaitingOnSubmission {
+                    callout_id: uid,
+                    node_id: "n".to_string(),
+                },
+                false,
+                false,
+            ),
+            (
+                "WaitingOnInvocation",
+                ProcessState::WaitingOnInvocation {
+                    execution_id: uid,
+                    node_id: "n".to_string(),
+                },
+                false,
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn is_terminal_and_is_schedulable_classify_every_variant_as_expected() {
+        for (label, state, expected_terminal, expected_schedulable) in representative_instances()
+        {
+            assert_eq!(
+                state.is_terminal(),
+                expected_terminal,
+                "{label}: is_terminal() mismatch"
+            );
+            assert_eq!(
+                state.is_schedulable(),
+                expected_schedulable,
+                "{label}: is_schedulable() mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn is_schedulable_is_true_only_for_running() {
+        let schedulable: Vec<&str> = representative_instances()
+            .into_iter()
+            .filter(|(_, _, _, sched)| *sched)
+            .map(|(label, ..)| label)
+            .collect();
+        assert_eq!(schedulable, vec!["Running"]);
+    }
+
+    #[test]
+    fn incidented_is_neither_terminal_nor_schedulable() {
+        let state = ProcessState::Incidented {
+            incident_id: Uuid::from_u128(42),
+        };
+        assert!(!state.is_terminal(), "Incidented must not be terminal — ResolveIncident revives it");
+        assert!(!state.is_schedulable(), "Incidented must not be schedulable — it awaits ResolveIncident, not ticking");
+    }
 }

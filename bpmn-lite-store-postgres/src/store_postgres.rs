@@ -87,27 +87,20 @@ fn value_key(v: &Value) -> String {
         Value::I64(n) => format!("i:{n}"),
         Value::Str(s) => format!("s:{s}"),
         Value::Ref(r) => format!("r:{r}"),
+        // §18 ruling K Part 2: `Value::Array` is new. Same "a:" + hex of
+        // canonical bytes convention as the other `value_key` copies in
+        // this workspace.
+        Value::Array(_) => format!(
+            "a:{}",
+            v.to_canonical_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
     }
 }
 
 /// Deserialize a JSONB `Vec<Value>` into `[Value; 8]`, padding with `Value::Bool(false)` if short.
-fn regs_from_json(json: serde_json::Value) -> Result<[Value; 8]> {
-    let vec: Vec<Value> = serde_json::from_value(json).map_err(|error| {
-        StoreError::Unavailable(format!("failed to deserialize fiber regs: {error}"))
-    })?;
-    if vec.len() > 8 {
-        return Err(StoreError::Integrity(format!(
-            "fiber regs has {} elements, expected <= 8",
-            vec.len()
-        )));
-    }
-    let mut regs: [Value; 8] = std::array::from_fn(|_| Value::Bool(false));
-    for (i, v) in vec.into_iter().enumerate() {
-        regs[i] = v;
-    }
-    Ok(regs)
-}
-
 /// Convert a `[u8; 32]` BYTEA column loaded as `Vec<u8>` back to `[u8; 32]`.
 fn bytes_to_hash(bytes: Vec<u8>) -> Result<[u8; 32]> {
     bytes
@@ -120,10 +113,14 @@ fn epoch_ms_to_datetime(epoch_ms: i64) -> chrono::DateTime<chrono::Utc> {
     use chrono::TimeZone;
     let secs = epoch_ms / 1000;
     let nanos = ((epoch_ms % 1000) * 1_000_000) as u32;
+    // Substituting `Utc::now()` here would silently write the wrong
+    // timestamp into a claim/lease/expiry column with no error signal —
+    // an out-of-range value means the caller computed a corrupt epoch_ms
+    // and that must fail the commit, not be papered over.
     chrono::Utc
         .timestamp_opt(secs, nanos)
         .single()
-        .unwrap_or_else(chrono::Utc::now)
+        .unwrap_or_else(|| panic!("epoch_ms_to_datetime: {epoch_ms} is out of representable range"))
 }
 
 fn datetime_to_epoch_ms(dt: chrono::DateTime<chrono::Utc>) -> i64 {
@@ -339,6 +336,163 @@ impl PostgresWorkflowStore {
         Ok(())
     }
 
+    /// V&S §15 (v0.7) ruling F: the store-side repeated-failure budget.
+    /// Called from `commit_transition` with `concurrency_table` already
+    /// carrying this transition's own mutations applied (so a
+    /// just-cancelled guard's `opened_at` is still resolvable even though
+    /// its `RecordState` is now `Retired`).
+    ///
+    /// - `V2ScopeCancelled` whose `fiber_id` is in `transition.fibers_delete()`
+    ///   is ruling C's automatic rollback (the triggering fibre is killed,
+    ///   `RollbackCaller::Dies`) — increments the budget, quarantining the
+    ///   instance via the existing `quarantine_state` mechanism if
+    ///   exhausted (T10.3's claim gate already refuses claims for any
+    ///   quarantined instance — no new claim-path code needed). The same
+    ///   event with a *surviving* `fiber_id` is an in-line, explicit
+    ///   `V2CancelScope` (`RollbackCaller::Continues`) — intentional
+    ///   control flow, not a failure, and does not touch the budget.
+    /// - `V2GuardRetired` (a guard closing normally via `V2GuardEnd`)
+    ///   resets the budget for that guard.
+    async fn apply_guard_failure_budget(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tenant_id: &str,
+        instance_id: Uuid,
+        transition: &Transition,
+        concurrency_table: &ConcurrencyTable,
+    ) -> Result<()> {
+        // §31: the per-guard escalation ceiling is artifact-resident (the
+        // counter stays store-side, below). Loaded lazily — only a guard
+        // cancellation reads it — from the instance's pinned artifact, keyed
+        // by the guard's `opened_at` address, falling back to the artifact's
+        // workflow-level default.
+        let has_cancel = transition
+            .events()
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::V2ScopeCancelled { .. }));
+        let (guard_budgets, default_budget) = if has_cancel {
+            // Source the per-guard ceiling with a tx-scoped, pure read of the
+            // instance's pinned artifact — same connection as the commit, no
+            // second pool checkout, no self-healing writes escaping `tx`. A
+            // missing or non-canonical pinned artifact on a guard cancellation
+            // is an integrity violation, NOT a licence to apply a lenient
+            // default that could weaken a stricter declared budget: fail closed.
+            let hash = transition.next_snapshot().bytecode_version;
+            let bytes: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT canonical_bytes FROM compiled_programs WHERE bytecode_version = $1",
+            )
+            .bind(&hash[..])
+            .fetch_optional(&mut **tx)
+            .await
+            .persistence()?
+            .flatten();
+            let Some(bytes) = bytes else {
+                return Err(StoreError::Integrity(format!(
+                    "guard cancellation on instance {instance_id}: pinned artifact {:?} is \
+                     absent or pre-canonical; refusing to apply a guessed failure budget",
+                    ArtifactHash::from_bytes(hash)
+                )));
+            };
+            // Full verify (not a bare decode) is defensible here: guard
+            // cancellations are rare, and the whole-corpus verify gate proves
+            // every stored artifact admissible at cutover — this is the
+            // belt-and-suspenders read, not the primary admission point.
+            let workflow = ExecutableWorkflow::verify(&bytes).map_err(|error| {
+                StoreError::Integrity(format!(
+                    "pinned artifact failed verification on guard cancellation: {error}"
+                ))
+            })?;
+            let metadata = workflow.envelope().metadata();
+            (
+                metadata.v2_guard_budgets().clone(),
+                metadata.default_guard_budget(),
+            )
+        } else {
+            (
+                std::collections::BTreeMap::new(),
+                ScopeFailureBudget::conservative_default(),
+            )
+        };
+        for event in transition.events() {
+            match event {
+                RuntimeEvent::V2ScopeCancelled { record_id, fiber_id, .. } => {
+                    if !transition.fibers_delete().contains(fiber_id) {
+                        continue;
+                    }
+                    let Some(guard_addr) =
+                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    else {
+                        continue;
+                    };
+                    let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
+                        StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                    })?;
+                    let new_count: i32 = sqlx::query_scalar(
+                        r#"
+                        INSERT INTO guard_failure_budget (tenant_id, instance_id, guard_addr, failure_count, updated_at)
+                        VALUES ($1, $2, $3, 1, now())
+                        ON CONFLICT (tenant_id, instance_id, guard_addr)
+                        DO UPDATE SET failure_count = guard_failure_budget.failure_count + 1, updated_at = now()
+                        RETURNING failure_count
+                        "#,
+                    )
+                    .bind(tenant_id)
+                    .bind(instance_id)
+                    .bind(guard_addr_i32)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .persistence()?;
+                    let prior = u32::try_from(new_count).unwrap_or(u32::MAX).saturating_sub(1);
+                    let budget = guard_budgets
+                        .get(&guard_addr)
+                        .copied()
+                        .unwrap_or(default_budget);
+                    if matches!(budget.decision(prior), ScopeFailureDecision::Exhausted(_)) {
+                        sqlx::query(
+                            r#"
+                            UPDATE workflow_instances
+                            SET quarantine_state = 'guard_failure_budget_exhausted',
+                                lease_owner = NULL, lease_until = NULL
+                            WHERE tenant_id = $1 AND instance_id = $2
+                            "#,
+                        )
+                        .bind(tenant_id)
+                        .bind(instance_id)
+                        .execute(&mut **tx)
+                        .await
+                        .persistence()?;
+                        tracing::warn!(
+                            %instance_id,
+                            guard_addr = guard_addr.get(),
+                            failure_count = new_count,
+                            "guard repeated-failure budget exhausted; instance quarantined"
+                        );
+                    }
+                }
+                RuntimeEvent::V2GuardRetired { record_id, .. } => {
+                    if let Some(guard_addr) =
+                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    {
+                        let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
+                            StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                        })?;
+                        sqlx::query(
+                            "DELETE FROM guard_failure_budget WHERE tenant_id = $1 AND instance_id = $2 AND guard_addr = $3",
+                        )
+                        .bind(tenant_id)
+                        .bind(instance_id)
+                        .bind(guard_addr_i32)
+                        .execute(&mut **tx)
+                        .await
+                        .persistence()?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     async fn list_tenants(&self) -> Result<Vec<String>> {
         use sqlx::Row;
         let rows = sqlx::query("SELECT tenant_id FROM tenants ORDER BY first_seen_at")
@@ -495,7 +649,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                 use sqlx::Row;
                 let pc: i32 = row.get("pc");
                 let stack_json: serde_json::Value = row.get("stack");
-                let regs_json: serde_json::Value = row.get("regs");
                 let wait_json: serde_json::Value = row.get("wait_state");
                 let loop_epoch: i32 = row.get("loop_epoch");
 
@@ -503,7 +656,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                     fiber_id: row.get("fiber_id"),
                     pc: Addr::new(pc as u32),
                     stack: serde_json::from_value(stack_json).persistence()?,
-                    regs: regs_from_json(regs_json)?,
                     wait: serde_json::from_value(wait_json).persistence()?,
                     loop_epoch: loop_epoch as u32,
                     // No control_stack column yet — V2 adds it under the
@@ -540,7 +692,6 @@ impl RuntimeStore for PostgresWorkflowStore {
             use sqlx::Row;
             let pc: i32 = row.get("pc");
             let stack_json: serde_json::Value = row.get("stack");
-            let regs_json: serde_json::Value = row.get("regs");
             let wait_json: serde_json::Value = row.get("wait_state");
             let loop_epoch: i32 = row.get("loop_epoch");
 
@@ -548,7 +699,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                 fiber_id: row.get("fiber_id"),
                 pc: Addr::new(pc as u32),
                 stack: serde_json::from_value(stack_json).persistence()?,
-                regs: regs_from_json(regs_json)?,
                 wait: serde_json::from_value(wait_json).persistence()?,
                 loop_epoch: loop_epoch as u32,
                 control_stack: Vec::new(),
@@ -1091,6 +1241,7 @@ impl RuntimeStore for PostgresWorkflowStore {
                 END
             WHERE tenant_id = $1
               AND instance_id = $2
+              AND quarantine_state IS NULL
               AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
             RETURNING revision, fence, bytecode_version, snapshot_schema_version,
                       artifact_abi, snapshot_envelope, frame_hash
@@ -1232,6 +1383,42 @@ impl RuntimeStore for PostgresWorkflowStore {
             .execute(&mut *tx)
             .await
             .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            // Detection is fail-stop; recovery is point-in-time restore. The
+            // operator only learns to restore from the audit log, so the
+            // claim-path quarantine must emit the same InstanceQuarantined
+            // event as the explicit op — never a silent column set.
+            let event = RuntimeEvent::InstanceQuarantined {
+                instance_id,
+                tenant_id: tenant_id.as_str().to_string(),
+                detection_point: "scheduler_claim".to_string(),
+                failure_reason: reason.clone(),
+                detected_at: chrono::Utc::now().timestamp_millis(),
+            };
+            let event_json = serde_json::to_value(&event)
+                .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            sqlx::query(
+                r#"
+                WITH seq AS (
+                    INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                    VALUES ($1, 1, $3)
+                    ON CONFLICT (instance_id) DO UPDATE
+                        SET next_seq = event_sequences.next_seq + 1
+                    RETURNING next_seq, tenant_id
+                )
+                INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                SELECT $1, seq.next_seq, $2, seq.tenant_id
+                FROM seq
+                "#,
+            )
+            .bind(instance_id)
+            .bind(&event_json)
+            .bind(tenant_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            notify_event_tx(&mut tx, instance_id)
+                .await
+                .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
             tx.commit()
                 .await
                 .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
@@ -1467,7 +1654,7 @@ impl RuntimeStore for PostgresWorkflowStore {
         for fiber in transition.fibers_upsert() {
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(&fiber.regs)
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
@@ -2213,9 +2400,35 @@ impl RuntimeStore for PostgresWorkflowStore {
                     .execute(&mut *tx)
                     .await
                 }
+                TimerMutation::V2CancelRace {
+                    fiber_id,
+                    record_id,
+                    except,
+                } => {
+                    sqlx::query(
+                        r#"
+                        UPDATE workflow_timers
+                        SET state = 'cancelled', updated_at = now(),
+                            claim_owner = NULL, claim_token = NULL, claim_until = NULL
+                        WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3
+                          AND state = 'armed' AND timer_id <> $4
+                          AND kind #>> '{V2Race,record_id}' = $5
+                        "#,
+                    )
+                    .bind(claim.tenant_id().as_str())
+                    .bind(claim.instance_id())
+                    .bind(fiber_id)
+                    .bind(except.as_uuid())
+                    .bind(record_id.as_uuid().to_string())
+                    .execute(&mut *tx)
+                    .await
+                }
             }
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
-            if !matches!(mutation, TimerMutation::CancelRace { .. }) && result.rows_affected() != 1
+            if !matches!(
+                mutation,
+                TimerMutation::CancelRace { .. } | TimerMutation::V2CancelRace { .. }
+            ) && result.rows_affected() != 1
             {
                 tx.rollback()
                     .await
@@ -2281,7 +2494,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             let fiber = child.root_fiber();
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(&fiber.regs)
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
@@ -2500,8 +2713,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                 })?),
                 stack: serde_json::from_value(row.get("stack"))
                     .map_err(|error| CommitError::Integrity(error.to_string()))?,
-                regs: regs_from_json(row.get("regs"))
-                    .map_err(|error| CommitError::Integrity(error.to_string()))?,
                 wait: serde_json::from_value(row.get("wait_state"))
                     .map_err(|error| CommitError::Integrity(error.to_string()))?,
                 loop_epoch: u32::try_from(loop_epoch).map_err(|_| {
@@ -2589,14 +2800,27 @@ impl RuntimeStore for PostgresWorkflowStore {
         .await
         .map_err(|error| CommitError::Unavailable(error.to_string()))?
         .flatten();
-        let mut concurrency_table = prior_envelope_bytes
+        // A decode failure here means the persisted row exists but is
+        // corrupt — that must reject the commit, not be treated as if no
+        // prior snapshot existed (which would silently drop live
+        // concurrency records and desync the Ring 2 hash chain).
+        let prior_envelope: Option<SnapshotEnvelope> = prior_envelope_bytes
             .as_deref()
-            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
+            .map(|bytes| {
+                SnapshotEnvelope::decode(bytes).map_err(|error| {
+                    CommitError::Integrity(format!(
+                        "prior snapshot envelope failed to decode on commit: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let mut concurrency_table = prior_envelope
+            .as_ref()
             .map(|envelope| envelope.state().concurrency_table().clone())
             .unwrap_or_default();
         for mutation in transition.concurrency_mutations() {
             match mutation {
-                ConcurrencyMutation::Insert(record) => concurrency_table.insert(record.clone()),
+                ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
                 ConcurrencyMutation::Retire(id) => {
                     if let Some(record) = concurrency_table.get_mut(*id) {
                         record.state = RecordState::Retired;
@@ -2607,6 +2831,26 @@ impl RuntimeStore for PostgresWorkflowStore {
                 }
             }
         }
+        // V&S §15 (v0.7) ruling F: read BEFORE `concurrency_table` moves
+        // into `PersistedSnapshotState` below — this transition's own
+        // mutations are already applied, so a just-cancelled Guard's
+        // `opened_at` is still resolvable here even though its record is
+        // now `Retired`.
+        self.apply_guard_failure_budget(
+            &mut tx,
+            claim.tenant_id().as_str(),
+            claim.instance_id(),
+            transition,
+            &concurrency_table,
+        )
+        .await
+        // Preserve the error kind: a fail-closed integrity violation (e.g. a
+        // guard cancellation whose pinned artifact is absent) must NOT be
+        // reported as `Unavailable`, which reads as transient/retryable.
+        .map_err(|error| match error {
+            StoreError::Integrity(message) => CommitError::Integrity(message),
+            other => CommitError::Unavailable(other.to_string()),
+        })?;
         let snapshot_envelope = SnapshotEnvelope::new(
             CURRENT_ARTIFACT_ABI,
             persisted_instance.bytecode_version,
@@ -2653,10 +2897,14 @@ impl RuntimeStore for PostgresWorkflowStore {
         let state_hash = snapshot_envelope
             .state_hash()
             .map_err(|error| CommitError::Integrity(error.to_string()))?;
-        let prior_state_hash = prior_envelope_bytes
-            .as_deref()
-            .and_then(|bytes| SnapshotEnvelope::decode(bytes).ok())
-            .and_then(|envelope| envelope.state_hash().ok())
+        let prior_state_hash = prior_envelope
+            .as_ref()
+            .map(|envelope| {
+                envelope
+                    .state_hash()
+                    .map_err(|error| CommitError::Integrity(error.to_string()))
+            })
+            .transpose()?
             .unwrap_or([0u8; 32]);
         let command = transition.command_envelope().cloned().unwrap_or_else(|| {
             transition.start_dedupe().map_or_else(
@@ -3770,6 +4018,44 @@ impl AdminProjectionStore for PostgresWorkflowStore {
 }
 
 impl PostgresWorkflowStore {
+    /// V6.4 cutover-readiness gate: verify EVERY stored artifact, not just the
+    /// ones a running instance happens to load. Closes the lazy-verification
+    /// gap — `load_artifact` verifies on demand, so a corrupt or pre-canonical
+    /// row can sit undetected until claimed. Fails closed, naming every
+    /// offending `bytecode_version`; a NULL `canonical_bytes` (pre-canonical
+    /// legacy row) is itself a failure — a cutover-clean corpus has none.
+    /// Returns the count verified.
+    pub async fn verify_artifact_corpus(&self) -> Result<usize> {
+        use sqlx::Row;
+        let rows = sqlx::query("SELECT bytecode_version, canonical_bytes FROM compiled_programs")
+            .fetch_all(&self.pool)
+            .await
+            .persistence()?;
+        let mut failures = Vec::new();
+        for row in &rows {
+            let version: Vec<u8> = row.get("bytecode_version");
+            let canonical: Option<Vec<u8>> = row.get("canonical_bytes");
+            let hash_hex: String = version.iter().map(|b| format!("{b:02x}")).collect();
+            match canonical {
+                None => failures.push(format!("{hash_hex}: pre-canonical (canonical_bytes IS NULL)")),
+                Some(bytes) => {
+                    if let Err(error) = ExecutableWorkflow::verify(&bytes) {
+                        failures.push(format!("{hash_hex}: {error}"));
+                    }
+                }
+            }
+        }
+        if !failures.is_empty() {
+            return Err(StoreError::Integrity(format!(
+                "artifact corpus verification failed for {} of {} artifact(s): {}",
+                failures.len(),
+                rows.len(),
+                failures.join("; ")
+            )));
+        }
+        Ok(rows.len())
+    }
+
     async fn dequeue_jobs_inner(
         tx: &mut TenantTx<'_>,
         task_types: &[String],
@@ -4121,6 +4407,17 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // FK-orphaned live tables — not reachable by any CASCADE, so a reused
+        // test DB would leak them across tests. Named here so the harness
+        // exercises the same completeness the cutover wipe script must have.
+        sqlx::query("TRUNCATE dsl_bus.inbox CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("TRUNCATE message_buffer")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         sqlx::query("TRUNCATE workflow_instances CASCADE")
             .execute(&pool)
@@ -4159,6 +4456,13 @@ mod tests {
             .await
             .unwrap();
         sqlx::query("TRUNCATE incidents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Artifact migration lineage persists a new_hash per old_hash; without
+        // this truncation a re-run of the migration tests collides on a hash
+        // stored by the prior run (the artifact hash is content-deterministic).
+        sqlx::query("TRUNCATE artifact_lineage")
             .execute(&pool)
             .await
             .unwrap();
@@ -4260,6 +4564,45 @@ mod tests {
             current_node_id: None,
             placeholder_values: None,
         }
+    }
+
+    /// V6.4 fail-closed budget read: a guard cancellation requires the
+    /// instance's pinned artifact to be present. Stores a minimal verifying
+    /// guarded artifact with an EMPTY per-guard budget table and the given
+    /// workflow-level default, returning its hash for the instance to pin.
+    async fn store_default_budget_artifact(
+        store: &PostgresWorkflowStore,
+        default_max: u32,
+    ) -> [u8; 32] {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![
+                Instr::V2Guard { handler: Addr::new(3) },
+                Instr::V2GuardEnd,
+                Instr::End,
+                Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            BTreeMap::new(),
+            bpmn_lite_types::ScopeFailureBudget::new(1, default_max).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v6-4-default-budget")
+                .unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+        workflow.hash().into_bytes()
     }
 
     /// T-PG-1: Instance round-trip
@@ -4380,8 +4723,6 @@ mod tests {
         );
         assert_eq!(loaded.stack, vec![Value::I64(99)]);
         assert_eq!(loaded.loop_epoch, 3);
-        // Verify regs padded to 8
-        assert_eq!(loaded.regs.len(), 8);
 
         // Delete
         store.delete_fiber(iid, fid).await.unwrap();
@@ -4645,11 +4986,8 @@ mod tests {
             join_plan: BTreeMap::new(),
             wait_plan: BTreeMap::new(),
             message_name_map: BTreeMap::new(),
-            race_plan: BTreeMap::new(),
-            boundary_map: BTreeMap::new(),
             write_set: BTreeMap::new(),
             task_manifest: vec![],
-            error_route_map: BTreeMap::new(),
             flag_symbol_table: BTreeMap::new(),
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
@@ -5370,6 +5708,613 @@ mod tests {
         assert!(
             msg.contains("immutable") || msg.contains("P0001"),
             "expected immutability rejection, got: {msg}"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: 5 automatic-rollback `V2ScopeCancelled`
+    /// events for the *same* guard `Addr` (a fresh `RecordId` each time,
+    /// mirroring reality — the record retires and is fresh on re-open)
+    /// exhaust the built-in budget and quarantine the instance via the
+    /// existing `quarantine_state` mechanism. `fiber_id` is included in
+    /// `fibers_delete()` on every commit — the signal that distinguishes
+    /// ruling C's automatic rollback (`RollbackCaller::Dies`) from an
+    /// in-line, explicit `V2CancelScope` (`RollbackCaller::Continues`),
+    /// which must NOT count against the budget.
+    #[tokio::test]
+    async fn test_guard_failure_budget_quarantines_after_repeated_automatic_rollback() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(7);
+
+        for _ in 0..5u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine.as_deref(),
+            Some("guard_failure_budget_exhausted"),
+            "5 automatic rollbacks of the same guard address must exhaust the built-in budget"
+        );
+    }
+
+    /// V6.4 (§31.1) fail-closed: a guard cancellation whose pinned artifact is
+    /// absent (or pre-canonical) must ABORT the commit with an integrity error,
+    /// never silently fall back to a lenient default that could weaken a
+    /// stricter declared guard. `make_instance` pins `[0u8; 32]`, and `setup()`
+    /// truncates `compiled_programs`, so the tx-scoped budget read finds nothing.
+    #[tokio::test]
+    async fn test_guard_cancellation_with_missing_artifact_fails_closed() {
+        let (_pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("no-artifact", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record =
+            ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(Addr::new(0));
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+            .delete_fiber(fiber_id)
+            .event(RuntimeEvent::V2ScopeCancelled {
+                record_id,
+                fiber_id,
+                cancelled_records: vec![],
+                cancelled_fibers: vec![],
+            })
+            .build();
+        let result = store.commit_transition(&claim, &transition).await;
+        assert!(
+            matches!(result, Err(CommitError::Integrity(_))),
+            "a guard cancellation with no pinned artifact must fail closed, got {result:?}"
+        );
+    }
+
+    /// V6.4 whole-corpus verify gate: every stored artifact verifies
+    /// (`Ok(count)`), and a corrupted `canonical_bytes` row is caught by the
+    /// gate — fail-closed at cutover, not surfaced lazily only when the
+    /// instance is eventually claimed.
+    #[tokio::test]
+    async fn test_verify_artifact_corpus_catches_a_corrupt_row() {
+        let (pool, store, _lock) = setup().await;
+        // Two valid artifacts (distinct defaults => distinct canonical bytes
+        // => distinct hashes => two rows).
+        let _h1 = store_default_budget_artifact(&store, 3).await;
+        let good_hash = store_default_budget_artifact(&store, 7).await;
+
+        let count = store.verify_artifact_corpus().await.unwrap();
+        assert_eq!(count, 2, "both stored artifacts must verify");
+
+        // Corrupt one row's canonical_bytes; the gate must now fail closed.
+        sqlx::query("UPDATE compiled_programs SET canonical_bytes = $1 WHERE bytecode_version = $2")
+            .bind(&b"not a valid canonical envelope"[..])
+            .bind(&good_hash[..])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = store.verify_artifact_corpus().await;
+        assert!(
+            matches!(&result, Err(StoreError::Integrity(message)) if message.contains("corpus verification failed")),
+            "a corrupt artifact row must fail the corpus gate closed, got {result:?}"
+        );
+    }
+
+    /// V6.4 destructive cutover: the shipped `scripts/cutover-wipe.sql` clears
+    /// the artifact corpus and all per-instance runtime state — including the
+    /// FORCE-RLS V8 `guard_failure_budget` table, transitively via
+    /// `TRUNCATE workflow_instances CASCADE` — and the store then cold-starts
+    /// ready: the corpus gate passes on the empty corpus and a freshly stored
+    /// artifact + instance is immediately claimable.
+    #[tokio::test]
+    async fn test_cutover_wipe_clears_runtime_state_and_store_cold_starts() {
+        let (pool, store, _lock) = setup().await;
+
+        // Seed: an artifact, an instance pinned to it, and — on a tenant-scoped
+        // connection, since guard_failure_budget FORCEs RLS — a budget row.
+        let hash = store_default_budget_artifact(&store, 5).await;
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = hash;
+        store.save_instance("cutover-seed", &instance).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("SELECT set_config('app.current_tenant', 'default', false)")
+            .execute(conn.as_mut())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO guard_failure_budget (tenant_id, instance_id, guard_addr, failure_count, updated_at) \
+             VALUES ('default', $1, 0, 1, now())",
+        )
+        .bind(instance_id)
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        let pre_budget: i64 = sqlx::query_scalar("SELECT count(*) FROM guard_failure_budget")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(pre_budget, 1, "seed must create a guard_failure_budget row");
+
+        // FK-orphaned live state (no FK path to workflow_instances, so CASCADE
+        // does NOT reach them) — must be named explicitly in the wipe script.
+        sqlx::query(
+            "INSERT INTO message_buffer (tenant_id, message_name, correlation_key, msg_id, payload, expires_at) \
+             VALUES ('default', 'msg', 'corr', 'm1', $1, now() + interval '1 hour')",
+        )
+        .bind(&[0u8][..])
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO dsl_bus.inbox (idempotency_key, source_domain, endpoint, tenant_id) \
+             VALUES ($1, 'src', 'invocation', 'default')",
+        )
+        .bind(Uuid::now_v7())
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        let pre_buffer: i64 = sqlx::query_scalar("SELECT count(*) FROM message_buffer")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        let pre_inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM dsl_bus.inbox")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            (pre_buffer, pre_inbox),
+            (1, 1),
+            "seeds must create the FK-orphaned rows (buffer={pre_buffer}, inbox={pre_inbox})"
+        );
+        assert_eq!(
+            store.verify_artifact_corpus().await.unwrap(),
+            1,
+            "seed must store one artifact"
+        );
+
+        // Execute the shipped cutover wipe script statement-by-statement.
+        let sql = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scripts/cutover-wipe.sql"
+        ))
+        .unwrap();
+        // Strip full-line `--` comments before splitting on `;` — psql's lexer
+        // ignores a `;` inside a comment, but this hand-rolled splitter would
+        // otherwise treat one as a statement terminator.
+        let sql_statements: String = sql
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for statement in sql_statements.split(';') {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            sqlx::query(trimmed).execute(&pool).await.unwrap();
+        }
+
+        // Runtime state and corpus cleared; guard_failure_budget cascaded away.
+        let post_budget: i64 = sqlx::query_scalar("SELECT count(*) FROM guard_failure_budget")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            post_budget, 0,
+            "TRUNCATE workflow_instances CASCADE must clear guard_failure_budget"
+        );
+        let post_buffer: i64 = sqlx::query_scalar("SELECT count(*) FROM message_buffer")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        let post_inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM dsl_bus.inbox")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            (post_buffer, post_inbox),
+            (0, 0),
+            "the wipe must explicitly clear FK-orphaned live state (message_buffer, dsl_bus.inbox)"
+        );
+        assert_eq!(
+            store.verify_artifact_corpus().await.unwrap(),
+            0,
+            "the artifact corpus must be empty and verify as ready after the wipe"
+        );
+
+        // Cold start: a freshly stored artifact + instance is immediately claimable.
+        let fresh_hash = store_default_budget_artifact(&store, 4).await;
+        let fresh_id = Uuid::now_v7();
+        let mut fresh = make_instance(fresh_id);
+        fresh.bytecode_version = fresh_hash;
+        store.save_instance("cold-start", &fresh).await.unwrap();
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                fresh_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap();
+        assert!(
+            claim.is_some(),
+            "a fresh instance must be claimable on the cold-started store"
+        );
+    }
+
+    /// V8 (§31): the escalation ceiling is read from the instance's pinned
+    /// artifact, not a hardcoded constant. An artifact whose workflow-level
+    /// default budget is 2 must quarantine after *2* rollbacks — proving the
+    /// retired `ScopeFailureBudget::new(1, 5)` placeholder is gone.
+    #[tokio::test]
+    async fn test_guard_failure_budget_ceiling_comes_from_the_artifact() {
+        let (pool, store, _lock) = setup().await;
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![Instr::End],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            BTreeMap::new(),
+            bpmn_lite_types::ScopeFailureBudget::new(1, 2).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-budget-2").unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = workflow.hash().into_bytes();
+        store.save_instance("guard-budget-artifact", &instance).await.unwrap();
+        let guard_addr = Addr::new(7);
+
+        let mut quarantine_after = None;
+        for attempt in 1..=2u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+
+            let quarantine: Option<String> = sqlx::query_scalar(
+                "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+            )
+            .bind(instance_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if quarantine.as_deref() == Some("guard_failure_budget_exhausted") {
+                quarantine_after = Some(attempt);
+                break;
+            }
+        }
+        assert_eq!(
+            quarantine_after,
+            Some(2),
+            "the artifact's default budget of 2 must quarantine after exactly 2 rollbacks, \
+             not the retired hardcoded 5"
+        );
+    }
+
+    /// V&S §31 per-guard store read: a NON-empty `v2_guard_budgets` entry for
+    /// the cancelling guard's address overrides the workflow default — the
+    /// headline "per-guard, not just default" claim, proven at the store (the
+    /// sibling test above only exercises the `unwrap_or(default)` fallback).
+    /// A strict per-guard budget of 1 must quarantine after ONE rollback even
+    /// though the workflow default is a lenient 9.
+    #[tokio::test]
+    async fn test_per_guard_budget_entry_overrides_the_workflow_default() {
+        let (pool, store, _lock) = setup().await;
+        // Address 0 is a real guard-open in this minimal verifying program, so
+        // the V8.3 admission gate (budget key must resolve to a guard-opener)
+        // accepts the non-empty table — mirrors v2_verifier's minimal guard.
+        let guard_addr = Addr::new(0);
+        let mut budgets = BTreeMap::new();
+        budgets.insert(guard_addr, bpmn_lite_types::ScopeFailureBudget::new(1, 1).unwrap());
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![
+                Instr::V2Guard { handler: Addr::new(3) },
+                Instr::V2GuardEnd,
+                Instr::End,
+                Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            budgets,
+            // Lenient workflow default — the per-guard entry must win over it.
+            bpmn_lite_types::ScopeFailureBudget::new(1, 9).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-per-guard-1").unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = workflow.hash().into_bytes();
+        store.save_instance("per-guard-budget", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record =
+            ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(guard_addr);
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+            .delete_fiber(fiber_id)
+            .event(RuntimeEvent::V2ScopeCancelled {
+                record_id,
+                fiber_id,
+                cancelled_records: vec![],
+                cancelled_fibers: vec![],
+            })
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine.as_deref(),
+            Some("guard_failure_budget_exhausted"),
+            "the per-guard budget of 1 must quarantine after ONE rollback, \
+             overriding the lenient workflow default of 9"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: an explicit, in-line `V2CancelScope`
+    /// (the triggering fibre survives — not in `fibers_delete()`) must
+    /// never count against the budget, however many times it fires.
+    #[tokio::test]
+    async fn test_guard_failure_budget_ignores_explicit_cancel_scope() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(9);
+
+        for _ in 0..10u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let surviving_fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+                // No `.delete_fiber(surviving_fiber_id)` — the cancelling
+                // fibre continues in place (`RollbackCaller::Continues`).
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id: surviving_fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine, None,
+            "10 explicit V2CancelScope firings must never quarantine — only automatic rollback counts"
+        );
+    }
+
+    /// V&S §15 (v0.7) ruling F: a successful guard close (`V2GuardRetired`)
+    /// resets the budget — 4 automatic-rollback failures (under the
+    /// built-in 5-failure budget), a successful close, then 4 more
+    /// failures must NOT quarantine, proving the counter actually reset
+    /// rather than merely not yet having reached 8.
+    #[tokio::test]
+    async fn test_guard_failure_budget_resets_on_successful_close() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
+        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        let guard_addr = Addr::new(11);
+
+        async fn fail_once(
+            store: &PostgresWorkflowStore,
+            instance: &ProcessInstance,
+            instance_id: Uuid,
+            guard_addr: Addr,
+        ) {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+        }
+
+        for _ in 0..4u32 {
+            fail_once(&store, &instance, instance_id, guard_addr).await;
+        }
+
+        // A successful close resets the counter.
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record = ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(guard_addr);
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+            .event(RuntimeEvent::V2GuardRetired { record_id, fiber_id })
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        for _ in 0..4u32 {
+            fail_once(&store, &instance, instance_id, guard_addr).await;
+        }
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine, None,
+            "4 + 4 failures with a successful close in between must not quarantine — the close must have reset the counter, not merely paused it short of 8"
         );
     }
 
@@ -8543,6 +9488,141 @@ mod tests {
         assert!(lease_owner.is_none());
     }
 
+    /// V6.1 isolate: once an instance is quarantined on a load-time integrity
+    /// violation, a subsequent claim must not re-select it. Without the
+    /// `quarantine_state IS NULL` claim predicate the poisoned instance is
+    /// re-claimed → re-checked → re-quarantined every tick (fail-closed but
+    /// never isolated). The second claim must return `Ok(None)`, not another
+    /// `Err(Integrity)`.
+    #[tokio::test]
+    async fn test_quarantined_instance_is_not_reclaimed() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let mut envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let flip = envelope_bytes.len() / 2;
+        envelope_bytes[flip] ^= 0xFF;
+        sqlx::query("UPDATE workflow_instances SET snapshot_envelope = $1 WHERE instance_id = $2")
+            .bind(&envelope_bytes)
+            .bind(instance_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // First claim detects, quarantines, and fails closed.
+        let first = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(matches!(first, Err(ClaimError::Integrity(_))));
+
+        // Second claim must find nothing to claim — the row is isolated.
+        let second = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(
+            matches!(second, Ok(None)),
+            "a quarantined instance must not be re-claimed, got {second:?}"
+        );
+    }
+
+    /// V6.1 surface: the claim-path quarantine must emit an
+    /// `InstanceQuarantined` audit event, not merely set the column. Recovery
+    /// is point-in-time restore, which an operator only initiates on seeing
+    /// the event — a silent column set is invisible and never triggers it.
+    #[tokio::test]
+    async fn test_claim_path_quarantine_emits_audit_event() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let mut envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let flip = envelope_bytes.len() / 2;
+        envelope_bytes[flip] ^= 0xFF;
+        sqlx::query("UPDATE workflow_instances SET snapshot_envelope = $1 WHERE instance_id = $2")
+            .bind(&envelope_bytes)
+            .bind(instance_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(matches!(result, Err(ClaimError::Integrity(_))));
+
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM event_log WHERE instance_id = $1 AND event::text LIKE '%InstanceQuarantined%'",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            event_count, 1,
+            "claim-path quarantine must emit exactly one InstanceQuarantined audit event"
+        );
+    }
+
     /// V2.5 Ring 2: directly corrupts the journal head's `prior_state_hash`
     /// column so it no longer equals the previous record's `state_hash`,
     /// proving the chain-walk added in V2.3 (not merely the three-way
@@ -9112,7 +10192,7 @@ mod tests {
                 .persistence()?;
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(&fiber.regs).persistence()?;
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             let result = sqlx::query(
@@ -9412,7 +10492,7 @@ mod tests {
             }
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(&fiber.regs).persistence()?;
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             sqlx::query(

@@ -32,5 +32,9 @@ proptest = "1"
 name = "fiber_codec"
 harness = false
 
+[[bench]]
+name = "v2_perf"
+harness = false
+
 [lints]
 workspace = true

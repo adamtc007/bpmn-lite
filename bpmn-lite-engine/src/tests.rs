@@ -751,33 +751,33 @@ async fn test_signal_matches_message_name_and_correlation_key() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
+    // V5.3 (§18, landed 2026-07-23): migrated from v1 `Instr::WaitMsg` to
+    // `Instr::V2WaitMsg` — v1 `WaitMsg` and its `wait_plan` side-table
+    // entry are deleted entirely; `V2WaitMsg` needs neither `wait_id` nor
+    // a `wait_plan` row (V-9 forbids a static side table surviving into
+    // a v2-bearing artifact).
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [90u8; 32],
         program: vec![
-            Instr::WaitMsg {
-                wait_id: 0,
-                name: 1,
-                corr_reg: 0,
-            },
+            Instr::V2WaitMsg { name: 1 },
             Instr::End,
         ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::from([(0, WaitPlanEntry {
-            wait_type: WaitType::Msg,
-            name: Some(1),
-            corr_source: Some(0),
-        })]),
+        wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::from([(1, "case_arrived".to_string())]),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
-    };
+    }
+    .with_v2_corr_sources(BTreeMap::from([(
+        bpmn_lite_types::Addr::new(0),
+        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
+            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        ),
+    )]));
     store
         .store_program(program.bytecode_version(), &program)
         .await
@@ -807,7 +807,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(true),
+            "true".to_string(),
             None,
             None,
             Some("wrong"),
@@ -824,7 +824,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(false),
+            "false".to_string(),
             None,
             None,
             Some("right"),
@@ -847,7 +847,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(false),
+            "false".to_string(),
             None,
             None,
             Some("right"),
@@ -867,33 +867,33 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
+    // V5.3 (§18, landed 2026-07-23): migrated from v1 `Instr::WaitMsg` to
+    // `Instr::V2WaitMsg`. This test in particular is why `V2WaitMsg`'s
+    // kernel handler needed the signal-before-wait pre-check ported over
+    // as part of this migration (see the handler's own doc comment) —
+    // without it, this exact test would have failed.
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [91u8; 32],
         program: vec![
-            Instr::WaitMsg {
-                wait_id: 0,
-                name: 1,
-                corr_reg: 0,
-            },
+            Instr::V2WaitMsg { name: 1 },
             Instr::End,
         ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::from([(0, WaitPlanEntry {
-            wait_type: WaitType::Msg,
-            name: Some(1),
-            corr_source: Some(0),
-        })]),
+        wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::from([(1, "1".to_string())]),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
-    };
+    }
+    .with_v2_corr_sources(BTreeMap::from([(
+        bpmn_lite_types::Addr::new(0),
+        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
+            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        ),
+    )]));
     store
         .store_program(program.bytecode_version(), &program)
         .await
@@ -913,7 +913,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         .unwrap();
 
     engine
-        .signal_with_value(iid, "1", Value::Bool(false), None, None, Some("early"))
+        .signal_with_value(iid, "1", "false".to_string(), None, None, Some("early"))
         .await
         .unwrap();
 
@@ -1117,38 +1117,61 @@ const NI_BOUNDARY_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
       </bpmn:process>
     </bpmn:definitions>"#;
 
-/// BPMN with non-interrupting cycle timer (R3/PT1S — fires 3 times).
-const NI_CYCLE_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
-                      xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
-      <bpmn:process id="ni_cycle_proc" isExecutable="true">
-        <bpmn:startEvent id="start" />
-        <bpmn:serviceTask id="long_task" name="Long Running Task">
-          <bpmn:extensionElements>
-            <zeebe:taskDefinition type="long_work" />
-          </bpmn:extensionElements>
-        </bpmn:serviceTask>
-        <bpmn:boundaryEvent id="reminder" attachedToRef="long_task" cancelActivity="false">
-          <bpmn:timerEventDefinition>
-            <bpmn:timeCycle>R3/PT1S</bpmn:timeCycle>
-          </bpmn:timerEventDefinition>
-        </bpmn:boundaryEvent>
-        <bpmn:serviceTask id="send_reminder" name="Send Reminder">
-          <bpmn:extensionElements>
-            <zeebe:taskDefinition type="send_reminder" />
-          </bpmn:extensionElements>
-        </bpmn:serviceTask>
-        <bpmn:endEvent id="end_normal" />
-        <bpmn:endEvent id="end_reminder" />
-        <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="long_task" />
-        <bpmn:sequenceFlow id="f2" sourceRef="long_task" targetRef="end_normal" />
-        <bpmn:sequenceFlow id="f3" sourceRef="reminder" targetRef="send_reminder" />
-        <bpmn:sequenceFlow id="f4" sourceRef="send_reminder" targetRef="end_reminder" />
-      </bpmn:process>
-    </bpmn:definitions>"#;
+// V5.3 (§18, landed 2026-07-23) originally found non-interrupting
+// boundary-timer CYCLE (repeat) semantics — v1's `R<n>/PT<duration>`
+// `timeCycle` mechanism — to be a real, unresolved design gap and
+// deleted `NI_CYCLE_BPMN`/`t_ni_2_cycle_fires_multiple_times`/
+// `t_ni_3_cycle_exhausted_reverts_to_job` with the finding recorded in
+// place, rather than force a fix through: `Instr::V2GuardArmTimer`
+// (`GUARD-TIMER>`, ruling I) was fire-once by construction, and nothing
+// in the v2 word set re-armed a guard timer after it fired.
+//
+// **Restored (post-close remediation, landed 2026-07-23, same day):**
+// V&S §13 amendment v0.5 ruling A ("`GUARD-N>` re-arms after trigger...
+// the record stays `Armed`... this is the default") already ratified the
+// general re-arm behaviour for `GUARD-N>`'s manual trigger
+// (`Command::V2TriggerGuard`) — `GUARD-TIMER>`'s own timer-fire path
+// simply hadn't been wired to the same default. Fixed at the kernel
+// level (`bpmn-lite-kernel/src/lib.rs`'s `TimerKind::V2GuardTimer` arm
+// of `apply_timer`): a `GUARD-N>`-kind record's timer now reschedules
+// itself in the same transition it fires in
+// (`TimerMutation::Rearm`, pre-existing generic timer-schedule
+// infrastructure — `bpmn-lite-types::transition::TimerRepeatSpec`/
+// `ClaimedTimer::repeat_spec`, this is the first `V2*` word to populate
+// them), bounded by a new, optional, additive word,
+// `Instr::V2GuardTimerCycle { max_fires }` (word `GUARD-TIMER-CYCLE>`),
+// which must immediately follow `GUARD-TIMER>` and only ever bounds a
+// `GUARD-N>` target (verifier-enforced, `v2_verifier.rs`). `GUARD>`/
+// `GUARD-R>` (interrupting) are unaffected — their record retires on
+// trigger, same as before this fix. No frontend lowering was built
+// (out of scope, matching how `GUARD-TIMER>` itself landed —
+// `lowering.rs`'s `timer_spec_duration_ms` still silently drops
+// `TimerSpec::Cycle`'s `max_fires` to a single relative duration; BPMN
+// XML `timeCycle` still does not reach `GUARD-TIMER-CYCLE>`), so both
+// restored tests below hand-assemble their own `V2GuardN`/
+// `GUARD-TIMER>`/`GUARD-TIMER-CYCLE>` bytecode (mirroring the REAL
+// lowered shape `lower_boundary_guarded_task_v2` already produces for
+// the single-fire case, plus the new cycle word) rather than compiling
+// `NI_CYCLE_BPMN` through the XML frontend — proven via the real engine
+// (`store_program` + `engine.start`/`tick_instance`/`tick_due_timers`),
+// not `bpmn-lite-kernel::apply()` directly, per the brief's own
+// instruction to land this restoration in `bpmn-lite-engine/src/tests.rs`.
+//
+// Single-fire non-interrupting boundary timers (`NI_BOUNDARY_BPMN`,
+// `cancelActivity="false"` with a plain `timeDuration`, no cycle) were
+// never part of this gap — `V2GuardN` + `GUARD-TIMER>` fully supports
+// them, proven below by `t_ni_1_non_interrupting_spawns_child` and
+// `t_ni_4_job_completes_before_timer`.
 
-/// Helper: compile + start + tick until fiber is promoted to a durable timer race.
-async fn setup_ni_race(
+/// Helper: compile (v2 default) + start + tick until the host fiber is
+/// parked on its own job, with a `GUARD-TIMER>`-armed non-interrupting
+/// guard wrapping it. Unlike the deleted v1 `setup_ni_race`, the host
+/// fiber's `WaitState` never changes to a race-shaped variant — arming a
+/// guard timer does not park the fiber differently (`V2GuardN`'s own
+/// doc comment: "the guarded body keeps executing normally after
+/// arming"); it stays plain `WaitState::Job` for as long as the job is
+/// outstanding, timer armed or not.
+async fn setup_ni_guard(
     bpmn: &str,
 ) -> (
     BpmnLiteEngine,
@@ -1168,10 +1191,8 @@ async fn setup_ni_race(
         .await
         .unwrap();
 
-    // Tick to get fiber parked on Job, then promoted to Race
     engine.tick_instance(iid).await.unwrap();
 
-    // Dequeue jobs so we have the job_key
     let jobs = engine
         .activate_jobs(&["long_work".to_string()], 10)
         .await
@@ -1179,169 +1200,342 @@ async fn setup_ni_race(
     assert!(!jobs.is_empty(), "Expected job activation");
     let job_key = jobs[0].job_key.clone();
 
-    // Verify fiber is now in Race state
     let fibers = store
         .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
         .await
         .unwrap();
     assert_eq!(fibers.len(), 1);
     assert!(
-        matches!(&fibers[0].wait, WaitState::Race { .. }),
-        "Expected Race, got {:?}",
+        matches!(&fibers[0].wait, WaitState::Job { job_key: jk } if *jk == job_key),
+        "Expected the host fiber parked on its own job, got {:?}",
         fibers[0].wait
     );
 
     (engine, store, iid, job_key, hash)
 }
 
-// ── T-NI-1: Non-interrupting timer fires → spawns child, main stays in Race ──
+// ── T-NI-1b: a plain (non-cycle) boundary timer fires exactly once,
+// not indefinitely ──
 
 #[tokio::test]
-async fn t_ni_1_non_interrupting_spawns_child() {
-    let (engine, store, iid, job_key, _hash) = setup_ni_race(NI_BOUNDARY_BPMN).await;
+async fn t_ni_1b_non_cycle_timer_does_not_rearm_after_first_fire() {
+    let (engine, _store, iid, _job_key, _hash) = setup_ni_guard(NI_BOUNDARY_BPMN).await;
 
     engine
         .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
         .await
         .unwrap();
+    engine.tick_instance(iid).await.unwrap();
 
-    // Verify: should now have 2 fibers (main in Race/Job, child Running)
+    // A rearmed timer's new due_at is fired_at + interval_ms, so a second
+    // sweep must use a later "as of" timestamp to reach it.
+    engine
+        .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS + 60_000, 10, 30_000)
+        .await
+        .unwrap();
+    engine.tick_instance(iid).await.unwrap();
+
+    let escalation_jobs = engine
+        .activate_jobs(&["send_reminder".to_string()], 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        escalation_jobs.len(),
+        1,
+        "a non-cycle boundary timer must fire exactly once, got {} escalation jobs",
+        escalation_jobs.len()
+    );
+}
+
+// ── T-NI-1: Non-interrupting GUARD-TIMER> fires → spawns escalation job,
+// host fiber's own job wait is unaffected ──
+
+#[tokio::test]
+async fn t_ni_1_non_interrupting_spawns_child() {
+    let (engine, store, iid, job_key, _hash) = setup_ni_guard(NI_BOUNDARY_BPMN).await;
+
+    engine
+        .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+        .await
+        .unwrap();
+    // The fired timer spawns the escalation handler fibre parked; a
+    // further tick advances it through its own ExecNative to actually
+    // enqueue the job (mirrors t_boundary_timer_v2_guard_timer_fires_
+    // and_activates_escalation_job's identical second tick).
+    engine.tick_instance(iid).await.unwrap();
+
+    // Host fiber is unaffected by the timer firing — still parked on the
+    // same job (non-interrupting: the guard scope re-arms/stays open,
+    // it does not touch the host at all).
     let fibers = store
         .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
         .await
         .unwrap();
-    assert_eq!(
-        fibers.len(),
-        2,
-        "Expected 2 fibers (main + spawned child), got {}",
-        fibers.len()
-    );
-
-    // Main fiber should still reference the job (either Race or Job state)
-    let main_fiber = fibers.iter().find(|f| {
-        matches!(&f.wait, WaitState::Race { job_key: Some(jk), .. } if *jk == job_key)
-            || matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)
-    });
     assert!(
-        main_fiber.is_some(),
-        "Main fiber should still have the job_key"
+        fibers
+            .iter()
+            .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)),
+        "Host fiber should still be parked on its own job, got {:?}",
+        fibers.iter().map(|f| &f.wait).collect::<Vec<_>>()
     );
 
-    // Verify BoundaryFired event was emitted
-    let events = store
-        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+    // The escalation branch's own job ("send_reminder") must now be
+    // activatable — this is the v2-shaped replacement for the deleted
+    // `RuntimeEvent::BoundaryFired` assertion: instead of reading an
+    // event, prove the escalation handler fibre actually ran its own
+    // `ExecNative` and enqueued real work.
+    let escalation_jobs = engine
+        .activate_jobs(&["send_reminder".to_string()], 10)
         .await
         .unwrap();
-    let has_boundary_fired = events
-        .iter()
-        .any(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }));
-    assert!(
-        has_boundary_fired,
-        "Expected BoundaryFired event, got: {:?}",
-        events.iter().map(|(_, e)| e).collect::<Vec<_>>()
+    assert_eq!(
+        escalation_jobs.len(),
+        1,
+        "Expected the escalation handler's own job to be activated"
     );
 
-    // Instance should still be Running (not Completed)
+    // Instance should still be Running (not Completed) — the host branch
+    // never resolved.
     let inspection = engine.inspect(iid).await.unwrap();
     assert_eq!(inspection.state, ProcessState::Running);
 }
 
-// ── T-NI-2: Cycle R3 fires 3 times, spawns 3 child fibers ──
+/// Hand-assembled `V2GuardN` + `GUARD-TIMER>` + `GUARD-TIMER-CYCLE>`
+/// program, mirroring `lower_boundary_guarded_task_v2`'s real lowered
+/// shape (`bpmn-lite-compiler/src/lowering.rs`) for a non-interrupting
+/// boundary timer on a service task — `PushI64(duration); V2GuardN;
+/// V2GuardArmTimer; <host task>; V2GuardNEnd; End`, with the escalation
+/// handler itself closing via `ExecNative; V2GuardNEnd; End` (the exact
+/// `guardn_close_before_end` pre-pass shape) — plus this restoration's
+/// own new word, `V2GuardTimerCycle { max_fires: 3 }`, bounding the
+/// timer to 3 fires (BPMN `R3/PT<duration>`). No `engine.compile(xml)`
+/// step: XML `timeCycle` lowering to `GUARD-TIMER-CYCLE>` remains out of
+/// scope (see the comment block above), so the program is stored
+/// directly via `store_program`, same as `t_term_2_parallel_terminate_
+/// kills_siblings`'s own hand-assembled `V2Fork` restoration.
+async fn setup_ni_cycle_guard() -> (BpmnLiteEngine, Arc<dyn WorkflowStore>, Uuid, String, [u8; 32]) {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
 
-#[tokio::test]
-async fn t_ni_2_cycle_fires_multiple_times() {
-    let (engine, store, iid, _job_key, _hash) = setup_ni_race(NI_CYCLE_BPMN).await;
-
-    // Fire 3 durable iterations using a representable deterministic test clock.
-    for i in 0..3 {
-        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
-        engine
-            .tick_due_timers("timer-test", fired_at, 10, 30_000)
-            .await
-            .unwrap();
-
-        let fibers = store
-            .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
-            .await
-            .unwrap();
-        // After each fire: 1 main + (i+1) child fibers
-        // But child fibers may have run to End and been removed
-        // Just check that total is >= 1 (main still exists)
-        assert!(
-            !fibers.is_empty(),
-            "Fibers should not be empty after iteration {}",
-            i
-        );
-    }
-
-    // Verify 3 BoundaryFired events were emitted
-    let events = store
-        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [42u8; 32],
+        program: vec![
+            Instr::PushI64(1_000),                              // 0: duration
+            Instr::V2GuardN { handler: 7.into() },               // 1
+            Instr::V2GuardArmTimer,                              // 2
+            Instr::V2GuardTimerCycle { max_fires: 3 },           // 3: R3
+            Instr::ExecNative { task_type: 0, argc: 0, retc: 0 }, // 4: long_work
+            Instr::V2GuardNEnd,                                  // 5
+            Instr::End,                                          // 6
+            Instr::ExecNative { task_type: 1, argc: 0, retc: 0 }, // 7: send_reminder (handler)
+            Instr::V2GuardNEnd,                                  // 8
+            Instr::End,                                          // 9
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "long_work".to_string()),
+            (7.into(), "send_reminder".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec!["long_work".to_string(), "send_reminder".to_string()],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
         .await
         .unwrap();
-    let boundary_fired_count = events
-        .iter()
-        .filter(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }))
-        .count();
-    assert_eq!(
-        boundary_fired_count, 3,
-        "Expected 3 BoundaryFired events, got {}",
-        boundary_fired_count
-    );
 
-    // Verify 3 TimerCycleIteration events
-    let iteration_count = events
-        .iter()
-        .filter(|(_, e)| matches!(e, RuntimeEvent::TimerCycleIteration { .. }))
-        .count();
-    assert_eq!(
-        iteration_count, 3,
-        "Expected 3 TimerCycleIteration events, got {}",
-        iteration_count
-    );
-}
+    let payload = r#"{"case":"ni-cycle-test"}"#;
+    let hash = compute_hash(payload);
+    let iid = engine
+        .start("test", program.bytecode_version(), payload, hash, "corr-ni-cycle")
+        .await
+        .unwrap();
 
-// ── T-NI-3: Cycle exhausted → fiber reverts to plain Job wait ──
+    engine.tick_instance(iid).await.unwrap();
 
-#[tokio::test]
-async fn t_ni_3_cycle_exhausted_reverts_to_job() {
-    let (engine, store, iid, job_key, _hash) = setup_ni_race(NI_CYCLE_BPMN).await;
+    let jobs = engine
+        .activate_jobs(&["long_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert!(!jobs.is_empty(), "Expected job activation");
+    let job_key = jobs[0].job_key.clone();
 
-    // Fire all 3 iterations
-    for i in 0..3 {
-        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
-        engine
-            .tick_due_timers("timer-test", fired_at, 10, 30_000)
-            .await
-            .unwrap();
-    }
-
-    // After 3 fires, the main fiber should revert to Job state (cycle exhausted)
     let fibers = store
         .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
         .await
         .unwrap();
-    let main_has_job = fibers
-        .iter()
-        .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key));
+    assert_eq!(fibers.len(), 1);
     assert!(
-        main_has_job,
-        "After cycle exhaustion, main fiber should revert to Job wait. Got: {:?}",
+        matches!(&fibers[0].wait, WaitState::Job { job_key: jk } if *jk == job_key),
+        "Expected the host fiber parked on its own job, got {:?}",
+        fibers[0].wait
+    );
+
+    (engine, store, iid, job_key, hash)
+}
+
+// ── T-NI-2: Cycle R3 fires 3 times, spawning 3 escalation handler fibres,
+// via the SAME durable timer row re-arming each time (`TimerMutation::
+// Rearm`), not 3 independently-scheduled timers ──
+
+#[tokio::test]
+async fn t_ni_2_cycle_fires_multiple_times() {
+    let (engine, store, iid, job_key, _hash) = setup_ni_cycle_guard().await;
+
+    // Fire 3 iterations using a representable deterministic test clock —
+    // each `tick_due_timers` call claims the SAME re-armed timer row
+    // (`TimerMutation::Rearm` updates its `due_at` in place rather than
+    // scheduling a new one), so a growing `fired_at` per iteration is
+    // required for the row to become claimable again, exactly as the
+    // deleted v1 test's own clock-advancing loop did.
+    for i in 0..3u64 {
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        let applied = engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1, "iteration {i}: exactly one timer must fire");
+
+        // Host fiber is never touched by any of the 3 fires — it stays
+        // parked on its own job throughout, non-interrupting per ruling A.
+        let fibers = store
+            .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+            .await
+            .unwrap();
+        assert!(
+            fibers
+                .iter()
+                .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)),
+            "iteration {i}: host fiber should still be parked on its own job"
+        );
+    }
+
+    // Each of the 3 fires spawned its own, distinct escalation handler
+    // fibre — proven via `RuntimeEvent::V2GuardNTriggered` (one per fire,
+    // each naming a different `handler_fiber_id`) and
+    // `RuntimeEvent::TimerFired` (one per fire, same guard's timer),
+    // rather than via job-queue activation counts: the escalation
+    // handler's own `ExecNative` (`send_reminder`) computes its job_key
+    // from `(instance_id, service_task_id, pc, loop_epoch)` only — no
+    // fiber_id component — so 3 concurrently-live handler fibres sitting
+    // at the SAME static pc collide onto the SAME job_key. That is a
+    // pre-existing gap in job_key derivation (already latent for repeated
+    // MANUAL `Command::V2TriggerGuard` re-triggering of the same handler
+    // address, unaffected by and out of scope for this restoration — see
+    // the comment block above this test), not something this fix
+    // introduces or is responsible for resolving; events, not the job
+    // queue, are the right place to observe "3 separate spawns" here.
+    let tenant = bpmn_lite_types::TenantId::new("default").unwrap();
+    let events = store.read_events(&tenant, iid, 0).await.unwrap();
+    let timer_fired_count = events
+        .iter()
+        .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
+        .count();
+    assert_eq!(timer_fired_count, 3, "Expected 3 TimerFired events, one per cycle iteration");
+    let spawned_handlers: std::collections::BTreeSet<Uuid> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        spawned_handlers.len(),
+        3,
+        "Expected 3 distinct escalation handler fibres, one per fire, got: {events:?}"
+    );
+
+    // A further tick_instance runs each spawned handler fibre to its own
+    // park point (its own ExecNative dispatch) — the fibre count alone
+    // (not job identity) confirms all 3 are real, live, concurrently-held
+    // fibres, not the same one reused.
+    engine.tick_instance(iid).await.unwrap();
+    let fibers = store.load_fibers(&tenant, iid).await.unwrap();
+    assert_eq!(fibers.len(), 4, "host fibre + 3 escalation handler fibres, all still live");
+
+    let inspection = engine.inspect(iid).await.unwrap();
+    assert_eq!(inspection.state, ProcessState::Running);
+}
+
+// ── T-NI-3: Cycle exhausted after 3 fires → no 4th rearm; host fiber was
+// never diverted out of its own job wait in the first place ──
+
+#[tokio::test]
+async fn t_ni_3_cycle_exhausted_reverts_to_job() {
+    let (engine, store, iid, job_key, _hash) = setup_ni_cycle_guard().await;
+
+    // Fire all 3 permitted iterations.
+    for i in 0..3u64 {
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        let applied = engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1, "iteration {i}: exactly one timer must fire");
+    }
+
+    // A 4th attempt, well past the 3rd fire's own interval, must find
+    // nothing due — `remaining` reached its last permitted fire on the
+    // 3rd `TimerFired`, so that transition pushed `TimerMutation::Consume`
+    // instead of `Rearm` (see `Instr::V2GuardTimerCycle`'s doc comment):
+    // exhaustion means "no further rearm," not a fourth no-op fire.
+    let fourth_fired_at = FAR_FUTURE_TIMER_MS + 3 * 100_000;
+    let applied = engine
+        .tick_due_timers("timer-test", fourth_fired_at, 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(applied, 0, "the cycle is exhausted — no 4th timer should be due");
+
+    // "Reverts to job," precisely for what the v2 mechanism actually
+    // does: unlike v1's `WaitState::Race` (which diverted the host fiber
+    // out of plain `Job` wait for the cycle's duration and had to revert
+    // it back on exhaustion), `GUARD-N>`'s host fiber was NEVER diverted
+    // out of `WaitState::Job` by any of the 3 fires — arming/firing a
+    // guard timer does not touch the guarded body's own fiber at all.
+    // So the host fiber is found in exactly the same `Job` wait,
+    // continuously, before, during, and after cycle exhaustion — the v2
+    // shape of "reverts to job" is "was never not there."
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
+    assert!(
+        fibers
+            .iter()
+            .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)),
+        "After cycle exhaustion, the host fiber must still be in its own (uninterrupted) \
+         Job wait. Got: {:?}",
         fibers.iter().map(|f| &f.wait).collect::<Vec<_>>()
     );
 
-    // Verify TimerCycleExhausted event
-    let events = store
-        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
-        .await
-        .unwrap();
-    let has_exhausted = events
+    // All 3 fires still happened — exhaustion only suppresses the 4th.
+    // Proven via events, not job-queue activation counts — see
+    // `t_ni_2_cycle_fires_multiple_times`'s own comment for why (a
+    // pre-existing, out-of-scope job_key-collision gap for concurrently-
+    // live fibres sharing one static pc).
+    let tenant = bpmn_lite_types::TenantId::new("default").unwrap();
+    let events = store.read_events(&tenant, iid, 0).await.unwrap();
+    let timer_fired_count = events
         .iter()
-        .any(|(_, e)| matches!(e, RuntimeEvent::TimerCycleExhausted { total_fired: 3, .. }));
-    assert!(
-        has_exhausted,
-        "Expected TimerCycleExhausted with total_fired=3"
+        .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
+        .count();
+    assert_eq!(
+        timer_fired_count, 3,
+        "All 3 permitted fires must still have happened — exhaustion only suppresses the 4th"
     );
+    let spawned_handlers: std::collections::BTreeSet<Uuid> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spawned_handlers.len(), 3, "3 distinct escalation handler fibres, got: {events:?}");
 }
 
 // ── T-NI-4: Job completes before non-interrupting timer → normal resolution ──
@@ -1359,7 +1553,7 @@ async fn t_ni_4_job_completes_before_timer() {
         .await
         .unwrap();
 
-    // Tick to promote fiber to Race
+    // Tick to arm the GUARD-TIMER> and park the host fiber on its job
     engine.tick_instance(iid).await.unwrap();
 
     let jobs = engine
@@ -1407,7 +1601,8 @@ async fn t_ni_4_job_completes_before_timer() {
         engine.tick_instance(iid).await.unwrap();
     }
 
-    // Instance should eventually complete (job resolved the race via Internal arm)
+    // Instance should eventually complete via the host's own normal path
+    // (V2GuardNEnd closes the still-armed guard scope on the way out).
     let inspection = engine.inspect(iid).await.unwrap();
     assert!(
         matches!(inspection.state, ProcessState::Completed { .. }),
@@ -1415,17 +1610,19 @@ async fn t_ni_4_job_completes_before_timer() {
         inspection.state
     );
 
-    // No BoundaryFired events (timer never fired)
-    let events = store
-        .read_events(&bpmn_lite_types::TenantId::new("default").unwrap(), iid, 0)
+    // The escalation branch's own job ("send_reminder") must never have
+    // been activated — the v2-shaped replacement for the deleted
+    // `RuntimeEvent::BoundaryFired` assertion: since the host job
+    // completed before the guard timer ever fired, the escalation
+    // handler fibre never ran, so its `ExecNative` never enqueued work.
+    let escalation_jobs = engine
+        .activate_jobs(&["send_reminder".to_string()], 10)
         .await
         .unwrap();
-    let boundary_fired = events
-        .iter()
-        .any(|(_, e)| matches!(e, RuntimeEvent::BoundaryFired { .. }));
     assert!(
-        !boundary_fired,
-        "BoundaryFired should not have been emitted when job completes first"
+        escalation_jobs.is_empty(),
+        "Escalation job should not have been activated when the host job completes first, got {:?}",
+        escalation_jobs
     );
 }
 
@@ -1469,6 +1666,135 @@ async fn t_ni_5_verifier_rejects_cycle_interrupting() {
     );
 }
 
+// ── T-NI-6: `timeCycle` XML → `GUARD-TIMER-CYCLE>` frontend wiring
+// (this landing's own gap-closer) — full `engine.compile(xml)` pipeline,
+// not hand-assembled bytecode like `setup_ni_cycle_guard` above. Proves
+// the frontend actually reaches the kernel mechanism `t_ni_2`/`t_ni_3`
+// already proved sound; does not re-prove the mechanism itself. ──
+
+const NI_CYCLE_XML_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                      xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+      <bpmn:process id="ni_cycle_xml_proc" isExecutable="true">
+        <bpmn:startEvent id="start" />
+        <bpmn:serviceTask id="long_task" name="Long Running Task">
+          <bpmn:extensionElements>
+            <zeebe:taskDefinition type="long_work" />
+          </bpmn:extensionElements>
+        </bpmn:serviceTask>
+        <bpmn:boundaryEvent id="reminder" attachedToRef="long_task" cancelActivity="false">
+          <bpmn:timerEventDefinition>
+            <bpmn:timeCycle>R3/PT1S</bpmn:timeCycle>
+          </bpmn:timerEventDefinition>
+        </bpmn:boundaryEvent>
+        <bpmn:serviceTask id="send_reminder" name="Send Reminder">
+          <bpmn:extensionElements>
+            <zeebe:taskDefinition type="send_reminder" />
+          </bpmn:extensionElements>
+        </bpmn:serviceTask>
+        <bpmn:endEvent id="end_normal" />
+        <bpmn:endEvent id="end_reminder" />
+        <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="long_task" />
+        <bpmn:sequenceFlow id="f2" sourceRef="long_task" targetRef="end_normal" />
+        <bpmn:sequenceFlow id="f3" sourceRef="reminder" targetRef="send_reminder" />
+        <bpmn:sequenceFlow id="f4" sourceRef="send_reminder" targetRef="end_reminder" />
+      </bpmn:process>
+    </bpmn:definitions>"#;
+
+#[tokio::test]
+async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Real XML frontend, not hand-assembled bytecode — this is the
+    // thing this landing actually fixes: `timeCycle` reaching
+    // `Instr::V2GuardTimerCycle` via `parser::parse_bpmn` +
+    // `lowering::lower`/`Compiler::lower`, not just the kernel's own
+    // already-proven handling of the word once emitted.
+    let cr = engine.compile(NI_CYCLE_XML_BPMN).await.unwrap();
+    let payload = r#"{"case":"ni-xml-cycle-test"}"#;
+    let hash = compute_hash(payload);
+    let iid = engine
+        .start("ni_cycle_xml_proc", cr.bytecode_version, payload, hash, "corr-ni6")
+        .await
+        .unwrap();
+
+    engine.tick_instance(iid).await.unwrap();
+
+    let jobs = engine
+        .activate_jobs(&["long_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert!(!jobs.is_empty(), "Expected job activation");
+    let job_key = jobs[0].job_key.clone();
+
+    let tenant = bpmn_lite_types::TenantId::new("default").unwrap();
+    let fibers = store.load_fibers(&tenant, iid).await.unwrap();
+    assert_eq!(fibers.len(), 1);
+    assert!(
+        matches!(&fibers[0].wait, WaitState::Job { job_key: jk } if *jk == job_key),
+        "Expected the host fiber parked on its own job, got {:?}",
+        fibers[0].wait
+    );
+
+    // Fire all 3 permitted iterations — same re-armed-timer-row pattern
+    // as `t_ni_2_cycle_fires_multiple_times`.
+    for i in 0..3u64 {
+        let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+        let applied = engine
+            .tick_due_timers("timer-test", fired_at, 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1, "iteration {i}: exactly one timer must fire");
+
+        // Host fiber is never touched by any of the 3 fires.
+        let fibers = store.load_fibers(&tenant, iid).await.unwrap();
+        assert!(
+            fibers
+                .iter()
+                .any(|f| matches!(&f.wait, WaitState::Job { job_key: jk } if *jk == job_key)),
+            "iteration {i}: host fiber should still be parked on its own job"
+        );
+    }
+
+    // A 4th attempt must find nothing due — the cycle is exhausted after
+    // 3 fires (R3), proving `max_fires` actually reached the kernel via
+    // the XML frontend rather than being silently dropped to unbounded
+    // or to a single fire.
+    let fourth_fired_at = FAR_FUTURE_TIMER_MS + 3 * 100_000;
+    let applied = engine
+        .tick_due_timers("timer-test", fourth_fired_at, 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(applied, 0, "the cycle is exhausted — no 4th timer should be due");
+
+    // 3 distinct escalation handler fibres were spawned, one per fire —
+    // same event-based proof `t_ni_2` uses (job_key collision on the
+    // shared static pc makes job-queue activation counts unreliable
+    // here, see that test's own comment).
+    let events = store.read_events(&tenant, iid, 0).await.unwrap();
+    let timer_fired_count = events
+        .iter()
+        .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
+        .count();
+    assert_eq!(timer_fired_count, 3, "Expected 3 TimerFired events, one per cycle iteration");
+    let spawned_handlers: std::collections::BTreeSet<Uuid> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        spawned_handlers.len(),
+        3,
+        "Expected 3 distinct escalation handler fibres, one per fire, got: {events:?}"
+    );
+
+    let inspection = engine.inspect(iid).await.unwrap();
+    assert_eq!(inspection.state, ProcessState::Running);
+}
+
 // ── Phase 5.1: Terminate End Event tests ────────────────────────
 
 /// T-TERM-1: Single fiber hits EndTerminate → instance Terminated.
@@ -1491,11 +1817,8 @@ async fn t_term_1_single_fiber_terminate() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1567,18 +1890,42 @@ async fn t_term_1_single_fiber_terminate() {
 }
 
 /// T-TERM-2: Parallel flow — one branch terminates, other branch killed.
-/// Order-independent: handles either fiber executing first after Fork.
+/// Restored (post-close remediation, landed after the V-1 `EndTerminate`
+/// exemption): V5.3 originally deleted this test and flagged the gap it
+/// found as a genuine open verifier-soundness question, not a small
+/// migration — `V2Fork{targets:[1,2]}` with branch A going straight to
+/// `EndTerminate` (never reaching a `V2Join`) was rejected by V-1's
+/// control-stack balance check, which (unlike `Fail`) gave `EndTerminate`
+/// no exemption from requiring an empty stack. Adam's ruling: `EndTerminate`
+/// kills the WHOLE instance, so no fibre's own open scope can be orphaned
+/// (every fibre dies with it) — same reasoning as `Fail`'s pre-existing
+/// exemption. `v2_verifier.rs`'s V-1 walk now leaves `Instr::EndTerminate`
+/// unmatched (falls through to the no-op catch-all, same mechanism `Fail`
+/// already used), so this topology verifies again. Order-independent, as
+/// the original test's own framing had it: handles either child fibre
+/// executing first after the fork — whichever one is NOT branch A either
+/// never gets ticked at all (branch A wins the race for the first internal
+/// `Tick`) or parks mid-flight on its own dispatched job (branch B wins
+/// the race, dispatches `slow_task`, parks, then branch A's `EndTerminate`
+/// fires on the next `Tick`) — both are exercised across real test runs
+/// since fibre-processing order depends on derived UUID ordering, not
+/// fixed here.
 #[tokio::test]
 async fn t_term_2_parallel_terminate_kills_siblings() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    // Fork → Branch A (EndTerminate), Branch B (ExecNative → End)
+    // V2Fork → Branch A (EndTerminate directly, no V2Join), Branch B
+    // (ExecNative → EndTerminate, also no V2Join — branch B's own
+    // reachable terminal is never actually hit in this test; branch A
+    // always wins, either before branch B ever runs or while branch B
+    // sits parked on its own dispatched job).
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [41u8; 32],
         program: vec![
-            Instr::Fork {
+            Instr::V2Fork {
                 targets: Box::new([1.into(), 2.into()]),
+                pairing: 0.into(),
             }, // 0: fork
             Instr::EndTerminate, // 1: Branch A terminates
             Instr::ExecNative {
@@ -1586,17 +1933,14 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
                 argc: 0,
                 retc: 0,
             }, // 2: Branch B task
-            Instr::End,          // 3: Branch B end
+            Instr::EndTerminate, // 3: Branch B's own terminal (unreached here)
         ],
         debug_map: BTreeMap::from([(2.into(), "slow_task".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["slow_task".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1714,11 +2058,8 @@ async fn t_term_3_complete_job_after_terminate() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_x".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -1846,48 +2187,56 @@ async fn t_err_1_business_error_routes_to_handler() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
+    // BoundaryError v2 migration: the host task is now wrapped in a
+    // `V2Guard`/`V2GuardArmError` scope (§18 v0.10 ruling I's second
+    // arming-trigger kind) instead of relying on the deleted
+    // `error_route_map` side table. A match now fires via the same
+    // spawn-a-new-handler-fiber mechanism `V2TriggerGuard`/timer-fire use
+    // (`v2_trigger_guard_changes_with_target`) — the ORIGINAL failing fibre
+    // is retired, not resumed in place, so assertions below check for A
+    // Running fibre at the handler pc, not the SAME fibre.
+    //
     // Bytecode:
-    // 0: ExecNative(sanctions_check)  — parks fiber
-    // 1: Jump(4)                      — normal continuation
-    // 2: ExecNative(enhanced_review)  — error handler path
-    // 3: End                          — error handler end
-    // 4: End                          — normal end
+    // 0: V2Guard { handler: 5 }                      — opens the guard
+    // 1: V2GuardArmError(SANCTIONS_HIT, handler: 5)   — arms the route
+    // 2: ExecNative(sanctions_check)                  — parks fiber
+    // 3: V2GuardEnd
+    // 4: Jump(6)                                       — normal continuation
+    // 5: ExecNative(enhanced_review)                   — error handler path
+    // 6: End                                           — error handler end
+    // 7: End                                           — normal end
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [50u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".to_string().into_boxed_str()),
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 4.into() }, // 1
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 7.into() }, // 4
             Instr::ExecNative {
                 task_type: 1,
                 argc: 0,
                 retc: 0,
-            }, // 2: error handler
-            Instr::End,                // 3
-            Instr::End,                // 4
+            }, // 5: error handler
+            Instr::End,                // 6
+            Instr::End,                // 7
         ],
         debug_map: BTreeMap::from([
-            (0.into(), "sanctions_check".to_string()),
-            (2.into(), "enhanced_review".to_string()),
+            (2.into(), "sanctions_check".to_string()),
+            (5.into(), "enhanced_review".to_string()),
         ]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["sanctions_check".to_string(), "enhanced_review".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 2.into(),
-                boundary_element_id: "catch_sanctions".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2001,33 +2350,31 @@ async fn t_err_2_unmatched_error_creates_incident() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    // Same program but error_route_map only catches SANCTIONS_HIT
+    // Same guard shape as T-ERR-1 but only arms SANCTIONS_HIT — the fail
+    // below uses a non-matching code, so `V2GuardArmError`'s route never
+    // fires and this falls through to the ordinary incident path unchanged.
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [51u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 4.into() }, // 0 — never fired; must still be in-bounds (artifact verifier checks statically)
+            Instr::V2GuardArmError {
+                error_code: Some("SANCTIONS_HIT".to_string().into_boxed_str()),
+                handler: 4.into(), // never fired — the fail below uses a non-matching code
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            },
-            Instr::End,
+            }, // 2
+            Instr::V2GuardEnd, // 3
+            Instr::End,        // 4
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("SANCTIONS_HIT".to_string()),
-                resume_at: 99.into(), // doesn't matter, won't be used
-                boundary_element_id: "catch_sanctions".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2084,7 +2431,9 @@ async fn t_err_2_unmatched_error_creates_incident() {
         "Should NOT emit ErrorRouted for unmatched code"
     );
 
-    // Assert: instance Failed
+    // Assert: instance Incidented (parked on an open Incident, resumable
+    // via Command::ResolveIncident — not Failed, which is genuinely dead
+    // forever).
     let instance = store
         .load_instance(
             &bpmn_lite_types::TenantId::new("default").unwrap(),
@@ -2093,7 +2442,7 @@ async fn t_err_2_unmatched_error_creates_incident() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(instance.state, ProcessState::Failed { .. }));
+    assert!(matches!(instance.state, ProcessState::Incidented { .. }));
 }
 
 /// T-ERR-3: Catch-all error route (error_code: None) catches any BusinessRejection.
@@ -2105,31 +2454,27 @@ async fn t_err_3_catch_all_routes_any_business_error() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [52u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 3.into() }, // 1
-            Instr::End,                // 2: error handler end
-            Instr::End,                // 3: normal end
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 6.into() }, // 4: normal path
+            Instr::End,                // 5: error handler end
+            Instr::End,                // 6: normal end
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2197,30 +2542,26 @@ async fn t_err_4_transient_error_always_incident() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [53u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 4.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all — must NOT apply to Transient
+                handler: 4.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            },
-            Instr::End,
-            Instr::End, // error handler (won't be used)
+            }, // 2
+            Instr::V2GuardEnd, // 3
+            Instr::End,        // 4: error handler (won't be used)
+            Instr::End,        // 5: normal end
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2292,11 +2633,8 @@ async fn t_err_5_fail_job_on_terminated_instance() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2371,6 +2709,331 @@ async fn t_err_5_fail_job_on_terminated_instance() {
     assert!(has_ignored, "Should emit SignalIgnored for late fail_job");
 }
 
+/// T-ERR-6: multiple specific-code `V2GuardArmError` routes on ONE guard
+/// each route independently — proves the multi-arm mechanism (N armed
+/// routes on a single guard record, `ConcurrencyRecord.error_routes`), not
+/// just the single-arm case T-ERR-1 already covers. Two independent
+/// instances of the SAME program are each failed with a DIFFERENT specific
+/// code; each must resolve to its OWN handler, not the other's.
+#[tokio::test]
+async fn t_err_6_multiple_specific_routes_fire_independently() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Bytecode:
+    // 0: V2Guard { handler: 6 }
+    // 1: V2GuardArmError(CODE_A, handler: 6)
+    // 2: V2GuardArmError(CODE_B, handler: 8)
+    // 3: ExecNative(risky_task)
+    // 4: V2GuardEnd
+    // 5: Jump(10)                — normal path
+    // 6: ExecNative(handler_a)   — CODE_A's own handler
+    // 7: Jump(9)
+    // 8: ExecNative(handler_b)   — CODE_B's own handler
+    // 9: End
+    // 10: End
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [55u8; 32],
+        program: vec![
+            Instr::V2Guard { handler: 6.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("CODE_A".to_string().into_boxed_str()),
+                handler: 6.into(),
+            }, // 1
+            Instr::V2GuardArmError {
+                error_code: Some("CODE_B".to_string().into_boxed_str()),
+                handler: 8.into(),
+            }, // 2
+            Instr::ExecNative {
+                task_type: 0,
+                argc: 0,
+                retc: 0,
+            }, // 3
+            Instr::V2GuardEnd,                 // 4
+            Instr::Jump { target: 10.into() }, // 5
+            Instr::ExecNative {
+                task_type: 1,
+                argc: 0,
+                retc: 0,
+            }, // 6: handler for CODE_A
+            Instr::Jump { target: 9.into() }, // 7
+            Instr::ExecNative {
+                task_type: 2,
+                argc: 0,
+                retc: 0,
+            }, // 8: handler for CODE_B
+            Instr::End,  // 9
+            Instr::End,  // 10
+        ],
+        debug_map: BTreeMap::from([
+            (3.into(), "risky_task".to_string()),
+            (6.into(), "handler_a".to_string()),
+            (8.into(), "handler_b".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec![
+            "risky_task".to_string(),
+            "handler_a".to_string(),
+            "handler_b".to_string(),
+        ],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
+        .await
+        .unwrap();
+
+    // Instance 1: fail with CODE_A — must activate handler_a, never handler_b.
+    let instance_a = engine
+        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-a")
+        .await
+        .unwrap();
+    let jobs_a = engine.run_instance(instance_a).await.unwrap();
+    assert_eq!(jobs_a.len(), 1);
+    engine
+        .fail_job(
+            &jobs_a[0].job_key,
+            ErrorClass::BusinessRejection { rejection_code: "CODE_A".to_string() },
+            "attempt A",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_a).await.unwrap();
+    let handler_a_jobs = store
+        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(!handler_a_jobs.is_empty(), "CODE_A must activate handler_a's job");
+    let handler_b_jobs_after_a = store
+        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(
+        handler_b_jobs_after_a.is_empty(),
+        "CODE_A must NOT activate handler_b's job"
+    );
+
+    // Instance 2: fail with CODE_B — must activate handler_b, never handler_a.
+    let instance_b = engine
+        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-b")
+        .await
+        .unwrap();
+    let jobs_b = engine.run_instance(instance_b).await.unwrap();
+    assert_eq!(jobs_b.len(), 1);
+    engine
+        .fail_job(
+            &jobs_b[0].job_key,
+            ErrorClass::BusinessRejection { rejection_code: "CODE_B".to_string() },
+            "attempt B",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_b).await.unwrap();
+    let handler_b_jobs = store
+        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(!handler_b_jobs.is_empty(), "CODE_B must activate handler_b's job");
+    let handler_a_jobs_after_b = store
+        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .await
+        .unwrap();
+    assert!(
+        handler_a_jobs_after_b.is_empty(),
+        "CODE_B must NOT activate handler_a's job"
+    );
+}
+
+/// T-ERR-7: nested guards — an outer catch-all must NOT catch an inner
+/// guard's unmatched failure. Regression for the independent blind-review
+/// finding (2026-07-23): `apply_job_failure`'s error-route search used a
+/// single `find_map` whose closure returned `None` for both "not a guard,
+/// keep looking outward" and "is the guard, but no matching route" —
+/// collapsing those two cases let the outward walk continue past the
+/// innermost armed guard to an outer one. Live-repro'd before the fix: a
+/// rejection code matching neither the inner guard's specific route nor
+/// (correctly) requiring a match wrongly activated the OUTER catch-all's
+/// handler instead of falling through to an `Incident`. The fix stops the
+/// search at the first armed `Guard`-kind record unconditionally (mirroring
+/// `innermost_guard`'s own "stop at the first Guard-kind record regardless"
+/// rule below in the same function) and only then looks for a match inside
+/// that one record — a miss there must mean Incident, never "try the next
+/// guard out."
+#[tokio::test]
+async fn t_err_7_nested_guard_miss_does_not_fall_through_to_outer_catch_all() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    // Bytecode — each of the three paths (normal, outer-handler,
+    // inner-handler) gets its own dedicated `End`: sharing a merge point
+    // across paths whose control-stack depth genuinely differs (the inner
+    // handler's static entry state, per V-4, inherits the outer guard's
+    // still-open token; the outer handler's does not) is a real V-2 CFG
+    // conflict, not a fixture-authoring convenience — so this fixture
+    // deliberately avoids any merge at all.
+    // 0: V2Guard(handler: 8)                       — outer, catch-all
+    // 1: V2GuardArmError(None, handler: 8)
+    // 2: V2Guard(handler: 10)                       — inner, specific only
+    // 3: V2GuardArmError(INNER_CODE, handler: 10)
+    // 4: ExecNative(risky_task)
+    // 5: V2GuardEnd                                 — close inner
+    // 6: V2GuardEnd                                 — close outer
+    // 7: End                                        — normal path
+    // 8: ExecNative(outer_handler)                  — must NEVER fire here
+    // 9: End
+    // 10: ExecNative(inner_handler)                 — must NEVER fire here
+    // 11: V2GuardEnd  — inner-handler entry (V-4: PRE-push relative to the
+    //                    inner guard only) still statically carries the
+    //                    outer guard's still-open token; must retire it
+    //                    before reaching a scope-external End (V-1).
+    // 12: End
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [56u8; 32],
+        program: vec![
+            Instr::V2Guard { handler: 8.into() }, // 0 — outer
+            Instr::V2GuardArmError {
+                error_code: None,
+                handler: 8.into(),
+            }, // 1 — outer catch-all
+            Instr::V2Guard { handler: 10.into() }, // 2 — inner
+            Instr::V2GuardArmError {
+                error_code: Some("INNER_CODE".to_string().into_boxed_str()),
+                handler: 10.into(),
+            }, // 3 — inner specific-only
+            Instr::ExecNative {
+                task_type: 0,
+                argc: 0,
+                retc: 0,
+            }, // 4
+            Instr::V2GuardEnd, // 5 — close inner
+            Instr::V2GuardEnd, // 6 — close outer
+            Instr::End,        // 7 — normal path
+            Instr::ExecNative {
+                task_type: 1,
+                argc: 0,
+                retc: 0,
+            }, // 8: outer catch-all handler — must never fire
+            Instr::End, // 9
+            Instr::ExecNative {
+                task_type: 2,
+                argc: 0,
+                retc: 0,
+            }, // 10: inner handler — must never fire (wrong code)
+            Instr::V2GuardEnd, // 11 — retire the still-open outer token
+            Instr::End,        // 12
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "risky_task".to_string()),
+            (8.into(), "outer_handler".to_string()),
+            (10.into(), "inner_handler".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec![
+            "risky_task".to_string(),
+            "outer_handler".to_string(),
+            "inner_handler".to_string(),
+        ],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
+        .await
+        .unwrap();
+
+    let instance_id = engine
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-7",
+        )
+        .await
+        .unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1);
+
+    // Fail with a code the INNER guard (innermost, so the only one
+    // consulted) does not arm — must fall through to Incident, never reach
+    // the outer catch-all.
+    engine
+        .fail_job(
+            &jobs[0].job_key,
+            ErrorClass::BusinessRejection {
+                rejection_code: "UNRELATED_CODE".to_string(),
+            },
+            "unrelated failure",
+        )
+        .await
+        .unwrap();
+
+    let outer_handler_jobs = store
+        .dequeue_jobs(
+            &["outer_handler".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
+        .await
+        .unwrap();
+    assert!(
+        outer_handler_jobs.is_empty(),
+        "an inner guard's miss must NOT fall through to an outer guard's catch-all"
+    );
+    let inner_handler_jobs = store
+        .dequeue_jobs(
+            &["inner_handler".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
+        .await
+        .unwrap();
+    assert!(
+        inner_handler_jobs.is_empty(),
+        "the inner guard itself has no matching route either"
+    );
+
+    let events = store
+        .read_events(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+            0,
+        )
+        .await
+        .unwrap();
+    let has_incident = events
+        .iter()
+        .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
+    assert!(has_incident, "unmatched-at-innermost-guard must create an Incident");
+    let has_routed = events
+        .iter()
+        .any(|(_, e)| matches!(e, RuntimeEvent::ErrorRouted { .. }));
+    assert!(!has_routed, "must not emit ErrorRouted for a miss at the innermost guard");
+
+    let instance = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(instance.state, ProcessState::Incidented { .. }));
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Phase 5.3: Bounded loops
 // ═══════════════════════════════════════════════════════════
@@ -2381,48 +3044,52 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    // Simulates: task_a fails → error route → IncCounter → BrCounterLt(limit=3) → retry or end
+    // Simulates: task_a fails → V2GuardArmError route → IncCounter →
+    // BrCounterLt(limit=3) → retry (loops back to guard-open, re-arming a
+    // FRESH guard scope each iteration) or end. BoundaryError v2 migration:
+    // a match fires by spawning a new handler fibre (retiring the failed
+    // one), not resuming the same fibre in place — see T-ERR-1's comment
+    // for the full mechanism.
     // Bytecode:
-    // 0: ExecNative(task_a)         — parks fiber
-    // 1: Jump(5)                    — normal end (skip error handler)
-    // 2: IncCounter(0)              — error handler: bump counter
-    // 3: BrCounterLt(0, 3, 0)      — if counter<3, retry task_a
-    // 4: End                        — counter exhausted, escalation end
-    // 5: End                        — normal end
+    // 0: V2Guard { handler: 5 }                — opens the guard
+    // 1: V2GuardArmError(RETRY_ME, handler: 5)  — arms the retry route
+    // 2: ExecNative(task_a)                     — parks fiber
+    // 3: V2GuardEnd
+    // 4: Jump(8)                                 — normal end (skip error handler)
+    // 5: IncCounter(0)                           — error handler: bump counter
+    // 6: BrCounterLt(0, 3, 0)                   — if counter<3, retry (reopens guard)
+    // 7: End                                     — counter exhausted, escalation end
+    // 8: End                                     — normal end
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [60u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: Some("RETRY_ME".to_string().into_boxed_str()),
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 5.into() },           // 1
-            Instr::IncCounter { counter_id: 0 }, // 2
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 8.into() }, // 4
+            Instr::IncCounter { counter_id: 0 }, // 5
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 3,
                 target: 0.into(),
-            }, // 3
-            Instr::End,                          // 4
-            Instr::End,                          // 5
+            }, // 6
+            Instr::End,                          // 7
+            Instr::End,                          // 8
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: Some("RETRY_ME".to_string()),
-                resume_at: 2.into(),
-                boundary_element_id: "catch_retry".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2536,37 +3203,33 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [61u8; 32],
         program: vec![
+            Instr::V2Guard { handler: 5.into() }, // 0
+            Instr::V2GuardArmError {
+                error_code: None, // catch-all
+                handler: 5.into(),
+            }, // 1
             Instr::ExecNative {
                 task_type: 0,
                 argc: 0,
                 retc: 0,
-            }, // 0
-            Instr::Jump { target: 5.into() },           // 1
-            Instr::IncCounter { counter_id: 0 }, // 2
+            }, // 2
+            Instr::V2GuardEnd,                // 3
+            Instr::Jump { target: 8.into() }, // 4
+            Instr::IncCounter { counter_id: 0 }, // 5
             Instr::BrCounterLt {
                 counter_id: 0,
                 limit: 2,
                 target: 0.into(),
-            }, // 3
-            Instr::End,                          // 4
-            Instr::End,                          // 5
+            }, // 6
+            Instr::End,                          // 7
+            Instr::End,                          // 8
         ],
-        debug_map: BTreeMap::from([(0.into(), "task_a".to_string())]),
+        debug_map: BTreeMap::from([(2.into(), "task_a".to_string())]),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::from([(
-            Addr::new(0),
-            vec![ErrorRoute {
-                error_code: None, // catch-all
-                resume_at: 2.into(),
-                boundary_element_id: "catch_all".to_string(),
-            }],
-        )]),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2642,11 +3305,8 @@ fn t_loop_3_counter_starts_at_zero() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2714,11 +3374,8 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2756,11 +3413,8 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
         message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
         write_set: BTreeMap::new(),
         task_manifest: vec!["task_a".to_string()],
-        error_route_map: BTreeMap::new(),
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
@@ -2778,710 +3432,50 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
 //  Phase 5A: Inclusive gateway
 // ═══════════════════════════════════════════════════════════
 
-/// T-IG-1: All conditions truthy → all branches run → join waits for all → completes.
-#[tokio::test]
-async fn t_ig_1_all_branches_taken() {
-    let store = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone());
-
-    let program = bpmn_lite_types::legacy_program! {
-        bytecode_version: [70u8; 32],
-        program: vec![
-            Instr::ForkInclusive {
-                branches: Box::new([
-                    InclusiveBranch {
-                        condition_flag: None,
-                        target: 2.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(0),
-                        target: 4.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(1),
-                        target: 6.into(),
-                    },
-                ]),
-                join_id: 0,
-                default_target: None,
-            },
-            Instr::End, // 1: placeholder
-            Instr::ExecNative {
-                task_type: 0,
-                argc: 0,
-                retc: 0,
-            }, // 2: identity_check
-            Instr::JoinDynamic { id: 0, next: 8.into() }, // 3
-            Instr::ExecNative {
-                task_type: 1,
-                argc: 0,
-                retc: 0,
-            }, // 4: edd_check
-            Instr::JoinDynamic { id: 0, next: 8.into() }, // 5
-            Instr::ExecNative {
-                task_type: 2,
-                argc: 0,
-                retc: 0,
-            }, // 6: pep_screening
-            Instr::JoinDynamic { id: 0, next: 8.into() }, // 7
-            Instr::End, // 8: done
-        ],
-        debug_map: BTreeMap::from([
-            (2.into(), "identity_check".to_string()),
-            (4.into(), "edd_check".to_string()),
-            (6.into(), "pep_screening".to_string()),
-        ]),
-        join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
-        write_set: BTreeMap::new(),
-        task_manifest: vec![
-            "identity_check".to_string(),
-            "edd_check".to_string(),
-            "pep_screening".to_string(),
-        ],
-        error_route_map: BTreeMap::new(),
-        flag_symbol_table: BTreeMap::new(),
-        data_objects: BTreeMap::new(),
-        ffi_task_decls: BTreeMap::new(),
-    };
-    store
-        .store_program(program.bytecode_version(), &program)
-        .await
-        .unwrap();
-
-    // Start with both flags true → all 3 branches taken
-    let instance_id = engine
-        .start(
-            "test",
-            program.bytecode_version(),
-            "{}",
-            compute_hash("{}"),
-            "corr-1",
-        )
-        .await
-        .unwrap();
-
-    // Set flags before first tick
-    let mut inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    inst.flags.insert(0, Value::Bool(true)); // high_risk
-    inst.flags.insert(1, Value::Bool(true)); // pep_flagged
-    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
-        .await
-        .unwrap();
-
-    // Tick → ForkInclusive evaluates: all 3 taken → 3 fibers spawned
-    engine.tick_instance(instance_id).await.unwrap();
-
-    // Assert: InclusiveForkTaken event with expected=3
-    let events = store
-        .read_events(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-            0,
-        )
-        .await
-        .unwrap();
-    let fork_event = events
-        .iter()
-        .find(|(_, e)| matches!(e, RuntimeEvent::InclusiveForkTaken { .. }));
-    assert!(fork_event.is_some(), "Should emit InclusiveForkTaken");
-
-    // Assert: join_expected[0] = 3
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(inst.join_expected.get(&0), Some(&3));
-
-    // Run → 3 jobs activated
-    let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 3, "All 3 branches should activate jobs");
-
-    // Complete all 3 jobs
-    for job in &jobs {
-        let payload = "{}";
-        let hash = bpmn_lite_vm::compute_hash(payload);
-        engine
-            .complete_job(&job.job_key, payload, hash, BTreeMap::new())
-            .await
-            .unwrap();
-    }
-
-    // Tick until complete
-    for _ in 0..5 {
-        engine.tick_instance(instance_id).await.unwrap();
-        let inst = store
-            .load_instance(
-                &bpmn_lite_types::TenantId::new("default").unwrap(),
-                instance_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        if inst.state.is_terminal() {
-            break;
-        }
-    }
-
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        matches!(inst.state, ProcessState::Completed { .. }),
-        "Expected Completed, got {:?}",
-        inst.state
-    );
-}
-
-/// T-IG-2: Only 1 of 3 conditions truthy → 1 branch runs → join waits for 1 → immediate release.
-#[tokio::test]
-async fn t_ig_2_single_branch_taken() {
-    let store = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone());
-
-    let program = bpmn_lite_types::legacy_program! {
-        bytecode_version: [71u8; 32],
-        program: vec![
-            Instr::ForkInclusive {
-                branches: Box::new([
-                    InclusiveBranch {
-                        condition_flag: None,
-                        target: 2.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(0),
-                        target: 4.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(1),
-                        target: 6.into(),
-                    },
-                ]),
-                join_id: 0,
-                default_target: None,
-            },
-            Instr::End,
-            Instr::ExecNative {
-                task_type: 0,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::ExecNative {
-                task_type: 1,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::ExecNative {
-                task_type: 2,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::End,
-        ],
-        debug_map: BTreeMap::from([
-            (2.into(), "identity_check".to_string()),
-            (4.into(), "edd_check".to_string()),
-            (6.into(), "pep_screening".to_string()),
-        ]),
-        join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
-        write_set: BTreeMap::new(),
-        task_manifest: vec![
-            "identity_check".to_string(),
-            "edd_check".to_string(),
-            "pep_screening".to_string(),
-        ],
-        error_route_map: BTreeMap::new(),
-        flag_symbol_table: BTreeMap::new(),
-        data_objects: BTreeMap::new(),
-        ffi_task_decls: BTreeMap::new(),
-    };
-    store
-        .store_program(program.bytecode_version(), &program)
-        .await
-        .unwrap();
-
-    // Start with flags FALSE → only unconditional branch (A) taken
-    let instance_id = engine
-        .start(
-            "test",
-            program.bytecode_version(),
-            "{}",
-            compute_hash("{}"),
-            "corr-2",
-        )
-        .await
-        .unwrap();
-
-    // Tick → ForkInclusive: only branch A taken → 1 fiber
-    engine.tick_instance(instance_id).await.unwrap();
-
-    // Assert: join_expected[0] = 1
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(inst.join_expected.get(&0), Some(&1));
-
-    // Run → 1 job
-    let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 1, "Only unconditional branch should spawn");
-
-    // Complete job → JoinDynamic expects 1, 1 arrives → immediate release
-    let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
-    engine
-        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
-        .await
-        .unwrap();
-
-    for _ in 0..5 {
-        engine.tick_instance(instance_id).await.unwrap();
-        let inst = store
-            .load_instance(
-                &bpmn_lite_types::TenantId::new("default").unwrap(),
-                instance_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        if inst.state.is_terminal() {
-            break;
-        }
-    }
-
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(inst.state, ProcessState::Completed { .. }));
-}
-
-/// T-IG-3: Zero conditions match, no default → incident.
-#[tokio::test]
-async fn t_ig_3_zero_match_no_default_incident() {
-    let store = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone());
-
-    // ALL branches conditional — no unconditional
-    let program = bpmn_lite_types::legacy_program! {
-        bytecode_version: [72u8; 32],
-        program: vec![
-            Instr::ForkInclusive {
-                branches: Box::new([
-                    InclusiveBranch {
-                        condition_flag: Some(0),
-                        target: 2.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(1),
-                        target: 4.into(),
-                    },
-                ]),
-                join_id: 0,
-                default_target: None, // no default!
-            },
-            Instr::End,
-            Instr::ExecNative {
-                task_type: 0,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 6.into() },
-            Instr::ExecNative {
-                task_type: 1,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 6.into() },
-            Instr::End,
-        ],
-        debug_map: BTreeMap::new(),
-        join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
-        write_set: BTreeMap::new(),
-        task_manifest: vec!["task_a".to_string(), "task_b".to_string()],
-        error_route_map: BTreeMap::new(),
-        flag_symbol_table: BTreeMap::new(),
-        data_objects: BTreeMap::new(),
-        ffi_task_decls: BTreeMap::new(),
-    };
-    store
-        .store_program(program.bytecode_version(), &program)
-        .await
-        .unwrap();
-
-    let instance_id = engine
-        .start(
-            "test",
-            program.bytecode_version(),
-            "{}",
-            compute_hash("{}"),
-            "corr-3",
-        )
-        .await
-        .unwrap();
-    // No flags set → all conditions false → zero match
-
-    engine.tick_instance(instance_id).await.unwrap();
-
-    // Assert: instance Failed with incident
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        matches!(inst.state, ProcessState::Failed { .. }),
-        "Zero match with no default should create incident, got {:?}",
-        inst.state
-    );
-
-    let events = store
-        .read_events(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-            0,
-        )
-        .await
-        .unwrap();
-    let has_incident = events
-        .iter()
-        .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
-    assert!(has_incident, "Should emit IncidentCreated");
-}
-
-/// T-IG-4: Zero conditions match WITH default → default branch runs.
-#[tokio::test]
-async fn t_ig_4_zero_match_with_default() {
-    let store = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone());
-
-    let program = bpmn_lite_types::legacy_program! {
-        bytecode_version: [73u8; 32],
-        program: vec![
-            Instr::ForkInclusive {
-                branches: Box::new([InclusiveBranch {
-                    condition_flag: Some(0),
-                    target: 2.into(),
-                }]),
-                join_id: 0,
-                default_target: Some(4.into()), // default branch
-            },
-            Instr::End,
-            Instr::ExecNative {
-                task_type: 0,
-                argc: 0,
-                retc: 0,
-            }, // 2: conditional
-            Instr::JoinDynamic { id: 0, next: 6.into() },
-            Instr::ExecNative {
-                task_type: 1,
-                argc: 0,
-                retc: 0,
-            }, // 4: default
-            Instr::JoinDynamic { id: 0, next: 6.into() },
-            Instr::End, // 6: done
-        ],
-        debug_map: BTreeMap::from([
-            (2.into(), "conditional_task".to_string()),
-            (4.into(), "default_task".to_string()),
-        ]),
-        join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
-        write_set: BTreeMap::new(),
-        task_manifest: vec!["conditional_task".to_string(), "default_task".to_string()],
-        error_route_map: BTreeMap::new(),
-        flag_symbol_table: BTreeMap::new(),
-        data_objects: BTreeMap::new(),
-        ffi_task_decls: BTreeMap::new(),
-    };
-    store
-        .store_program(program.bytecode_version(), &program)
-        .await
-        .unwrap();
-
-    let instance_id = engine
-        .start(
-            "test",
-            program.bytecode_version(),
-            "{}",
-            compute_hash("{}"),
-            "corr-4",
-        )
-        .await
-        .unwrap();
-    // No flags → condition false → default taken
-
-    engine.tick_instance(instance_id).await.unwrap();
-
-    // Assert: join_expected = 1 (default branch only)
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(inst.join_expected.get(&0), Some(&1));
-
-    // Run → should get default_task job
-    let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 1);
-
-    // Complete and finish
-    let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
-    engine
-        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
-        .await
-        .unwrap();
-    for _ in 0..5 {
-        engine.tick_instance(instance_id).await.unwrap();
-        let inst = store
-            .load_instance(
-                &bpmn_lite_types::TenantId::new("default").unwrap(),
-                instance_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        if inst.state.is_terminal() {
-            break;
-        }
-    }
-
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(inst.state, ProcessState::Completed { .. }));
-}
-
-/// T-IG-5: JoinDynamic releases only after dynamic expected count arrivals.
-#[tokio::test]
-async fn t_ig_5_join_waits_for_dynamic_count() {
-    let store = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store.clone());
-
-    // 2 of 3 branches taken → join waits for exactly 2
-    let program = bpmn_lite_types::legacy_program! {
-        bytecode_version: [74u8; 32],
-        program: vec![
-            Instr::ForkInclusive {
-                branches: Box::new([
-                    InclusiveBranch {
-                        condition_flag: None,
-                        target: 2.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(0),
-                        target: 4.into(),
-                    },
-                    InclusiveBranch {
-                        condition_flag: Some(1),
-                        target: 6.into(),
-                    },
-                ]),
-                join_id: 0,
-                default_target: None,
-            },
-            Instr::End,
-            Instr::ExecNative {
-                task_type: 0,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::ExecNative {
-                task_type: 1,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::ExecNative {
-                task_type: 2,
-                argc: 0,
-                retc: 0,
-            },
-            Instr::JoinDynamic { id: 0, next: 8.into() },
-            Instr::End,
-        ],
-        debug_map: BTreeMap::from([
-            (2.into(), "task_a".to_string()),
-            (4.into(), "task_b".to_string()),
-            (6.into(), "task_c".to_string()),
-        ]),
-        join_plan: BTreeMap::new(),
-        wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
-        race_plan: BTreeMap::new(),
-        boundary_map: BTreeMap::new(),
-        write_set: BTreeMap::new(),
-        task_manifest: vec![
-            "task_a".to_string(),
-            "task_b".to_string(),
-            "task_c".to_string(),
-        ],
-        error_route_map: BTreeMap::new(),
-        flag_symbol_table: BTreeMap::new(),
-        data_objects: BTreeMap::new(),
-        ffi_task_decls: BTreeMap::new(),
-    };
-    store
-        .store_program(program.bytecode_version(), &program)
-        .await
-        .unwrap();
-
-    let instance_id = engine
-        .start(
-            "test",
-            program.bytecode_version(),
-            "{}",
-            compute_hash("{}"),
-            "corr-5",
-        )
-        .await
-        .unwrap();
-
-    // Set flag_0=true, flag_1=false → 2 branches taken (unconditional + flag_0)
-    let mut inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    inst.flags.insert(0, Value::Bool(true));
-    // flag 1 not set = false
-    bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
-        .await
-        .unwrap();
-
-    engine.tick_instance(instance_id).await.unwrap();
-
-    assert_eq!(
-        store
-            .load_instance(
-                &bpmn_lite_types::TenantId::new("default").unwrap(),
-                instance_id
-            )
-            .await
-            .unwrap()
-            .unwrap()
-            .join_expected
-            .get(&0),
-        Some(&2)
-    );
-
-    // Run → 2 jobs
-    let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 2, "Should have 2 jobs (branches A and B)");
-
-    // Complete first job → join has 1/2, should NOT release yet
-    let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
-    engine
-        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
-        .await
-        .unwrap();
-    engine.tick_instance(instance_id).await.unwrap();
-
-    // Instance still Running (waiting for 2nd branch)
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        matches!(inst.state, ProcessState::Running),
-        "Should still be Running, got {:?}",
-        inst.state
-    );
-
-    // Complete second job → join has 2/2, releases
-    engine
-        .complete_job(&jobs[1].job_key, payload, hash, BTreeMap::new())
-        .await
-        .unwrap();
-    for _ in 0..5 {
-        engine.tick_instance(instance_id).await.unwrap();
-        let inst = store
-            .load_instance(
-                &bpmn_lite_types::TenantId::new("default").unwrap(),
-                instance_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        if inst.state.is_terminal() {
-            break;
-        }
-    }
-
-    let inst = store
-        .load_instance(
-            &bpmn_lite_types::TenantId::new("default").unwrap(),
-            instance_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(inst.state, ProcessState::Completed { .. }));
-}
+// V5.3 (§18, landed 2026-07-23): T-IG-1 through T-IG-5 are deleted along
+// with `Instr::ForkInclusive`/`JoinDynamic` (v1) — both variants are gone
+// from the `Instr` enum entirely this step, and these five tests each
+// hand-assembled a `legacy_program!` fixture constructing one directly
+// (via the real engine, not through `lower()`), so there is no mechanical
+// way to keep them compiling, let alone passing. Checked before deleting,
+// not assumed harmless: each has an already-landed v2 engine-level test
+// (§18 ruling I item (e), landed the same day) proving the identical
+// behavioural property against the mechanism that is now the only one
+// that exists —
+//   T-IG-1 (all conditions truthy → all branches run → join waits for
+//     all → completes)            → t_ig_v2_all_matched_branches_run_concurrently_and_join_completes
+//   T-IG-2 (one of three truthy → one branch runs, others skip to join)
+//                                  → t_ig_v2_single_matched_branch_skips_the_other_to_join
+//   T-IG-3 (zero match, no default → Incident, not a hard error)
+//                                  → t_ig_v2_zero_match_no_default_raises_incident
+//   T-IG-4 (zero match, default present → default branch runs)
+//                                  → t_ig_v2_zero_match_with_default_runs_default_branch
+//   T-IG-5 (join releases at exactly the dynamic arrival count, not a
+//     hardcoded one) — no single same-named v2 test, but the property is
+//     inherent to `V2Join`'s barrier-arity mechanism (not a per-gateway
+//     count computed and compared, the way v1's `JoinDynamic` needed
+//     `join_expected` bookkeeping to reproduce) and is exercised by every
+//     one of the four tests above, each of which drives a `V2Join` to
+//     release at its own branch count (1, 3, or the default-branch count
+//     of 1) and asserts completion — the same "waits for exactly this
+//     many, not a stale hardcoded number" property, proven structurally
+//     rather than by a dedicated count-varying fixture.
+// This is a consolidation, not a silent coverage loss — the same
+// properties, proven against the only mechanism that runs after this
+// step's `lower()` default flip, per the same "if redundant, consolidate
+// honestly" discipline this landing's own T-IG-6/t_auth_6_boundary_timer_
+// yaml relocks follow.
 
 /// T-IG-6: Full compiler pipeline — parse inclusiveGateway from BPMN XML.
+/// Relocked in place (V5.3, §18, landed 2026-07-23, `lower()` default
+/// flip, Part A): previously locked `lower()`'s (v1) literal output —
+/// `Instr::ForkInclusive`/`JoinDynamic` present in the compiled program.
+/// `lower()` now emits v2 words unconditionally for every construct
+/// (Part A's core change) and both v1 variants are deleted entirely
+/// (Part B) — same structural-lock rigor, new shape: `Instr::V2Fork`/
+/// `V2Join` present, with `V2Fork`'s target count matching the gateway's
+/// declared branch count (2: `task_a` unconditional, `task_b`
+/// conditional).
 #[tokio::test]
 async fn t_ig_6_parse_inclusive_gateway() {
     let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -3530,21 +3524,1133 @@ async fn t_ig_6_parse_inclusive_gateway() {
         .unwrap()
         .unwrap();
 
-    // Should contain ForkInclusive and JoinDynamic instructions
-    let has_fork_inclusive = program
-        .program()
-        .iter()
-        .any(|i| matches!(i, Instr::ForkInclusive { .. }));
-    assert!(
-        has_fork_inclusive,
-        "Should contain ForkInclusive instruction"
+    // Should contain V2Fork and V2Join instructions (v2 dynamic-arity
+    // skip-to-join lowering, ruling H) — v1's ForkInclusive/JoinDynamic no
+    // longer exist as types to construct.
+    let fork_targets = program.program().iter().find_map(|i| match i {
+        Instr::V2Fork { targets, .. } => Some(targets.len()),
+        _ => None,
+    });
+    assert_eq!(
+        fork_targets,
+        Some(2),
+        "Should contain a V2Fork with 2 targets (task_a unconditional, task_b conditional)"
     );
 
-    let has_join_dynamic = program
+    let has_join = program
         .program()
         .iter()
-        .any(|i| matches!(i, Instr::JoinDynamic { .. }));
-    assert!(has_join_dynamic, "Should contain JoinDynamic instruction");
+        .any(|i| matches!(i, Instr::V2Join { .. }));
+    assert!(has_join, "Should contain a V2Join instruction");
+}
+
+// ═══════════════════════════════════════════════════════════
+//  V5 post-close (§18 rulings H/I/J) — v2 inclusive-gateway lowering
+//  (`lowering::lower_v2`), driven end-to-end through the real engine.
+//  `lower()`/`engine.compile` (T-IG-6 above) are untouched by this step —
+//  these fixtures exercise the separate `lower_v2` entry point instead,
+//  proving the SAME BPMN construct lowers to genuinely different, both
+//  independently correct, bytecode depending which function compiles it.
+// ═══════════════════════════════════════════════════════════
+
+fn inclusive_gateway_v2_xml(default_flow: bool) -> String {
+    let default_edge = if default_flow {
+        r#"<bpmn:sequenceFlow id="f_default" sourceRef="ig_fork" targetRef="always"/>"#
+    } else {
+        ""
+    };
+    let default_task = if default_flow {
+        r#"<bpmn:serviceTask id="always"><bpmn:extensionElements><zeebe:taskDefinition type="always_task"/></bpmn:extensionElements></bpmn:serviceTask>
+           <bpmn:sequenceFlow id="f_always_join" sourceRef="always" targetRef="ig_join"/>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:inclusiveGateway id="ig_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a"><bpmn:extensionElements><zeebe:taskDefinition type="identity_check"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b"><bpmn:extensionElements><zeebe:taskDefinition type="edd_check"/></bpmn:extensionElements></bpmn:serviceTask>
+    {default_task}
+    <bpmn:inclusiveGateway id="ig_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="ig_fork"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="ig_fork" targetRef="task_a">
+      <bpmn:conditionExpression>= high_risk == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3" sourceRef="ig_fork" targetRef="task_b">
+      <bpmn:conditionExpression>= pep_flagged == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    {default_edge}
+    <bpmn:sequenceFlow id="f4" sourceRef="task_a" targetRef="ig_join"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="task_b" targetRef="ig_join"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="ig_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#
+    )
+}
+
+async fn compile_inclusive_gateway_v2(
+    default_flow: bool,
+) -> (Arc<MemoryStore>, [u8; 32]) {
+    let store = Arc::new(MemoryStore::new());
+    let xml = inclusive_gateway_v2_xml(default_flow);
+    let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
+    let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
+        .expect("v2 inclusive-gateway lowering must verify");
+    store.store_artifact(&workflow).await.unwrap();
+    (store, workflow.hash().into_bytes())
+}
+
+/// (a)/(b) — two branches truthy: real concurrent work happens on both
+/// matched branches (2 jobs activated), the shared `V2Join` releases only
+/// once both arrive, and the instance completes.
+#[tokio::test]
+async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
+    let (store, bytecode_version) = compile_inclusive_gateway_v2(false).await;
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-1")
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        inst.flags.insert(0, Value::Bool(true)); // high_risk
+        inst.flags.insert(1, Value::Bool(true)); // pep_flagged
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 2, "both matched branches must do real concurrent work");
+
+    for job in &jobs {
+        let payload = "{}";
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        engine
+            .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+            .await
+            .unwrap();
+    }
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// (b) — only one of two conditions truthy: one branch does real work, the
+/// other skips straight to the shared `V2Join` (the proven dynamic-arity
+/// pattern) — one job activated, not two, and the instance still completes.
+#[tokio::test]
+async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
+    let (store, bytecode_version) = compile_inclusive_gateway_v2(false).await;
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-2")
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        inst.flags.insert(0, Value::Bool(true)); // high_risk only
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1, "only the matched branch should do real work");
+
+    let payload = "{}";
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    engine
+        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
+        .await
+        .unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// (c) — zero branches truthy, no default/always-live edge: the
+/// synchronous pre-`V2Fork` zero-match check (`V2RouteZeroMatch`) raises
+/// an Incident — `ProcessState::Incidented`, matching what `T-IG-3` (v1)
+/// proves for `ForkInclusive`'s own zero-match arm.
+#[tokio::test]
+async fn t_ig_v2_zero_match_no_default_raises_incident() {
+    let (store, bytecode_version) = compile_inclusive_gateway_v2(false).await;
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-3")
+        .await
+        .unwrap();
+    // Neither flag set — both conditions false, no default edge.
+    engine.tick_instance(instance_id).await.unwrap();
+
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(inst.state, ProcessState::Incidented { .. }),
+        "expected Incidented, got {:?}",
+        inst.state
+    );
+}
+
+/// (d) — zero branches truthy WITH an always-live (default) edge: the
+/// zero-match precheck is never emitted at all (compile-time proof the
+/// fork's target set is non-empty), and the default branch runs for real.
+#[tokio::test]
+async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
+    let (store, bytecode_version) = compile_inclusive_gateway_v2(true).await;
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-4")
+        .await
+        .unwrap();
+    // Neither flag set — the always-live branch is taken regardless.
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1, "only the always-live/default branch should run");
+    assert_eq!(jobs[0].task_type, "always_task");
+
+    let payload = "{}";
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    engine
+        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
+        .await
+        .unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Multi-pair GatewayInclusive — end-to-end runtime proof (Direction A,
+//  `docs/todo/EOP-VS-BPMN-ISA-002.md` §19; verifier.rs's "9. Inclusive
+//  gateway validation" count-based rejection and
+//  `bpmn-lite-authoring/src/validate.rs`'s V10 both lifted). The tests
+//  above (`t_ig_v2_*`) each drive exactly ONE `GatewayInclusive` pair
+//  through the real engine; `lowering.rs`'s
+//  `test_two_sequential_inclusive_pairs_lower_correctly` and
+//  `test_two_independently_nested_inclusive_pairs_pair_correctly` prove
+//  multi-pair COMPILATION correctness (bytecode-level `V2Join.pairing`
+//  assertions) but never execute a single instruction. These tests close
+//  that gap: real `tick_instance`/`run_instance`/`complete_job` traces,
+//  asserting on job activation counts, PER-ROUND activation ordering (to
+//  prove sequential/independent routing, not just eventual completion),
+//  and final `ProcessState`.
+// ═══════════════════════════════════════════════════════════
+
+/// Drains an instance to completion, driving `run_instance`/`complete_job`
+/// in a loop (each `run_instance` call ticks once and dequeues whatever
+/// became runnable), completing every activated job immediately. Returns
+/// `(round, task_type)` for every job activated, in activation order — the
+/// round number is what lets a test assert TWO pairs' branches were
+/// activated in different rounds (proving one pair's join gated the next
+/// pair's fork opening), not merely that both eventually ran.
+async fn drain_and_complete_all(
+    engine: &BpmnLiteEngine,
+    store: &MemoryStore,
+    instance_id: Uuid,
+) -> Vec<(usize, String)> {
+    let mut activations = Vec::new();
+    for round in 0..20usize {
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        if jobs.is_empty() {
+            let inst = store
+                .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+                .await
+                .unwrap()
+                .unwrap();
+            if inst.state.is_terminal() {
+                break;
+            }
+            continue;
+        }
+        for job in &jobs {
+            activations.push((round, job.task_type.clone()));
+            let payload = "{}";
+            let hash = compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+    }
+    activations
+}
+
+/// Two SEQUENTIAL `GatewayInclusive` pairs in one process (pair 1 fully
+/// resolves and joins, THEN pair 2 opens and resolves independently) —
+/// driven through the REAL frontend (`engine.compile`, parsing BPMN XML),
+/// matching `T-IG-6`'s "prove the real frontend reaches this, not just
+/// hand-assembled bytecode" discipline, and then executed end-to-end
+/// through the real engine (not just compiled). All four branch flags are
+/// set truthy up front; the proof is in the ROUND STRUCTURE of job
+/// activation, not just eventual completion: pair 1's two branches
+/// (`task_a1`/`task_b1`) must both be activated (and both completed)
+/// strictly before EITHER of pair 2's branches (`task_a2`/`task_b2`) is
+/// activated — pair 2's `GatewayInclusive` fork cannot open until pair 1's
+/// `GatewayInclusive` join has released, exactly the barrier semantics
+/// `V2Join`/`V2Fork` are supposed to provide, now proven for two
+/// INDEPENDENT pairs sharing one process rather than one pair alone.
+#[tokio::test]
+async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:inclusiveGateway id="ig_fork1" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join1" gatewayDirection="Converging"/>
+    <bpmn:inclusiveGateway id="ig_fork2" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join2" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="ig_fork1"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="ig_fork1" targetRef="task_a1">
+      <bpmn:conditionExpression>= flag_a1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3" sourceRef="ig_fork1" targetRef="task_b1">
+      <bpmn:conditionExpression>= flag_b1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f4" sourceRef="task_a1" targetRef="ig_join1"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="task_b1" targetRef="ig_join1"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="ig_join1" targetRef="ig_fork2"/>
+    <bpmn:sequenceFlow id="f7" sourceRef="ig_fork2" targetRef="task_a2">
+      <bpmn:conditionExpression>= flag_a2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f8" sourceRef="ig_fork2" targetRef="task_b2">
+      <bpmn:conditionExpression>= flag_b2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f9" sourceRef="task_a2" targetRef="ig_join2"/>
+    <bpmn:sequenceFlow id="f10" sourceRef="task_b2" targetRef="ig_join2"/>
+    <bpmn:sequenceFlow id="f11" sourceRef="ig_join2" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("two sequential inclusive-gateway pairs must compile via the real frontend");
+
+    let flag_key = |name: &str| -> FlagKey {
+        *compiled
+            .flag_symbol_table
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(k, _)| k)
+            .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+    };
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-seq",
+        )
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        inst.flags.insert(flag_key("flag_a1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_a2"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b2"), Value::Bool(true));
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    let activations = drain_and_complete_all(&engine, &store, instance_id).await;
+
+    let round_of = |task_type: &str| -> usize {
+        activations
+            .iter()
+            .find(|(_, t)| t == task_type)
+            .map(|(r, _)| *r)
+            .unwrap_or_else(|| panic!("{task_type} was never activated, got: {activations:?}"))
+    };
+    assert_eq!(
+        activations.len(),
+        4,
+        "all four branch tasks (and only those four) must be activated exactly once, got: {activations:?}"
+    );
+    let pair1_last_round = round_of("task_a1").max(round_of("task_b1"));
+    let pair2_first_round = round_of("task_a2").min(round_of("task_b2"));
+    assert!(
+        pair1_last_round < pair2_first_round,
+        "pair 1's branches (rounds {}/{}) must both complete strictly before pair 2's fork opens \
+         (rounds {}/{}) — pair 2's GatewayInclusive must not open until pair 1's join releases, \
+         got: {activations:?}",
+        round_of("task_a1"),
+        round_of("task_b1"),
+        round_of("task_a2"),
+        round_of("task_b2")
+    );
+
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// FIXED regression test (was a known K-1 bug; see the FIXED note below).
+/// Runs live — no longer `#[ignore]`d — and is a permanent reproduction.
+///
+/// Two INDEPENDENTLY-NESTED `GatewayInclusive` pairs, one inside EACH
+/// branch of an outer `GatewayAnd` fork — the runtime equivalent of
+/// `lowering.rs`'s `test_two_independently_nested_inclusive_pairs_pair_
+/// correctly` (which proves only compilation) and `verifier.rs`'s
+/// `test_two_nested_inclusive_pairs_in_and_branches_now_admitted` (which
+/// proves only admission). Neither of those tests ever executes a single
+/// instruction; driving this exact topology through the REAL engine
+/// (built for this task, per the brief's item 4) surfaced a genuine,
+/// reproducible kernel-level defect, INDEPENDENT of Direction A's
+/// pairing-derivation fix (`compute_gateway_pairing`/
+/// `check_gateway_and_nesting`, both of which are innocent here — this is
+/// not a mispairing, and it reproduces with branch flags set either way):
+///
+/// Once a `GatewayInclusive` nested inside one branch of an outer
+/// `GatewayAnd` fork takes its dynamic-arity "skip-to-join" path (fewer
+/// branches matched than declared — the same mechanism
+/// `t_ig_v2_single_matched_branch_skips_the_other_to_join` proves correct
+/// for a STANDALONE (non-nested) inclusive gateway), completing that
+/// branch's job and ticking again raises `Ring 3 runtime integrity
+/// violation: K-1 violated: record <id> (armed) has member <id>, no live
+/// fibre` (`bpmn-lite-kernel/src/lib.rs`'s `check_k_invariants`) — some
+/// concurrency-table record is left listing a fibre that no longer exists.
+/// Confirmed by hand-reduction: reproduces with EITHER branch (or both)
+/// taking the skip-to-join path, so it is not specific to the
+/// single-match/all-match ASYMMETRY between sibling branches — the trigger
+/// is "a nested inclusive gateway under an AND fork resolves with dynamic
+/// arity less than its declared branch count," full stop. Not reproduced
+/// (and not expected to reproduce, per the passing
+/// `t_ig_v2_two_sequential_pairs_route_and_join_independently` test above)
+/// for sequential (non-nested) multi-pair topology — this looks specific
+/// to the interaction between the outer AND-fork's own barrier/fibre
+/// bookkeeping and an inner inclusive gateway's dynamic-arity skip, in
+/// `bpmn-lite-kernel`, not to anything `verifier.rs`/`lowering.rs` control.
+///
+/// A separate, unrelated, pre-existing bug was ALSO found while isolating
+/// this one (`lowering.rs`'s `topo_order`, the naive-BFS address-layout
+/// backward-jump bug) — fixed separately, see the address-layout fix's own
+/// post-close entry; this test's branch shapes remain length-balanced from
+/// that investigation but no longer need to be, now that both bugs are
+/// fixed.
+///
+/// **FIXED 2026-07-24 — root cause confirmed the SAME as
+/// `t_and_v2_nested_gateway_inside_branch_compiles_and_completes`'s
+/// (`bpmn-lite-kernel/src/lib.rs`), not a separate inclusive-gateway-
+/// specific defect**, exactly per Adam's own prediction ("it may be a
+/// symptom rather than a separate defect"): `apply_tick` runs one fibre
+/// across potentially many instructions in a single transition without
+/// re-snapshotting between them. A nested barrier's survivor can pop an
+/// inner `V2Join` (correctly reconciling the OUTER barrier's own
+/// membership via `v2_reconcile_ancestor_membership`, staged into
+/// `changes`) and then, without blocking, immediately execute the OUTER
+/// `V2Join` in the SAME transition — which used to read the outer
+/// record straight from `snapshot` (fixed at the transition's start,
+/// blind to this transition's own in-flight writes) and silently
+/// overwrite the just-staged reconciliation with its own stale
+/// re-`Insert` (last-write-wins on `Insert`-by-key). Fixed by
+/// `fetch_record_in_transition`, a shared pending-aware lookup (mirroring
+/// `v2_reconcile_ancestor_membership`'s own pre-existing "check `changes`
+/// before `snapshot`" idiom) now used at every mid-transition record read.
+/// Independently confirmed via 100 standalone process runs post-fix, zero
+/// failures (pre-fix: intermittent, ~1-in-15 to 1-in-40, since which fibre
+/// is selected first — and hence whether both `V2Join`s land in one
+/// transition — depends on `BTreeMap`-order-of-derived-UUIDs, which varies
+/// by process run).
+#[tokio::test]
+async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:inclusiveGateway id="ig_fork_a" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join_a" gatewayDirection="Converging"/>
+    <bpmn:inclusiveGateway id="ig_fork_b" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="ig_join_b" gatewayDirection="Converging"/>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="ig_fork_a"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="ig_fork_a" targetRef="task_a1">
+      <bpmn:conditionExpression>= flag_a1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa2" sourceRef="ig_fork_a" targetRef="task_a2">
+      <bpmn:conditionExpression>= flag_a2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a1" targetRef="ig_join_a"/>
+    <bpmn:sequenceFlow id="fa4" sourceRef="task_a2" targetRef="ig_join_a"/>
+    <bpmn:sequenceFlow id="fa5" sourceRef="ig_join_a" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="ig_fork_b"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="ig_fork_b" targetRef="task_b1">
+      <bpmn:conditionExpression>= flag_b1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fb2" sourceRef="ig_fork_b" targetRef="task_b2">
+      <bpmn:conditionExpression>= flag_b2 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fb3" sourceRef="task_b1" targetRef="ig_join_b"/>
+    <bpmn:sequenceFlow id="fb4" sourceRef="task_b2" targetRef="ig_join_b"/>
+    <bpmn:sequenceFlow id="fb5" sourceRef="ig_join_b" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "GatewayAnd fork with an independently-nested GatewayInclusive pair in EACH branch must compile",
+    );
+
+    let flag_key = |name: &str| -> FlagKey {
+        *compiled
+            .flag_symbol_table
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(k, _)| k)
+            .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+    };
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-nested-and",
+        )
+        .await
+        .unwrap();
+    {
+        let mut inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        // Branch A: single match (task_a2's flag left unset) — its inner
+        // GatewayInclusive must skip task_a2 straight to ig_join_a.
+        inst.flags.insert(flag_key("flag_a1"), Value::Bool(true));
+        // Branch B: both match — its inner GatewayInclusive must run both
+        // branches concurrently before ig_join_b releases.
+        inst.flags.insert(flag_key("flag_b1"), Value::Bool(true));
+        inst.flags.insert(flag_key("flag_b2"), Value::Bool(true));
+        bpmn_lite_store::store::commit_snapshot(store.as_ref(), "test", inst)
+            .await
+            .unwrap();
+    }
+
+    let activations = drain_and_complete_all(&engine, &store, instance_id).await;
+    let activated: std::collections::BTreeSet<&str> =
+        activations.iter().map(|(_, t)| t.as_str()).collect();
+
+    assert_eq!(
+        activations.len(),
+        3,
+        "branch A must activate exactly 1 job (single-match skip-to-join) and branch B exactly \
+         2 (all-match concurrent) — 3 total, got: {activations:?}"
+    );
+    assert!(
+        activated.contains("task_a1") && !activated.contains("task_a2"),
+        "branch A's inner GatewayInclusive must run only task_a1 (its own routing decision), \
+         got: {activations:?}"
+    );
+    assert!(
+        activated.contains("task_b1") && activated.contains("task_b2"),
+        "branch B's inner GatewayInclusive must run both task_b1 and task_b2 (its own, \
+         independent routing decision — unaffected by branch A's single-match outcome), \
+         got: {activations:?}"
+    );
+
+    let inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed (outer GatewayAnd join must still release once both inner \
+         GatewayInclusive joins have, each at its own address) — got {:?}",
+        inst.state
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// `lowering::topo_order` backward-jump fix (structured/region-aware
+// address layout, replacing plain BFS) — see `structured_order`'s doc
+// comment in `bpmn-lite-compiler/src/lowering.rs` for the full design
+// record. The fixture immediately below is the EXACT minimal reproduction
+// reported alongside `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_
+// route_independently` above (that test's own doc comment references it):
+// a bare `GatewayAnd` fork, one 3-task branch, one 1-task sibling branch —
+// no `GatewayInclusive`, no multiple pairs — compiled via `engine.compile`
+// (the real XML frontend, which runs `verify_bytecode`). Before the fix
+// this failed outright with "Backward jump at addr 12 to 6 — only
+// BrCounterLt may jump backward"; confirmed genuinely red by temporarily
+// reverting `structured_order`/`compute_region_map` back to the old
+// `topo_order` BFS and re-running this exact test.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Red-before/green-after reproduction for the reported bug: a bare
+/// `GatewayAnd` fork with unequal-length branches (3 tasks vs. 1 task) must
+/// compile through the real XML frontend without a backward-jump rejection.
+#[tokio::test]
+async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="task_b1" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "bare GatewayAnd fork with unequal-length branches (3 tasks vs. 1) must compile",
+    );
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-unequal-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+    let first_jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(first_jobs.len(), 2, "both branches must activate concurrent work");
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut pending = first_jobs;
+    for _ in 0..10 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        for job in &pending {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        pending = engine.run_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// Broader sweep (1): THREE branches of three DIFFERENT lengths (1, 2, and
+/// 4 tasks) off a single `GatewayAnd` fork — not just the minimal two-branch
+/// case above.
+#[tokio::test]
+async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c1"><bpmn:extensionElements><zeebe:taskDefinition type="task_c1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c2"><bpmn:extensionElements><zeebe:taskDefinition type="task_c2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c3"><bpmn:extensionElements><zeebe:taskDefinition type="task_c3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c4"><bpmn:extensionElements><zeebe:taskDefinition type="task_c4"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="task_b1" targetRef="task_b2"/>
+    <bpmn:sequenceFlow id="fb2" sourceRef="task_b2" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fc0" sourceRef="and_fork" targetRef="task_c1"/>
+    <bpmn:sequenceFlow id="fc1" sourceRef="task_c1" targetRef="task_c2"/>
+    <bpmn:sequenceFlow id="fc2" sourceRef="task_c2" targetRef="task_c3"/>
+    <bpmn:sequenceFlow id="fc3" sourceRef="task_c3" targetRef="task_c4"/>
+    <bpmn:sequenceFlow id="fc4" sourceRef="task_c4" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("GatewayAnd fork with three differently-lengthed branches must compile");
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-3way-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+
+    // Drain jobs across ticks until all three branches have completed and
+    // the instance reaches a terminal state (branch C needs 4 sequential
+    // jobs, one per tick-drain round).
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..20 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        for job in &jobs {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// Broader sweep (2): a branch containing a NESTED further `GatewayAnd`
+/// fork/join pair (own unequal-length sub-branches), sibling to a plain
+/// longer linear branch — exercises the region-boundary recursion, not
+/// just a flat two-branch shape.
+///
+/// **Independently confirmed 2026-07-24, INTERMITTENT (not deterministic —
+/// an earlier note calling this "5/5 deterministic" was a misread; actual
+/// behavior is ~1-in-15 to 1-in-40 process runs, since it depends on
+/// which fibre `apply_tick` selects first, which in turn depends on
+/// `BTreeMap`-order-of-derived-UUIDs, which varies by process run):**
+/// `engine.compile` and the first several execution rounds succeed —
+/// proving the address-layout fix itself works correctly here, this
+/// topology could not even compile before that fix — but a later tick
+/// used to raise `Ring 3 runtime integrity violation: K-1 violated: record
+/// <id> (armed) has member <id>, no live fibre`, the SAME error class as
+/// `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_
+/// independently`.
+///
+/// **This significantly broadened that bug's known scope**, exactly as
+/// Adam predicted ("its trigger is broader than I guessed"). The prior
+/// finding was framed as "a `GatewayInclusive` nested under a `GatewayAnd`
+/// branch, resolving with dynamic arity BELOW its declared count" —
+/// implicitly scoping it to inclusive-gateway dynamic-arity mismatch. This
+/// fixture has NO `GatewayInclusive` anywhere and NO arity mismatch —
+/// every branch of both the outer and inner `GatewayAnd` forks always
+/// runs, nothing skips. The trigger is "a `GatewayAnd` fork nested inside
+/// one branch of another `GatewayAnd` fork" — a barrier nested inside a
+/// barrier — full stop.
+///
+/// **FIXED 2026-07-24** (`bpmn-lite-kernel/src/lib.rs`): confirmed, by
+/// adding temporary tracing and running to a captured failure, that the
+/// root cause is `apply_tick` running one fibre across many instructions
+/// in a single transition without re-snapshotting between them — a nested
+/// barrier's survivor pops an inner `V2Join` (correctly reconciling the
+/// OUTER barrier's own membership into `changes`), then, without blocking,
+/// immediately executes the OUTER `V2Join` in the SAME transition, which
+/// used to read the outer record straight from the transition-start
+/// `snapshot` (blind to this transition's own in-flight writes) and
+/// silently overwrite the just-staged reconciliation with its own stale
+/// re-`Insert`. Fixed by `fetch_record_in_transition`, a shared
+/// pending-aware lookup used at every mid-transition record read,
+/// mirroring `v2_reconcile_ancestor_membership`'s own pre-existing
+/// "check `changes` before `snapshot`" idiom. Independently confirmed via
+/// 100 standalone process runs post-fix, zero failures.
+#[tokio::test]
+async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="outer_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="b_pre"><bpmn:extensionElements><zeebe:taskDefinition type="b_pre"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="inner_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b3"><bpmn:extensionElements><zeebe:taskDefinition type="task_b3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="inner_join" gatewayDirection="Converging"/>
+    <bpmn:parallelGateway id="outer_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="outer_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="outer_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="outer_join"/>
+    <bpmn:sequenceFlow id="fb_pre" sourceRef="outer_fork" targetRef="b_pre"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="b_pre" targetRef="inner_fork"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="inner_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb2" sourceRef="task_b1" targetRef="task_b2"/>
+    <bpmn:sequenceFlow id="fb3" sourceRef="task_b2" targetRef="inner_join"/>
+    <bpmn:sequenceFlow id="fb4" sourceRef="inner_fork" targetRef="task_b3"/>
+    <bpmn:sequenceFlow id="fb5" sourceRef="task_b3" targetRef="inner_join"/>
+    <bpmn:sequenceFlow id="fb6" sourceRef="inner_join" targetRef="outer_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="outer_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "GatewayAnd branch containing a further nested GatewayAnd pair must compile",
+    );
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-nested-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..20 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        for job in &jobs {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// `GatewayXor` investigation: this IR has no dedicated "converging
+/// GatewayXor" node — two XOR branches can reconverge directly on a shared
+/// downstream `ServiceTask` with no gateway element at the merge point at
+/// all. Proves that shape, with unequal-length branches (skewing raw BFS
+/// discovery order the same way the GatewayAnd reproduction above does),
+/// compiles and routes correctly through the real XML frontend.
+#[tokio::test]
+async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:exclusiveGateway id="xor_split"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="merge_task"><bpmn:extensionElements><zeebe:taskDefinition type="merge_task"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="xor_split"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="xor_split" targetRef="task_a1">
+      <bpmn:conditionExpression>= take_a == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="xor_split" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="merge_task" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("GatewayXor with unequal-length branches reconverging on a shared task must compile");
+
+    // Take the DEFAULT (short) branch straight to merge_task — the flag is
+    // left unset, so `take_a` is false.
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-xor-merge-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1, "default branch should reach merge_task directly");
+    assert_eq!(jobs[0].task_type, "merge_task");
+
+    let payload = "{}";
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    engine
+        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
+        .await
+        .unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// V5 post-close (§18 ruling I): a v2-lowered interrupting boundary timer
+/// — `V2Guard` + `GUARD-TIMER>` wrapping the host task (`lowering::
+/// lower_boundary_guarded_task_v2`) — actually fires end-to-end through
+/// the real timer-claim path (`tick_due_timers` → `Command::TimerFired` →
+/// `TimerKind::V2GuardTimer` → `apply_v2_trigger_guard`), the same shape
+/// `t_auth_6_boundary_timer_yaml` proves for the v1 `race_plan` mechanism
+/// (untouched, above): the host task's own job is never completed, the
+/// timer fires instead, and the escalation task's job is activated.
+#[tokio::test]
+async fn t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="host"><bpmn:extensionElements><zeebe:taskDefinition type="long_work"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:boundaryEvent id="timeout" attachedToRef="host" cancelActivity="true">
+      <bpmn:timerEventDefinition><bpmn:timeDuration>PT2S</bpmn:timeDuration></bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="escalate"><bpmn:extensionElements><zeebe:taskDefinition type="escalate_work"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="normal_end"/>
+    <bpmn:endEvent id="timeout_end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="host"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="host" targetRef="normal_end"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="timeout" targetRef="escalate"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="escalate" targetRef="timeout_end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+    let graph = bpmn_lite_compiler::parser::parse_bpmn(xml).unwrap();
+    let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
+        .expect("v2 boundary-timer lowering must verify");
+    store.store_artifact(&workflow).await.unwrap();
+    let bytecode_version = workflow.hash().into_bytes();
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-bt-1")
+        .await
+        .unwrap();
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let host_jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(host_jobs.len(), 1, "the host task's own job must be activated");
+
+    assert_eq!(
+        engine
+            .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+            .await
+            .unwrap(),
+        1,
+        "GUARD-TIMER>'s scheduled timer must fire"
+    );
+    // The fired timer spawns the handler fibre parked; a further tick
+    // advances it through its own ExecNative to actually enqueue the job
+    // (mirrors t_auth_6_boundary_timer_yaml's identical second tick).
+    engine.tick_instance(instance_id).await.unwrap();
+
+    let escalation_jobs = engine
+        .activate_jobs(&["escalate_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        escalation_jobs.len(),
+        1,
+        "the interrupting guard's handler (escalation task) must be spawned on fire"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4090,3 +5196,400 @@ edges:
         .unwrap();
     assert_eq!(escalations.len(), 1);
 }
+
+// ═══════════════════════════════════════════════════════════
+//  §18 ruling K: multi-instance runtime tests
+// ═══════════════════════════════════════════════════════════
+
+fn multi_instance_v2_xml(declared_max: u32) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_mi" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="verify_docs">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="verify_doc"/>
+      </bpmn:extensionElements>
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="doc_count" maxInstances="{declared_max}"/>
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="verify_docs"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="verify_docs" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#
+    )
+}
+
+/// Returns the workflow's `collection_flag` (the flag `V2MiIndexLive`/
+/// `V2MiArityCheck` read as a `Value::Array`, §18 ruling K Part 2 — was an
+/// `I64` length flag before this landing) plus the full artifact so
+/// per-branch element-flag keys can be looked up by name afterward.
+async fn compile_multi_instance_v2(
+    declared_max: u32,
+) -> (Arc<MemoryStore>, ExecutableWorkflow, FlagKey) {
+    let store = Arc::new(MemoryStore::new());
+    let xml = multi_instance_v2_xml(declared_max);
+    let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
+    let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
+        .expect("v2 multi-instance lowering must verify");
+    let collection_flag = *workflow
+        .envelope()
+        .metadata()
+        .flag_symbol_table()
+        .iter()
+        .find(|(_, name)| name.as_str() == "doc_count")
+        .map(|(key, _)| key)
+        .expect("doc_count must be interned as a flag");
+    store.store_artifact(&workflow).await.unwrap();
+    (store, workflow, collection_flag)
+}
+
+/// Looks up the `FlagKey` interned for MI branch `index`'s per-branch
+/// element flag (`<node_id>_mi_element_<index>`, `lowering.rs`'s
+/// `lower_multi_instance_v2`). The XML fixture's `serviceTask` id is
+/// `verify_docs`.
+fn mi_element_flag_key(workflow: &ExecutableWorkflow, index: u32) -> FlagKey {
+    let name = format!("verify_docs_mi_element_{index}");
+    *workflow
+        .envelope()
+        .metadata()
+        .flag_symbol_table()
+        .iter()
+        .find(|(_, n)| n.as_str() == name)
+        .map(|(key, _)| key)
+        .unwrap_or_else(|| panic!("{name} must be interned as a flag"))
+}
+
+/// Sets the MI collection to a `Value::Array` of `I64` elements (§18
+/// ruling K Part 2 — was `Value::I64(length)` before this landing; length
+/// is now derived from the array itself, not tracked separately).
+async fn set_collection(
+    store: &MemoryStore,
+    instance_id: Uuid,
+    collection_flag: FlagKey,
+    elements: &[i64],
+) {
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    inst.flags.insert(
+        collection_flag,
+        Value::Array(elements.iter().map(|n| Value::I64(*n)).collect()),
+    );
+    bpmn_lite_store::store::commit_snapshot(store, "test", inst)
+        .await
+        .unwrap();
+}
+
+async fn drain_to_terminal(engine: &BpmnLiteEngine, store: &MemoryStore, instance_id: Uuid) -> ProcessInstance {
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    inst
+}
+
+/// (a) full collection (length == declared_max): all `n` fibres do real
+/// work, the barrier retires normally, the instance completes.
+#[tokio::test]
+async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-1")
+        .await
+        .unwrap();
+    set_collection(&store, instance_id, collection_flag, &[100, 200, 300]).await;
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 3, "all 3 declared-max fibres must do real work");
+    for job in &jobs {
+        assert_eq!(job.task_type, "verify_doc");
+    }
+
+    for job in &jobs {
+        let payload = "{}";
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        engine
+            .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+            .await
+            .unwrap();
+    }
+
+    let inst = drain_to_terminal(&engine, &store, instance_id).await;
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// §18 ruling K Part 2 (the reason this landing exists): each branch must
+/// receive its OWN element's value, not merely know whether its index is
+/// live. Proven end to end through the real `orch_flags` job-dispatch
+/// pipeline (`ExecNative`'s handler snapshots `instance.flags` into
+/// `JobActivation.orch_flags` at the moment it runs) — not by inspecting
+/// kernel-internal state directly. Each branch's `ExecNative` sits at a
+/// distinct compiled address (branches are laid out at fixed, increasing
+/// offsets in index order), and no `debug_map` entry exists for it
+/// specifically (only the MI node's own `base` address is recorded), so
+/// the kernel's `service_task_id` fallback is `"pc_<address>"` — this is
+/// used here only to recover which job came from which branch index (by
+/// sorting on the numeric pc), not asserted as meaningful behavior in its
+/// own right.
+#[tokio::test]
+async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(2).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-elements")
+        .await
+        .unwrap();
+    let elements = [111i64, 222i64];
+    set_collection(&store, instance_id, collection_flag, &elements).await;
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let mut jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 2, "both branches must do real work (full collection)");
+
+    // Recover branch index via the "pc_<address>" service_task_id
+    // fallback — branch 0's ExecNative compiles to a lower address than
+    // branch 1's, since branches are synthesized in index order.
+    jobs.sort_by_key(|job| {
+        job.service_task_id
+            .strip_prefix("pc_")
+            .and_then(|n| n.parse::<u32>().ok())
+            .expect("MI branch ExecNative has no debug_map entry of its own, so service_task_id must be the pc_<addr> fallback")
+    });
+
+    for (index, job) in jobs.iter().enumerate() {
+        let element_flag = mi_element_flag_key(&workflow, index as u32);
+        let expected_key = format!("flag_{element_flag}");
+        assert_eq!(
+            job.orch_flags.get(&expected_key),
+            Some(&Value::I64(elements[index])),
+            "branch {index}'s job must carry its OWN element ({}) under {expected_key}, not \
+             some other branch's — got orch_flags = {:?}",
+            elements[index],
+            job.orch_flags
+        );
+    }
+    // The two branches' own element flags must differ — proving this
+    // isn't "some value arrived" but genuinely distinct per-branch
+    // delivery.
+    let flag_0 = mi_element_flag_key(&workflow, 0);
+    let flag_1 = mi_element_flag_key(&workflow, 1);
+    assert_ne!(flag_0, flag_1, "each branch must write its OWN element flag key");
+
+    for job in &jobs {
+        let payload = "{}";
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        engine
+            .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+            .await
+            .unwrap();
+    }
+    let inst = drain_to_terminal(&engine, &store, instance_id).await;
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// (b) partial collection (length < declared_max): some fibres do real
+/// work, the rest skip straight to `V2Join` — the barrier still retires
+/// correctly on the reduced arrival count that matters (real-work count),
+/// and the instance completes.
+#[tokio::test]
+async fn t_mi_v2_partial_collection_some_fibres_skip() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-2")
+        .await
+        .unwrap();
+    set_collection(&store, instance_id, collection_flag, &[100]).await;
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1, "only index 0 is live; indices 1,2 skip to V2Join");
+
+    let payload = "{}";
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    engine
+        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
+        .await
+        .unwrap();
+
+    let inst = drain_to_terminal(&engine, &store, instance_id).await;
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// (c) empty collection (length == 0): every fibre skips, the barrier
+/// still retires (all `n` "arrived," just instantly), execution continues
+/// past the join — **no Incident raised**, in deliberate contrast to a
+/// gateway's zero-match (ruling J), which IS an incident. This is the test
+/// that actually distinguishes the two rules — see
+/// `t_ig_v2_zero_match_no_default_raises_incident` immediately above for
+/// the gateway-side behavior this must differ from.
+#[tokio::test]
+async fn t_mi_v2_empty_collection_completes_without_incident() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(3).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-3")
+        .await
+        .unwrap();
+    set_collection(&store, instance_id, collection_flag, &[]).await;
+
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 0, "an empty collection does no real work at all");
+
+    let inst = drain_to_terminal(&engine, &store, instance_id).await;
+    assert!(
+        !matches!(inst.state, ProcessState::Incidented { .. }),
+        "empty collection must NOT raise an Incident — ruling K item (c), \
+         deliberately not unified with a gateway's zero-match (ruling J): {:?}",
+        inst.state
+    );
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// (d) collection length exceeds declared_max: a typed, hard reject
+/// (`TransitionError::ResourceLimitExceeded`, the SAME shape
+/// `validate_snapshot_limits` already uses for fiber/stack/register
+/// overflow) — not silent truncation, not a panic, and NOT an Incident
+/// (deliberately distinct from ruling J's zero-match handling — see
+/// `Instr::V2MiArityCheck`'s doc comment).
+#[tokio::test]
+async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
+    let (store, workflow, collection_flag) = compile_multi_instance_v2(2).await;
+    let bytecode_version = workflow.hash().into_bytes();
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-4")
+        .await
+        .unwrap();
+    set_collection(&store, instance_id, collection_flag, &[100, 200, 300, 400, 500]).await;
+
+    let err = engine
+        .tick_instance(instance_id)
+        .await
+        .expect_err("exceeding declared_max must be a hard reject, not silent truncation");
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("multi-instance collection length") || message.contains("ResourceLimitExceeded"),
+        "error must name the resource-limit violation: {message}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════
+//  V5.5 (§18, landed 2026-07-23): corpus recompile-and-verify sweep.
+//  "All demo/test workflows recompiled; full verifier pass over the
+//  recompiled corpus is itself a test" — not a one-time manual claim, a
+//  standing regression gate. Every workflow here compiles through the
+//  now-v2-default `lower()` (XML) / `dsl::compile` (DSL) frontend and
+//  must pass the full pipeline: `verify_or_err` (V4a structural checks),
+//  lowering, `verify_bytecode`, and `ArtifactEnvelope::from_legacy_program`
+//  → `ExecutableWorkflow::from_verified_envelope`'s `verify_program`
+//  (V-1..V-11, K-1..K-3's static control-stack half). Any future v1
+//  residue, a broken lowering path, or a verifier regression on any of
+//  these fixtures fails this test, not just the fixture's own narrower
+//  test elsewhere in this file.
+// ═══════════════════════════════════════════════════════════
+
+/// The §10 demo workflow (`bpmn_lite_engine::demo::DEMO_SOURCE`) — the
+/// only DSL corpus item compiled against real, checked-in manifests
+/// (`manifests/ob-poc-v1.0.0.yaml`/`manifests/dmn-lite-v1.0.0.yaml`), not
+/// a hand-built in-test fixture. `demo::build_demo_plan()` already proves
+/// the T1 manifest-resolution pipeline; this test adds the missing link —
+/// lowering that plan all the way to a verified `ExecutableWorkflow`,
+/// which `build_demo_plan`'s own tests never do.
+#[test]
+fn corpus_sweep_demo_source_lowers_and_verifies() {
+    let plan = crate::demo::build_demo_plan().expect("§10 demo must compile");
+    bpmn_lite_compiler::Compiler::lower_dsl(&plan)
+        .expect("§10 demo plan must lower and pass the full v2 verifier (V-1..V-11)");
+}
+
+/// Every hand-built XML fixture in this file that exercises a distinct
+/// BPMN construct (parallel/exclusive/inclusive gateways, standalone and
+/// boundary timers — interrupting and non-interrupting, multi-instance,
+/// send/message tasks) recompiles cleanly through `lower()`'s v2-default
+/// path and passes the full verifier. `t_ig_6_parse_inclusive_gateway`
+/// and `t_auth_6_boundary_timer_yaml` already prove their own fixtures
+/// individually (with tighter, shape-specific assertions); this sweep is
+/// deliberately broader and shallower — one line per fixture, "does the
+/// whole pipeline still admit this," not a re-assertion of each
+/// fixture's own specific behavior.
+#[test]
+fn corpus_sweep_xml_fixtures_lower_and_verify() {
+    let fixtures: &[(&str, &str)] = &[
+        ("ORDINARY_TIMER_BPMN", ORDINARY_TIMER_BPMN),
+        ("ABSOLUTE_TIMER_BPMN", ABSOLUTE_TIMER_BPMN),
+        ("SINGLE_TASK_BPMN", SINGLE_TASK_BPMN),
+        ("NI_BOUNDARY_BPMN", NI_BOUNDARY_BPMN),
+    ];
+    for (name, xml) in fixtures {
+        let graph = bpmn_lite_compiler::parser::parse_bpmn(xml)
+            .unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
+        bpmn_lite_compiler::Compiler::lower(&graph)
+            .unwrap_or_else(|e| panic!("{name}: lower+verify failed: {e}"));
+    }
+}
+
+// The inclusive-gateway/boundary-timer/multi-instance corpus (T-IG-6's own
+// XML, the v2 boundary-timer/inclusive-gateway/MI fixtures built by their
+// own `make_*`-style helper functions elsewhere in this file) already
+// recompiles and verifies inside each of their own tests
+// (`t_ig_6_parse_inclusive_gateway`, `t_ig_v2_*`, `t_boundary_timer_v2_*`,
+// `t_mi_v2_*` — every one of them calls `engine.compile`/
+// `Compiler::lower_v2` and unwraps the result, which is exactly this
+// sweep's own check). Not duplicated here — see this test module's own
+// `T-IG`/`T-NI`/`t_mi_v2`/`t_boundary_timer_v2` sections for that
+// coverage; `corpus_sweep_xml_fixtures_lower_and_verify` above exists so
+// the two fixtures with no other dedicated lowering-through-verifier test
+// (`ORDINARY_TIMER_BPMN`/`ABSOLUTE_TIMER_BPMN`, used only for
+// scheduler-behavior tests that compile via `engine.compile` and never
+// separately assert on the lowered program) get swept too.
+

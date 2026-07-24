@@ -167,6 +167,98 @@ pub enum FfiBindingError {
     WrongType(String),
 }
 
+/// Resolve a `BindingSource` to a concrete JSON scalar against `instance`'s
+/// flags and the already-parsed `domain` payload.
+///
+/// Shared by FFI input encoding and message correlation so both derive a value
+/// from process data through one code path — a second, divergent derivation
+/// would make correlation silently mismatch. `label` names the source for
+/// diagnostics (a target field for FFI, the correlation-key expression here).
+fn resolve_binding_scalar_with_domain(
+    instance: &ProcessInstance,
+    source: &BindingSource,
+    domain: &serde_json::Value,
+    label: &str,
+) -> Result<serde_json::Value, FfiBindingError> {
+    Ok(match source {
+        BindingSource::Literal(Literal::Bool(value)) => serde_json::Value::Bool(*value),
+        BindingSource::Literal(Literal::I64(value)) => (*value).into(),
+        BindingSource::Literal(Literal::F64(value)) => serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| FfiBindingError::WrongType(label.to_string()))?,
+        BindingSource::Literal(Literal::String(value)) => serde_json::Value::String(value.clone()),
+        BindingSource::FlagRef(key) => match instance.flags.get(key) {
+            Some(Value::Bool(value)) => serde_json::Value::Bool(*value),
+            Some(Value::I64(value)) => (*value).into(),
+            Some(Value::Str(value)) => (*value).into(),
+            Some(Value::Ref(value)) => (*value).into(),
+            // §18 ruling K Part 2: `Value::Array` is new and is not a valid
+            // scalar — a flag holding an array is a real type mismatch, not
+            // something to silently flatten. Fail closed.
+            Some(Value::Array(_)) => return Err(FfiBindingError::WrongType(label.to_string())),
+            None => return Err(FfiBindingError::MissingValue(label.to_string())),
+        },
+        BindingSource::DomainPayloadRef(path) => read_json_path(domain, path)
+            .cloned()
+            .ok_or_else(|| FfiBindingError::MissingValue(label.to_string()))?,
+    })
+}
+
+/// Resolve a `BindingSource` to a concrete JSON scalar, parsing the domain
+/// payload as needed. The correlation-facing entry point onto the same
+/// resolution `encode_ffi_inputs` uses.
+pub fn resolve_binding_scalar(
+    instance: &ProcessInstance,
+    source: &BindingSource,
+    label: &str,
+) -> Result<serde_json::Value, FfiBindingError> {
+    // Only DomainPayloadRef needs the parsed payload; parse lazily so a
+    // literal/flag correlation key costs no JSON parse.
+    let domain = match source {
+        BindingSource::DomainPayloadRef(_) => serde_json::from_str::<serde_json::Value>(
+            &instance.domain_payload,
+        )
+        .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))?,
+        _ => serde_json::Value::Null,
+    };
+    resolve_binding_scalar_with_domain(instance, source, &domain, label)
+}
+
+/// Canonicalize a resolved JSON scalar into a message-correlation key string.
+///
+/// The single derivation waiter, publisher, and the gRPC wire boundary all go
+/// through (V&S §28) — content-based, so a dynamic business key (`case_id`
+/// from the payload) correlates by its value, not an intern id. Correlation
+/// keys are scalar bool/integer/string; floats and composites fail closed.
+pub fn correlation_key_string(scalar: &serde_json::Value) -> Result<String, FfiBindingError> {
+    match scalar {
+        serde_json::Value::Bool(value) => Ok(value.to_string()),
+        serde_json::Value::String(value) => Ok(value.clone()),
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .map(|value| value.to_string())
+            .or_else(|| number.as_u64().map(|value| value.to_string()))
+            .ok_or_else(|| {
+                FfiBindingError::WrongType(
+                    "correlation key must be an integer or string, not a float".to_string(),
+                )
+            }),
+        serde_json::Value::Null
+        | serde_json::Value::Array(_)
+        | serde_json::Value::Object(_) => Err(FfiBindingError::WrongType(
+            "correlation key must be a scalar (bool, integer, or string)".to_string(),
+        )),
+    }
+}
+
+/// Resolve a correlation-key `BindingSource` to its content string in one step.
+pub fn resolve_correlation_key(
+    instance: &ProcessInstance,
+    source: &BindingSource,
+) -> Result<String, FfiBindingError> {
+    correlation_key_string(&resolve_binding_scalar(instance, source, "correlation key")?)
+}
+
 pub fn encode_ffi_inputs(
     instance: &ProcessInstance,
     declaration: &FfiTaskDecl,
@@ -175,26 +267,12 @@ pub fn encode_ffi_inputs(
         .map_err(|error| FfiBindingError::InvalidDomainPayload(error.to_string()))?;
     let mut object = serde_json::Map::new();
     for binding in &declaration.inputs {
-        let value = match &binding.source {
-            BindingSource::Literal(Literal::Bool(value)) => serde_json::Value::Bool(*value),
-            BindingSource::Literal(Literal::I64(value)) => (*value).into(),
-            BindingSource::Literal(Literal::F64(value)) => serde_json::Number::from_f64(*value)
-                .map(serde_json::Value::Number)
-                .ok_or_else(|| FfiBindingError::WrongType(binding.target_field.clone()))?,
-            BindingSource::Literal(Literal::String(value)) => {
-                serde_json::Value::String(value.clone())
-            }
-            BindingSource::FlagRef(key) => match instance.flags.get(key) {
-                Some(Value::Bool(value)) => serde_json::Value::Bool(*value),
-                Some(Value::I64(value)) => (*value).into(),
-                Some(Value::Str(value)) => (*value).into(),
-                Some(Value::Ref(value)) => (*value).into(),
-                None => return Err(FfiBindingError::MissingValue(binding.target_field.clone())),
-            },
-            BindingSource::DomainPayloadRef(path) => read_json_path(&domain, path)
-                .cloned()
-                .ok_or_else(|| FfiBindingError::MissingValue(binding.target_field.clone()))?,
-        };
+        let value = resolve_binding_scalar_with_domain(
+            instance,
+            &binding.source,
+            &domain,
+            &binding.target_field,
+        )?;
         object.insert(binding.target_field.clone(), value);
     }
     serde_json::to_vec(&serde_json::Value::Object(object))
@@ -268,4 +346,90 @@ fn write_json_path(
         .ok_or_else(|| FfiBindingError::WrongType(last.clone()))?
         .insert(last.clone(), value);
     Ok(())
+}
+
+#[cfg(test)]
+mod correlation_tests {
+    use super::*;
+    use crate::session_stack::SessionStackState;
+    use crate::types::ProcessState;
+    use std::collections::BTreeMap;
+    use uuid::Uuid;
+
+    fn instance_with(domain: &str, flags: BTreeMap<FlagKey, Value>) -> ProcessInstance {
+        ProcessInstance {
+            instance_id: Uuid::nil(),
+            tenant_id: "t".to_string(),
+            process_key: "p".to_string(),
+            bytecode_version: [0u8; 32],
+            domain_payload: domain.to_string().into(),
+            domain_payload_hash: [0u8; 32],
+            session_stack: SessionStackState::default(),
+            flags,
+            counters: BTreeMap::new(),
+            join_expected: BTreeMap::new(),
+            state: ProcessState::Running,
+            correlation_id: "c".to_string(),
+            entry_id: Uuid::nil(),
+            runbook_id: Uuid::nil(),
+            created_at: 1,
+            integrity_hash: None,
+            quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
+        }
+    }
+
+    #[test]
+    fn correlation_key_string_canonicalizes_scalars_and_rejects_composites() {
+        use serde_json::json;
+        assert_eq!(correlation_key_string(&json!("ACME-42")).unwrap(), "ACME-42");
+        assert_eq!(correlation_key_string(&json!(42)).unwrap(), "42");
+        assert_eq!(correlation_key_string(&json!(-7)).unwrap(), "-7");
+        assert_eq!(correlation_key_string(&json!(true)).unwrap(), "true");
+        assert!(correlation_key_string(&json!(1.5)).is_err(), "float rejected");
+        assert!(correlation_key_string(&json!(null)).is_err(), "null rejected");
+        assert!(correlation_key_string(&json!([1, 2])).is_err(), "array rejected");
+        assert!(correlation_key_string(&json!({"a": 1})).is_err(), "object rejected");
+    }
+
+    #[test]
+    fn resolve_correlation_key_reads_a_dynamic_string_from_domain_payload() {
+        let instance = instance_with(r#"{"case_id":"ACME-42"}"#, BTreeMap::new());
+        let source = BindingSource::DomainPayloadRef(vec!["case_id".to_string()]);
+        assert_eq!(resolve_correlation_key(&instance, &source).unwrap(), "ACME-42");
+    }
+
+    #[test]
+    fn resolve_correlation_key_reads_an_i64_flag() {
+        let mut flags = BTreeMap::new();
+        flags.insert(3u32, Value::I64(99));
+        let instance = instance_with("{}", flags);
+        assert_eq!(
+            resolve_correlation_key(&instance, &BindingSource::FlagRef(3)).unwrap(),
+            "99"
+        );
+    }
+
+    #[test]
+    fn resolve_correlation_key_reads_a_string_literal() {
+        let instance = instance_with("{}", BTreeMap::new());
+        let source = BindingSource::Literal(Literal::String("fixed-key".to_string()));
+        assert_eq!(resolve_correlation_key(&instance, &source).unwrap(), "fixed-key");
+    }
+
+    #[test]
+    fn resolve_correlation_key_rejects_a_missing_payload_path() {
+        let instance = instance_with(r#"{"other":1}"#, BTreeMap::new());
+        let source = BindingSource::DomainPayloadRef(vec!["case_id".to_string()]);
+        assert!(resolve_correlation_key(&instance, &source).is_err());
+    }
+
+    #[test]
+    fn resolve_correlation_key_rejects_a_composite_payload_value() {
+        let instance = instance_with(r#"{"case_id":[1,2,3]}"#, BTreeMap::new());
+        let source = BindingSource::DomainPayloadRef(vec!["case_id".to_string()]);
+        assert!(resolve_correlation_key(&instance, &source).is_err());
+    }
 }

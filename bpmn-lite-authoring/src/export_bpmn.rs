@@ -237,6 +237,32 @@ pub fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
                     bid, host_bid, err_attr
                 )?;
             }
+            NodeDto::MultiInstance {
+                task_type,
+                bpmn_id,
+                collection_flag,
+                declared_max,
+                ..
+            } => {
+                let name_attr = bpmn_id
+                    .as_deref()
+                    .map(|n| format!(r#" name="{}""#, xml_escape(n)))
+                    .unwrap_or_default();
+                writeln!(
+                    xml,
+                    r#"    <bpmn:serviceTask id="{}"{}>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="{}" />
+      </bpmn:extensionElements>
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="{}" maxInstances="{}" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:serviceTask>"#,
+                    bid, name_attr, task_type, collection_flag, declared_max
+                )?;
+            }
         }
     }
 

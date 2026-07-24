@@ -421,6 +421,7 @@ name = "bpmn-lite-kernel"
 version = "0.1.0"
 dependencies = [
  "bpmn-lite-types",
+ "proptest",
 ]
 
 [[package]]

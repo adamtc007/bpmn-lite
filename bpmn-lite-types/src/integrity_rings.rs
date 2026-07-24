@@ -65,6 +65,16 @@ pub enum IntegrityError {
     /// chain (`prior_state_hash` == previous record's `state_hash`) fails.
     #[error("Ring 2 frame integrity violation: {0}")]
     Ring2Frame(String),
+    /// Ring 3 (V4.3): unconditional structural asserts over the decoded
+    /// frame at every park/resume — PC within program, operand/control
+    /// stack heights within `VerifiedLimits`, every control-stack handle
+    /// resolves in the concurrency table, K-1/K-2/K-3 shadows, every
+    /// pending effect owned by exactly one waiting fibre. A verified
+    /// program under a proven kernel yielding a structurally invalid
+    /// frame has one explanation — corruption — so this check is
+    /// unconditional and fail-closed, not test-only.
+    #[error("Ring 3 runtime integrity violation: {0}")]
+    Ring3Runtime(String),
 }
 
 #[cfg(test)]

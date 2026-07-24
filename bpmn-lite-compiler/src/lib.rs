@@ -21,7 +21,7 @@ pub mod verifier;
 // either `use bpmn_lite_compiler::IRGraph` (flat) or
 // `use bpmn_lite_compiler::ir::IRGraph` (module-qualified).
 pub use ir::*;
-pub use lowering::lower;
+pub use lowering::{lower, lower_v2};
 pub use parser::parse_bpmn;
 pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
@@ -62,6 +62,15 @@ impl Compiler {
         }
         let envelope = ArtifactEnvelope::from_legacy_program(legacy, env!("CARGO_PKG_VERSION"))?;
         ExecutableWorkflow::from_verified_envelope(envelope).map_err(Into::into)
+    }
+
+    /// V5.3 (§18, landed 2026-07-23): thin alias — `lower()` above now emits
+    /// v2 words unconditionally (the `LoweringTarget::V2`/`V1` split this
+    /// used to mirror is retired, see `lowering::lower`'s doc comment).
+    /// Kept, not removed, for existing call sites naming `lower_v2`
+    /// explicitly.
+    pub fn lower_v2(graph: &IRGraph) -> Result<VerifiedWorkflow> {
+        Self::lower(graph)
     }
 
     pub fn lower_dsl(

@@ -10,7 +10,9 @@ use bpmn_lite_analysis;
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::{HttpFfiOwner, HttpIdempotency, HttpMethod};
-use bpmn_lite_types::{ErrorClass, TenantId, Value};
+use bpmn_lite_types::{
+    ErrorClass, TenantId, Value, ValueLimitError, MAX_VALUE_ARRAY_DEPTH, MAX_VALUE_ARRAY_LEN,
+};
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
@@ -123,9 +125,70 @@ impl RequestLimits {
             if let Some(proto_value::Kind::StrValue(s)) = &value.kind {
                 self.check_string("orch_flags string value", s)?;
             }
+            // §18 ruling K Part 2 remediation (blind-review finding, see
+            // docs/todo/EOP-PLAN-BPMN-ISA-002.md): this is the actual
+            // untrusted-input boundary — `orch_flags` arrives from a gRPC
+            // client via `start_process`/`complete_job` and is merged
+            // straight into `instance.flags` (the latter with NO prior
+            // array-limit check at all, see `apply_completion`). Reject
+            // an oversized/deep `ArrayValue` HERE, before `proto_to_value`
+            // ever turns it into a `Value::Array` and before it is merged
+            // into `orch_flags`/`instance.flags` — a `Value::Array` that
+            // reaches `instance.flags` unchecked leaves the kernel-side
+            // `validate_snapshot_limits` backstop as the only thing
+            // standing between it and a permanently stuck instance (every
+            // `apply` call rejects at the top, `Cancel`/`Terminate`
+            // included, prior to this landing's kernel-side exemption).
+            if let Err(limit_error) = check_proto_value_array_limits(value) {
+                return Err(Status::resource_exhausted(format!(
+                    "orch_flags value for key {:?}: {}",
+                    key, limit_error
+                )));
+            }
         }
         Ok(())
     }
+}
+
+/// Recursive `Value::Array` size/depth check performed directly on the
+/// still-undecoded `ProtoValue` wire shape — mirrors
+/// `bpmn_lite_types::types::Value::check_array_limits_at_depth` exactly,
+/// walking `ProtoValueArray.items` the same way that method walks
+/// `Value::Array`'s `Vec<Value>`, and sharing the SAME
+/// `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` constants (imported from
+/// `bpmn_lite_types`, not re-derived) so the gRPC-boundary check and the
+/// kernel-side `validate_snapshot_limits` backstop can never drift apart
+/// on what "too large" means. Deliberately checked BEFORE
+/// `proto_to_value` converts to the owned `Value` tree, and depth-first
+/// during the walk (not after full traversal) — the same
+/// decode-time-not-after-the-fact reasoning `Value::canonical_decode`
+/// documents for the depth bound's actual purpose (bounding recursion,
+/// not merely rejecting the final result).
+fn check_proto_value_array_limits(value: &ProtoValue) -> Result<(), ValueLimitError> {
+    check_proto_value_array_limits_at_depth(value, 0)
+}
+
+fn check_proto_value_array_limits_at_depth(
+    value: &ProtoValue,
+    depth: u32,
+) -> Result<(), ValueLimitError> {
+    if let Some(proto_value::Kind::ArrayValue(array)) = &value.kind {
+        if depth >= MAX_VALUE_ARRAY_DEPTH {
+            return Err(ValueLimitError::TooDeep {
+                max: MAX_VALUE_ARRAY_DEPTH,
+            });
+        }
+        if array.items.len() > MAX_VALUE_ARRAY_LEN {
+            return Err(ValueLimitError::TooLong {
+                actual: array.items.len(),
+                max: MAX_VALUE_ARRAY_LEN,
+            });
+        }
+        for item in &array.items {
+            check_proto_value_array_limits_at_depth(item, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_usize_env(name: &str, default: usize) -> usize {
@@ -234,6 +297,16 @@ fn value_to_proto(v: &Value) -> ProtoValue {
         Value::Ref(idx) => ProtoValue {
             kind: Some(proto_value::Kind::StrValue(format!("ref_{}", idx))),
         },
+        // §18 ruling K Part 2: a genuine schema field (`ProtoValueArray`),
+        // not the lossy string-prefix convention used above — this is a
+        // real production entry point for MI collection data (`orch_flags`
+        // seeds `instance.flags` at spawn), so it must round-trip
+        // faithfully, recursively.
+        Value::Array(items) => ProtoValue {
+            kind: Some(proto_value::Kind::ArrayValue(ProtoValueArray {
+                items: items.iter().map(value_to_proto).collect(),
+            })),
+        },
     }
 }
 
@@ -242,34 +315,40 @@ fn proto_to_value(pv: &ProtoValue) -> Value {
         Some(proto_value::Kind::BoolValue(b)) => Value::Bool(*b),
         Some(proto_value::Kind::I64Value(n)) => Value::I64(*n),
         Some(proto_value::Kind::StrValue(_)) => Value::Str(0),
+        // §18 ruling K Part 2: recursive, faithful — unlike `StrValue`
+        // above (a pre-existing fidelity gap this landing does not
+        // repair), `Array` must round-trip its actual contents, since
+        // this is the real path an MI collection's element data arrives
+        // through from a gRPC client via `orch_flags`.
+        Some(proto_value::Kind::ArrayValue(arr)) => {
+            Value::Array(arr.items.iter().map(proto_to_value).collect())
+        }
         None => Value::Bool(false),
     }
 }
 
 #[allow(clippy::result_large_err)]
-fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<Value, Status> {
-    match pv.as_ref().and_then(|value| value.kind.as_ref()) {
-        Some(proto_value::Kind::BoolValue(b)) => Ok(Value::Bool(*b)),
-        Some(proto_value::Kind::I64Value(n)) => Ok(Value::I64(*n)),
-        Some(proto_value::Kind::StrValue(s)) => {
-            if let Some(rest) = s.strip_prefix("str_") {
-                return rest
-                    .parse::<u32>()
-                    .map(Value::Str)
-                    .map_err(|_| Status::invalid_argument("invalid str_ correlation key"));
-            }
-            if let Some(rest) = s.strip_prefix("ref_") {
-                return rest
-                    .parse::<u32>()
-                    .map(Value::Ref)
-                    .map_err(|_| Status::invalid_argument("invalid ref_ correlation key"));
-            }
-            Err(Status::invalid_argument(
-                "string correlation keys must use str_<id> or ref_<id>",
-            ))
+/// §28: the correlation key arrives as raw content (a business key), not an
+/// intern id. Canonicalize it to the same content string a waiting
+/// subscription derives from its own process data via `correlation_key_string`
+/// — string keys pass through verbatim (a dynamic `case_id` like `"ACME-42"`),
+/// integers/bools canonicalize identically on both sides.
+fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status> {
+    use bpmn_lite_types::ffi_bindings::correlation_key_string;
+    let scalar = match pv.as_ref().and_then(|value| value.kind.as_ref()) {
+        Some(proto_value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
+        Some(proto_value::Kind::I64Value(n)) => (*n).into(),
+        Some(proto_value::Kind::StrValue(s)) => serde_json::Value::String(s.clone()),
+        // A composite is not a valid correlation key — correlation always
+        // keys on a single scalar. Fail closed with a typed rejection.
+        Some(proto_value::Kind::ArrayValue(_)) => {
+            return Err(Status::invalid_argument(
+                "correlation keys must be scalar (bool/i64/string), not an array",
+            ));
         }
-        None => Ok(Value::Bool(false)),
-    }
+        None => serde_json::Value::Bool(false),
+    };
+    correlation_key_string(&scalar).map_err(|error| Status::invalid_argument(error.to_string()))
 }
 
 fn proto_to_orch_flags(
@@ -585,6 +664,7 @@ impl BpmnLite for BpmnLiteService {
             bpmn_lite_types::ProcessState::Completed { .. } => "COMPLETED",
             bpmn_lite_types::ProcessState::Cancelled { .. } => "CANCELLED",
             bpmn_lite_types::ProcessState::Failed { .. } => "FAILED",
+            bpmn_lite_types::ProcessState::Incidented { .. } => "INCIDENTED",
             bpmn_lite_types::ProcessState::Terminated { .. } => "TERMINATED",
             bpmn_lite_types::ProcessState::WaitingOnSubmission { .. } => "WAITING_ON_SUBMISSION",
             bpmn_lite_types::ProcessState::WaitingOnInvocation { .. } => "WAITING_ON_INVOCATION",
@@ -622,11 +702,14 @@ impl BpmnLite for BpmnLiteService {
                         ("EFFECT".to_string(), effect_id.as_uuid().to_string())
                     }
                     bpmn_lite_types::WaitState::Join { .. } => ("JOIN".to_string(), String::new()),
+                    bpmn_lite_types::WaitState::V2Barrier { record_id } => {
+                        ("V2_BARRIER".to_string(), record_id.to_string())
+                    }
+                    bpmn_lite_types::WaitState::V2Race { record_id, .. } => {
+                        ("V2_RACE".to_string(), record_id.to_string())
+                    }
                     bpmn_lite_types::WaitState::Incident { incident_id } => {
                         ("INCIDENT".to_string(), incident_id.to_string())
-                    }
-                    bpmn_lite_types::WaitState::Race { race_id, .. } => {
-                        ("RACE".to_string(), format!("race_{}", race_id))
                     }
                     bpmn_lite_types::WaitState::Running => unreachable!(),
                 };

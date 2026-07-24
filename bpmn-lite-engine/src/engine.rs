@@ -413,6 +413,7 @@ impl BpmnLiteEngine {
                             EffectResponse::Failed {
                                 error_class,
                                 message,
+                                attempt: claimed_effect.attempt(),
                             }
                         }
                     }
@@ -435,6 +436,7 @@ impl BpmnLiteEngine {
                     error_class: ErrorClass::ContractViolation,
                     message: "ExecFfi reached dispatcher boundary with no FfiDispatcher configured"
                         .to_string(),
+                    attempt: claimed_effect.attempt(),
                 }
             };
             self.store
@@ -477,10 +479,18 @@ impl BpmnLiteEngine {
             RetryDecision::Exhausted => Ok(Some(EffectResponse::Failed {
                 error_class: ErrorClass::Transient,
                 message: format!("effect retry budget exhausted: {message}"),
+                // Mirrors the store's own `schedule_effect_retry` handling
+                // of `RetryDecision::Exhausted` (attempt + 1: the attempt
+                // that just exhausted the budget counts).
+                attempt: effect.attempt().saturating_add(1),
             })),
             RetryDecision::Terminal => Ok(Some(EffectResponse::Failed {
                 error_class: ErrorClass::ContractViolation,
                 message,
+                // Mirrors the store's own handling of `RetryDecision::Terminal`
+                // (attempt unchanged: this error class was never retriable,
+                // so no new attempt was consumed deciding that).
+                attempt: effect.attempt(),
             })),
         }
     }
@@ -521,12 +531,14 @@ impl BpmnLiteEngine {
                 EffectResponse::Failed {
                     error_class,
                     message,
+                    attempt,
                 } => Command::EffectFailed {
                     effect_id: pending.effect_id(),
                     job_key: String::new(),
                     error_class: error_class.clone(),
                     message: message.clone(),
                     retry: None,
+                    attempt: *attempt,
                 },
             };
             self.apply_and_commit_command(pending.instance_id(), command)
@@ -998,16 +1010,28 @@ impl BpmnLiteEngine {
                     .values()
                     .filter(|fiber| fiber.wait == WaitState::Running)
                 {
-                    let Some(Instr::WaitMsg { name, corr_reg, .. }) =
+                    let Some(Instr::V2WaitMsg { name }) =
                         artifact.envelope().instructions().get(fiber.pc.index())
                     else {
                         continue;
                     };
-                    let correlation = fiber
-                        .regs
-                        .get(*corr_reg as usize)
-                        .cloned()
-                        .unwrap_or(Value::Bool(false));
+                    // §28: resolve this wait's correlation key from process
+                    // data via its `v2_corr_sources` entry; a source that
+                    // can't resolve to a scalar claims nothing (fail closed),
+                    // rather than claiming on a wrong/default key.
+                    let Some(source) = artifact
+                        .envelope()
+                        .metadata()
+                        .v2_corr_sources()
+                        .get(&fiber.pc)
+                    else {
+                        continue;
+                    };
+                    let Ok(correlation_key) =
+                        bpmn_lite_types::ffi_bindings::resolve_correlation_key(instance, source)
+                    else {
+                        continue;
+                    };
                     let message_name = artifact
                         .envelope()
                         .metadata()
@@ -1020,7 +1044,7 @@ impl BpmnLiteEngine {
                         .claim_buffered_message(
                             &TenantId::new(instance.tenant_id.clone())?,
                             &message_name,
-                            &value_key(&correlation),
+                            &correlation_key,
                             DEFAULT_MESSAGE_CLAIM_MS,
                         )
                         .await?
@@ -1241,6 +1265,9 @@ impl BpmnLiteEngine {
                 error_class,
                 message: message.to_string(),
                 retry: None,
+                // No RetryPolicy bookkeeping is consulted on this path
+                // (V&S §15 ruling E): honest absence, not a lie.
+                attempt: 0,
             },
         )
         .await
@@ -1289,6 +1316,9 @@ impl BpmnLiteEngine {
                         .checked_add(1)
                         .ok_or_else(|| anyhow!("retry timestamp overflow"))?,
                 )),
+                // No RetryPolicy bookkeeping is consulted on this path
+                // (V&S §15 ruling E): honest absence, not a lie.
+                attempt: 0,
             },
         )
         .await
@@ -1303,11 +1333,10 @@ impl BpmnLiteEngine {
         domain_payload_hash: Option<[u8; 32]>,
         _msg_id: Option<&str>,
     ) -> Result<()> {
-        let corr_key = parse_signal_corr_key(corr_key);
         self.signal_with_value(
             instance_id,
             _msg_name,
-            corr_key,
+            corr_key.to_string(),
             domain_payload,
             domain_payload_hash,
             _msg_id,
@@ -1315,11 +1344,15 @@ impl BpmnLiteEngine {
         .await
     }
 
+    /// `corr_key` is the content correlation key (§28) — matched by string
+    /// equality against the key a waiting subscription resolved from its own
+    /// process data. Callers at the gRPC boundary canonicalize the wire value
+    /// via `correlation_key_string` before this point.
     pub async fn signal_with_value(
         &self,
         instance_id: Uuid,
         msg_name: &str,
-        corr_key: Value,
+        corr_key: String,
         domain_payload: Option<&str>,
         domain_payload_hash: Option<[u8; 32]>,
         msg_id: Option<&str>,
@@ -1333,7 +1366,7 @@ impl BpmnLiteEngine {
             Command::MessageDelivered {
                 message_id: msg_id.to_string(),
                 name: msg_name.to_string(),
-                correlation_key: value_key(&corr_key),
+                correlation_key: corr_key,
                 payload: domain_payload.map(str::as_bytes).unwrap_or(&[]).to_vec(),
                 payload_hash: domain_payload_hash,
                 expires_at: now + DEFAULT_MESSAGE_TTL_MS as i64,
@@ -1740,6 +1773,10 @@ impl BpmnLiteEngine {
                                     &template_id_hex[..16]
                                 ),
                                 retry: None,
+                                // No RetryPolicy bookkeeping is consulted
+                                // on this path (V&S §15 ruling E): honest
+                                // absence, not a lie.
+                                attempt: 0,
                             },
                         ).await?;
                     }
@@ -1799,41 +1836,6 @@ fn parse_job_key(job_key: &str) -> Result<(Uuid, String, u32)> {
         .parse()
         .map_err(|e| anyhow!("Invalid pc in job_key: {}", e))?;
     Ok((instance_id, service_task_id, pc))
-}
-
-fn parse_signal_corr_key(corr_key: &str) -> Value {
-    if corr_key.is_empty() {
-        return Value::Bool(false);
-    }
-    if corr_key == "true" {
-        return Value::Bool(true);
-    }
-    if corr_key == "false" {
-        return Value::Bool(false);
-    }
-    if let Ok(n) = corr_key.parse::<i64>() {
-        return Value::I64(n);
-    }
-    if let Some(rest) = corr_key.strip_prefix("str_") {
-        if let Ok(n) = rest.parse::<u32>() {
-            return Value::Str(n);
-        }
-    }
-    if let Some(rest) = corr_key.strip_prefix("ref_") {
-        if let Ok(n) = rest.parse::<u32>() {
-            return Value::Ref(n);
-        }
-    }
-    Value::Bool(false)
-}
-
-fn value_key(value: &Value) -> String {
-    match value {
-        Value::Bool(b) => format!("b:{b}"),
-        Value::I64(n) => format!("i:{n}"),
-        Value::Str(s) => format!("s:{s}"),
-        Value::Ref(r) => format!("r:{r}"),
-    }
 }
 
 // ── A8 FFI helpers ────────────────────────────────────────────────────────────

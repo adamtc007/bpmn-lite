@@ -25,6 +25,10 @@ jobs:
         run: bash scripts/check-canonical-invariant.sh --self-test
       - name: Canonical hash-domain invariant guard
         run: bash scripts/check-canonical-invariant.sh
+      - name: Transition read-safety guard self-test
+        run: bash scripts/check-transition-read-safety.sh --self-test
+      - name: Transition read-safety guard
+        run: bash scripts/check-transition-read-safety.sh
       - name: Deterministic kernel WASI Preview 2 build
         run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
       - name: Native/WASM replay byte equality

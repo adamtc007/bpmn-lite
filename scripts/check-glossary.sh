@@ -63,19 +63,16 @@ fi
 
 echo "== bpmn-lite glossary guard (V&S §2) =="
 
-# Directories holding ISA/bytecode/runtime-state identifiers. Excludes DSL
-# and DMN lexers/parsers, where "Token" is legitimate source-text lexing
-# vocabulary, not a bytecode/instruction identifier.
-isa_dirs=(
-  bpmn-lite-types/src
-  bpmn-lite-kernel/src
-  bpmn-lite-store/src
-  bpmn-lite-store-postgres/src
-  bpmn-lite-engine/src
-  bpmn-lite-vm/src
-  bpmn-lite-server/src
-  bpmn-lite-authoring/src
-)
+# Every workspace crate's src/, derived from the Cargo.toml layout so a
+# newly-added crate is scanned automatically — a hardcoded list silently
+# stops gating whatever it omits. Lexers/parsers are excluded below (not
+# here): "Token" is legitimate source-text lexing vocabulary there, not a
+# bytecode/instruction identifier.
+isa_dirs=()
+while IFS= read -r cargo_toml; do
+  src_dir="$(dirname "$cargo_toml")/src"
+  [ -d "$src_dir" ] && isa_dirs+=("$src_dir")
+done < <(find . -maxdepth 3 -name Cargo.toml -not -path './target/*' | sort)
 isa_files_excluding_lexers() {
   for dir in "${isa_dirs[@]}"; do
     [ -d "$dir" ] || continue

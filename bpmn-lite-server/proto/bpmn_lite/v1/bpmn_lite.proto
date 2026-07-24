@@ -265,5 +265,23 @@ message ProtoValue {
         bool bool_value = 1;
         int64 i64_value = 2;
         string str_value = 3;
+        // §18 ruling K Part 2: `Value::Array`. This IS a real production
+        // entry point for an MI collection's element data (`orch_flags`
+        // is how a client seeds `instance.flags` at spawn/resume) — not
+        // a cosmetic boundary, so this is a genuine schema field, not the
+        // lossy string-prefix convention `Value::Ref` uses above
+        // (`ref_<id>`/`str_<id>` encoded into `str_value`, an existing,
+        // pre-this-landing fidelity gap in this bridge — `proto_to_value`
+        // below already collapses every `StrValue` to `Value::Str(0)`
+        // regardless of prefix; not repaired here, out of this landing's
+        // scope, but not silently extended to `Array` either).
+        ProtoValueArray array_value = 4;
     }
+}
+
+// A `repeated` field cannot appear directly inside a `oneof` (protobuf
+// language rule) — this one-field wrapper message is the standard way
+// around that restriction.
+message ProtoValueArray {
+    repeated ProtoValue items = 1;
 }

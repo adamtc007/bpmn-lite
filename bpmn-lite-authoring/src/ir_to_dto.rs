@@ -187,6 +187,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             attached_to,
             spec,
             interrupting,
+            ..
         } => {
             let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec);
             NodeDto::BoundaryTimer {
@@ -204,11 +205,29 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             id,
             attached_to,
             error_code,
+            ..
         } => NodeDto::BoundaryError {
             id: id.clone(),
             host: attached_to.clone(),
             error_code: error_code.clone(),
         },
+
+        IRNode::MultiInstance {
+            id,
+            name,
+            task_type,
+            collection_flag_name,
+            declared_max,
+        } => {
+            let bpmn_id = if name != id { Some(name.clone()) } else { None };
+            NodeDto::MultiInstance {
+                id: id.clone(),
+                task_type: task_type.clone(),
+                bpmn_id,
+                collection_flag: collection_flag_name.clone(),
+                declared_max: *declared_max,
+            }
+        }
 
         // DataObject and FfiServiceTask are not represented in the DTO/YAML
         // authoring layer (they are FFI-specific constructs). If encountered,

@@ -231,6 +231,7 @@ impl JournalCommand {
             Self::Kernel(Command::ResolveIncident { .. }) => "resolve_incident",
             Self::Kernel(Command::StartChildResult { .. }) => "start_child_result",
             Self::Kernel(Command::JobClaimed { .. }) => "job_claimed",
+            Self::Kernel(Command::V2TriggerGuard { .. }) => "v2_trigger_guard",
             Self::Start(_) => "start",
             Self::Administrative { .. } => "administrative",
         }
@@ -542,5 +543,68 @@ mod tests {
              — if this is a deliberate encoding change, regenerate the fixture and have a \
              reviewer ratify the diff; it is exactly the R1 risk this test exists to catch"
         );
+    }
+
+    fn perf_instance() -> ProcessInstance {
+        ProcessInstance {
+            instance_id: Uuid::from_u128(1),
+            tenant_id: "tenant".to_string(),
+            process_key: "process".to_string(),
+            bytecode_version: [1; 32],
+            domain_payload: Arc::from("{}"),
+            domain_payload_hash: EffectId::content_hash(b"{}"),
+            session_stack: SessionStackState::default(),
+            flags: BTreeMap::new(),
+            counters: BTreeMap::new(),
+            join_expected: BTreeMap::new(),
+            state: ProcessState::Running,
+            correlation_id: "correlation".to_string(),
+            entry_id: Uuid::nil(),
+            runbook_id: Uuid::nil(),
+            created_at: 1,
+            integrity_hash: None,
+            quarantine_state: None,
+            plan_hash: None,
+            current_node_id: None,
+            placeholder_values: None,
+        }
+    }
+
+    fn perf_frame_bytes(live_fibers: usize) -> usize {
+        let fibers = (0..live_fibers).map(|index| {
+            Fiber::new(Uuid::from_u128(1_000 + index as u128), crate::types::Addr::new(0))
+        });
+        PersistedSnapshotState::new(
+            perf_instance(),
+            fibers,
+            BTreeMap::new(),
+            [],
+            ConcurrencyTable::new(),
+            [],
+        )
+        .try_canonical_hash_bytes()
+        .unwrap()
+        .len()
+    }
+
+    /// T11 perf claim — the persisted frame size is proportional to the
+    /// number of live tokens (fibres), never to program size: `Instr` lives
+    /// in the artifact envelope, not the STATE frame, so the STATE encoding
+    /// takes no program input. Identical fibres carry a fixed per-fibre byte
+    /// cost, so the frame is *exactly* `base + N·per_fibre` — a superlinear
+    /// term (history, program, or anything else creeping into the frame)
+    /// breaks the equality.
+    #[test]
+    fn v2_frame_size_is_linear_in_live_fiber_count() {
+        let base = perf_frame_bytes(0);
+        let per_fiber = perf_frame_bytes(1) - base;
+        assert!(per_fiber > 0, "one live fibre must add bytes");
+        for live in [2usize, 4, 8, 16, 32, 64] {
+            assert_eq!(
+                perf_frame_bytes(live),
+                base + live * per_fiber,
+                "frame size must be exactly base + N·per_fibre (live={live})"
+            );
+        }
     }
 }

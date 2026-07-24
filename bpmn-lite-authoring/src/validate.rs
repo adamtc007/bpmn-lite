@@ -167,39 +167,26 @@ pub fn validate_dto(dto: &WorkflowGraphDto) -> Vec<ValidationError> {
         }
     }
 
-    // V10: At most one InclusiveGateway pair
-    let inclusive_diverging = dto
-        .nodes
-        .iter()
-        .filter(|n| {
-            matches!(
-                n,
-                NodeDto::InclusiveGateway {
-                    direction: bpmn_lite_compiler::ir::GatewayDirection::Diverging,
-                    ..
-                }
-            )
-        })
-        .count();
-    let inclusive_converging = dto
-        .nodes
-        .iter()
-        .filter(|n| {
-            matches!(
-                n,
-                NodeDto::InclusiveGateway {
-                    direction: bpmn_lite_compiler::ir::GatewayDirection::Converging,
-                    ..
-                }
-            )
-        })
-        .count();
-    if inclusive_diverging > 1 || inclusive_converging > 1 {
-        errors.push(ValidationError {
-            rule: "V10".to_string(),
-            message: "Multiple inclusive gateway pairs not supported (v1)".to_string(),
-        });
-    }
+    // V10: (formerly) at most one InclusiveGateway pair — LIFTED. Used to
+    // mirror `bpmn-lite-compiler/src/verifier.rs`'s "9. Inclusive gateway
+    // validation" blanket count rejection at the DTO layer, for the
+    // identical reason: the old `lowering.rs` `inclusive_pairing_stack`
+    // paired fork/join identity via a stack popped in BFS-traversal order,
+    // which mispaired overlapping/nested GatewayInclusive pairs (confirmed
+    // 2026-07-23 by hand construction).
+    //
+    // Direction A (2026-07-24, `docs/todo/EOP-VS-BPMN-ISA-002.md` §19)
+    // replaced that pairing mechanism with `lowering.rs`'s
+    // `compute_gateway_pairing` (DFS-recursive, clone-the-stack-per-branch)
+    // and extended `verifier.rs`'s `check_gateway_and_nesting` (§4a) to
+    // structurally validate the same nesting property for any number of
+    // `GatewayAnd`/`GatewayInclusive` pairs — see `verifier.rs`'s "9.
+    // Inclusive gateway validation" doc comment for the full record. The
+    // IR-level verifier (`verify()`, always run after DTO→IR lowering in
+    // the real pipeline — see `dto_to_ir.rs`) is what now provides this
+    // guarantee; this DTO-layer rule mirrored it only to fail fast before
+    // lowering, and that mirrored restriction is no longer warranted now
+    // that the restriction itself is lifted at the IR layer.
 
     // V11: BoundaryTimer.host references a ServiceTask
     for node in &dto.nodes {

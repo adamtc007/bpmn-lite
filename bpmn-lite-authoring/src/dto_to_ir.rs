@@ -120,6 +120,9 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                     attached_to: host.clone(),
                     spec,
                     interrupting: *interrupting,
+                    // DSL/DTO authoring carries no per-guard budget surface
+                    // (§31) — guards lowered from the DTO inherit the default.
+                    failure_budget: None,
                 }
             }
 
@@ -131,6 +134,21 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 id: id.clone(),
                 attached_to: host.clone(),
                 error_code: error_code.clone(),
+                failure_budget: None,
+            },
+
+            NodeDto::MultiInstance {
+                id,
+                task_type,
+                bpmn_id,
+                collection_flag,
+                declared_max,
+            } => IRNode::MultiInstance {
+                id: id.clone(),
+                name: bpmn_id.as_ref().cloned().unwrap_or_else(|| id.clone()),
+                task_type: task_type.clone(),
+                collection_flag_name: collection_flag.clone(),
+                declared_max: *declared_max,
             },
         };
 
@@ -158,6 +176,7 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
             id: synth_id.clone(),
             attached_to: from_id.clone(),
             error_code: error_code.clone(),
+            failure_budget: None,
         };
         let idx = graph.add_node(ir_node);
         node_index_map.insert(synth_id.clone(), idx);
@@ -424,6 +443,7 @@ mod tests {
                     id,
                     attached_to,
                     error_code: Some(code),
+                    ..
                 } if id == "err_task_a_BIZ_001" && attached_to == "task_a" && code == "BIZ_001"
             )
         });

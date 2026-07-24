@@ -142,6 +142,11 @@ impl CanonicalWriter {
 pub struct CanonicalReader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Live `Value::Array` nesting depth during `Value::canonical_decode`
+    /// recursion (§18 ruling K Part 2). Zero everywhere else. See
+    /// `types::MAX_VALUE_ARRAY_DEPTH`'s doc comment for why this is
+    /// checked mid-recursion rather than post-hoc.
+    array_depth: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -154,11 +159,19 @@ pub enum CanonicalDecodeError {
     UnknownTag { tag: u8, type_name: &'static str },
     #[error("canonical decode: {0} trailing bytes after decode")]
     TrailingBytes(usize),
+    #[error("canonical decode: Value::Array nesting depth exceeds {max}")]
+    ValueArrayTooDeep { max: u32 },
+    #[error("canonical decode: Value::Array length {actual} exceeds {max}")]
+    ValueArrayTooLong { actual: usize, max: usize },
 }
 
 impl<'a> CanonicalReader<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            pos: 0,
+            array_depth: 0,
+        }
     }
 
     /// Assert the reader consumed every byte — proves the encoder/decoder
@@ -386,6 +399,38 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         w.write_option(&self.handler, |w, a| a.canonical_encode(w));
         self.state.canonical_encode(w);
         self.counters.canonical_encode(w);
+        w.write_option(&self.rollback_domain_payload, |w, p| w.write_str(p));
+        w.write_option(&self.rollback_domain_payload_hash, |w, h| {
+            w.write_bytes_fixed(h)
+        });
+        // A18 A3 rollback-set additions. `rollback_flags`/
+        // `rollback_join_expected` encode structurally (their element
+        // types — `u32` keys, `Value`/`u16` values — already have
+        // infallible `CanonicalEncode`/primitive writers);
+        // `rollback_session_stack` is opaque serialized text — see the
+        // struct doc comment for why it can't follow the structural path.
+        w.write_option(&self.rollback_flags, |w, flags| {
+            w.write_seq(flags.iter(), |w, (k, v)| {
+                w.write_u32(*k);
+                v.canonical_encode(w);
+            });
+        });
+        w.write_option(&self.rollback_join_expected, |w, joins| {
+            w.write_seq(joins.iter(), |w, (k, v)| {
+                w.write_u32(*k);
+                w.write_u16(*v);
+            });
+        });
+        w.write_option(&self.rollback_session_stack, |w, s| w.write_str(s));
+        w.write_option(&self.opened_at, |w, a| a.canonical_encode(w));
+        // BoundaryError v2 migration: armed error-match routes. Encoded
+        // structurally (length-prefixed sequence of `(Option<code>, Addr)`
+        // pairs), same convention `rollback_flags`/`rollback_join_expected`
+        // already use for their own structural Vec/Map content.
+        w.write_seq(self.error_routes.iter(), |w, (code, addr)| {
+            w.write_option(code, |w, c| w.write_str(c));
+            addr.canonical_encode(w);
+        });
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
         let id = crate::concurrency::RecordId::canonical_decode(r)?;
@@ -397,6 +442,35 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
         let handler = r.read_option(crate::types::Addr::canonical_decode)?;
         let state = crate::concurrency::RecordState::canonical_decode(r)?;
         let counters = crate::concurrency::RecordCounters::canonical_decode(r)?;
+        let rollback_domain_payload = r
+            .read_option(|r| r.read_str())?
+            .map(String::into_boxed_str);
+        let rollback_domain_payload_hash = r.read_option(|r| r.read_bytes_fixed::<32>())?;
+        let rollback_flags = r.read_option(|r| {
+            let entries = r.read_seq(|r| -> Result<(u32, crate::types::Value), CanonicalDecodeError> {
+                let k = r.read_u32()?;
+                let v = crate::types::Value::canonical_decode(r)?;
+                Ok((k, v))
+            })?;
+            Ok::<_, CanonicalDecodeError>(entries.into_iter().collect::<std::collections::BTreeMap<_, _>>())
+        })?;
+        let rollback_join_expected = r.read_option(|r| {
+            let entries = r.read_seq(|r| -> Result<(u32, u16), CanonicalDecodeError> {
+                let k = r.read_u32()?;
+                let v = r.read_u16()?;
+                Ok((k, v))
+            })?;
+            Ok::<_, CanonicalDecodeError>(entries.into_iter().collect::<std::collections::BTreeMap<_, _>>())
+        })?;
+        let rollback_session_stack = r
+            .read_option(|r| r.read_str())?
+            .map(String::into_boxed_str);
+        let opened_at = r.read_option(crate::types::Addr::canonical_decode)?;
+        let error_routes = r.read_seq(|r| -> Result<(Option<Box<str>>, crate::types::Addr), CanonicalDecodeError> {
+            let code = r.read_option(|r| r.read_str())?.map(String::into_boxed_str);
+            let addr = crate::types::Addr::canonical_decode(r)?;
+            Ok((code, addr))
+        })?;
         Ok(Self {
             id,
             kind,
@@ -404,6 +478,13 @@ impl CanonicalEncode for crate::concurrency::ConcurrencyRecord {
             handler,
             state,
             counters,
+            rollback_domain_payload,
+            rollback_domain_payload_hash,
+            rollback_flags,
+            rollback_join_expected,
+            rollback_session_stack,
+            opened_at,
+            error_routes,
         })
     }
 }
@@ -436,7 +517,12 @@ impl CanonicalEncode for BTreeSet<crate::EffectId> {
     }
 }
 
-/// Tags: `0x00` Bool, `0x01` I64, `0x02` Str(interned id), `0x03` Ref(handle).
+/// Tags: `0x00` Bool, `0x01` I64, `0x02` Str(interned id), `0x03`
+/// Ref(handle), `0x04` Array (§18 ruling K Part 2). `Array` encodes as a
+/// `u32le` element count then each element recursively via `Value`'s own
+/// `CanonicalEncode` impl — genuinely recursive; nesting is structurally
+/// permitted (see `types::Value`'s doc comment for why), bounded by
+/// `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` on the decode side.
 impl CanonicalEncode for crate::types::Value {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
         match self {
@@ -456,6 +542,10 @@ impl CanonicalEncode for crate::types::Value {
                 w.write_u8(0x03);
                 w.write_u32(*id);
             }
+            Self::Array(items) => {
+                w.write_u8(0x04);
+                w.write_seq(items.iter(), |w, item| item.canonical_encode(w));
+            }
         }
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
@@ -464,6 +554,32 @@ impl CanonicalEncode for crate::types::Value {
             0x01 => Self::I64(r.read_u64()? as i64),
             0x02 => Self::Str(r.read_u32()?),
             0x03 => Self::Ref(r.read_u32()?),
+            0x04 => {
+                // Depth checked BEFORE recursing into elements — this is
+                // what actually bounds decoder stack depth against an
+                // adversarial-nesting input, not merely rejecting the
+                // fully-built result afterward (see `MAX_VALUE_ARRAY_DEPTH`'s
+                // doc comment).
+                r.array_depth += 1;
+                if r.array_depth > crate::types::MAX_VALUE_ARRAY_DEPTH {
+                    return Err(CanonicalDecodeError::ValueArrayTooDeep {
+                        max: crate::types::MAX_VALUE_ARRAY_DEPTH,
+                    });
+                }
+                let len = r.read_u32()? as usize;
+                if len > crate::types::MAX_VALUE_ARRAY_LEN {
+                    return Err(CanonicalDecodeError::ValueArrayTooLong {
+                        actual: len,
+                        max: crate::types::MAX_VALUE_ARRAY_LEN,
+                    });
+                }
+                let mut items = Vec::with_capacity(len.min(1 << 16));
+                for _ in 0..len {
+                    items.push(Self::canonical_decode(r)?);
+                }
+                r.array_depth -= 1;
+                Self::Array(items)
+            }
             tag => {
                 return Err(CanonicalDecodeError::UnknownTag {
                     tag,
@@ -475,7 +591,13 @@ impl CanonicalEncode for crate::types::Value {
 }
 
 /// Tags: `0x00` Running, `0x01` Timer, `0x02` Msg, `0x03` Job, `0x04` Effect,
-/// `0x05` Join, `0x06` Race, `0x07` Incident.
+/// `0x05` Join, `0x07` Incident, `0x08` V2Barrier, `0x09` V2Race. `0x06`
+/// (v1 `Race`) is permanently retired, not reused (V5.3, §18, landed
+/// 2026-07-23 — `WaitState::Race` is deleted along with `race_plan`/
+/// `boundary_map`) — decoding `0x06` is a typed `UnknownTag` error, same
+/// as any other never-assigned byte, rather than silently accepting stale
+/// persisted v1 bytes or reusing the tag for something new (greenfield:
+/// no v1 state survives cutover, per the plan's wipe-and-recompile rule).
 impl CanonicalEncode for crate::types::WaitState {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
         match self {
@@ -492,7 +614,7 @@ impl CanonicalEncode for crate::types::WaitState {
                 w.write_u8(0x02);
                 w.write_u32(*wait_id);
                 w.write_u32(*name);
-                corr_key.canonical_encode(w);
+                w.write_str(corr_key);
             }
             Self::Job { job_key } => {
                 w.write_u8(0x03);
@@ -506,27 +628,18 @@ impl CanonicalEncode for crate::types::WaitState {
                 w.write_u8(0x05);
                 w.write_u32(*join_id);
             }
-            Self::Race {
-                race_id,
-                timer_deadline_ms,
-                job_key,
-                interrupting,
-                timer_arm_index,
-                cycle_remaining,
-                cycle_fired_count,
-            } => {
-                w.write_u8(0x06);
-                w.write_u32(*race_id);
-                w.write_option(timer_deadline_ms, |w, v| w.write_u64(*v));
-                w.write_option(job_key, |w, v| w.write_str(v));
-                w.write_bool(*interrupting);
-                w.write_option(timer_arm_index, |w, v| w.write_u64(*v as u64));
-                w.write_option(cycle_remaining, |w, v| w.write_u32(*v));
-                w.write_u32(*cycle_fired_count);
-            }
             Self::Incident { incident_id } => {
                 w.write_u8(0x07);
                 incident_id.canonical_encode(w);
+            }
+            Self::V2Barrier { record_id } => {
+                w.write_u8(0x08);
+                record_id.canonical_encode(w);
+            }
+            Self::V2Race { record_id, arms } => {
+                w.write_u8(0x09);
+                record_id.canonical_encode(w);
+                w.write_seq(arms.iter(), |w, arm| arm.canonical_encode(w));
             }
         }
     }
@@ -539,7 +652,7 @@ impl CanonicalEncode for crate::types::WaitState {
             0x02 => Self::Msg {
                 wait_id: r.read_u32()?,
                 name: r.read_u32()?,
-                corr_key: crate::types::Value::canonical_decode(r)?,
+                corr_key: r.read_str()?,
             },
             0x03 => Self::Job {
                 job_key: r.read_str()?,
@@ -550,22 +663,75 @@ impl CanonicalEncode for crate::types::WaitState {
             0x05 => Self::Join {
                 join_id: r.read_u32()?,
             },
-            0x06 => Self::Race {
-                race_id: r.read_u32()?,
-                timer_deadline_ms: r.read_option(|r| r.read_u64())?,
-                job_key: r.read_option(|r| r.read_str())?,
-                interrupting: r.read_bool()?,
-                timer_arm_index: r.read_option(|r| Ok(r.read_u64()? as usize))?,
-                cycle_remaining: r.read_option(|r| r.read_u32())?,
-                cycle_fired_count: r.read_u32()?,
-            },
             0x07 => Self::Incident {
                 incident_id: uuid::Uuid::canonical_decode(r)?,
+            },
+            0x08 => Self::V2Barrier {
+                record_id: crate::concurrency::RecordId::canonical_decode(r)?,
+            },
+            0x09 => Self::V2Race {
+                record_id: crate::concurrency::RecordId::canonical_decode(r)?,
+                arms: r.read_seq(crate::types::V2RaceArm::canonical_decode)?,
             },
             tag => {
                 return Err(CanonicalDecodeError::UnknownTag {
                     tag,
                     type_name: "WaitState",
+                })
+            }
+        })
+    }
+}
+
+/// Tags: `0x00` Timer, `0x01` Msg, `0x02` Effect.
+impl CanonicalEncode for crate::types::V2RaceArm {
+    fn canonical_encode(&self, w: &mut CanonicalWriter) {
+        match self {
+            Self::Timer { target } => {
+                w.write_u8(0x00);
+                target.canonical_encode(w);
+            }
+            Self::Msg {
+                target,
+                name,
+                corr_key,
+            } => {
+                w.write_u8(0x01);
+                target.canonical_encode(w);
+                w.write_u32(*name);
+                w.write_str(corr_key);
+            }
+            Self::Effect {
+                target,
+                effect_id,
+                template_id,
+            } => {
+                w.write_u8(0x02);
+                target.canonical_encode(w);
+                effect_id.canonical_encode(w);
+                w.write_bytes_fixed(template_id);
+            }
+        }
+    }
+    fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
+        Ok(match r.read_u8()? {
+            0x00 => Self::Timer {
+                target: crate::types::Addr::canonical_decode(r)?,
+            },
+            0x01 => Self::Msg {
+                target: crate::types::Addr::canonical_decode(r)?,
+                name: r.read_u32()?,
+                corr_key: r.read_str()?,
+            },
+            0x02 => Self::Effect {
+                target: crate::types::Addr::canonical_decode(r)?,
+                effect_id: crate::EffectId::canonical_decode(r)?,
+                template_id: r.read_bytes_fixed::<32>()?,
+            },
+            tag => {
+                return Err(CanonicalDecodeError::UnknownTag {
+                    tag,
+                    type_name: "V2RaceArm",
                 })
             }
         })
@@ -594,6 +760,10 @@ impl CanonicalEncode for crate::types::ProcessState {
             }
             Self::Failed { incident_id } => {
                 w.write_u8(0x04);
+                incident_id.canonical_encode(w);
+            }
+            Self::Incidented { incident_id } => {
+                w.write_u8(0x07);
                 incident_id.canonical_encode(w);
             }
             Self::WaitingOnSubmission {
@@ -628,6 +798,9 @@ impl CanonicalEncode for crate::types::ProcessState {
                 at: r.read_u64()? as i64,
             },
             0x04 => Self::Failed {
+                incident_id: uuid::Uuid::canonical_decode(r)?,
+            },
+            0x07 => Self::Incidented {
                 incident_id: uuid::Uuid::canonical_decode(r)?,
             },
             0x05 => Self::WaitingOnSubmission {
@@ -713,9 +886,6 @@ impl CanonicalEncode for crate::types::Fiber {
         self.fiber_id.canonical_encode(w);
         self.pc.canonical_encode(w);
         w.write_seq(self.stack.iter(), |w, v| v.canonical_encode(w));
-        for reg in &self.regs {
-            reg.canonical_encode(w);
-        }
         self.wait.canonical_encode(w);
         w.write_u32(self.loop_epoch);
         w.write_seq(self.control_stack.iter(), |w, h| h.canonical_encode(w));
@@ -724,19 +894,6 @@ impl CanonicalEncode for crate::types::Fiber {
         let fiber_id = uuid::Uuid::canonical_decode(r)?;
         let pc = crate::types::Addr::canonical_decode(r)?;
         let stack = r.read_seq(crate::types::Value::canonical_decode)?;
-        let mut regs_vec = Vec::with_capacity(8);
-        for _ in 0..8 {
-            regs_vec.push(crate::types::Value::canonical_decode(r)?);
-        }
-        // `regs_vec` always has exactly 8 elements by construction (the loop
-        // above pushes exactly 8 times, or returns early via `?` on decode
-        // failure) — `try_into` cannot actually fail; the error arm exists
-        // only because the conversion is fallible in its type signature, not
-        // because this path is reachable.
-        let regs: [crate::types::Value; 8] = match regs_vec.try_into() {
-            Ok(regs) => regs,
-            Err(_) => return Err(CanonicalDecodeError::UnexpectedEof { offset: 0 }),
-        };
         let wait = crate::types::WaitState::canonical_decode(r)?;
         let loop_epoch = r.read_u32()?;
         let control_stack = r.read_seq(crate::concurrency::RecordId::canonical_decode)?;
@@ -744,7 +901,6 @@ impl CanonicalEncode for crate::types::Fiber {
             fiber_id,
             pc,
             stack,
-            regs,
             wait,
             loop_epoch,
             control_stack,
@@ -1092,6 +1248,20 @@ mod tests {
             // counters: arity=2, count=0
             0x02, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
+            // rollback_domain_payload: None
+            0x00,
+            // rollback_domain_payload_hash: None
+            0x00,
+            // rollback_flags: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_join_expected: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_session_stack: None (A18 A3 rollback-set)
+            0x00,
+            // opened_at: None (V&S §15 v0.7 ruling F)
+            0x00,
+            // error_routes: count = 0 (BoundaryError v2 migration)
+            0x00, 0x00, 0x00, 0x00,
             // -- record 2: id = Uuid::from_u128(2) --
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
@@ -1106,8 +1276,111 @@ mod tests {
             // counters: arity=0, count=0
             0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
+            // rollback_domain_payload: None
+            0x00,
+            // rollback_domain_payload_hash: None
+            0x00,
+            // rollback_flags: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_join_expected: None (A18 A3 rollback-set)
+            0x00,
+            // rollback_session_stack: None (A18 A3 rollback-set)
+            0x00,
+            // opened_at: None (V&S §15 v0.7 ruling F)
+            0x00,
+            // error_routes: count = 0 (BoundaryError v2 migration)
+            0x00, 0x00, 0x00, 0x00,
         ];
         assert_eq!(bytes, golden, "canonical encoding drifted from the committed golden bytes — this is exactly the R1 risk V2.1 exists to catch; any change here must be a reviewed, deliberate encoding change, not an incidental one");
+    }
+
+    /// A18 golden-bytes fixture: a `GUARD-R>`-opened record with every A3
+    /// rollback-set field populated (`Some`, not `None`) — the companion
+    /// fixture to `golden_bytes_concurrency_table` above, which only
+    /// exercises the `None` case for these three new fields. Proves the
+    /// new encode/decode arms round-trip real content, not just presence
+    /// tags.
+    #[test]
+    fn golden_bytes_concurrency_record_guard_r_rollback_set() {
+        let mut record = ConcurrencyRecord::new(
+            RecordId::new(Uuid::from_u128(9)),
+            RecordKind::Guard { interrupting: true },
+        );
+        record.rollback_domain_payload = Some("{}".to_string().into_boxed_str());
+        record.rollback_domain_payload_hash = Some([0x11; 32]);
+        record.rollback_flags = Some(std::collections::BTreeMap::from([(7u32, crate::types::Value::Bool(false))]));
+        record.rollback_join_expected = Some(std::collections::BTreeMap::from([(42u32, 3u16)]));
+        record.rollback_session_stack = Some(r#"{"session_id":"00000000-0000-0000-0000-000000000000"}"#.to_string().into_boxed_str());
+        record.opened_at = Some(crate::types::Addr::new(5));
+
+        let bytes = record.to_canonical_bytes();
+        let decoded = ConcurrencyRecord::from_canonical_bytes(&bytes)
+            .expect("a freshly-encoded GUARD-R> record must always decode");
+        assert_eq!(decoded, record, "round-trip must be a fixed point");
+        assert_eq!(decoded.to_canonical_bytes(), bytes, "canonicalize(decode(b)) == b");
+
+        // Presence tags for the three new A3 fields must all be 0x01
+        // (Some), not 0x00 — the concrete receipt that `Some` content, not
+        // merely a `None` tag, survived the round trip.
+        // Window widened by 4 bytes (was 60) to account for the trailing
+        // `error_routes: count = 0` u32 the BoundaryError v2 migration
+        // appended after `opened_at` — the 0x01 presence tags this
+        // assertion looks for now sit 4 bytes further from the end.
+        let flags_tag_and_beyond = &bytes[bytes.len() - 64..];
+        assert!(
+            flags_tag_and_beyond.contains(&0x01),
+            "expected at least one 0x01 (Some) presence tag among the tail A3 fields"
+        );
+    }
+
+    /// BoundaryError v2 migration golden-bytes fixture: a record with a
+    /// POPULATED `error_routes` (one specific-code entry, one catch-all)
+    /// — the companion to `golden_bytes_concurrency_table`'s `count = 0`
+    /// case and `golden_bytes_concurrency_record_guard_r_rollback_set`'s
+    /// A3-fields-populated case, neither of which exercises non-empty
+    /// `error_routes` content. Independent blind review (2026-07-23) flagged
+    /// this as a real coverage gap: the proptest round-trip below proves
+    /// `encode(decode(x)) == x`, which can't catch a change that stays
+    /// self-consistent while silently altering the on-wire layout — only a
+    /// fixed-byte lock catches that, "exactly the R1 risk V2.1 exists to
+    /// catch."
+    #[test]
+    fn golden_bytes_concurrency_record_populated_error_routes() {
+        let mut record = ConcurrencyRecord::new(
+            RecordId::new(Uuid::from_u128(11)),
+            RecordKind::Guard { interrupting: true },
+        );
+        record.error_routes = vec![
+            (Some("SANCTIONS_HIT".to_string().into_boxed_str()), crate::types::Addr::new(6)),
+            (None, crate::types::Addr::new(8)),
+        ];
+
+        let bytes = record.to_canonical_bytes();
+        let decoded = ConcurrencyRecord::from_canonical_bytes(&bytes)
+            .expect("a freshly-encoded record with populated error_routes must always decode");
+        assert_eq!(decoded, record, "round-trip must be a fixed point");
+        assert_eq!(decoded.to_canonical_bytes(), bytes, "canonicalize(decode(b)) == b");
+
+        // Fixed-byte lock on the `error_routes` tail specifically: count
+        // (u32le = 2), then per-entry (`Option<Box<str>>` tag+content via
+        // `write_str`'s own u32le length prefix, `Addr` as u32le) in
+        // insertion order — specific-code entry first, catch-all second,
+        // matching what was actually pushed above. All multi-byte integers
+        // in this format are little-endian (`write_u32`/`write_bytes`).
+        let error_routes_tail = &bytes[bytes.len() - 31..];
+        let expected_tail: &[u8] = &[
+            0x02, 0x00, 0x00, 0x00, // error_routes: count = 2 (u32le)
+            0x01, // entry 0: Option tag = Some
+            0x0d, 0x00, 0x00, 0x00, // "SANCTIONS_HIT" length = 13 (u32le)
+            b'S', b'A', b'N', b'C', b'T', b'I', b'O', b'N', b'S', b'_', b'H', b'I', b'T',
+            0x06, 0x00, 0x00, 0x00, // Addr(6) (u32le)
+            0x00, // entry 1: Option tag = None
+            0x08, 0x00, 0x00, 0x00, // Addr(8) (u32le)
+        ];
+        assert_eq!(
+            error_routes_tail, expected_tail,
+            "canonical encoding of populated error_routes drifted from the committed golden bytes"
+        );
     }
 
     /// V2.1a gate: golden-bytes fixture per `Value` variant.
@@ -1129,6 +1402,85 @@ mod tests {
         );
     }
 
+    /// §18 ruling K Part 2 golden-bytes fixture: `Value::Array`, tag
+    /// `0x04`. Two cases, committed bytes derived by hand from the wire
+    /// format documented on the `CanonicalEncode for Value` impl (tag,
+    /// then `u32le` count, then each element recursively):
+    /// - A non-trivial, non-nested array with mixed inner variants
+    ///   (`[Bool(true), I64(-1), Str(0x2A)]`).
+    /// - A nested case (`[Array([I64(7)]), Bool(false)]`), proving nesting
+    ///   is not merely "structurally possible in principle" but actually
+    ///   round-trips byte-for-byte, per this landing's own "allow nesting,
+    ///   but test it" decision.
+    #[test]
+    fn golden_bytes_value_array_variant() {
+        let mixed = crate::types::Value::Array(vec![
+            crate::types::Value::Bool(true),
+            crate::types::Value::I64(-1),
+            crate::types::Value::Str(0x2A),
+        ]);
+        assert_eq!(
+            mixed.to_canonical_bytes(),
+            vec![
+                0x04, // tag: Array
+                0x03, 0x00, 0x00, 0x00, // count = 3
+                0x00, 0x01, // Bool(true)
+                0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // I64(-1)
+                0x02, 0x2A, 0x00, 0x00, 0x00, // Str(0x2A)
+            ]
+        );
+
+        let nested = crate::types::Value::Array(vec![
+            crate::types::Value::Array(vec![crate::types::Value::I64(7)]),
+            crate::types::Value::Bool(false),
+        ]);
+        assert_eq!(
+            nested.to_canonical_bytes(),
+            vec![
+                0x04, // tag: outer Array
+                0x02, 0x00, 0x00, 0x00, // outer count = 2
+                0x04, // tag: inner Array
+                0x01, 0x00, 0x00, 0x00, // inner count = 1
+                0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // I64(7)
+                0x00, 0x00, // Bool(false)
+            ]
+        );
+    }
+
+    /// A `Value::Array` nested `MAX_VALUE_ARRAY_DEPTH` + 1 levels deep is a
+    /// typed decode error, not a stack overflow — proves the mid-recursion
+    /// depth check actually fires before unbounded recursion, not just
+    /// that a shallow case happens to pass.
+    #[test]
+    fn value_array_exceeding_max_depth_is_a_typed_decode_error() {
+        let mut v = crate::types::Value::I64(0);
+        for _ in 0..=crate::types::MAX_VALUE_ARRAY_DEPTH {
+            v = crate::types::Value::Array(vec![v]);
+        }
+        let bytes = v.to_canonical_bytes();
+        let err = crate::types::Value::from_canonical_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CanonicalDecodeError::ValueArrayTooDeep { .. }
+        ));
+    }
+
+    /// A claimed `Value::Array` length exceeding `MAX_VALUE_ARRAY_LEN` is
+    /// rejected from the length prefix alone, before attempting to decode
+    /// any (nonexistent) elements.
+    #[test]
+    fn value_array_exceeding_max_len_is_a_typed_decode_error() {
+        let mut w = CanonicalWriter::new();
+        w.write_u8(0x04);
+        w.write_u32((crate::types::MAX_VALUE_ARRAY_LEN as u32) + 1);
+        let bytes = w.into_bytes();
+        let err = crate::types::Value::from_canonical_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CanonicalDecodeError::ValueArrayTooLong { .. }
+        ));
+    }
+
     #[test]
     fn value_round_trips_byte_identically() {
         for value in [
@@ -1138,6 +1490,15 @@ mod tests {
             crate::types::Value::I64(i64::MAX),
             crate::types::Value::Str(7),
             crate::types::Value::Ref(7),
+            crate::types::Value::Array(vec![]),
+            crate::types::Value::Array(vec![
+                crate::types::Value::Bool(true),
+                crate::types::Value::I64(-42),
+            ]),
+            crate::types::Value::Array(vec![crate::types::Value::Array(vec![
+                crate::types::Value::Str(1),
+                crate::types::Value::Ref(2),
+            ])]),
         ] {
             let bytes = value.to_canonical_bytes();
             let decoded = crate::types::Value::from_canonical_bytes(&bytes).unwrap();
@@ -1159,11 +1520,13 @@ mod tests {
             vec![0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
         );
         assert_eq!(
-            WaitState::Msg { wait_id: 1, name: 2, corr_key: crate::types::Value::I64(3) }
+            // V7 (§28): corr_key is now the resolved content string, encoded
+            // via `write_str` (u32-LE length + UTF-8), not a `Value`.
+            WaitState::Msg { wait_id: 1, name: 2, corr_key: "3".to_string() }
                 .to_canonical_bytes(),
             vec![
-                0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00
+                0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                0x33
             ]
         );
         assert_eq!(
@@ -1182,24 +1545,11 @@ mod tests {
             WaitState::Join { join_id: 6 }.to_canonical_bytes(),
             vec![0x05, 0x06, 0x00, 0x00, 0x00]
         );
-        assert_eq!(
-            WaitState::Race {
-                race_id: 7,
-                timer_deadline_ms: Some(8),
-                job_key: Some("rk".to_string()),
-                interrupting: true,
-                timer_arm_index: Some(9),
-                cycle_remaining: Some(10),
-                cycle_fired_count: 11,
-            }
-            .to_canonical_bytes(),
-            vec![
-                0x06, 0x07, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x72, 0x6B, 0x01, 0x01, 0x09, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x0A, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00,
-                0x00
-            ]
-        );
+        // V5.3 (§18, landed 2026-07-23): the golden-bytes fixture for v1
+        // `WaitState::Race` (tag `0x06`) that used to sit here is deleted
+        // along with the variant itself — `0x06` is now permanently
+        // retired (see this impl's own doc comment); nothing constructs
+        // `WaitState::Race` any more so there is no shape left to lock.
         assert_eq!(
             WaitState::Incident { incident_id: Uuid::from_u128(12) }.to_canonical_bytes(),
             vec![
@@ -1207,6 +1557,26 @@ mod tests {
                 0x00, 0x00, 0x00, 0x0C
             ]
         );
+    }
+
+    #[test]
+    fn v2_race_arm_all_variants_round_trip_through_canonical_bytes() {
+        use crate::types::{Addr, V2RaceArm};
+        let arms = vec![
+            V2RaceArm::Timer { target: Addr::new(1) },
+            V2RaceArm::Msg { target: Addr::new(2), name: 3, corr_key: "k4".to_string() },
+            V2RaceArm::Effect {
+                target: Addr::new(5),
+                effect_id: crate::EffectId::from_uuid(Uuid::from_u128(6)),
+                template_id: [7u8; 32],
+            },
+        ];
+        for arm in arms {
+            let bytes = arm.to_canonical_bytes();
+            let mut reader = CanonicalReader::new(&bytes);
+            let decoded = V2RaceArm::canonical_decode(&mut reader).expect("decode");
+            assert_eq!(decoded, arm);
+        }
     }
 
     #[test]
@@ -1232,6 +1602,13 @@ mod tests {
             ]
         );
         assert_eq!(
+            ProcessState::Incidented { incident_id: Uuid::from_u128(16) }.to_canonical_bytes(),
+            vec![
+                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x10
+            ]
+        );
+        assert_eq!(
             ProcessState::WaitingOnSubmission {
                 callout_id: Uuid::from_u128(17),
                 node_id: "n".to_string(),
@@ -1252,6 +1629,27 @@ mod tests {
                 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00, 0x6D
             ]
+        );
+    }
+
+    #[test]
+    fn incidented_process_state_round_trips_through_canonical_bytes() {
+        use crate::types::ProcessState;
+        let original = ProcessState::Incidented {
+            incident_id: Uuid::from_u128(99),
+        };
+        let bytes = original.to_canonical_bytes();
+        // Tag 0x07 — distinct from Failed's 0x04, per the two-jobs-one-name
+        // split (Failed = genuinely dead; Incidented = parked, resumable
+        // via Command::ResolveIncident).
+        assert_eq!(bytes[0], 0x07);
+        let mut reader = CanonicalReader::new(&bytes);
+        let decoded = ProcessState::canonical_decode(&mut reader).expect("decode");
+        assert_eq!(decoded, original);
+        assert_ne!(
+            ProcessState::Incidented { incident_id: Uuid::from_u128(99) }.to_canonical_bytes(),
+            ProcessState::Failed { incident_id: Uuid::from_u128(99) }.to_canonical_bytes(),
+            "Incidented and Failed must not share a wire tag"
         );
     }
 
@@ -1488,24 +1886,106 @@ mod proptest_round_trip {
         prop_oneof![Just(RecordState::Armed), Just(RecordState::Retired)]
     }
 
+    /// §18 ruling K Part 2 fix: this module's `rollback_flags` generator
+    /// previously constructed only `Value::I64` directly, independent of
+    /// the `arb_value()` strategy in `proptest_round_trip_v2_1h` below —
+    /// exactly the kind of silent embedding-site gap the landing brief
+    /// warned about (a rollback-flags snapshot is a `BTreeMap<u32, Value>`
+    /// exactly like `flags` itself, so it can legitimately hold a
+    /// `Value::Array` now that the variant exists, and this proptest
+    /// module would never have generated one without this fix). Local
+    /// bounded recursive generator rather than importing the other
+    /// module's `arb_value()` — this module already duplicates `arb_uuid()`
+    /// rather than sharing it, matching that pre-existing convention.
+    fn arb_value_incl_array() -> impl Strategy<Value = crate::types::Value> {
+        let leaf = prop_oneof![
+            any::<bool>().prop_map(crate::types::Value::Bool),
+            any::<i64>().prop_map(crate::types::Value::I64),
+            any::<u32>().prop_map(crate::types::Value::Str),
+            any::<u32>().prop_map(crate::types::Value::Ref),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            pvec(inner, 0..8).prop_map(crate::types::Value::Array)
+        })
+    }
+
+    fn arb_rollback_flags() -> impl Strategy<Value = Option<std::collections::BTreeMap<u32, crate::types::Value>>> {
+        proptest::option::of(proptest::collection::btree_map(
+            any::<u32>(),
+            arb_value_incl_array(),
+            0..4,
+        ))
+    }
+
+    fn arb_rollback_join_expected() -> impl Strategy<Value = Option<std::collections::BTreeMap<u32, u16>>> {
+        proptest::option::of(proptest::collection::btree_map(any::<u32>(), any::<u16>(), 0..4))
+    }
+
+    /// BoundaryError v2 migration: `ConcurrencyRecord::error_routes`
+    /// generator — a `Vec` of `(Option<code>, Addr)` pairs, same shape the
+    /// real field carries. Not sorted by this generator (the type itself
+    /// doesn't enforce catch-all-last ordering; that's a kernel/verifier
+    /// invariant on well-formed programs, not a canonical-encoding
+    /// constraint) — the round-trip law under test doesn't care about
+    /// element order, only that it survives unchanged.
+    fn arb_error_routes() -> impl Strategy<Value = Vec<(Option<Box<str>>, Addr)>> {
+        pvec(
+            (proptest::option::of(".{0,12}"), any::<u32>()),
+            0..4,
+        )
+        .prop_map(|entries| {
+            entries
+                .into_iter()
+                .map(|(code, addr)| (code.map(String::into_boxed_str), Addr::new(addr)))
+                .collect()
+        })
+    }
+
     fn arb_record() -> impl Strategy<Value = ConcurrencyRecord> {
         (
-            arb_uuid(),
-            arb_record_kind(),
-            btree_set(arb_uuid(), 0..4),
+            (
+                arb_uuid(),
+                arb_record_kind(),
+                btree_set(arb_uuid(), 0..4),
+                proptest::option::of(any::<u32>()),
+                arb_record_state(),
+                any::<u32>(),
+                any::<u32>(),
+                proptest::option::of(".{0,16}"),
+                proptest::option::of(any::<[u8; 32]>()),
+            ),
+            arb_rollback_flags(),
+            arb_rollback_join_expected(),
+            proptest::option::of(".{0,16}"),
             proptest::option::of(any::<u32>()),
-            arb_record_state(),
-            any::<u32>(),
-            any::<u32>(),
+            arb_error_routes(),
         )
-            .prop_map(|(id, kind, members, handler, state, arity, count)| ConcurrencyRecord {
-                id: RecordId::new(id),
-                kind,
-                members,
-                handler: handler.map(Addr::new),
-                state,
-                counters: RecordCounters { arity, count },
-            })
+            .prop_map(
+                |(
+                    (id, kind, members, handler, state, arity, count, rollback_payload, rollback_hash),
+                    rollback_flags,
+                    rollback_join_expected,
+                    rollback_session_stack,
+                    opened_at,
+                    error_routes,
+                )| {
+                    ConcurrencyRecord {
+                        id: RecordId::new(id),
+                        kind,
+                        members,
+                        handler: handler.map(Addr::new),
+                        state,
+                        counters: RecordCounters { arity, count },
+                        rollback_domain_payload: rollback_payload.map(String::into_boxed_str),
+                        rollback_domain_payload_hash: rollback_hash,
+                        rollback_flags,
+                        rollback_join_expected,
+                        rollback_session_stack: rollback_session_stack.map(String::into_boxed_str),
+                        opened_at: opened_at.map(Addr::new),
+                        error_routes,
+                    }
+                },
+            )
     }
 
     fn arb_table() -> impl Strategy<Value = ConcurrencyTable> {
@@ -1580,20 +2060,38 @@ mod proptest_round_trip_v2_1h {
         arb_uuid().prop_map(crate::EffectId::from_uuid)
     }
 
+    /// §18 ruling K Part 2: extended to generate `Value::Array`, bounded
+    /// via proptest's standard `prop_recursive` combinator rather than a
+    /// hand-rolled depth counter — the documented pattern for a recursive
+    /// strategy over a recursive type, so an unbounded proptest run can't
+    /// generate a pathologically deep/large case and blow the test budget.
+    /// Bounds chosen well inside the real (`MAX_VALUE_ARRAY_DEPTH` = 8,
+    /// `MAX_VALUE_ARRAY_LEN` = 4096) production limits — proptest generates
+    /// small-but-real cases for shrinking/coverage, not adversarial ones
+    /// (those are exercised directly by
+    /// `value_array_exceeding_max_depth_is_a_typed_decode_error`/
+    /// `..._max_len_...` above, which need exact boundary values a
+    /// probabilistic strategy wouldn't reliably hit anyway).
     fn arb_value() -> impl Strategy<Value = Value> {
-        prop_oneof![
+        let leaf = prop_oneof![
             any::<bool>().prop_map(Value::Bool),
             any::<i64>().prop_map(Value::I64),
             any::<u32>().prop_map(Value::Str),
             any::<u32>().prop_map(Value::Ref),
-        ]
+        ];
+        leaf.prop_recursive(
+            4,  // max depth
+            64, // max total nodes
+            8,  // items per collection level
+            |inner| pvec(inner, 0..8).prop_map(Value::Array),
+        )
     }
 
     fn arb_wait_state() -> impl Strategy<Value = WaitState> {
         prop_oneof![
             Just(WaitState::Running),
             any::<u64>().prop_map(|deadline_ms| WaitState::Timer { deadline_ms }),
-            (any::<u32>(), any::<u32>(), arb_value()).prop_map(|(wait_id, name, corr_key)| {
+            (any::<u32>(), any::<u32>(), ".{0,16}").prop_map(|(wait_id, name, corr_key)| {
                 WaitState::Msg {
                     wait_id,
                     name,
@@ -1603,34 +2101,6 @@ mod proptest_round_trip_v2_1h {
             ".{0,16}".prop_map(|job_key| WaitState::Job { job_key }),
             arb_effect_id().prop_map(|effect_id| WaitState::Effect { effect_id }),
             any::<u32>().prop_map(|join_id| WaitState::Join { join_id }),
-            (
-                any::<u32>(),
-                proptest::option::of(any::<u64>()),
-                proptest::option::of(".{0,16}"),
-                any::<bool>(),
-                proptest::option::of(any::<u16>().prop_map(|v| v as usize)),
-                proptest::option::of(any::<u32>()),
-                any::<u32>(),
-            )
-                .prop_map(
-                    |(
-                        race_id,
-                        timer_deadline_ms,
-                        job_key,
-                        interrupting,
-                        timer_arm_index,
-                        cycle_remaining,
-                        cycle_fired_count,
-                    )| WaitState::Race {
-                        race_id,
-                        timer_deadline_ms,
-                        job_key,
-                        interrupting,
-                        timer_arm_index,
-                        cycle_remaining,
-                        cycle_fired_count,
-                    }
-                ),
             arb_uuid().prop_map(|incident_id| WaitState::Incident { incident_id }),
         ]
     }
@@ -1643,6 +2113,7 @@ mod proptest_round_trip_v2_1h {
                 .prop_map(|(reason, at)| ProcessState::Cancelled { reason, at }),
             any::<i64>().prop_map(|at| ProcessState::Terminated { at }),
             arb_uuid().prop_map(|incident_id| ProcessState::Failed { incident_id }),
+            arb_uuid().prop_map(|incident_id| ProcessState::Incidented { incident_id }),
             (arb_uuid(), ".{0,16}").prop_map(|(callout_id, node_id)| {
                 ProcessState::WaitingOnSubmission {
                     callout_id,
@@ -1714,17 +2185,15 @@ mod proptest_round_trip_v2_1h {
             arb_uuid(),
             any::<u32>(),
             pvec(arb_value(), 0..6),
-            proptest::array::uniform8(arb_value()),
             arb_wait_state(),
             any::<u32>(),
             pvec(arb_uuid(), 0..6),
         )
             .prop_map(
-                |(fiber_id, pc, stack, regs, wait, loop_epoch, control_stack)| Fiber {
+                |(fiber_id, pc, stack, wait, loop_epoch, control_stack)| Fiber {
                     fiber_id,
                     pc: Addr::new(pc),
                     stack,
-                    regs,
                     wait,
                     loop_epoch,
                     control_stack: control_stack.into_iter().map(RecordId::new).collect(),

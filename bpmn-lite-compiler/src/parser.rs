@@ -50,6 +50,16 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
     // <bpmn:dataObject>...<bpmn:dataType .../>...</bpmn:dataObject>.
     let mut data_object_type_decl: Option<(DataObjectType, DataObjectRole)> = None;
 
+    // §18 ruling K — multi-instance state, accumulated while parsing a
+    // serviceTask's <bpmn:multiInstanceLoopCharacteristics> child (and its
+    // own nested <zeebe:loopCharacteristics> extension element).
+    // `mi_is_sequential`'s mere presence (Some, regardless of value) marks
+    // this serviceTask as a multi-instance activity — its value is
+    // validated (must be false) at the serviceTask close tag.
+    let mut mi_is_sequential: Option<bool> = None;
+    let mut mi_collection_flag: Option<String> = None;
+    let mut mi_max: Option<u32> = None;
+
     let mut buf = Vec::new();
 
     loop {
@@ -79,6 +89,9 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut ffi_outputs,
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
+                    &mut mi_is_sequential,
+                    &mut mi_collection_flag,
+                    &mut mi_max,
                 )?;
             }
             Ok(Event::Empty(ref e)) => {
@@ -105,6 +118,9 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut ffi_outputs,
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
+                    &mut mi_is_sequential,
+                    &mut mi_collection_flag,
+                    &mut mi_max,
                 )?;
             }
             Ok(Event::End(ref e)) => {
@@ -131,6 +147,9 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
                     &mut ffi_outputs,
                     &mut in_ffi_task_definition,
                     &mut data_object_type_decl,
+                    &mut mi_is_sequential,
+                    &mut mi_collection_flag,
+                    &mut mi_max,
                 )?;
             }
             Ok(Event::Text(ref e)) => {
@@ -208,6 +227,9 @@ fn handle_open_tag(
     ffi_outputs: &mut Vec<FfiOutputBinding>,
     in_ffi_task_definition: &mut bool,
     data_object_type_decl: &mut Option<(DataObjectType, DataObjectRole)>,
+    mi_is_sequential: &mut Option<bool>,
+    mi_collection_flag: &mut Option<String>,
+    mi_max: &mut Option<u32>,
 ) -> Result<()> {
     let local = local_name(e.name().as_ref());
 
@@ -255,6 +277,49 @@ fn handle_open_tag(
             } else {
                 *current_element = Some(ElementContext::ServiceTask { id, name });
                 *extension_task_type = None;
+                *mi_is_sequential = None;
+                *mi_collection_flag = None;
+                *mi_max = None;
+            }
+        }
+        "multiInstanceLoopCharacteristics" if *in_process => {
+            // §18 ruling K. Real Zeebe/Camunda 8 shape: `isSequential`
+            // (parallel is the ratified default — accepted only as
+            // "false"; a "true" declaration is rejected with a clear
+            // error at the serviceTask close tag rather than silently
+            // misinterpreted as parallel). Absent `isSequential` defaults
+            // to "false" (BPMN 2.0's own schema default), matching the
+            // ratified parallel-is-default posture.
+            let seq_str = get_attr_opt(e, "isSequential").unwrap_or_else(|| "false".to_string());
+            *mi_is_sequential = Some(seq_str == "true");
+        }
+        "loopCharacteristics" if *in_extension_elements => {
+            // <zeebe:loopCharacteristics inputCollection="<flag>" maxInstances="<n>"/>
+            // nested inside <bpmn:multiInstanceLoopCharacteristics>'s own
+            // <bpmn:extensionElements>. `inputCollection` is interpreted
+            // here (as it was before ruling K Part 2) as the NAME of a
+            // flag/data-object, NOT a FEEL expression over an inline array
+            // literal — real Zeebe's own richer FEEL-expression form is
+            // out of scope. What's changed (ruling K Part 2): that named
+            // flag is now expected to hold the collection's actual
+            // `Value::Array` data at runtime (populated via `orch_flags`
+            // at spawn or `StoreFlag` in-workflow), not merely its `I64`
+            // length — see `Instr::V2MiIndexLive`'s doc comment for why
+            // the two-flag (length + data) design was rejected. The XML
+            // shape itself is unchanged; only the flag's expected runtime
+            // type changed. `maxInstances` is a non-standard, additive
+            // attribute on the same `zeebe:` extension element — Zeebe has
+            // no declared-max concept at all (ruling K delta (a): a forced
+            // deviation), and extending an existing `zeebe:`-namespaced
+            // element with one more attribute is the smallest reasonable
+            // addition, rather than inventing a new namespace or element
+            // for it.
+            if let Some(coll) = get_attr_opt(e, "inputCollection") {
+                let stripped = coll.strip_prefix('=').unwrap_or(&coll).trim().to_string();
+                *mi_collection_flag = Some(stripped);
+            }
+            if let Some(max_str) = get_attr_opt(e, "maxInstances") {
+                *mi_max = max_str.parse::<u32>().ok();
             }
         }
         "dataObject" if *in_process && !is_empty => {
@@ -434,6 +499,12 @@ fn handle_open_tag(
                     id,
                     attached_to,
                     cancel_activity,
+                    // V8 (§31) — per-guard failure budget; a non-standard,
+                    // additive `failureBudget` attribute (Zeebe has no
+                    // equivalent — a documented superset, §31). Absent or
+                    // non-numeric ⇒ inherit the workflow default.
+                    failure_budget: get_attr_opt(e, "failureBudget")
+                        .and_then(|value| value.trim().parse::<u32>().ok()),
                 });
                 *sub_event_type = None;
                 *timer_text = None;
@@ -492,6 +563,9 @@ fn handle_close_tag(
     ffi_outputs: &mut Vec<FfiOutputBinding>,
     in_ffi_task_definition: &mut bool,
     data_object_type_decl: &mut Option<(DataObjectType, DataObjectRole)>,
+    mi_is_sequential: &mut Option<bool>,
+    mi_collection_flag: &mut Option<String>,
+    mi_max: &mut Option<u32>,
 ) -> Result<()> {
     match local {
         "process" => {
@@ -526,7 +600,59 @@ fn handle_close_tag(
         }
         "serviceTask" => {
             if let Some(ElementContext::ServiceTask { id, name }) = current_element.take() {
-                if let Some(tid) = ffi_template_id.take() {
+                if let Some(is_sequential) = mi_is_sequential.take() {
+                    // §18 ruling K: this serviceTask carried a
+                    // <bpmn:multiInstanceLoopCharacteristics> child.
+                    if is_sequential {
+                        return Err(anyhow!(
+                            "serviceTask '{}': multiInstanceLoopCharacteristics \
+                             isSequential=\"true\" (sequential multi-instance) is \
+                             out of scope — only parallel \
+                             (isSequential=\"false\", the ratified default) is \
+                             supported",
+                            id
+                        ));
+                    }
+                    let collection_flag_name = mi_collection_flag.take().ok_or_else(|| {
+                        anyhow!(
+                            "serviceTask '{}': multiInstanceLoopCharacteristics has \
+                             no <zeebe:loopCharacteristics inputCollection=\"...\"/> \
+                             — the collection flag reference is required",
+                            id
+                        )
+                    })?;
+                    let declared_max = mi_max.take().ok_or_else(|| {
+                        anyhow!(
+                            "serviceTask '{}': multiInstanceLoopCharacteristics has \
+                             no <zeebe:loopCharacteristics maxInstances=\"...\"/> — \
+                             an artifact-declared maximum is required (§18 ruling K \
+                             delta (a))",
+                            id
+                        )
+                    })?;
+                    if ffi_template_id.take().is_some() {
+                        ffi_inputs.clear();
+                        ffi_outputs.clear();
+                        return Err(anyhow!(
+                            "serviceTask '{}': multi-instance over an FFI service \
+                             task (<bpmn:taskDefinition implementation=\"...\">) is \
+                             out of scope — only an external-job task_type inner \
+                             activity is supported",
+                            id
+                        ));
+                    }
+                    let task_type = extension_task_type
+                        .take()
+                        .unwrap_or_else(|| name_to_snake(&name));
+                    let idx = graph.add_node(IRNode::MultiInstance {
+                        id: id.clone(),
+                        name,
+                        task_type,
+                        collection_flag_name,
+                        declared_max,
+                    });
+                    node_map.insert(id, idx);
+                } else if let Some(tid) = ffi_template_id.take() {
                     // FFI service task — build FfiServiceTask node.
                     let inputs = std::mem::take(ffi_inputs);
                     let outputs = std::mem::take(ffi_outputs);
@@ -653,6 +779,7 @@ fn handle_close_tag(
                 id,
                 attached_to,
                 cancel_activity,
+                failure_budget,
             }) = current_element.take()
             {
                 match sub_event_type.take() {
@@ -663,6 +790,7 @@ fn handle_close_tag(
                             attached_to,
                             spec,
                             interrupting: cancel_activity,
+                            failure_budget,
                         });
                         node_map.insert(id, idx);
                     }
@@ -676,6 +804,7 @@ fn handle_close_tag(
                             id: id.clone(),
                             attached_to,
                             error_code,
+                            failure_budget,
                         });
                         node_map.insert(id, idx);
                     }
@@ -734,6 +863,7 @@ enum ElementContext {
         id: String,
         attached_to: String,
         cancel_activity: bool,
+        failure_budget: Option<u32>,
     },
     EndEvent {
         id: String,
@@ -1280,6 +1410,8 @@ mod tests {
           <bpmn:process id="kyc_open_case" isExecutable="true">
             <bpmn:startEvent id="start" />
 
+            <bpmn:dataObject id="case_id" name="case_id"></bpmn:dataObject>
+
             <bpmn:serviceTask id="create_case" name="Create Case Record">
               <bpmn:extensionElements>
                 <zeebe:taskDefinition type="create_case_record" />
@@ -1325,7 +1457,7 @@ mod tests {
 
         // Parse
         let graph = parse_bpmn(xml).unwrap();
-        assert_eq!(graph.node_count(), 7); // start, 3 service tasks, msg wait, human wait, end
+        assert_eq!(graph.node_count(), 8); // + case_id dataObject, start, 3 service tasks, msg wait, human wait, end
 
         // Verify
         verifier::verify_or_err(&graph).unwrap();
@@ -1341,11 +1473,15 @@ mod tests {
             .count();
         assert_eq!(exec_native_count, 3);
 
-        // Should have WaitMsg for the message wait and human wait
+        // Should have V2WaitMsg for the message wait and human wait.
+        // Relocked in place (V5.3, §18, landed 2026-07-23, `lower()`
+        // default flip): `IRNode::MessageWait`/`HumanWait` now migrate to
+        // `V2WaitMsg` (v1 `WaitMsg` is deleted entirely) — same count
+        // assertion, new instruction identifier.
         let wait_msg_count = program
             .program()
             .iter()
-            .filter(|i| matches!(i, bpmn_lite_types::Instr::WaitMsg { .. }))
+            .filter(|i| matches!(i, bpmn_lite_types::Instr::V2WaitMsg { .. }))
             .count();
         assert_eq!(wait_msg_count, 2);
 
@@ -1391,6 +1527,26 @@ mod tests {
         assert!(parse_iso_cycle("PT1H").is_err(), "Missing R prefix");
         assert!(parse_iso_cycle("R0/PT1H").is_err(), "Zero count");
         assert!(parse_iso_cycle("R3PT1H").is_err(), "Missing slash");
+
+        // GUARD-TIMER-CYCLE> frontend-wiring investigation (confirmed by
+        // direct test, not assumed): unbounded ISO-8601 recurring-interval
+        // syntax (`R/PT<duration>`, no repeat count — "repeat forever")
+        // is NOT supported by this parser today. `count_str` is empty
+        // ("" between 'R' and '/'), which fails the `u32` parse the same
+        // way any other non-numeric count would, producing a clear
+        // rejection rather than any sentinel value (no `u32::MAX`, no
+        // silently-treated-as-1). `TimerSpec::Cycle.max_fires` is a plain
+        // `u32` with no distinct "unbounded" representation, so admitting
+        // `R/PT...` would require a real design decision (a new
+        // TimerSpec variant, or a reserved sentinel with verifier
+        // support) — out of scope for wiring the already-ratified,
+        // already-bounded `GUARD-TIMER-CYCLE>` word through the frontend;
+        // flagged, not silently added.
+        assert!(
+            parse_iso_cycle("R/PT1H").is_err(),
+            "unbounded cycle syntax (no repeat count) must be rejected, not silently treated \
+             as a sentinel — TimerSpec::Cycle has no unbounded representation"
+        );
     }
 
     #[test]
@@ -1467,7 +1623,20 @@ mod tests {
         assert_eq!(graph.edge_count(), 4, "Expected 4 edges");
     }
 
-    /// T-BTIMER-2: Full pipeline: parse → verify → lower → boundary_map + race_plan populated
+    /// T-BTIMER-2: Full pipeline: parse → verify → lower → `V2Guard` +
+    /// `GUARD-TIMER>` wrapping the host task. Relocked in place (V5.3, §18,
+    /// landed 2026-07-23, `lower()` default flip): previously locked
+    /// `lower()`'s v1 output — `program.boundary_map()`/`race_plan()`
+    /// populated with a `WaitArm::Internal`/`WaitArm::Timer` pair — both
+    /// the fields and the v1 boundary-timer mechanism they described are
+    /// deleted this step. Same rigor, new shape: an interrupting boundary
+    /// timer (`cancelActivity="true"`) lowers to `PushI64(duration_ms)` +
+    /// `V2Guard{handler}` + `V2GuardArmTimer` + the host `ExecNative` +
+    /// `V2GuardEnd`, with `handler` resolving to the escalation task's own
+    /// address — the same "resume_at points to escalation code, not the
+    /// boundary node" property the old test proved, now proved of
+    /// `V2Guard`'s `handler` field instead of `WaitArm::Timer`'s
+    /// `resume_at`.
     #[test]
     fn t_btimer_2_lower_boundary_timer() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1503,51 +1672,135 @@ mod tests {
         verifier::verify_or_err(&graph).unwrap();
         let program = lowering::lower(&graph).unwrap();
 
-        assert_eq!(
-            program.boundary_map().len(),
-            1,
-            "Expected 1 boundary_map entry"
-        );
-        assert_eq!(program.race_plan().len(), 1, "Expected 1 race_plan entry");
+        let guard_addr = program
+            .program()
+            .iter()
+            .position(|i| matches!(i, bpmn_lite_types::Instr::V2Guard { .. }))
+            .expect("Expected exactly one V2Guard in the lowered program");
+        let bpmn_lite_types::Instr::V2Guard { handler } = &program.program()[guard_addr] else {
+            unreachable!()
+        };
+        let handler = *handler;
 
-        let (_, race_entry) = program.race_plan().iter().next().unwrap();
-        assert_eq!(
-            race_entry.arms.len(),
-            2,
-            "Expected 2 arms (Internal + Timer)"
-        );
+        // `PushI64(duration_ms)` must immediately precede `V2Guard` (the
+        // established ordering: the operand survives across the guard-open,
+        // which touches neither stack).
         assert!(
             matches!(
-                race_entry.arms[0],
-                bpmn_lite_types::WaitArm::Internal { .. }
+                program.program()[guard_addr - 1],
+                bpmn_lite_types::Instr::PushI64(259_200_000)
             ),
-            "Arm 0 = Internal"
+            "3 days = 259200000ms, pushed immediately before V2Guard, got {:?}",
+            program.program()[guard_addr - 1]
+        );
+        // `V2GuardArmTimer` must land at exactly guard_addr + 1 (verifier-
+        // enforced adjacency).
+        assert!(
+            matches!(
+                program.program()[guard_addr + 1],
+                bpmn_lite_types::Instr::V2GuardArmTimer
+            ),
+            "GUARD-TIMER> must sit at guard_open_addr + 1, got {:?}",
+            program.program()[guard_addr + 1]
         );
 
-        match &race_entry.arms[1] {
-            bpmn_lite_types::WaitArm::Timer {
-                duration_ms,
-                resume_at,
-                interrupting,
-                cycle,
+        // `handler` (the escalation target) must point to escalation task
+        // code, not the boundary node itself — the same property the old
+        // test proved of `WaitArm::Timer`'s `resume_at`.
+        assert!(handler.get() > 0, "handler should be valid");
+        let instr = &program.program()[handler.index()];
+        assert!(
+            matches!(
+                instr,
+                bpmn_lite_types::Instr::ExecNative { .. }
+                    | bpmn_lite_types::Instr::Jump { .. }
+            ),
+            "V2Guard's handler should point to escalation code, got {:?}",
+            instr
+        );
+
+        // `cancelActivity="true"` (interrupting) closes with `V2GuardEnd`,
+        // not `V2GuardNEnd`.
+        assert!(
+            program
+                .program()
+                .iter()
+                .any(|i| matches!(i, bpmn_lite_types::Instr::V2GuardEnd)),
+            "interrupting boundary timer must close with V2GuardEnd"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  §18 ruling K: multi-instance parser tests
+    // ═══════════════════════════════════════════════════════════
+
+    const MI_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                      xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+      <bpmn:process id="mi_proc" isExecutable="true">
+        <bpmn:startEvent id="start" />
+        <bpmn:serviceTask id="verify_docs" name="Verify Doc">
+          <bpmn:extensionElements>
+            <zeebe:taskDefinition type="verify_doc" />
+          </bpmn:extensionElements>
+          <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+            <bpmn:extensionElements>
+              <zeebe:loopCharacteristics inputCollection="doc_count" maxInstances="5" />
+            </bpmn:extensionElements>
+          </bpmn:multiInstanceLoopCharacteristics>
+        </bpmn:serviceTask>
+        <bpmn:endEvent id="end" />
+        <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="verify_docs" />
+        <bpmn:sequenceFlow id="f2" sourceRef="verify_docs" targetRef="end" />
+      </bpmn:process>
+    </bpmn:definitions>"#;
+
+    #[test]
+    fn t_mi_1_parse_multi_instance() {
+        let graph = parse_bpmn(MI_XML).expect("MI XML should parse");
+        let idx = find_node_by_id(&graph, "verify_docs").expect("verify_docs node");
+        match &graph[idx] {
+            IRNode::MultiInstance {
+                task_type,
+                collection_flag_name,
+                declared_max,
+                ..
             } => {
-                assert!(*interrupting, "Default boundary should be interrupting");
-                assert!(cycle.is_none(), "No cycle spec for simple duration timer");
-                assert_eq!(*duration_ms, 259_200_000, "3 days = 259200000ms");
-                assert!(resume_at.get() > 0, "resume_at should be valid");
-                // resume_at should point to escalation task code, not boundary node
-                let instr = &program.program()[resume_at.index()];
-                assert!(
-                    matches!(
-                        instr,
-                        bpmn_lite_types::Instr::ExecNative { .. }
-                            | bpmn_lite_types::Instr::Jump { .. }
-                    ),
-                    "Timer resume_at should point to escalation code, got {:?}",
-                    instr
-                );
+                assert_eq!(task_type, "verify_doc");
+                assert_eq!(collection_flag_name, "doc_count");
+                assert_eq!(*declared_max, 5);
             }
-            other => panic!("Arm 1 should be Timer, got {:?}", other),
+            other => panic!("expected IRNode::MultiInstance, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn t_mi_2_sequential_rejected() {
+        let xml = MI_XML.replace(r#"isSequential="false""#, r#"isSequential="true""#);
+        let err = parse_bpmn(&xml).expect_err("sequential MI must be rejected");
+        assert!(
+            format!("{err}").contains("sequential"),
+            "error should name sequential MI as the cause: {err}"
+        );
+    }
+
+    #[test]
+    fn t_mi_3_missing_max_instances_rejected() {
+        let xml = MI_XML.replace(r#" maxInstances="5""#, "");
+        let err = parse_bpmn(&xml).expect_err("missing maxInstances must be rejected");
+        assert!(
+            format!("{err}").contains("maxInstances"),
+            "error should name the missing maxInstances: {err}"
+        );
+    }
+
+    #[test]
+    fn t_mi_4_missing_input_collection_rejected() {
+        let xml = MI_XML.replace(r#"inputCollection="doc_count" "#, "");
+        let err = parse_bpmn(&xml).expect_err("missing inputCollection must be rejected");
+        assert!(
+            format!("{err}").contains("inputCollection"),
+            "error should name the missing inputCollection: {err}"
+        );
     }
 }
