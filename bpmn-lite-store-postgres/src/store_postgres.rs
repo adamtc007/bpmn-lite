@@ -354,19 +354,47 @@ impl PostgresWorkflowStore {
     /// - `V2GuardRetired` (a guard closing normally via `V2GuardEnd`)
     ///   resets the budget for that guard.
     async fn apply_guard_failure_budget(
+        &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         tenant_id: &str,
         instance_id: Uuid,
         transition: &Transition,
         concurrency_table: &ConcurrencyTable,
     ) -> Result<()> {
-        // Built-in budget: 5 automatic rollbacks of the same guard before
-        // escalating to quarantine. Not yet exposed as configuration —
-        // ruling F ratifies the mechanism, not a specific ceiling; this
-        // is a deliberately conservative placeholder pending an explicit
-        // policy-configuration decision.
-        let budget = ScopeFailureBudget::new(1, 5)
-            .expect("built-in guard failure budget bounds are valid");
+        // §31: the per-guard escalation ceiling is artifact-resident (the
+        // counter stays store-side, below). Loaded lazily — only a guard
+        // cancellation reads it — from the instance's pinned artifact, keyed
+        // by the guard's `opened_at` address, falling back to the artifact's
+        // workflow-level default.
+        let has_cancel = transition
+            .events()
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::V2ScopeCancelled { .. }));
+        let (guard_budgets, default_budget) = if has_cancel {
+            let hash = ArtifactHash::from_bytes(transition.next_snapshot().bytecode_version);
+            match self
+                .load_artifact(hash)
+                .await
+                .map_err(|error| StoreError::Unavailable(error.to_string()))?
+            {
+                Some(workflow) => {
+                    let metadata = workflow.envelope().metadata();
+                    (
+                        metadata.v2_guard_budgets().clone(),
+                        metadata.default_guard_budget(),
+                    )
+                }
+                None => (
+                    std::collections::BTreeMap::new(),
+                    ScopeFailureBudget::conservative_default(),
+                ),
+            }
+        } else {
+            (
+                std::collections::BTreeMap::new(),
+                ScopeFailureBudget::conservative_default(),
+            )
+        };
         for event in transition.events() {
             match event {
                 RuntimeEvent::V2ScopeCancelled { record_id, fiber_id, .. } => {
@@ -397,6 +425,10 @@ impl PostgresWorkflowStore {
                     .await
                     .persistence()?;
                     let prior = u32::try_from(new_count).unwrap_or(u32::MAX).saturating_sub(1);
+                    let budget = guard_budgets
+                        .get(&guard_addr)
+                        .copied()
+                        .unwrap_or(default_budget);
                     if matches!(budget.decision(prior), ScopeFailureDecision::Exhausted(_)) {
                         sqlx::query(
                             r#"
@@ -2786,7 +2818,7 @@ impl RuntimeStore for PostgresWorkflowStore {
         // mutations are already applied, so a just-cancelled Guard's
         // `opened_at` is still resolvable here even though its record is
         // now `Retired`.
-        Self::apply_guard_failure_budget(
+        self.apply_guard_failure_budget(
             &mut tx,
             claim.tenant_id().as_str(),
             claim.instance_id(),
@@ -5625,6 +5657,92 @@ mod tests {
             quarantine.as_deref(),
             Some("guard_failure_budget_exhausted"),
             "5 automatic rollbacks of the same guard address must exhaust the built-in budget"
+        );
+    }
+
+    /// V8 (§31): the escalation ceiling is read from the instance's pinned
+    /// artifact, not a hardcoded constant. An artifact whose workflow-level
+    /// default budget is 2 must quarantine after *2* rollbacks — proving the
+    /// retired `ScopeFailureBudget::new(1, 5)` placeholder is gone.
+    #[tokio::test]
+    async fn test_guard_failure_budget_ceiling_comes_from_the_artifact() {
+        let (pool, store, _lock) = setup().await;
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![Instr::End],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            BTreeMap::new(),
+            bpmn_lite_types::ScopeFailureBudget::new(1, 2).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-budget-2").unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = workflow.hash().into_bytes();
+        store.save_instance("guard-budget-artifact", &instance).await.unwrap();
+        let guard_addr = Addr::new(7);
+
+        let mut quarantine_after = None;
+        for attempt in 1..=2u32 {
+            let claim = store
+                .claim_instance_for_transition(
+                    &TenantId::new("default").unwrap(),
+                    instance_id,
+                    "apply",
+                    30_000,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let record_id = RecordId::new(Uuid::now_v7());
+            let fiber_id = Uuid::now_v7();
+            let mut record =
+                ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+            record.opened_at = Some(guard_addr);
+            record.state = RecordState::Retired;
+            let transition = TransitionBuilder::new(instance.clone())
+                .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+                .delete_fiber(fiber_id)
+                .event(RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    cancelled_records: vec![],
+                    cancelled_fibers: vec![],
+                })
+                .build();
+            store.commit_transition(&claim, &transition).await.unwrap();
+
+            let quarantine: Option<String> = sqlx::query_scalar(
+                "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+            )
+            .bind(instance_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if quarantine.as_deref() == Some("guard_failure_budget_exhausted") {
+                quarantine_after = Some(attempt);
+                break;
+            }
+        }
+        assert_eq!(
+            quarantine_after,
+            Some(2),
+            "the artifact's default budget of 2 must quarantine after exactly 2 rollbacks, \
+             not the retired hardcoded 5"
         );
     }
 
