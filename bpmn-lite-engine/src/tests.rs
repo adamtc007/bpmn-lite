@@ -3989,7 +3989,8 @@ async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
     );
 }
 
-/// KNOWN BUG — kept `#[ignore]`d as a precise reproduction, not deleted.
+/// FIXED regression test (was a known K-1 bug; see the FIXED note below).
+/// Runs live — no longer `#[ignore]`d — and is a permanent reproduction.
 ///
 /// Two INDEPENDENTLY-NESTED `GatewayInclusive` pairs, one inside EACH
 /// branch of an outer `GatewayAnd` fork — the runtime equivalent of
