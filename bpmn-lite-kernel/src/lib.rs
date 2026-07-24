@@ -1632,13 +1632,14 @@ fn apply_tick(
                 // retirement, not a subtree walk (`v2_cancel_guard_scope`'s
                 // shape doesn't apply — there's no single root; every
                 // still-`Armed` record anywhere in the table is in scope,
-                // since the whole instance is ending).
-                for (record_id, record) in snapshot.concurrency_table().iter() {
-                    if record.state == RecordState::Armed {
-                        changes
-                            .concurrency_mutations
-                            .push(ConcurrencyMutation::Retire(*record_id));
-                    }
+                // since the whole instance is ending). Folds `changes`
+                // staged earlier this tick, not just `snapshot`: a record
+                // opened immediately before this instruction (no
+                // intervening park) exists only in `changes`.
+                for record_id in armed_record_ids_in_transition(snapshot, &changes) {
+                    changes
+                        .concurrency_mutations
+                        .push(ConcurrencyMutation::Retire(record_id));
                 }
                 return Ok(changes.finish(instance));
             }
@@ -2228,27 +2229,12 @@ fn apply_tick(
                 // be dead weight for them — left `None`, unchanged from
                 // ruling I's original fire-once behaviour, matching every
                 // pre-existing interrupting-guard fixture byte-for-byte.
-                // `record_id` may be brand new THIS SAME tick (the common
-                // case — `V2GuardN`/`V2GuardArmTimer` are verifier-enforced
-                // adjacent, so the record was just opened by the
-                // immediately-preceding instruction and only exists in
-                // `changes.concurrency_mutations`, not yet materialized
-                // into `snapshot`) — check the in-flight mutations first,
-                // falling back to `snapshot` for the (also legal) case of
-                // a guard opened in an earlier transition being re-armed
-                // again after `V2GuardTimerCycle` narrowed/exhausted a
-                // prior spec.
-                let record_kind = changes
-                    .concurrency_mutations
-                    .iter()
-                    .rev()
-                    .find_map(|mutation| match mutation {
-                        ConcurrencyMutation::Insert(record) if record.id == record_id => {
-                            Some(record.kind)
-                        }
-                        _ => None,
-                    })
-                    .or_else(|| snapshot.concurrency_table().get(record_id).map(|r| r.kind));
+                // `record_id` may exist only in `changes`, not yet
+                // `snapshot`: `V2GuardN`/`V2GuardArmTimer` are
+                // verifier-enforced adjacent, so the record can be opened
+                // by the immediately-preceding instruction this same tick.
+                let record_kind = fetch_record_in_transition(snapshot, &changes, record_id)
+                    .map(|record| record.kind);
                 let repeat_spec = match record_kind {
                     Some(RecordKind::Guard { interrupting: false }) => {
                         Some(TimerRepeatSpec::new(duration.max(0) as u64, u32::MAX, 0))
@@ -3546,37 +3532,16 @@ enum MembershipOp {
     Remove(Uuid),
 }
 
-/// Fetch a concurrency record by handle the way every mid-transition read
-/// must: preferring whatever `changes` has already staged for this exact
-/// `handle` earlier in the SAME transition over `snapshot`, which is fixed
-/// at the transition's start and never sees the transition's own in-flight
-/// writes. `apply_tick` runs one fibre to its next block point across
-/// potentially many instructions in a single transition — a nested
-/// barrier's survivor can pop an inner `V2Join` (triggering
-/// `v2_reconcile_ancestor_membership` against the OUTER barrier's record)
-/// and then, without blocking, immediately execute the OUTER `V2Join`
-/// itself, all before this transition's `Changes` are ever committed to a
-/// new snapshot. A read that goes straight to `snapshot` at that second
-/// site sees the outer record as it was BEFORE the inner join's
-/// reconciliation, and its own routine re-`Insert` (decrementing `count`)
-/// silently overwrites — last-write-wins on `Insert`-by-key — the
-/// reconciliation that already ran. This is the root cause of a K-1
-/// violation independently confirmed 2026-07-24 on exactly this shape (a
-/// `GatewayAnd` fork nested inside a `GatewayAnd` branch): the losing
-/// member of the inner barrier is correctly computed as needing removal
-/// from the outer barrier's membership, that removal is correctly staged,
-/// and then discarded before commit by the outer `V2Join`'s own stale
-/// read. Every one-time-per-transition record fetch across this file
-/// (`Instr::V2Join`, `v2_reconcile_ancestor_membership`'s own lookup) goes
-/// through this helper for that reason — never `snapshot.concurrency_
-/// table().get(...)` directly for a handle whose record another word in
-/// the SAME transition might already have touched.
-///
-/// A `Retire`/`Remove` staged for `handle` earlier in this transition
-/// means the record is gone as of THIS transition — stops the search and
-/// returns `None` rather than falling through to a stale, still-`Armed`
-/// snapshot copy (the record predates this transition, but this
-/// transition has already disposed of it).
+/// Fetches a concurrency record via `changes` first, `snapshot` only as
+/// fallback. `apply_tick` can execute several instructions against one
+/// fibre before a transition commits, so `snapshot` — fixed at the
+/// transition's start — may already be stale for a record an earlier
+/// instruction this same tick touched; a `Retire`/`Remove` staged for
+/// `handle` means the record is gone this transition even if `snapshot`
+/// still shows it `Armed`. Every mid-transition concurrency-record read
+/// in this file must go through this helper (or its bulk sibling,
+/// `armed_record_ids_in_transition`), never `snapshot.concurrency_
+/// table()` directly.
 fn fetch_record_in_transition(
     snapshot: &Snapshot,
     changes: &Changes,
@@ -3594,6 +3559,33 @@ fn fetch_record_in_transition(
         }
     }
     snapshot.concurrency_table().get(handle).cloned()
+}
+
+/// The bulk sibling of `fetch_record_in_transition`: returns every record
+/// `Armed` after folding `changes.concurrency_mutations` onto `snapshot`,
+/// for callers that need the full set rather than one record by handle.
+/// Same rationale as `fetch_record_in_transition` — a record opened
+/// earlier this transition may exist only in `changes`.
+fn armed_record_ids_in_transition(snapshot: &Snapshot, changes: &Changes) -> Vec<RecordId> {
+    let mut table = snapshot.concurrency_table().clone();
+    for mutation in &changes.concurrency_mutations {
+        match mutation {
+            ConcurrencyMutation::Insert(record) => table.insert((**record).clone()),
+            ConcurrencyMutation::Retire(id) => {
+                if let Some(record) = table.get_mut(*id) {
+                    record.state = RecordState::Retired;
+                }
+            }
+            ConcurrencyMutation::Remove(id) => {
+                table.remove(*id);
+            }
+        }
+    }
+    table
+        .iter()
+        .filter(|(_, record)| record.state == RecordState::Armed)
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// K-1/K-2 discharge helper (V&S §7): every word that creates a fibre
@@ -3930,13 +3922,12 @@ fn v2_rollback_guard_scope(
     caller: RollbackCaller,
     changes: &mut Changes,
 ) -> Result<RollbackSnapshot, TransitionError> {
-    let record = snapshot
-        .concurrency_table()
-        .get(guard_handle)
-        .cloned()
-        .ok_or(TransitionError::InvalidCommand(
-            "rollback: unknown scope handle",
-        ))?;
+    // `V2CancelScope` runs inside `apply_tick`'s per-instruction loop, so
+    // `guard_handle`'s record may exist only in `changes`, not yet
+    // `snapshot` — fetch_record_in_transition, not a raw table read.
+    let record = fetch_record_in_transition(snapshot, changes, guard_handle).ok_or(
+        TransitionError::InvalidCommand("rollback: unknown scope handle"),
+    )?;
     // A18/V-10: only a `V2GuardR`-opened record carries a rollback
     // snapshot at all — a plain `V2Guard`/`V2GuardN` handle reaching here
     // (via `V2CancelScope` or automatic rollback-on-failure) is rejected,
