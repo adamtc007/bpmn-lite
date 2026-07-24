@@ -59,6 +59,38 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
         });
     }
 
+    // 2b. No cycles. Independent-review finding (2026-07-24, against
+    // `lowering.rs`'s dominance-based `compute_post_dominators`): that
+    // function's single-pass (no fixed-point iteration) reverse-postorder
+    // dominance computation is only correct on an acyclic graph, and
+    // nothing in this XML→IR pipeline previously enforced that — a raw
+    // BPMN sequence-flow back edge (a gateway routed to an earlier task,
+    // no `multiInstanceLoopCharacteristics`/`GUARD-TIMER-CYCLE>` involved)
+    // would parse and reach `lower()` unrejected, silently producing a
+    // WRONG (not merely missing) post-dominator for the affected node
+    // rather than failing loudly — demonstrated by direct construction,
+    // not merely argued. Per CLAUDE.md's settled decisions ("Workflow
+    // topology is SESE only," "Loops are finitely bounded"), this pipeline
+    // has no sanctioned raw back-edge construct at all — a bounded loop is
+    // expressed via `MultiInstance`/`GUARD-TIMER-CYCLE>`, neither of which
+    // creates an `IRGraph` back edge (confirmed: zero `Instr::BrCounterLt`
+    // — the bounded-loop backward-jump opcode — is ever emitted by this
+    // pipeline's `lowering.rs`, only by the separate `dsl/frontend.rs`
+    // S-expression pipeline, which has its own, unrelated DAG-vs-cycle
+    // story). A cyclic `IRGraph` reaching this point is therefore always
+    // illegitimate input, not an untested-but-legal case — rejected here,
+    // structurally, rather than left as an unenforced assumption three
+    // downstream functions each independently hope holds.
+    if petgraph::algo::is_cyclic_directed(graph) {
+        errors.push(VerifyError {
+            message: "Graph contains a cycle — raw sequence-flow back edges are not supported; \
+                       express a bounded loop via multi-instance or a cyclic boundary timer \
+                       instead"
+                .to_string(),
+            element_id: None,
+        });
+    }
+
     // 3. All nodes reachable from Start (or from BoundaryTimer nodes,
     //    which are alternative entry points for escalation paths)
     if let Some(start_idx) = starts.first() {
@@ -962,6 +994,55 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Unclosed diverging gateway") && e.message.contains("fork1")),
             "dangling branch (fork1's second branch never reaches join1) must be rejected, got: {errors:?}"
+        );
+    }
+
+    /// Independent-review finding (2026-07-24), against `lowering.rs`'s
+    /// dominance-based `compute_post_dominators`: nothing in this pipeline
+    /// previously rejected a raw cyclic `IRGraph` — a BPMN sequence-flow
+    /// back edge with no `MultiInstance`/`GUARD-TIMER-CYCLE>` involved
+    /// would parse and reach `lower()` unrejected, where the dominance
+    /// computation's single-pass (no fixed-point iteration) reverse-
+    /// postorder algorithm — valid only on a DAG — silently returns a
+    /// WRONG real node, not a safe absence, for the affected diverging
+    /// node (confirmed by the reviewer via direct construction of the
+    /// same topology this test uses). Per CLAUDE.md's settled decisions
+    /// ("SESE only," "loops are finitely bounded"), a raw back edge is
+    /// always illegitimate input for this pipeline, not merely untested —
+    /// rejected here structurally, closing the gap rather than leaving it
+    /// as an unenforced doc-comment assumption.
+    ///
+    /// Topology: `b` diverges to `p` and `q`; `p -> m1 -> end1`; `q -> a`,
+    /// and `a` diverges to a back edge to `b` AND to `m2 -> end2` — a
+    /// genuine cycle (`b -> q -> a -> b`) with no bounded-loop construct
+    /// anywhere in sight.
+    #[test]
+    fn test_cyclic_graph_rejected() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let b = graph.add_node(IRNode::GatewayXor { id: "b".to_string(), name: "B".to_string() });
+        let p = graph.add_node(IRNode::ServiceTask { id: "p".to_string(), name: "P".to_string(), task_type: "p".to_string() });
+        let q = graph.add_node(IRNode::ServiceTask { id: "q".to_string(), name: "Q".to_string(), task_type: "q".to_string() });
+        let m1 = graph.add_node(IRNode::ServiceTask { id: "m1".to_string(), name: "M1".to_string(), task_type: "m1".to_string() });
+        let end1 = graph.add_node(IRNode::End { id: "end1".to_string(), terminate: false });
+        let a = graph.add_node(IRNode::GatewayXor { id: "a".to_string(), name: "A".to_string() });
+        let m2 = graph.add_node(IRNode::ServiceTask { id: "m2".to_string(), name: "M2".to_string(), task_type: "m2".to_string() });
+        let end2 = graph.add_node(IRNode::End { id: "end2".to_string(), terminate: false });
+
+        graph.add_edge(start, b, IREdge { id: "e0".to_string(), condition: None });
+        graph.add_edge(b, p, IREdge { id: "e1".to_string(), condition: None });
+        graph.add_edge(b, q, IREdge { id: "e2".to_string(), condition: None });
+        graph.add_edge(p, m1, IREdge { id: "e3".to_string(), condition: None });
+        graph.add_edge(m1, end1, IREdge { id: "e4".to_string(), condition: None });
+        graph.add_edge(q, a, IREdge { id: "e5".to_string(), condition: None });
+        graph.add_edge(a, b, IREdge { id: "e6_back_edge".to_string(), condition: None });
+        graph.add_edge(a, m2, IREdge { id: "e7".to_string(), condition: None });
+        graph.add_edge(m2, end2, IREdge { id: "e8".to_string(), condition: None });
+
+        let errors = verify(&graph);
+        assert!(
+            errors.iter().any(|e| e.message.contains("cycle")),
+            "a raw sequence-flow back edge must be rejected structurally, got: {errors:?}"
         );
     }
 

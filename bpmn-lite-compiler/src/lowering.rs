@@ -25,20 +25,24 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     let start_idx = find_start(graph).ok_or_else(|| anyhow!("No Start node in IR graph"))?;
 
-    // Structural (NOT plain-BFS) traversal to assign bytecode addresses AND
-    // drive instruction-emission order — see `compute_region_map`/
-    // `structured_order`'s doc comments for why: BFS visits nodes
-    // level-by-level, not in the graph's true nesting order, so a
-    // `GatewayAnd`/`GatewayInclusive`/`GatewayXor` fork with branches of
-    // unequal length can get its SHORTER branch's own trailing edge into
-    // the shared merge discovered (and therefore addressed) before the
-    // LONGER branch's own instructions are laid out — producing a forward
-    // reference that is actually a BACKWARD `Addr` once instructions are
-    // emitted in that same wrong order, which `verify_bytecode` correctly
-    // rejects. Same root cause, same DFS-clone-the-stack-per-branch
-    // discipline as `compute_gateway_pairing` (Direction A) — applied here
-    // to ADDRESS LAYOUT rather than fork/join PAIRING IDENTITY.
-    let region_map = compute_region_map(graph, start_idx);
+    // Structural (NOT plain-BFS, NOT in-degree heuristic) traversal to
+    // assign bytecode addresses AND drive instruction-emission order — see
+    // `compute_post_dominators`/`compute_region_map`/`structured_order`'s
+    // doc comments for why: BFS visits nodes level-by-level, not in the
+    // graph's true nesting order, so a `GatewayAnd`/`GatewayInclusive`/
+    // `GatewayXor` fork with branches of unequal length can get its
+    // SHORTER branch's own trailing edge into the shared merge discovered
+    // (and therefore addressed) before the LONGER branch's own
+    // instructions are laid out — producing a forward reference that is
+    // actually a BACKWARD `Addr` once instructions are emitted in that
+    // same wrong order, which `verify_bytecode` correctly rejects. `post_
+    // doms` is computed ONCE here and shared with `compute_gateway_
+    // pairing` below — one dominance computation is the structural source
+    // of truth for both layout regions AND fork/join pairing identity, not
+    // two independently-derived (and independently fixable, independently
+    // breakable) mechanisms.
+    let post_doms = compute_post_dominators(graph);
+    let region_map = compute_region_map(graph, &post_doms);
     let order = structured_order(graph, start_idx, &region_map);
 
     // String interning for task_types and flag names
@@ -233,7 +237,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     // missing pairing here fails loudly at emission time (below) rather
     // than silently mispairing.
     let (fork_pairing, inclusive_join_addr, inclusive_fork_addr) =
-        compute_gateway_pairing(graph, start_idx, &node_addr, &inclusive_branches);
+        compute_gateway_pairing(graph, &post_doms, &node_addr, &inclusive_branches);
 
     // ── Data-object pre-pass ──────────────────────────────────────────────────
     // Run before the instruction emission loop so that FfiServiceTask lowering
@@ -855,104 +859,195 @@ pub fn lower_v2(graph: &IRGraph) -> Result<CompiledProgram> {
     lower(graph)
 }
 
-/// Divergence↔convergence `NodeIndex` region map — the address-layout
-/// counterpart of `compute_gateway_pairing`'s (Direction A's) fork/join
-/// PAIRING map, computed the SAME way (DFS, clone-the-stack-per-branch
-/// before recursing) but generalized from "kind-tagged `GatewayAnd`/
-/// `GatewayInclusive` only" to "ANY node with out-degree > 1 pairs with the
-/// unique node its branches structurally reconverge at" — this is what
-/// `structured_order` needs to lay out each branch's own body CONTIGUOUSLY
-/// before its shared merge, for EVERY branching construct in this IR
-/// (`GatewayXor` included: see the module-level investigation note on
-/// `structured_order` for why a bare `GatewayXor` merge is exposed to the
-/// identical backward-jump hazard as `GatewayAnd`/`GatewayInclusive`, even
-/// though it needs no `Addr`-valued pairing field of its own).
+/// Immediate post-dominator of every node in `graph` — the SINGLE
+/// structural source of truth this module derives region merge identity
+/// (`compute_region_map`), gateway fork/join pairing
+/// (`compute_gateway_pairing`), and bytecode layout (`structured_order`)
+/// from. Replaces three independent BFS/in-degree-based PROXIES for
+/// "structure" (a nesting stack for pairing, an in-degree-triggered stack
+/// for layout regions) with the thing actually being asked: for node `n`,
+/// the CLOSEST node through which every path from `n` must pass before
+/// reaching the program's exit. That is, by definition, `n`'s structural
+/// merge/join when `n` is a branch point — not "some node with more than
+/// one incoming edge that a DFS from `n` happened to reach first on one
+/// branch," which is exactly the defect an independent review found in
+/// the in-degree heuristic this replaces (2026-07-24): a `BoundaryError`
+/// escalation edge landing on a node INSIDE one branch of a fork gives
+/// that node more than one incoming edge for reasons entirely unrelated
+/// to the fork's own join, and the in-degree heuristic recorded it as the
+/// fork's merge regardless — `region_map[div]` came out as the wrong
+/// node, `d`, not the fork's true join `m`
+/// (`test_region_map_resolves_true_merge_past_unrelated_indegree_node`,
+/// below, was originally the old heuristic's own reproduction; it now
+/// asserts the CORRECT answer instead, since dominance structurally
+/// cannot make that mistake: `d` does not post-dominate the fork, because
+/// not every branch passes through `d`, so dominance never considers it a
+/// candidate at all).
 ///
-/// Degree-based rather than kind-based is the key generalization over
-/// `compute_gateway_pairing`: this IR has no dedicated "GatewayXor
-/// converging" node — an XOR merge is just an ordinary node (often a plain
-/// `ServiceTask`) with more than one incoming edge — so kind-matching
-/// (`IRNode::GatewayAnd { direction: Converging, .. }`, etc.) cannot find
-/// it. Out-degree/in-degree can, and — under this codebase's settled SESE
-/// topology (CLAUDE.md) — every genuine branch point's reconvergence node
-/// (if one exists; two branches may legitimately run to distinct `End`
-/// nodes with no shared merge at all) has in-degree exactly matching the
-/// number of branches that structurally lead to it, the same invariant
-/// `compute_gateway_pairing` relies on for `GatewayAnd`/`GatewayInclusive`.
+/// **Algorithm**: ordinary (forward) dominance, computed over the graph
+/// with every edge reversed, rooted at a synthetic virtual exit node with
+/// an edge from every real sink (in practice always an `End`, by V-11
+/// terminal-reachability, but this connects on MEASURED out-degree, not
+/// node kind, so it stays correct if a future construct introduces
+/// another kind of sink) — that is exactly post-dominance over the
+/// original graph. Implemented as Cooper/Harvey/Kennedy's iterative
+/// dominance algorithm (*"A Simple, Fast Dominance Algorithm"*), computed
+/// in a SINGLE forward pass over reverse-postorder with no fixed-point
+/// iteration needed: valid ONLY on an acyclic graph, where reverse-
+/// postorder from the virtual exit is a genuine topological order, so
+/// every predecessor in the dominance computation is fully resolved
+/// before any node that depends on it. **This is enforced, not assumed**:
+/// `verifier.rs`'s `verify()` rejects any cyclic `IRGraph` with
+/// `petgraph::algo::is_cyclic_directed` before `lower()` ever runs (an
+/// independent review, 2026-07-24, found an earlier version of this
+/// comment claimed acyclicity was "confirmed" by an irrelevant
+/// cross-pipeline fact — zero `BrCounterLt` emission — and, by direct
+/// construction, that the single-pass computation silently returns a
+/// WRONG real node, not a safe absence, when fed an actually-cyclic
+/// graph; seeing nothing enforced this, since raw BPMN sequence-flow back
+/// edges parsed and reached `lower()` unrejected). The multi-pass
+/// "keep iterating until nothing changes" step the textbook algorithm
+/// needs for graphs with loops is therefore a genuine no-op here, not
+/// merely an unverified hope, and is not coded.
 ///
-/// Two-pass, exactly mirroring `topo_order`'s old shape (this is the
-/// replacement for its addressing role): Pass 1 walks forward from `start`;
-/// Pass 2 sweeps any node NOT reachable from `start` via forward edges
-/// (boundary-timer/error escalation entry points) so a construct nested
-/// inside a handler chain gets its own region facts too, not just the
-/// mainline flow.
-fn compute_region_map(graph: &IRGraph, start: NodeIndex) -> HashMap<NodeIndex, NodeIndex> {
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut region_map: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+/// No literal reversed-graph object is built — `Outgoing`/`Incoming` are
+/// simply queried in the swapped sense throughout (a node's OWN
+/// predecessor in the dominance computation is its `Outgoing` neighbor in
+/// the real graph, since dominance walks against the real edge
+/// direction); a real reversed clone is unnecessary and would just be a
+/// second data structure to keep consistent with the first.
+///
+/// Returns `None` for a node whose own immediate post-dominator would be
+/// the synthetic virtual exit itself — meaning no REAL node is common to
+/// every path onward from it (e.g. an XOR whose branches lead to two
+/// genuinely distinct `End` events with nothing else shared); callers
+/// treat "no entry" as exactly that case, same as before this rewrite.
+fn compute_post_dominators(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
+    let mut work = graph.clone();
+    let virtual_exit = work.add_node(IRNode::End {
+        id: "__pdom_virtual_exit__".to_string(),
+        terminate: false,
+    });
+    let sinks: Vec<NodeIndex> = graph
+        .node_indices()
+        .filter(|&idx| {
+            graph
+                .edges_directed(idx, petgraph::Direction::Outgoing)
+                .next()
+                .is_none()
+        })
+        .collect();
+    for sink in sinks {
+        work.add_edge(
+            sink,
+            virtual_exit,
+            IREdge {
+                id: "__pdom_virtual_edge__".to_string(),
+                condition: None,
+            },
+        );
+    }
 
-    let mut stack: Vec<NodeIndex> = Vec::new();
-    region_dfs(graph, start, &mut visited, &mut stack, &mut region_map);
+    // Reverse-postorder of the dominance graph (real edges reversed),
+    // rooted at `virtual_exit`: iterative DFS (explicit stack, not
+    // recursive — program size is not bounded here the way a single
+    // branch's own depth is elsewhere in this file), following each
+    // node's `Incoming` real-graph edges (= its `Outgoing` edges in the
+    // reversed dominance graph, i.e. its "children" for this walk).
+    let rpo: Vec<NodeIndex> = {
+        let mut visited: HashSet<NodeIndex> = HashSet::new();
+        let mut postorder: Vec<NodeIndex> = Vec::new();
+        let mut stack: Vec<(NodeIndex, bool)> = vec![(virtual_exit, false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                postorder.push(node);
+                continue;
+            }
+            if !visited.insert(node) {
+                continue;
+            }
+            stack.push((node, true));
+            for child in work.neighbors_directed(node, petgraph::Direction::Incoming) {
+                if !visited.contains(&child) {
+                    stack.push((child, false));
+                }
+            }
+        }
+        postorder.reverse();
+        postorder
+    };
 
-    // Pass 2: sweep ALL unvisited nodes (escalation paths, future constructs).
-    for idx in graph.node_indices() {
-        if !visited.contains(&idx) {
-            let mut stack = Vec::new();
-            region_dfs(graph, idx, &mut visited, &mut stack, &mut region_map);
+    let rpo_index: HashMap<NodeIndex, usize> =
+        rpo.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+
+    fn intersect(
+        a: NodeIndex,
+        b: NodeIndex,
+        idom: &HashMap<NodeIndex, NodeIndex>,
+        rpo_index: &HashMap<NodeIndex, usize>,
+    ) -> NodeIndex {
+        let mut a = a;
+        let mut b = b;
+        while a != b {
+            while rpo_index[&a] > rpo_index[&b] {
+                a = idom[&a];
+            }
+            while rpo_index[&b] > rpo_index[&a] {
+                b = idom[&b];
+            }
+        }
+        a
+    }
+
+    // `idom` in the reversed dominance graph == post-dominator in `graph`.
+    // A node's own PREDECESSORS in the dominance graph are its `Outgoing`
+    // real-graph neighbors (the swapped-sense query this function's own
+    // doc comment describes).
+    let mut idom: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+    idom.insert(virtual_exit, virtual_exit);
+    for &node in rpo.iter().skip(1) {
+        let mut new_idom: Option<NodeIndex> = None;
+        for pred in work.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if !idom.contains_key(&pred) {
+                continue; // not yet processed this single pass — cannot occur on a genuine DAG (would imply `pred` depends on `node`, a cycle).
+            }
+            new_idom = Some(match new_idom {
+                None => pred,
+                Some(existing) => intersect(existing, pred, &idom, &rpo_index),
+            });
+        }
+        if let Some(chosen) = new_idom {
+            idom.insert(node, chosen);
         }
     }
 
-    region_map
+    idom.remove(&virtual_exit);
+    idom.retain(|_, v| *v != virtual_exit);
+    idom
 }
 
-/// DFS worker for `compute_region_map` — structurally identical to
-/// `gateway_pairing_dfs` (clone `stack` into each branch before recursing;
-/// a converging node pops-and-matches on EVERY arrival, first or
-/// subsequent), generalized from kind-tagged gateway matching to plain
-/// out-degree/in-degree: pushes `curr` into each branch's own stack clone
-/// whenever `curr` has more than one successor, pops (and records
-/// `div → curr`) whenever `curr` has more than one predecessor. Idempotent
-/// insert (`entry().or_insert`) because a 3+-way branch's every sibling
-/// independently pops the SAME `(div, curr)` fact from its own clone —
-/// consistent, not a race, under well-nested (SESE) topology.
-fn region_dfs(
+/// Divergence↔convergence `NodeIndex` region map for `structured_order`:
+/// every node with out-degree > 1 whose immediate post-dominator is a
+/// real node maps to that post-dominator — its structural merge, by
+/// definition. A thin filter over `compute_post_dominators`'s full map;
+/// `structured_order`/`layout_region` are unchanged by this function's own
+/// rewrite from an in-degree heuristic to genuine dominance, since they
+/// only ever consume the `NodeIndex → NodeIndex` shape, never how it was
+/// derived.
+fn compute_region_map(
     graph: &IRGraph,
-    curr: NodeIndex,
-    visited: &mut HashSet<NodeIndex>,
-    stack: &mut Vec<NodeIndex>,
-    region_map: &mut HashMap<NodeIndex, NodeIndex>,
-) {
-    let in_degree = graph
-        .edges_directed(curr, petgraph::Direction::Incoming)
-        .count();
-    if in_degree > 1 {
-        if let Some(div) = stack.pop() {
-            region_map.entry(div).or_insert(curr);
-        }
-    }
-
-    if !visited.insert(curr) {
-        // Already explored `curr`'s own continuation on a previous arrival
-        // — this arrival's only job was the pop-and-match above.
-        return;
-    }
-
-    let neighbors: Vec<NodeIndex> = graph.neighbors(curr).collect();
-    if neighbors.len() > 1 {
-        // Branch point — clone `stack` into EACH branch, pushing `curr`
-        // onto every clone (never the incoming `stack` itself), so a
-        // sibling branch's pushes/pops never leak into this branch's
-        // traversal (the exact defect `compute_gateway_pairing`'s own doc
-        // comment describes for the pairing problem).
-        for neighbor in neighbors {
-            let mut branch_stack = stack.clone();
-            branch_stack.push(curr);
-            region_dfs(graph, neighbor, visited, &mut branch_stack, region_map);
-        }
-    } else {
-        for neighbor in neighbors {
-            region_dfs(graph, neighbor, visited, stack, region_map);
-        }
-    }
+    post_doms: &HashMap<NodeIndex, NodeIndex>,
+) -> HashMap<NodeIndex, NodeIndex> {
+    graph
+        .node_indices()
+        .filter(|&idx| {
+            graph
+                .edges_directed(idx, petgraph::Direction::Outgoing)
+                .count()
+                > 1
+        })
+        .filter_map(|idx| post_doms.get(&idx).map(|&merge| (idx, merge)))
+        .collect()
 }
 
 /// Structured, region-aware replacement for the old plain-BFS `topo_order`
@@ -1091,34 +1186,37 @@ fn get_successors(graph: &IRGraph, node: NodeIndex) -> Vec<NodeIndex> {
     graph.neighbors(node).collect()
 }
 
-/// Which gateway kind a `compute_gateway_pairing` stack entry belongs to.
-/// See that function's doc comment for why one unified, kind-tagged stack
-/// is used instead of two independent per-kind stacks.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum GatewayPairKind {
-    And,
-    Inclusive,
-}
-
-/// DFS-recursive fork↔join identity discovery for `GatewayAnd` and
-/// `GatewayInclusive`, mirroring `dsl::rpst::dfs_walk`'s shape: a single
-/// stack threaded through the recursion, CLONED before recursing into each
-/// of a branch point's outgoing edges (so pushes/pops from one branch never
-/// leak into a sibling branch's traversal — the defect this function
-/// replaces), and a `visited` set that lets a converging node (reached once
-/// per incoming branch) be checked on every arrival without infinite
-/// recursion: the first arrival does the pop-and-match AND continues to the
-/// node's own single successor; every later arrival does the identical
-/// pop-and-match against ITS OWN branch-local stack, then stops (the first
-/// arrival already explored the continuation).
+/// Fork↔join identity for `GatewayAnd` and `GatewayInclusive`, derived
+/// directly from `compute_post_dominators` — no stack, no DFS, no nesting
+/// tracking of any kind, because dominance already IS the answer to "what
+/// is this diverging gateway's structural join": a linear scan over every
+/// diverging gateway node, looking up its own immediate post-dominator,
+/// and recording the pairing if (and only if) that post-dominator is
+/// actually a converging gateway of the SAME kind.
+///
+/// **This replaces the DFS-clone-the-stack-per-branch mechanism Direction
+/// A landed (2026-07-24)**, not because that mechanism was wrong — it
+/// correctly fixed the BFS-order mispairing defect it targeted — but per
+/// Adam's ruling that pairing, layout, and merge identity should all
+/// derive from ONE structurally-correct computation rather than three
+/// independently-maintained (and independently breakable) proxies for the
+/// same underlying question. The kind-check here plays the identical role
+/// the old `gateway_pairing_pop`'s kind-match played (a cross-kind
+/// crossing hazard — e.g. a `GatewayInclusive` nested inside a
+/// `GatewayAnd` branch whose own join is skipped, reaching the `GatewayAnd`
+/// join directly — silently produces NO pairing entry here, exactly as it
+/// silently produced none there); `verifier.rs`'s `check_gateway_and_
+/// nesting` still rejects that hazard structurally before `lower` ever
+/// runs in the real pipeline, and `lower()`'s own `ok_or_else` guards
+/// still fail loudly on a missing pairing rather than silently emitting
+/// wrong bytecode.
 ///
 /// Returns `(fork_pairing, inclusive_join_addr, inclusive_fork_addr)` —
 /// the exact three output maps `lower()`'s emission pass already consumes;
-/// see the call site's doc comment for the full framing/kind-tagging
-/// rationale.
+/// see the call site's doc comment for the full framing rationale.
 fn compute_gateway_pairing(
     graph: &IRGraph,
-    start_idx: NodeIndex,
+    post_doms: &HashMap<NodeIndex, NodeIndex>,
     node_addr: &HashMap<NodeIndex, Addr>,
     inclusive_branches: &HashMap<NodeIndex, Vec<InclusiveBranchInfo>>,
 ) -> (
@@ -1126,214 +1224,54 @@ fn compute_gateway_pairing(
     HashMap<NodeIndex, Addr>,
     HashMap<NodeIndex, Addr>,
 ) {
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut stack: Vec<(GatewayPairKind, NodeIndex)> = Vec::new();
     let mut fork_pairing: HashMap<NodeIndex, Addr> = HashMap::new();
     let mut inclusive_join_addr: HashMap<NodeIndex, Addr> = HashMap::new();
     let mut inclusive_fork_addr: HashMap<NodeIndex, Addr> = HashMap::new();
 
-    gateway_pairing_dfs(
-        graph,
-        start_idx,
-        node_addr,
-        inclusive_branches,
-        &mut visited,
-        &mut stack,
-        &mut fork_pairing,
-        &mut inclusive_join_addr,
-        &mut inclusive_fork_addr,
-    );
+    for diverging_idx in graph.node_indices() {
+        let Some(&join_idx) = post_doms.get(&diverging_idx) else {
+            continue;
+        };
+        match &graph[diverging_idx] {
+            IRNode::GatewayAnd {
+                direction: GatewayDirection::Diverging,
+                ..
+            } => {
+                if matches!(
+                    &graph[join_idx],
+                    IRNode::GatewayAnd {
+                        direction: GatewayDirection::Converging,
+                        ..
+                    }
+                ) {
+                    fork_pairing.insert(join_idx, node_addr[&diverging_idx]);
+                }
+            }
+            IRNode::GatewayInclusive {
+                direction: GatewayDirection::Diverging,
+                ..
+            } => {
+                if matches!(
+                    &graph[join_idx],
+                    IRNode::GatewayInclusive {
+                        direction: GatewayDirection::Converging,
+                        ..
+                    }
+                ) {
+                    inclusive_join_addr.insert(diverging_idx, node_addr[&join_idx]);
+                    let precheck_len = inclusive_branches
+                        .get(&diverging_idx)
+                        .map(|branches| inclusive_precheck_len(branches))
+                        .unwrap_or(0);
+                    inclusive_fork_addr
+                        .insert(join_idx, node_addr[&diverging_idx] + precheck_len);
+                }
+            }
+            _ => {}
+        }
+    }
 
     (fork_pairing, inclusive_join_addr, inclusive_fork_addr)
-}
-
-/// Pop the top-of-stack entry for a converging gateway `curr` reached on
-/// ONE branch and, if it is tagged with the SAME kind as `curr`, record the
-/// pairing. A wrong-kind pop (a cross-kind crossing hazard) is deliberately
-/// left unresolved here — no error message is constructed in this pure
-/// pairing-derivation function; the emission pass's existing `ok_or_else`
-/// guards (`lower()`, ~line 433/464/485) fail loudly on a missing pairing,
-/// and `verifier.rs`'s extended `check_gateway_and_nesting` rejects the
-/// hazard structurally before `lower` ever runs in the real pipeline.
-///
-/// Independent review finding (2026-07-24): this function must NOT pop
-/// unconditionally before confirming `curr` is actually a converging
-/// And/Inclusive gateway — `verifier.rs`'s `check_gateway_nesting_pop`
-/// (the function this one otherwise mirrors) checks `curr`'s node kind
-/// FIRST and returns early without touching the stack if it isn't one; this
-/// function used to pop first and check second, silently discarding a
-/// stack entry on every revisit of ANY multi-incoming-edge node (e.g. a
-/// `GatewayXor` merge), not just a genuine converging And/Inclusive gateway.
-/// Not demonstrated to be live-exploitable under the current call graph
-/// (the "already visited" caller always returns immediately after this
-/// call, so a corrupted branch-local clone is discarded before it could be
-/// reused) — but real, fragile, and a needless deviation from the
-/// established mirror-of-`verifier.rs` shape, fixed here rather than left
-/// as latent risk for a future refactor that makes that caller keep
-/// traversing instead of returning.
-#[allow(clippy::too_many_arguments)]
-fn gateway_pairing_pop(
-    graph: &IRGraph,
-    curr: NodeIndex,
-    node_addr: &HashMap<NodeIndex, Addr>,
-    inclusive_branches: &HashMap<NodeIndex, Vec<InclusiveBranchInfo>>,
-    stack: &mut Vec<(GatewayPairKind, NodeIndex)>,
-    fork_pairing: &mut HashMap<NodeIndex, Addr>,
-    inclusive_join_addr: &mut HashMap<NodeIndex, Addr>,
-    inclusive_fork_addr: &mut HashMap<NodeIndex, Addr>,
-) {
-    let this_kind = match &graph[curr] {
-        IRNode::GatewayAnd {
-            direction: GatewayDirection::Converging,
-            ..
-        } => GatewayPairKind::And,
-        IRNode::GatewayInclusive {
-            direction: GatewayDirection::Converging,
-            ..
-        } => GatewayPairKind::Inclusive,
-        _ => return,
-    };
-    let Some((kind, diverging_idx)) = stack.pop() else {
-        return;
-    };
-    if kind != this_kind {
-        // Cross-kind mismatch — see doc comment above; no error constructed
-        // here, `verifier.rs` rejects this structurally before `lower` runs.
-        return;
-    }
-    match this_kind {
-        GatewayPairKind::And => {
-            fork_pairing.insert(curr, node_addr[&diverging_idx]);
-        }
-        GatewayPairKind::Inclusive => {
-            inclusive_join_addr.insert(diverging_idx, node_addr[&curr]);
-            let precheck_len = inclusive_branches
-                .get(&diverging_idx)
-                .map(|branches| inclusive_precheck_len(branches))
-                .unwrap_or(0);
-            inclusive_fork_addr.insert(curr, node_addr[&diverging_idx] + precheck_len);
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn gateway_pairing_dfs(
-    graph: &IRGraph,
-    curr: NodeIndex,
-    node_addr: &HashMap<NodeIndex, Addr>,
-    inclusive_branches: &HashMap<NodeIndex, Vec<InclusiveBranchInfo>>,
-    visited: &mut HashSet<NodeIndex>,
-    stack: &mut Vec<(GatewayPairKind, NodeIndex)>,
-    fork_pairing: &mut HashMap<NodeIndex, Addr>,
-    inclusive_join_addr: &mut HashMap<NodeIndex, Addr>,
-    inclusive_fork_addr: &mut HashMap<NodeIndex, Addr>,
-) {
-    if !visited.insert(curr) {
-        // A later arrival at a converging node (one per remaining incoming
-        // branch) — pop-and-match against THIS branch's own local stack,
-        // then stop; the first arrival already explored the continuation.
-        gateway_pairing_pop(
-            graph,
-            curr,
-            node_addr,
-            inclusive_branches,
-            stack,
-            fork_pairing,
-            inclusive_join_addr,
-            inclusive_fork_addr,
-        );
-        return;
-    }
-
-    // `push_entry`: what a Diverging gateway would push — but, mirroring
-    // `dsl::rpst::dfs_walk`'s `Split` arm precisely, it is pushed ONLY into
-    // each branch's own CLONE below, never into the incoming `stack`
-    // reference directly. Pushing directly here would (for the top-level
-    // caller's own stack, or any single-successor relay chain leading back
-    // to it) leave a phantom entry that never gets popped — since all
-    // actual pops happen on branch-local clones — silently corrupting
-    // whatever the caller does with `stack` after this call returns. A
-    // Converging gateway's pop, by contrast, is safe to apply directly to
-    // the incoming `stack` (mutating it in place) because it has exactly
-    // one successor — no sibling branch exists to protect from leakage.
-    let push_entry = match &graph[curr] {
-        IRNode::GatewayAnd {
-            direction: GatewayDirection::Diverging,
-            ..
-        } => Some((GatewayPairKind::And, curr)),
-        IRNode::GatewayInclusive {
-            direction: GatewayDirection::Diverging,
-            ..
-        } => Some((GatewayPairKind::Inclusive, curr)),
-        IRNode::GatewayAnd {
-            direction: GatewayDirection::Converging,
-            ..
-        }
-        | IRNode::GatewayInclusive {
-            direction: GatewayDirection::Converging,
-            ..
-        } => {
-            // First arrival at a converging node — pop-and-match, then
-            // fall through to continue to its own (single) successor below.
-            gateway_pairing_pop(
-                graph,
-                curr,
-                node_addr,
-                inclusive_branches,
-                stack,
-                fork_pairing,
-                inclusive_join_addr,
-                inclusive_fork_addr,
-            );
-            None
-        }
-        _ => None,
-    };
-
-    let neighbors: Vec<NodeIndex> = graph.neighbors(curr).collect();
-    if push_entry.is_none() && neighbors.len() <= 1 {
-        // No fan-out and nothing to push — continue with the SAME mutable
-        // stack (matches `dsl::rpst::dfs_walk`'s Join/Task/Start handling:
-        // single successor, no clone needed).
-        for neighbor in neighbors {
-            gateway_pairing_dfs(
-                graph,
-                neighbor,
-                node_addr,
-                inclusive_branches,
-                visited,
-                stack,
-                fork_pairing,
-                inclusive_join_addr,
-                inclusive_fork_addr,
-            );
-        }
-    } else {
-        // A branch point (GatewayXor/GatewayAnd/GatewayInclusive diverging,
-        // or any node with >1 outgoing edge) — clone the stack per branch
-        // BEFORE recursing, pushing `push_entry` onto EACH clone (never the
-        // incoming `stack`), so a sibling branch's pushes/pops never leak
-        // into this branch's traversal. This clone-per-branch discipline,
-        // ported from `dsl::rpst::dfs_walk`'s `Split` arm, is the actual
-        // fix for the BFS-order mispairing defect this function replaces.
-        for neighbor in neighbors {
-            let mut branch_stack = stack.clone();
-            if let Some(entry) = push_entry {
-                branch_stack.push(entry);
-            }
-            gateway_pairing_dfs(
-                graph,
-                neighbor,
-                node_addr,
-                inclusive_branches,
-                visited,
-                &mut branch_stack,
-                fork_pairing,
-                inclusive_join_addr,
-                inclusive_fork_addr,
-            );
-        }
-    }
 }
 
 fn estimate_instr_count(graph: &IRGraph, node: NodeIndex) -> u32 {
@@ -3801,23 +3739,30 @@ mod tests {
         );
     }
 
-    /// Independent-review probe (2026-07-24): `region_dfs` records a
-    /// `div → curr` region-map entry on ANY node with static in-degree > 1,
-    /// with no check that `curr` is actually where ALL of `div`'s own
-    /// branches converge. Constructs the review's counterexample directly
-    /// against `compute_region_map` (bypassing XML/BoundaryError plumbing
-    /// entirely): a `GatewayAnd` fork `a` with branch1 = `t1 -> m` and
-    /// branch2 = `t2 -> d -> m`, where `d` also receives an unrelated
-    /// incoming edge from `x` (modeling e.g. a boundary-error escalation
-    /// landing on a node inside one branch) — `d` has in-degree 2 for
-    /// reasons unrelated to `a`'s own fork, `m` is `a`'s TRUE join.
+    /// Independent-review probe (2026-07-24), UPDATED to lock the fix
+    /// rather than the bug it originally reproduced: the OLD `region_dfs`
+    /// (an in-degree-triggered DFS stack, since deleted — replaced by
+    /// `compute_post_dominators`) recorded a `div → curr` region-map entry
+    /// on ANY node with static in-degree > 1, with no check that `curr`
+    /// was actually where ALL of `div`'s own branches converge. This
+    /// construction is the review's original counterexample, unchanged: a
+    /// `GatewayAnd` fork `a` with branch1 = `t1 -> m` and branch2 =
+    /// `t2 -> d -> m`, where `d` also receives an unrelated incoming edge
+    /// from `x` (modeling e.g. a boundary-error escalation landing on a
+    /// node inside one branch) — `d` has in-degree 2 for reasons unrelated
+    /// to `a`'s own fork; `m` is `a`'s TRUE join.
     ///
-    /// Expected-if-review-is-right (and this is what's asserted below):
-    /// `region_map[a] == d`, not `m` — the wrong node — because branch2's
-    /// DFS arrival at `d` pops `a` off its stack and records `a -> d` via
-    /// `or_insert` BEFORE branch1 or branch2 ever reaches the true join `m`.
+    /// Dominance-based `compute_region_map` (2026-07-24 rewrite, per
+    /// Adam's ruling that region identity should be structurally correct,
+    /// not an in-degree proxy) gets this right BY CONSTRUCTION: `d` does
+    /// not post-dominate `a`, because branch1 (`t1 -> m`) never passes
+    /// through `d` at all — dominance never considers `d` a candidate,
+    /// full stop, not merely "checks harder and rejects it." `m` DOES
+    /// post-dominate `a` (every path from `a` passes through `m`), and is
+    /// the closest such node, so `region_map[a] == Some(m)` is the correct
+    /// answer this test now locks in.
     #[test]
-    fn test_region_dfs_misattributes_merge_to_unrelated_indegree_node() {
+    fn test_region_map_resolves_true_merge_past_unrelated_indegree_node() {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start {
             id: "start".to_string(),
@@ -3877,18 +3822,18 @@ mod tests {
         e(&mut graph, d, m, "f_d_m");
         e(&mut graph, m, end, "f_m_end");
 
-        let region_map = compute_region_map(&graph, start);
+        let post_doms = compute_post_dominators(&graph);
+        let region_map = compute_region_map(&graph, &post_doms);
 
         assert_eq!(
             region_map.get(&a),
-            Some(&d),
-            "confirms the misattribution: region_map[a] is `d` (an unrelated \
-             in-degree-2 node) rather than `m` (a's true join) — region_dfs \
-             has no check that `curr`'s in-degree is fully accounted for by \
-             branches reachable from `div`. If this assertion ever fails \
-             because the code was fixed to record `m` instead, replace it \
-             with `assert_eq!(region_map.get(&a), Some(&m))` and update this \
-             comment — the bug is fixed, not just relocated."
+            Some(&m),
+            "dominance must resolve a's true join (m), not the unrelated \
+             in-degree-2 node (d) a boundary-error-style escalation edge \
+             happens to land on inside one branch — d does not post-dominate \
+             a (branch1's t1 -> m path never passes through d at all), so \
+             dominance never considers it a candidate, unlike the old \
+             in-degree heuristic this replaced."
         );
     }
 }
