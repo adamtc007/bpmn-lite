@@ -735,14 +735,18 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                     // boundary's budget takes precedence, else the first error
                     // boundary's. `failureBudget="0"` is a lowering-time reject.
                     let guard_open_addr = Addr::new(instructions.len() as u32);
+                    // `and_then` (not `map(..).flatten()`): a co-attached timer
+                    // boundary that declares no budget must fall THROUGH to the
+                    // error boundary, not suppress it — `map` would yield
+                    // `Some(None)`, defeating the `or_else` and silently dropping
+                    // a declared error-arm budget down to the workflow default.
                     let budget_max = timer_boundary
-                        .map(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
+                        .and_then(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
                         .or_else(|| {
                             error_boundaries
                                 .and_then(|v| v.first())
-                                .map(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
-                        })
-                        .flatten();
+                                .and_then(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
+                        });
                     if let Some(max_failures) = budget_max {
                         let budget = ScopeFailureBudget::new(1, max_failures).map_err(|error| {
                             anyhow!("boundary event on '{id}' has invalid failureBudget {max_failures}: {error}")
@@ -1711,13 +1715,12 @@ fn lower_boundary_guarded_task_v2(
     // identical logic on the FFI-task guard-open path).
     let guard_open_addr = Addr::new(instructions.len() as u32);
     let budget_max = timer_boundary
-        .map(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
+        .and_then(|(bt_idx, _)| boundary_failure_budget(graph, *bt_idx))
         .or_else(|| {
             error_boundaries
                 .and_then(|v| v.first())
-                .map(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
-        })
-        .flatten();
+                .and_then(|(err_idx, _)| boundary_failure_budget(graph, *err_idx))
+        });
     if let Some(max_failures) = budget_max {
         let budget = ScopeFailureBudget::new(1, max_failures).map_err(|error| {
             anyhow!("boundary event on '{id}' has invalid failureBudget {max_failures}: {error}")
@@ -2962,6 +2965,78 @@ mod tests {
         assert_eq!(declared, vec![2, 4], "each guard keeps its own declared ceiling, not a shared one");
 
         crate::Compiler::lower_v2(&graph).expect("two-guard workflow must verify end-to-end");
+    }
+
+    /// V8 (§31) fail-closed: when a timer boundary and an error boundary are
+    /// co-attached to one host task (one shared guard), a *budget-less* timer
+    /// must not suppress the error boundary's declared `failureBudget` — the
+    /// budget falls through to the error arm. Red before the `and_then` fix:
+    /// `timer_boundary.map(..)` yielded `Some(None)`, defeating the `or_else`
+    /// and silently dropping the error budget to the workflow default.
+    #[test]
+    fn v8_budgetless_timer_does_not_suppress_error_boundary_budget() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host = graph.add_node(IRNode::ServiceTask {
+            id: "host".to_string(),
+            name: "Host".to_string(),
+            task_type: "risky_work".to_string(),
+        });
+        let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
+        // Timer boundary — interrupting, NO budget declared.
+        let timer = graph.add_node(IRNode::BoundaryTimer {
+            id: "timeout".to_string(),
+            attached_to: "host".to_string(),
+            spec: TimerSpec::Duration { ms: 5000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        let timer_escalate = graph.add_node(IRNode::ServiceTask {
+            id: "timer_escalate".to_string(),
+            name: "TimerEscalate".to_string(),
+            task_type: "timer_escalate".to_string(),
+        });
+        let timer_end = graph.add_node(IRNode::End { id: "timer_end".to_string(), terminate: false });
+        // Error boundary on the SAME host — declares a strict budget of 1.
+        let boom = graph.add_node(IRNode::BoundaryError {
+            id: "boom".to_string(),
+            attached_to: "host".to_string(),
+            error_code: Some("BOOM".to_string()),
+            failure_budget: Some(1),
+        });
+        let boom_escalate = graph.add_node(IRNode::ServiceTask {
+            id: "boom_escalate".to_string(),
+            name: "BoomEscalate".to_string(),
+            task_type: "boom_escalate".to_string(),
+        });
+        let boom_end = graph.add_node(IRNode::End { id: "boom_end".to_string(), terminate: false });
+
+        graph.add_edge(start, host, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host, normal_end, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(timer, timer_escalate, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(timer_escalate, timer_end, IREdge { id: "f4".to_string(), condition: None });
+        graph.add_edge(boom, boom_escalate, IREdge { id: "f5".to_string(), condition: None });
+        graph.add_edge(boom_escalate, boom_end, IREdge { id: "f6".to_string(), condition: None });
+
+        verifier::verify_or_err(&graph).unwrap();
+        let program = lower_v2(&graph).unwrap();
+
+        let guard_addr = program
+            .program()
+            .iter()
+            .position(|i| matches!(i, Instr::V2Guard { .. }))
+            .expect("interrupting timer boundary opens a V2Guard");
+        let budget = program
+            .v2_guard_budgets()
+            .get(&Addr::new(guard_addr as u32))
+            .expect("the error boundary's budget must survive a co-attached budget-less timer");
+        assert_eq!(
+            budget.max_failures(),
+            1,
+            "the declared error-arm failureBudget must not be dropped to the default"
+        );
+
+        crate::Compiler::lower_v2(&graph).expect("timer+error co-attached guard must verify");
     }
 
     /// V5 boundary-timer: non-interrupting case opens `V2GuardN`, closed by
