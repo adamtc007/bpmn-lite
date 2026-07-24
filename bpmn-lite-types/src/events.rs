@@ -83,11 +83,11 @@ pub enum RuntimeEvent {
     WaitMsgSubscribed {
         fiber_id: Uuid,
         name: u32,
-        corr_key: Value,
+        corr_key: String,
     },
     MsgReceived {
         name: u32,
-        corr_key: Value,
+        corr_key: String,
         msg_ref: Option<Uuid>,
     },
     MessageBuffered {

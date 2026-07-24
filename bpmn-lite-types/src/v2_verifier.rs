@@ -969,6 +969,7 @@ mod tests {
             data_objects: StdBTreeMap::new(),
             ffi_task_decls: StdBTreeMap::new(),
             v2_ffi_task_decls: StdBTreeMap::new(),
+            v2_corr_sources: StdBTreeMap::new(),
         }
     }
 
@@ -1227,7 +1228,7 @@ mod tests {
     fn v5_rejects_arm_count_mismatch() {
         let err = reject(vec![
             Instr::V2RaceOpen { arm_count: 2 },
-            Instr::V2ArmMsg { target: Addr::new(3), name: 1, corr_reg: 0 },
+            Instr::V2ArmMsg { target: Addr::new(3), name: 1 },
             Instr::V2RaceClose,
             Instr::End,
         ]);
@@ -1468,7 +1469,7 @@ mod tests {
             /* 8  */ Instr::V2RaceOpen { arm_count: 2 },
             /* 9  */ Instr::PushI64(5_000),
             /* 10 */ Instr::V2ArmTimer { target: Addr::new(13) },
-            /* 11 */ Instr::V2ArmMsg { target: Addr::new(14), name: 42, corr_reg: 0 },
+            /* 11 */ Instr::V2ArmMsg { target: Addr::new(14), name: 42 },
             /* 12 */ Instr::V2RaceClose,
             /* 13 */ Instr::Jump { target: Addr::new(15) },
             /* 14 */ Instr::Jump { target: Addr::new(15) },
@@ -1549,7 +1550,7 @@ mod tests {
             /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
             /* 7  */ Instr::PushI64(30_000),
             /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
-            /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+            /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100 },
             /* 10 */ Instr::V2RaceClose,
             /* 11 */ Instr::Jump { target: Addr::new(13) },
             /* 12 */ Instr::Jump { target: Addr::new(13) },
@@ -1629,7 +1630,7 @@ mod tests {
         // `race_arm_targets`'s own backward-scan check would even run.
         assert_rejected_no_panic(
             vec![
-                Instr::V2ArmMsg { target: Addr::new(2), name: 1, corr_reg: 0 },
+                Instr::V2ArmMsg { target: Addr::new(2), name: 1 },
                 Instr::V2RaceClose,
                 Instr::End,
             ],
@@ -1664,7 +1665,7 @@ mod tests {
         let instructions = vec![
             /* 0 */ Instr::Jump { target: Addr::new(1) },
             /* 1 */ Instr::V2RaceOpen { arm_count: 1 },
-            /* 2 */ Instr::V2ArmMsg { target: Addr::new(0), name: 1, corr_reg: 0 }, // backward!
+            /* 2 */ Instr::V2ArmMsg { target: Addr::new(0), name: 1 }, // backward!
             /* 3 */ Instr::V2RaceClose,
             /* 4 */ Instr::End,
         ];
@@ -1747,7 +1748,7 @@ mod tests {
                 (0u32..4).prop_map(|n| Instr::V2GuardTimerCycle { max_fires: n }),
                 (0u16..4).prop_map(|n| Instr::V2RaceOpen { arm_count: n }),
                 addr.clone().prop_map(|a| Instr::V2ArmTimer { target: a }),
-                addr.clone().prop_map(|a| Instr::V2ArmMsg { target: a, name: 1, corr_reg: 0 }),
+                addr.clone().prop_map(|a| Instr::V2ArmMsg { target: a, name: 1 }),
                 Just(Instr::V2RaceClose),
                 addr.clone().prop_map(|a| Instr::V2Fork {
                     targets: Box::new([a]),

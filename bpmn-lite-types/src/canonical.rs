@@ -614,7 +614,7 @@ impl CanonicalEncode for crate::types::WaitState {
                 w.write_u8(0x02);
                 w.write_u32(*wait_id);
                 w.write_u32(*name);
-                corr_key.canonical_encode(w);
+                w.write_str(corr_key);
             }
             Self::Job { job_key } => {
                 w.write_u8(0x03);
@@ -652,7 +652,7 @@ impl CanonicalEncode for crate::types::WaitState {
             0x02 => Self::Msg {
                 wait_id: r.read_u32()?,
                 name: r.read_u32()?,
-                corr_key: crate::types::Value::canonical_decode(r)?,
+                corr_key: r.read_str()?,
             },
             0x03 => Self::Job {
                 job_key: r.read_str()?,
@@ -694,12 +694,12 @@ impl CanonicalEncode for crate::types::V2RaceArm {
             Self::Msg {
                 target,
                 name,
-                corr_reg,
+                corr_key,
             } => {
                 w.write_u8(0x01);
                 target.canonical_encode(w);
                 w.write_u32(*name);
-                w.write_u8(*corr_reg);
+                w.write_str(corr_key);
             }
             Self::Effect {
                 target,
@@ -721,7 +721,7 @@ impl CanonicalEncode for crate::types::V2RaceArm {
             0x01 => Self::Msg {
                 target: crate::types::Addr::canonical_decode(r)?,
                 name: r.read_u32()?,
-                corr_reg: r.read_u8()?,
+                corr_key: r.read_str()?,
             },
             0x02 => Self::Effect {
                 target: crate::types::Addr::canonical_decode(r)?,
@@ -886,9 +886,6 @@ impl CanonicalEncode for crate::types::Fiber {
         self.fiber_id.canonical_encode(w);
         self.pc.canonical_encode(w);
         w.write_seq(self.stack.iter(), |w, v| v.canonical_encode(w));
-        for reg in &self.regs {
-            reg.canonical_encode(w);
-        }
         self.wait.canonical_encode(w);
         w.write_u32(self.loop_epoch);
         w.write_seq(self.control_stack.iter(), |w, h| h.canonical_encode(w));
@@ -897,19 +894,6 @@ impl CanonicalEncode for crate::types::Fiber {
         let fiber_id = uuid::Uuid::canonical_decode(r)?;
         let pc = crate::types::Addr::canonical_decode(r)?;
         let stack = r.read_seq(crate::types::Value::canonical_decode)?;
-        let mut regs_vec = Vec::with_capacity(8);
-        for _ in 0..8 {
-            regs_vec.push(crate::types::Value::canonical_decode(r)?);
-        }
-        // `regs_vec` always has exactly 8 elements by construction (the loop
-        // above pushes exactly 8 times, or returns early via `?` on decode
-        // failure) — `try_into` cannot actually fail; the error arm exists
-        // only because the conversion is fallible in its type signature, not
-        // because this path is reachable.
-        let regs: [crate::types::Value; 8] = match regs_vec.try_into() {
-            Ok(regs) => regs,
-            Err(_) => return Err(CanonicalDecodeError::UnexpectedEof { offset: 0 }),
-        };
         let wait = crate::types::WaitState::canonical_decode(r)?;
         let loop_epoch = r.read_u32()?;
         let control_stack = r.read_seq(crate::concurrency::RecordId::canonical_decode)?;
@@ -917,7 +901,6 @@ impl CanonicalEncode for crate::types::Fiber {
             fiber_id,
             pc,
             stack,
-            regs,
             wait,
             loop_epoch,
             control_stack,
@@ -1537,11 +1520,13 @@ mod tests {
             vec![0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
         );
         assert_eq!(
-            WaitState::Msg { wait_id: 1, name: 2, corr_key: crate::types::Value::I64(3) }
+            // V7 (§28): corr_key is now the resolved content string, encoded
+            // via `write_str` (u32-LE length + UTF-8), not a `Value`.
+            WaitState::Msg { wait_id: 1, name: 2, corr_key: "3".to_string() }
                 .to_canonical_bytes(),
             vec![
-                0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00
+                0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                0x33
             ]
         );
         assert_eq!(
@@ -1579,7 +1564,7 @@ mod tests {
         use crate::types::{Addr, V2RaceArm};
         let arms = vec![
             V2RaceArm::Timer { target: Addr::new(1) },
-            V2RaceArm::Msg { target: Addr::new(2), name: 3, corr_reg: 4 },
+            V2RaceArm::Msg { target: Addr::new(2), name: 3, corr_key: "k4".to_string() },
             V2RaceArm::Effect {
                 target: Addr::new(5),
                 effect_id: crate::EffectId::from_uuid(Uuid::from_u128(6)),
@@ -2106,7 +2091,7 @@ mod proptest_round_trip_v2_1h {
         prop_oneof![
             Just(WaitState::Running),
             any::<u64>().prop_map(|deadline_ms| WaitState::Timer { deadline_ms }),
-            (any::<u32>(), any::<u32>(), arb_value()).prop_map(|(wait_id, name, corr_key)| {
+            (any::<u32>(), any::<u32>(), ".{0,16}").prop_map(|(wait_id, name, corr_key)| {
                 WaitState::Msg {
                     wait_id,
                     name,
@@ -2200,17 +2185,15 @@ mod proptest_round_trip_v2_1h {
             arb_uuid(),
             any::<u32>(),
             pvec(arb_value(), 0..6),
-            proptest::array::uniform8(arb_value()),
             arb_wait_state(),
             any::<u32>(),
             pvec(arb_uuid(), 0..6),
         )
             .prop_map(
-                |(fiber_id, pc, stack, regs, wait, loop_epoch, control_stack)| Fiber {
+                |(fiber_id, pc, stack, wait, loop_epoch, control_stack)| Fiber {
                     fiber_id,
                     pc: Addr::new(pc),
                     stack,
-                    regs,
                     wait,
                     loop_epoch,
                     control_stack: control_stack.into_iter().map(RecordId::new).collect(),

@@ -1400,6 +1400,8 @@ mod tests {
           <bpmn:process id="kyc_open_case" isExecutable="true">
             <bpmn:startEvent id="start" />
 
+            <bpmn:dataObject id="case_id" name="case_id"></bpmn:dataObject>
+
             <bpmn:serviceTask id="create_case" name="Create Case Record">
               <bpmn:extensionElements>
                 <zeebe:taskDefinition type="create_case_record" />
@@ -1415,14 +1417,14 @@ mod tests {
             <bpmn:intermediateCatchEvent id="wait_docs" name="docs_received">
               <bpmn:messageEventDefinition messageRef="msg_docs" />
               <bpmn:extensionElements>
-                <zeebe:subscription correlationKey="0" />
+                <zeebe:subscription correlationKey="=case_id" />
               </bpmn:extensionElements>
             </bpmn:intermediateCatchEvent>
 
             <bpmn:userTask id="reviewer_decision" name="Reviewer Decision">
               <bpmn:extensionElements>
                 <zeebe:taskDefinition type="reviewer_decision" />
-                <zeebe:subscription correlationKey="0" />
+                <zeebe:subscription correlationKey="=case_id" />
               </bpmn:extensionElements>
             </bpmn:userTask>
 
@@ -1445,7 +1447,7 @@ mod tests {
 
         // Parse
         let graph = parse_bpmn(xml).unwrap();
-        assert_eq!(graph.node_count(), 7); // start, 3 service tasks, msg wait, human wait, end
+        assert_eq!(graph.node_count(), 8); // + case_id dataObject, start, 3 service tasks, msg wait, human wait, end
 
         // Verify
         verifier::verify_or_err(&graph).unwrap();

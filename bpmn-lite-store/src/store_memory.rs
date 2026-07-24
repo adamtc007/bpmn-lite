@@ -2515,7 +2515,7 @@ mod tests {
         fiber.wait = WaitState::Msg {
             wait_id: 1,
             name: 1,
-            corr_key: Value::Bool(false),
+            corr_key: "k".to_string(),
         };
         store.save_instance("default", &instance).await.unwrap();
         store.save_fiber(instance_id, &fiber).await.unwrap();

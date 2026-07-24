@@ -321,13 +321,13 @@ pub enum Instr {
 
     /// Publish a message into the engine's message buffer (BPMN Send Task).
     ///
-    /// Fire-and-continue. The interned message `name` is paired with the value
-    /// in register `corr_reg` (the correlation key) and inserted into the same
+    /// Fire-and-continue. The interned message `name` is paired with the
+    /// correlation key resolved from process data at publish time (this
+    /// instruction's `v2_corr_sources` entry, §28) and inserted into the same
     /// buffer that `V2WaitMsg`/`signal_inner` read from. No fiber parking, no
     /// reply expected; the next instruction executes on the same tick.
     PublishMessage {
         name: u32,
-        corr_reg: u8,
     },
     /// Cancel a specific pending wait (used by engine after race resolution).
     /// Retained as a kernel no-op (see `apply`'s handler) — no v2 word
@@ -596,12 +596,11 @@ pub enum Instr {
         target: Addr,
     },
     /// `ARM-MSG` — `( correlation -- ) [ h ]`. Arm a message alternative.
-    /// `target` as above; `corr_reg` names the register holding the
-    /// correlation key (mirrors v1 `WaitMsg`'s `corr_reg` convention).
+    /// `target` as above. The correlation key is resolved from process data
+    /// at arm time via this instruction's `v2_corr_sources` entry (§28).
     V2ArmMsg {
         target: Addr,
         name: u32,
-        corr_reg: u8,
     },
     /// `ARM-EFFECT` — `( effect-desc -- ) [ h ]`. Arm an external-effect
     /// alternative; emits `DurableEffect::Invoke` on arming. Shape mirrors
@@ -663,7 +662,6 @@ pub enum Instr {
     /// distinct identifier per the coexistence rule.
     V2WaitMsg {
         name: u32,
-        corr_reg: u8,
     },
     /// `AWAIT-EFFECT` — `( effect-desc -- )`. Emit
     /// `DurableEffect::Invoke` + park on completion; effect-ID derivation
@@ -836,11 +834,14 @@ pub enum Instr {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum V2RaceArm {
     Timer { target: Addr },
-    Msg { target: Addr, name: u32, corr_reg: u8 },
+    /// `corr_key` is the content correlation key resolved from process data
+    /// at arm time (§28), stored inline on the arm — the race resolution runs
+    /// off runtime state only, never a static register/side-table read.
+    Msg { target: Addr, name: u32, corr_key: String },
     /// Captured by `V2ArmEffect` — the effect's own `effect_id` (derived at
     /// arm time from `(instance, fiber, pc)`, same as `V2AwaitEffect`) is
     /// the resolution key; `apply_ffi_completion` matches it against this
-    /// arm the same way message delivery matches `Msg`'s `name`/`corr_reg`.
+    /// arm the same way message delivery matches `Msg`'s `name`/`corr_key`.
     Effect {
         target: Addr,
         effect_id: crate::EffectId,
@@ -860,7 +861,9 @@ pub enum WaitState {
     Msg {
         wait_id: WaitId,
         name: u32,
-        corr_key: Value,
+        /// Content correlation key resolved from process data at park time
+        /// (§28). Matching is string equality against the published key.
+        corr_key: String,
     },
     /// Parked waiting for ob-poc worker completion (NEW in v0.9).
     Job {
@@ -906,7 +909,6 @@ pub struct Fiber {
     pub fiber_id: Uuid,
     pub pc: Addr,
     pub stack: Vec<Value>,
-    pub regs: [Value; 8],
     pub wait: WaitState,
     /// Monotonic counter incremented by IncCounter. Used in job_key derivation.
     pub loop_epoch: u32,
@@ -922,7 +924,6 @@ impl Fiber {
             fiber_id,
             pc: pc.into(),
             stack: Vec::new(),
-            regs: std::array::from_fn(|_| Value::Bool(false)),
             wait: WaitState::Running,
             loop_epoch: 0,
             control_stack: Vec::new(),
@@ -1232,6 +1233,13 @@ pub struct CompiledProgram {
     /// `from_legacy_parts` so none of the existing macro call sites break;
     /// set via `with_v2_ffi_task_decls` for programs that need it.
     pub(crate) v2_ffi_task_decls: BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl>,
+    /// V7 (§28) — resolved message-correlation key sources, indexed by the
+    /// bytecode address of the `V2WaitMsg`/`PublishMessage`/`V2ArmMsg`
+    /// instruction they belong to. Each entry is resolved at runtime against
+    /// the instance's data to a content correlation key. Same side-table
+    /// shape and rationale as `v2_ffi_task_decls`; defaulted empty in
+    /// `from_legacy_parts`, set via `with_v2_corr_sources`.
+    pub(crate) v2_corr_sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
 }
 
 /// Field-less compatibility tuple used only while pre-T7 callers migrate.
@@ -1280,6 +1288,7 @@ impl CompiledProgram {
             data_objects,
             ffi_task_decls,
             v2_ffi_task_decls: BTreeMap::new(),
+            v2_corr_sources: BTreeMap::new(),
         }
     }
 
@@ -1296,6 +1305,21 @@ impl CompiledProgram {
 
     pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, crate::ffi_bindings::FfiTaskDecl> {
         &self.v2_ffi_task_decls
+    }
+
+    /// Set the v2 message-correlation source table. Not part of
+    /// `LegacyProgramParts` — see field doc on `v2_corr_sources`.
+    #[doc(hidden)]
+    pub fn with_v2_corr_sources(
+        mut self,
+        sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
+    ) -> Self {
+        self.v2_corr_sources = sources;
+        self
+    }
+
+    pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
+        &self.v2_corr_sources
     }
 
     pub fn bytecode_version(&self) -> [u8; 32] {

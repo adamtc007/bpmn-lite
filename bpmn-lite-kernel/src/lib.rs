@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use bpmn_lite_types::canonical::CanonicalEncode;
 use bpmn_lite_types::ffi_bindings::{apply_ffi_outputs, encode_ffi_inputs};
 use bpmn_lite_types::{
     Addr, BufferedMessageMutation, Command, CommandEnvelope, ConcurrencyMutation,
@@ -865,24 +864,17 @@ fn validate_snapshot_limits(
                 limit: u64::from(limits.max_stack()),
             });
         }
-        if fiber.regs.len() > limits.max_registers() as usize {
-            return Err(TransitionError::ResourceLimitExceeded {
-                resource: "register count",
-                actual: fiber.regs.len(),
-                limit: u64::from(limits.max_registers()),
-            });
-        }
-        // §18 ruling K Part 2 finding: `max_stack`/`max_registers` bound
-        // *slot count*, which was sufficient while every `Value` variant
-        // was fixed-width. `Value::Array` is not — a single stack/register
-        // slot can now hold an arbitrarily large/deep tree, so slot count
-        // alone no longer bounds this fibre's actual frame size. Walk
-        // every `Value` this fibre carries and reject any that exceeds
+        // §18 ruling K Part 2 finding: `max_stack` bounds *slot count*, which
+        // was sufficient while every `Value` variant was fixed-width.
+        // `Value::Array` is not — a single stack slot can now hold an
+        // arbitrarily large/deep tree, so slot count alone no longer bounds
+        // this fibre's actual frame size. Walk every `Value` this fibre
+        // carries and reject any that exceeds
         // `types::MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH`. Skipped for
         // `Cancel`/`Terminate` (`check_arrays == false`) — see doc comment
         // above.
         if check_arrays {
-            for value in fiber.stack.iter().chain(fiber.regs.iter()) {
+            for value in fiber.stack.iter() {
                 if let Err(limit_error) = value.check_array_limits() {
                     return Err(TransitionError::ResourceLimitExceeded {
                         resource: "Value::Array size/depth",
@@ -1494,12 +1486,9 @@ fn apply_tick(
                 changes.fibers_upsert.push(fiber);
                 return Ok(changes.finish(instance));
             }
-            Instr::PublishMessage { name, corr_reg } => {
-                let corr_key = fiber
-                    .regs
-                    .get(*corr_reg as usize)
-                    .cloned()
-                    .unwrap_or(Value::Bool(false));
+            Instr::PublishMessage { name } => {
+                let correlation_key =
+                    resolve_correlation_key_at(workflow, &instance, fiber.pc)?;
                 let message_name = workflow
                     .envelope()
                     .metadata()
@@ -1507,7 +1496,6 @@ fn apply_tick(
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| name.to_string());
-                let correlation_key = value_key(&corr_key);
                 let msg_id = format!(
                     "publish:{}:{}:{}",
                     instance.instance_id, fiber.fiber_id, fiber.pc
@@ -1956,15 +1944,12 @@ fn apply_tick(
             // K-1/K-2/K-3 (V4.2): as `V2ArmTimer` — records the
             // alternative for `V2RaceClose` to park on; no concurrency
             // record or control-stack change.
-            Instr::V2ArmMsg {
-                target,
-                name,
-                corr_reg,
-            } => {
+            Instr::V2ArmMsg { target, name } => {
+                let corr_key = resolve_correlation_key_at(workflow, &instance, fiber.pc)?;
                 race_arms.push(bpmn_lite_types::V2RaceArm::Msg {
                     target: *target,
                     name: *name,
-                    corr_reg: *corr_reg,
+                    corr_key,
                 });
                 fiber.pc = fiber.pc.saturating_add(1);
             }
@@ -2405,12 +2390,8 @@ fn apply_tick(
                 return Ok(changes.finish(instance));
             }
             // K-1/K-2/K-3 (V4.2): as `V2WaitFor`.
-            Instr::V2WaitMsg { name, corr_reg } => {
-                let corr_key = fiber
-                    .regs
-                    .get(*corr_reg as usize)
-                    .cloned()
-                    .unwrap_or(Value::Bool(false));
+            Instr::V2WaitMsg { name } => {
+                let corr_key = resolve_correlation_key_at(workflow, &instance, fiber.pc)?;
                 // V5.3 (§18, landed 2026-07-23): the `IRNode::MessageWait`/
                 // `HumanWait` migration to this word (from v1 `WaitMsg`,
                 // now deleted) carries over v1 `WaitMsg`'s own
@@ -3273,7 +3254,7 @@ fn apply_message(
                 corr_key,
                 ..
             } if message_name_matches(metadata.message_name_map(), name, *waiting_name)
-                && value_key(corr_key) == correlation_key.as_str() =>
+                && corr_key.as_str() == correlation_key.as_str() =>
             {
                 let mut resumed = fiber.clone();
                 resumed.wait = WaitState::Running;
@@ -3285,18 +3266,13 @@ fn apply_message(
                     let bpmn_lite_types::V2RaceArm::Msg {
                         target,
                         name: waiting_name,
-                        corr_reg,
+                        corr_key,
                     } = arm
                     else {
                         continue;
                     };
-                    let corr = fiber
-                        .regs
-                        .get(*corr_reg as usize)
-                        .cloned()
-                        .unwrap_or(Value::Bool(false));
                     if message_name_matches(metadata.message_name_map(), name, *waiting_name)
-                        && value_key(&corr) == correlation_key.as_str()
+                        && corr_key.as_str() == correlation_key.as_str()
                     {
                         let mut resumed = fiber.clone();
                         resumed.pc = *target;
@@ -3349,7 +3325,7 @@ fn apply_message(
         .unwrap_or(0);
     changes.events.push(RuntimeEvent::MsgReceived {
         name: message_name_id,
-        corr_key: parse_value_key(correlation_key),
+        corr_key: correlation_key.to_string(),
         msg_ref: None,
     });
     if let Some(record_id) = v2_race_record {
@@ -3385,57 +3361,26 @@ fn message_name_matches(
         .unwrap_or_else(|| requested == waiting.to_string())
 }
 
-fn value_key(value: &Value) -> String {
-    match value {
-        Value::Bool(value) => format!("b:{value}"),
-        Value::I64(value) => format!("i:{value}"),
-        Value::Str(value) => format!("s:{value}"),
-        Value::Ref(value) => format!("r:{value}"),
-        // §18 ruling K Part 2: `Value::Array` is new; this correlation-key
-        // dedup helper had no case for it (unreachable via MI itself — MI
-        // never puts a correlation key through this path — but genuinely
-        // reachable if a future caller sets `WaitState::Msg.corr_key` to
-        // an array). Deterministic, unambiguous ("a:" prefix, distinct
-        // from the scalar prefixes above) rather than a panic: hex of the
-        // value's own canonical bytes, which already fully and
-        // deterministically identifies the array's contents.
-        Value::Array(_) => format!(
-            "a:{}",
-            value
-                .to_canonical_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        ),
-    }
-}
-
-fn parse_value_key(value: &str) -> Value {
-    if let Some(raw) = value.strip_prefix("b:") {
-        return Value::Bool(raw == "true");
-    }
-    if let Some(raw) = value.strip_prefix("i:").and_then(|raw| raw.parse().ok()) {
-        return Value::I64(raw);
-    }
-    if let Some(raw) = value.strip_prefix("s:").and_then(|raw| raw.parse().ok()) {
-        return Value::Str(raw);
-    }
-    if let Some(raw) = value.strip_prefix("r:").and_then(|raw| raw.parse().ok()) {
-        return Value::Ref(raw);
-    }
-    // Must handle every prefix `value_key` can produce, including "a:"
-    // (Value::Array) — this used to fall through to Value::Bool(false)
-    // here, silently corrupting any array-valued correlation key.
-    if let Some(raw) = value.strip_prefix("a:") {
-        let bytes: Option<Vec<u8>> = (0..raw.len())
-            .step_by(2)
-            .map(|i| raw.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
-            .collect();
-        if let Some(decoded) = bytes.and_then(|b| Value::from_canonical_bytes(&b).ok()) {
-            return decoded;
-        }
-    }
-    Value::Bool(false)
+/// Resolve the content correlation key for a message word at `pc` from the
+/// program's `v2_corr_sources` side table (§28). Fails closed if the
+/// instruction has no source entry (a correctly compiled program always emits
+/// one) or the source does not resolve to a scalar.
+fn resolve_correlation_key_at(
+    workflow: &ExecutableWorkflow,
+    instance: &ProcessInstance,
+    pc: Addr,
+) -> Result<String, TransitionError> {
+    let source = workflow
+        .envelope()
+        .metadata()
+        .v2_corr_sources()
+        .get(&pc)
+        .ok_or(TransitionError::InvalidCommand(
+            "message word has no correlation-key source",
+        ))?;
+    bpmn_lite_types::ffi_bindings::resolve_correlation_key(instance, source).map_err(|_| {
+        TransitionError::InvalidCommand("correlation key did not resolve to a scalar")
+    })
 }
 
 fn error_class_label(error_class: &ErrorClass) -> &'static str {
@@ -4487,21 +4432,6 @@ mod tests {
     use bpmn_lite_types::{ArtifactEnvelope, session_stack::SessionStackState};
     use std::collections::BTreeMap;
 
-    #[test]
-    fn value_key_round_trips_every_value_variant_including_array() {
-        let values = vec![
-            Value::Bool(true),
-            Value::Bool(false),
-            Value::I64(-42),
-            Value::Str(7),
-            Value::Ref(9),
-            Value::Array(vec![Value::I64(1), Value::Bool(true)]),
-            Value::Array(vec![Value::Array(vec![Value::Str(3)])]),
-        ];
-        for v in values {
-            assert_eq!(parse_value_key(&value_key(&v)), v);
-        }
-    }
 
     fn minimal_instance() -> ProcessInstance {
         ProcessInstance {
@@ -4555,6 +4485,17 @@ mod tests {
             orch_flags,
         };
         assert!(apply_completion(&mut instance, &completion).is_err());
+    }
+
+    /// A `v2_corr_sources` table mapping each message-word address to a
+    /// `Bool(false)` literal, whose content correlation key is `"false"` —
+    /// the deterministic default these hand-assembled fixtures correlate on.
+    fn corr_false(addrs: &[u32]) -> BTreeMap<Addr, bpmn_lite_types::ffi_bindings::BindingSource> {
+        use bpmn_lite_types::ffi_bindings::{BindingSource, Literal};
+        addrs
+            .iter()
+            .map(|&addr| (Addr::new(addr), BindingSource::Literal(Literal::Bool(false))))
+            .collect()
     }
 
     fn fixture() -> (ExecutableWorkflow, Snapshot, DeterministicContext) {
@@ -5318,7 +5259,7 @@ mod tests {
         let program = bpmn_lite_types::legacy_program! {
             bytecode_version: [11u8; 32],
             program: vec![
-                /* 0 */ Instr::V2WaitMsg { name: 100, corr_reg: 0 },
+                /* 0 */ Instr::V2WaitMsg { name: 100 },
                 /* 1 */ Instr::End,
             ],
             debug_map: BTreeMap::new(),
@@ -5332,7 +5273,7 @@ mod tests {
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4-waitmsg-remediation").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program.with_v2_corr_sources(corr_false(&[0])), "v4-waitmsg-remediation").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, context) = fixture();
@@ -5363,11 +5304,11 @@ mod tests {
         )
         .with_concurrency_table(after_t1.state().concurrency_table().clone());
 
-        // corr_reg 0 defaults to Value::Bool(false) -> correlation key "b:false".
+        // The V2WaitMsg's v2_corr_sources entry is a Bool(false) literal -> key "false".
         let message_command = Command::MessageDelivered {
             message_id: "m1".to_string(),
             name: "100".to_string(),
-            correlation_key: "b:false".to_string(),
+            correlation_key: "false".to_string(),
             payload: b"{}".to_vec(),
             payload_hash: None,
             expires_at: 0,
@@ -5482,7 +5423,7 @@ mod tests {
                 /* 0 */ Instr::V2RaceOpen { arm_count: 2 },
                 /* 1 */ Instr::PushI64(30_000),
                 /* 2 */ Instr::V2ArmTimer { target: Addr::new(5) },
-                /* 3 */ Instr::V2ArmMsg { target: Addr::new(6), name: 100, corr_reg: 0 },
+                /* 3 */ Instr::V2ArmMsg { target: Addr::new(6), name: 100 },
                 /* 4 */ Instr::V2RaceClose,
                 /* 5 */ Instr::Jump { target: Addr::new(7) },
                 /* 6 */ Instr::Jump { target: Addr::new(7) },
@@ -5499,7 +5440,7 @@ mod tests {
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4-race-msg-wins").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program.with_v2_corr_sources(corr_false(&[3])), "v4-race-msg-wins").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, context) = fixture();
@@ -5552,7 +5493,7 @@ mod tests {
         let message_command = Command::MessageDelivered {
             message_id: "m1".to_string(),
             name: "100".to_string(),
-            correlation_key: "b:false".to_string(),
+            correlation_key: "false".to_string(),
             payload: b"{}".to_vec(),
             payload_hash: None,
             expires_at: 0,
@@ -5863,7 +5804,7 @@ mod tests {
                 /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
                 /* 7  */ Instr::PushI64(30_000),
                 /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
-                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100 },
                 /* 10 */ Instr::V2RaceClose,
                 /* 11 */ Instr::Jump { target: Addr::new(13) },
                 /* 12 */ Instr::Jump { target: Addr::new(13) },
@@ -5884,7 +5825,7 @@ mod tests {
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4-trigger-guard-cascade").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program.with_v2_corr_sources(corr_false(&[9])), "v4-trigger-guard-cascade").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, _) = fixture();
@@ -6048,7 +5989,7 @@ mod tests {
                 /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
                 /* 7  */ Instr::PushI64(30_000),
                 /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
-                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100 },
                 /* 10 */ Instr::V2RaceClose,
                 /* 11 */ Instr::Jump { target: Addr::new(13) },
                 /* 12 */ Instr::Jump { target: Addr::new(13) },
@@ -6069,7 +6010,7 @@ mod tests {
             ffi_task_decls: BTreeMap::new(),
         };
         let workflow = ExecutableWorkflow::from_verified_envelope(
-            ArtifactEnvelope::from_legacy_program(program, "v4.5-ex-oracle-scenario-1").unwrap(),
+            ArtifactEnvelope::from_legacy_program(program.with_v2_corr_sources(corr_false(&[9])), "v4.5-ex-oracle-scenario-1").unwrap(),
         )
         .unwrap();
         let (_, base_snapshot, _) = fixture();
@@ -6133,7 +6074,7 @@ mod tests {
             &Command::MessageDelivered {
                 message_id: "m1".to_string(),
                 name: "100".to_string(),
-                correlation_key: "b:false".to_string(),
+                correlation_key: "false".to_string(),
                 payload: b"{}".to_vec(),
                 payload_hash: None,
                 expires_at: 0,
@@ -8863,6 +8804,24 @@ mod tests {
         use proptest::prelude::*;
 
         fn build_workflow(bytecode_byte: u8, label: &str, program: Vec<Instr>) -> ExecutableWorkflow {
+            // Every message word needs a correlation source; a Bool(false)
+            // literal (content key "false") is the deterministic default for
+            // these hand-assembled property fixtures.
+            let corr_sources = corr_false(
+                &program
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, instr)| {
+                        matches!(
+                            instr,
+                            Instr::V2WaitMsg { .. }
+                                | Instr::V2ArmMsg { .. }
+                                | Instr::PublishMessage { .. }
+                        )
+                    })
+                    .map(|(addr, _)| addr as u32)
+                    .collect::<Vec<_>>(),
+            );
             let program = bpmn_lite_types::legacy_program! {
                 bytecode_version: [bytecode_byte; 32],
                 program: program,
@@ -8875,7 +8834,8 @@ mod tests {
                 flag_symbol_table: BTreeMap::new(),
                 data_objects: BTreeMap::new(),
                 ffi_task_decls: BTreeMap::new(),
-            };
+            }
+            .with_v2_corr_sources(corr_sources);
             ExecutableWorkflow::from_verified_envelope(
                 ArtifactEnvelope::from_legacy_program(program, label).unwrap(),
             )
@@ -8899,7 +8859,7 @@ mod tests {
                 /* 6  */ Instr::V2RaceOpen { arm_count: 2 },
                 /* 7  */ Instr::PushI64(30_000),
                 /* 8  */ Instr::V2ArmTimer { target: Addr::new(11) },
-                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100, corr_reg: 0 },
+                /* 9  */ Instr::V2ArmMsg { target: Addr::new(12), name: 100 },
                 /* 10 */ Instr::V2RaceClose,
                 /* 11 */ Instr::Jump { target: Addr::new(13) },
                 /* 12 */ Instr::Jump { target: Addr::new(13) },
@@ -8975,7 +8935,7 @@ mod tests {
                 /* 2  */ Instr::V2RaceOpen { arm_count: 2 },
                 /* 3  */ Instr::PushI64(30_000),
                 /* 4  */ Instr::V2ArmTimer { target: Addr::new(7) },
-                /* 5  */ Instr::V2ArmMsg { target: Addr::new(8), name: 100, corr_reg: 0 },
+                /* 5  */ Instr::V2ArmMsg { target: Addr::new(8), name: 100 },
                 /* 6  */ Instr::V2RaceClose,
                 /* 7  */ Instr::Jump { target: Addr::new(9) },
                 /* 8  */ Instr::Jump { target: Addr::new(9) },

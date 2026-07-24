@@ -248,6 +248,10 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         BTreeMap::new();
     let mut ffi_task_decls: BTreeMap<Addr, bpmn_lite_types::ffi_bindings::FfiTaskDecl> =
         BTreeMap::new();
+    // V7 (§28): resolved message-correlation key sources, keyed by the address
+    // of the `V2WaitMsg`/`PublishMessage`/`V2ArmMsg` instruction they belong to.
+    let mut v2_corr_sources: BTreeMap<Addr, bpmn_lite_types::ffi_bindings::BindingSource> =
+        BTreeMap::new();
     for &node_idx in &order {
         if let IRNode::DataObject {
             id,
@@ -535,12 +539,11 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // dropped `join_id`/`JoinPlanEntry`).
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source)?;
+                let corr_addr = Addr::new(instructions.len() as u32);
+                v2_corr_sources
+                    .insert(corr_addr, resolve_correlation_source(corr_key_source, &data_objects)?);
 
-                instructions.push(Instr::V2WaitMsg {
-                    name: name_id,
-                    corr_reg,
-                });
+                instructions.push(Instr::V2WaitMsg { name: name_id });
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
@@ -556,12 +559,11 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
             } => {
                 let name_id = intern_flag(&mut flag_intern, message_name);
                 message_name_map.insert(name_id, message_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source)?;
+                let corr_addr = Addr::new(instructions.len() as u32);
+                v2_corr_sources
+                    .insert(corr_addr, resolve_correlation_source(corr_key_source, &data_objects)?);
 
-                instructions.push(Instr::PublishMessage {
-                    name: name_id,
-                    corr_reg,
-                });
+                instructions.push(Instr::PublishMessage { name: name_id });
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
@@ -585,12 +587,11 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
                 // metadata, not behavior-affecting.
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_reg = parse_corr_reg(corr_key_source)?;
+                let corr_addr = Addr::new(instructions.len() as u32);
+                v2_corr_sources
+                    .insert(corr_addr, resolve_correlation_source(corr_key_source, &data_objects)?);
 
-                instructions.push(Instr::V2WaitMsg {
-                    name: name_id,
-                    corr_reg,
-                });
+                instructions.push(Instr::V2WaitMsg { name: name_id });
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
@@ -843,7 +844,8 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         flag_symbol_table: flag_symbol_table,
         data_objects: data_objects,
         ffi_task_decls: ffi_task_decls,
-    })
+    }
+    .with_v2_corr_sources(v2_corr_sources))
 }
 
 /// V5.3 (§18, landed 2026-07-23): thin alias, retained for the existing
@@ -2130,10 +2132,36 @@ fn intern_task(map: &mut HashMap<String, u32>, manifest: &mut Vec<String>, name:
     id
 }
 
-fn parse_corr_reg(source: &str) -> Result<u8> {
-    source
-        .parse::<u8>()
-        .map_err(|_| anyhow!("correlationKey must be a numeric register reference, got {source:?}"))
+/// Resolve a BPMN `correlationKey` variable-reference expression (the `=`
+/// FEEL prefix already stripped by the parser) into a `BindingSource` against
+/// the process's declared data objects (§28). A dotted path (`order.id`)
+/// selects a nested domain-payload field. Rejects an unknown reference (via
+/// `resolve_expression`) and a float-typed correlation key — the runtime
+/// `correlation_key_string` is the final scalar gate, but a float source can
+/// never yield a valid key, so reject it at compile time.
+fn resolve_correlation_source(
+    source: &str,
+    data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
+) -> Result<bpmn_lite_types::ffi_bindings::BindingSource> {
+    use bpmn_lite_types::ffi_bindings::{DataObjectType, PrimitiveType};
+    let path: Vec<String> = source.split('.').map(|segment| segment.to_string()).collect();
+    if path.iter().any(|segment| segment.is_empty()) {
+        return Err(anyhow!("correlationKey is empty or malformed: {source:?}"));
+    }
+    if let Some(first) = path.first() {
+        if let Some(decl) = data_objects.get(first.as_str()) {
+            if matches!(
+                decl.type_decl,
+                DataObjectType::Primitive(PrimitiveType::F64)
+            ) {
+                return Err(anyhow!(
+                    "correlationKey '{source}' is float-typed; correlation keys must be \
+                     bool, integer, or string"
+                ));
+            }
+        }
+    }
+    resolve_expression(&crate::ir::Expression::VarRef(path), data_objects)
 }
 
 #[cfg(test)]
@@ -2142,14 +2170,42 @@ mod tests {
     use crate::verifier;
 
     #[test]
-    fn parse_corr_reg_accepts_numeric_register_rejects_named_key() {
-        assert_eq!(parse_corr_reg("3").unwrap(), 3u8);
-        assert!(
-            parse_corr_reg("case_id").is_err(),
-            "a FEEL-expression-style correlationKey (variable name, not a \
-             register index) must be rejected, not silently treated as \
-             register 0"
-        );
+    fn resolve_correlation_source_resolves_declared_key_rejects_unknown_and_float() {
+        use bpmn_lite_types::ffi_bindings::{
+            BindingSource, DataObjectDecl, DataObjectRole, DataObjectType, PrimitiveType,
+        };
+        let mut flag_intern = HashMap::new();
+        let mut data_objects = BTreeMap::new();
+        for (id, ty) in [
+            ("case_id", PrimitiveType::String),
+            ("attempt", PrimitiveType::I64),
+            ("amount", PrimitiveType::F64),
+        ] {
+            let type_decl = DataObjectType::Primitive(ty);
+            let storage = assign_storage(&type_decl, id, &mut flag_intern);
+            data_objects.insert(
+                id.to_string(),
+                DataObjectDecl {
+                    id: id.to_string(),
+                    type_decl,
+                    storage,
+                    role: DataObjectRole::Internal,
+                },
+            );
+        }
+        // A dynamic string business key resolves to a domain-payload read.
+        assert!(matches!(
+            resolve_correlation_source("case_id", &data_objects).unwrap(),
+            BindingSource::DomainPayloadRef(_)
+        ));
+        // An i64 key resolves to its flag.
+        assert!(matches!(
+            resolve_correlation_source("attempt", &data_objects).unwrap(),
+            BindingSource::FlagRef(_)
+        ));
+        // An unknown reference and a float-typed key both fail closed.
+        assert!(resolve_correlation_source("nope", &data_objects).is_err());
+        assert!(resolve_correlation_source("amount", &data_objects).is_err());
     }
 
     fn make_linear_graph() -> IRGraph {
@@ -2419,10 +2475,18 @@ mod tests {
             id: "timer1".to_string(),
             spec: TimerSpec::Duration { ms: 5000 },
         });
+        graph.add_node(IRNode::DataObject {
+            id: "case_id".to_string(),
+            name: "case_id".to_string(),
+            type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
+                bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+            ),
+            role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+        });
         let msg = graph.add_node(IRNode::MessageWait {
             id: "msg1".to_string(),
             name: "docs_received".to_string(),
-            corr_key_source: "0".to_string(),
+            corr_key_source: "case_id".to_string(),
         });
         let end = graph.add_node(IRNode::End {
             id: "end".to_string(),

@@ -759,10 +759,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [90u8; 32],
         program: vec![
-            Instr::V2WaitMsg {
-                name: 1,
-                corr_reg: 0,
-            },
+            Instr::V2WaitMsg { name: 1 },
             Instr::End,
         ],
         debug_map: BTreeMap::new(),
@@ -774,7 +771,13 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
-    };
+    }
+    .with_v2_corr_sources(BTreeMap::from([(
+        bpmn_lite_types::Addr::new(0),
+        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
+            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        ),
+    )]));
     store
         .store_program(program.bytecode_version(), &program)
         .await
@@ -804,7 +807,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(true),
+            "true".to_string(),
             None,
             None,
             Some("wrong"),
@@ -821,7 +824,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(false),
+            "false".to_string(),
             None,
             None,
             Some("right"),
@@ -844,7 +847,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .signal_with_value(
             iid,
             "case_arrived",
-            Value::Bool(false),
+            "false".to_string(),
             None,
             None,
             Some("right"),
@@ -872,10 +875,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [91u8; 32],
         program: vec![
-            Instr::V2WaitMsg {
-                name: 1,
-                corr_reg: 0,
-            },
+            Instr::V2WaitMsg { name: 1 },
             Instr::End,
         ],
         debug_map: BTreeMap::new(),
@@ -887,7 +887,13 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
-    };
+    }
+    .with_v2_corr_sources(BTreeMap::from([(
+        bpmn_lite_types::Addr::new(0),
+        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
+            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        ),
+    )]));
     store
         .store_program(program.bytecode_version(), &program)
         .await
@@ -907,7 +913,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         .unwrap();
 
     engine
-        .signal_with_value(iid, "1", Value::Bool(false), None, None, Some("early"))
+        .signal_with_value(iid, "1", "false".to_string(), None, None, Some("early"))
         .await
         .unwrap();
 

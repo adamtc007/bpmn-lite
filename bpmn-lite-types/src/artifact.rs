@@ -28,7 +28,6 @@ impl ArtifactHash {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedLimits {
     max_stack: u32,
-    max_registers: u32,
     max_fibers: u32,
     max_steps: u64,
     /// V-7 (V&S §7): maximum control-stack depth across all fibre-reachable
@@ -48,10 +47,6 @@ pub struct VerifiedLimits {
 impl VerifiedLimits {
     pub fn max_stack(&self) -> u32 {
         self.max_stack
-    }
-
-    pub fn max_registers(&self) -> u32 {
-        self.max_registers
     }
 
     pub fn max_fibers(&self) -> u32 {
@@ -89,6 +84,9 @@ pub struct ArtifactMetadata {
     /// V4 D2 — `V2ArmEffect`/`V2AwaitEffect` binding table. See doc on
     /// `CompiledProgram::v2_ffi_task_decls`.
     v2_ffi_task_decls: BTreeMap<Addr, FfiTaskDecl>,
+    /// V7 (§28) — message-correlation key sources. See doc on
+    /// `CompiledProgram::v2_corr_sources`.
+    v2_corr_sources: BTreeMap<Addr, crate::ffi_bindings::BindingSource>,
 }
 
 impl ArtifactMetadata {
@@ -130,6 +128,10 @@ impl ArtifactMetadata {
 
     pub fn v2_ffi_task_decls(&self) -> &BTreeMap<Addr, FfiTaskDecl> {
         &self.v2_ffi_task_decls
+    }
+
+    pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
+        &self.v2_corr_sources
     }
 }
 
@@ -184,6 +186,7 @@ impl ArtifactEnvelope {
             data_objects: program.data_objects.clone(),
             ffi_task_decls: program.ffi_task_decls.clone(),
             v2_ffi_task_decls: program.v2_ffi_task_decls.clone(),
+            v2_corr_sources: program.v2_corr_sources.clone(),
         };
         let limits = verify_program(&program.program, &metadata)?;
         Ok(Self {
@@ -264,6 +267,7 @@ impl ExecutableWorkflow {
             data_objects: metadata.data_objects.clone(),
             ffi_task_decls: metadata.ffi_task_decls.clone(),
             v2_ffi_task_decls: metadata.v2_ffi_task_decls.clone(),
+            v2_corr_sources: metadata.v2_corr_sources.clone(),
         }
     }
 }
@@ -376,7 +380,6 @@ fn verify_program(
     let mut queue = VecDeque::from([0usize]);
     let mut reachable_end = false;
     let mut max_stack = 0u32;
-    let mut max_register = 0u32;
     let mut max_fibers = 1u32;
     let mut loop_multiplier = 1u64;
 
@@ -396,9 +399,6 @@ fn verify_program(
         let next_height = height - pops + pushes;
         max_stack = max_stack.max(next_height);
         match instruction {
-            Instr::V2WaitMsg { corr_reg, .. } | Instr::PublishMessage { corr_reg, .. } => {
-                max_register = max_register.max(u32::from(*corr_reg) + 1);
-            }
             Instr::V2Fork { targets, .. } => {
                 max_fibers = max_fibers.saturating_add(targets.len() as u32);
             }
@@ -529,7 +529,6 @@ fn verify_program(
 
     Ok(VerifiedLimits {
         max_stack,
-        max_registers: max_register.max(8),
         max_fibers,
         max_steps: (len as u64).saturating_mul(loop_multiplier),
         max_control_depth: control_stack_limits.max_control_depth,
@@ -885,6 +884,7 @@ mod v2_fixtures {
             data_objects: BTreeMap::new(),
             ffi_task_decls: BTreeMap::new(),
             v2_ffi_task_decls: BTreeMap::new(),
+            v2_corr_sources: BTreeMap::new(),
         }
     }
 
@@ -944,7 +944,6 @@ mod v2_fixtures {
             /* 11 */ Instr::V2ArmMsg {
                 target: Addr::new(14),
                 name: 42,
-                corr_reg: 0,
             },
             /* 12 */ Instr::V2RaceClose,
             /* 13 */ Instr::Jump { target: Addr::new(15) }, // timer-win continuation

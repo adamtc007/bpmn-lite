@@ -101,23 +101,6 @@ fn value_key(v: &Value) -> String {
 }
 
 /// Deserialize a JSONB `Vec<Value>` into `[Value; 8]`, padding with `Value::Bool(false)` if short.
-fn regs_from_json(json: serde_json::Value) -> Result<[Value; 8]> {
-    let vec: Vec<Value> = serde_json::from_value(json).map_err(|error| {
-        StoreError::Unavailable(format!("failed to deserialize fiber regs: {error}"))
-    })?;
-    if vec.len() > 8 {
-        return Err(StoreError::Integrity(format!(
-            "fiber regs has {} elements, expected <= 8",
-            vec.len()
-        )));
-    }
-    let mut regs: [Value; 8] = std::array::from_fn(|_| Value::Bool(false));
-    for (i, v) in vec.into_iter().enumerate() {
-        regs[i] = v;
-    }
-    Ok(regs)
-}
-
 /// Convert a `[u8; 32]` BYTEA column loaded as `Vec<u8>` back to `[u8; 32]`.
 fn bytes_to_hash(bytes: Vec<u8>) -> Result<[u8; 32]> {
     bytes
@@ -616,7 +599,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                 use sqlx::Row;
                 let pc: i32 = row.get("pc");
                 let stack_json: serde_json::Value = row.get("stack");
-                let regs_json: serde_json::Value = row.get("regs");
                 let wait_json: serde_json::Value = row.get("wait_state");
                 let loop_epoch: i32 = row.get("loop_epoch");
 
@@ -624,7 +606,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                     fiber_id: row.get("fiber_id"),
                     pc: Addr::new(pc as u32),
                     stack: serde_json::from_value(stack_json).persistence()?,
-                    regs: regs_from_json(regs_json)?,
                     wait: serde_json::from_value(wait_json).persistence()?,
                     loop_epoch: loop_epoch as u32,
                     // No control_stack column yet — V2 adds it under the
@@ -661,7 +642,6 @@ impl RuntimeStore for PostgresWorkflowStore {
             use sqlx::Row;
             let pc: i32 = row.get("pc");
             let stack_json: serde_json::Value = row.get("stack");
-            let regs_json: serde_json::Value = row.get("regs");
             let wait_json: serde_json::Value = row.get("wait_state");
             let loop_epoch: i32 = row.get("loop_epoch");
 
@@ -669,7 +649,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                 fiber_id: row.get("fiber_id"),
                 pc: Addr::new(pc as u32),
                 stack: serde_json::from_value(stack_json).persistence()?,
-                regs: regs_from_json(regs_json)?,
                 wait: serde_json::from_value(wait_json).persistence()?,
                 loop_epoch: loop_epoch as u32,
                 control_stack: Vec::new(),
@@ -1588,7 +1567,7 @@ impl RuntimeStore for PostgresWorkflowStore {
         for fiber in transition.fibers_upsert() {
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(&fiber.regs)
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
@@ -2428,7 +2407,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             let fiber = child.root_fiber();
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(&fiber.regs)
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
@@ -2646,8 +2625,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                     CommitError::Integrity("negative persisted program counter".to_string())
                 })?),
                 stack: serde_json::from_value(row.get("stack"))
-                    .map_err(|error| CommitError::Integrity(error.to_string()))?,
-                regs: regs_from_json(row.get("regs"))
                     .map_err(|error| CommitError::Integrity(error.to_string()))?,
                 wait: serde_json::from_value(row.get("wait_state"))
                     .map_err(|error| CommitError::Integrity(error.to_string()))?,
@@ -4340,6 +4317,13 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Artifact migration lineage persists a new_hash per old_hash; without
+        // this truncation a re-run of the migration tests collides on a hash
+        // stored by the prior run (the artifact hash is content-deterministic).
+        sqlx::query("TRUNCATE artifact_lineage")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let store = PostgresWorkflowStore::new(app_pool);
         (pool, store, guard)
@@ -4558,8 +4542,6 @@ mod tests {
         );
         assert_eq!(loaded.stack, vec![Value::I64(99)]);
         assert_eq!(loaded.loop_epoch, 3);
-        // Verify regs padded to 8
-        assert_eq!(loaded.regs.len(), 8);
 
         // Delete
         store.delete_fiber(iid, fid).await.unwrap();
@@ -9494,7 +9476,7 @@ mod tests {
                 .persistence()?;
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(&fiber.regs).persistence()?;
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             let result = sqlx::query(
@@ -9794,7 +9776,7 @@ mod tests {
             }
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(&fiber.regs).persistence()?;
+            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             sqlx::query(

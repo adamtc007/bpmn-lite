@@ -328,35 +328,27 @@ fn proto_to_value(pv: &ProtoValue) -> Value {
 }
 
 #[allow(clippy::result_large_err)]
-fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<Value, Status> {
-    match pv.as_ref().and_then(|value| value.kind.as_ref()) {
-        Some(proto_value::Kind::BoolValue(b)) => Ok(Value::Bool(*b)),
-        Some(proto_value::Kind::I64Value(n)) => Ok(Value::I64(*n)),
-        Some(proto_value::Kind::StrValue(s)) => {
-            if let Some(rest) = s.strip_prefix("str_") {
-                return rest
-                    .parse::<u32>()
-                    .map(Value::Str)
-                    .map_err(|_| Status::invalid_argument("invalid str_ correlation key"));
-            }
-            if let Some(rest) = s.strip_prefix("ref_") {
-                return rest
-                    .parse::<u32>()
-                    .map(Value::Ref)
-                    .map_err(|_| Status::invalid_argument("invalid ref_ correlation key"));
-            }
-            Err(Status::invalid_argument(
-                "string correlation keys must use str_<id> or ref_<id>",
-            ))
+/// §28: the correlation key arrives as raw content (a business key), not an
+/// intern id. Canonicalize it to the same content string a waiting
+/// subscription derives from its own process data via `correlation_key_string`
+/// — string keys pass through verbatim (a dynamic `case_id` like `"ACME-42"`),
+/// integers/bools canonicalize identically on both sides.
+fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status> {
+    use bpmn_lite_types::ffi_bindings::correlation_key_string;
+    let scalar = match pv.as_ref().and_then(|value| value.kind.as_ref()) {
+        Some(proto_value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
+        Some(proto_value::Kind::I64Value(n)) => (*n).into(),
+        Some(proto_value::Kind::StrValue(s)) => serde_json::Value::String(s.clone()),
+        // A composite is not a valid correlation key — correlation always
+        // keys on a single scalar. Fail closed with a typed rejection.
+        Some(proto_value::Kind::ArrayValue(_)) => {
+            return Err(Status::invalid_argument(
+                "correlation keys must be scalar (bool/i64/string), not an array",
+            ));
         }
-        // §18 ruling K Part 2: an array is not a valid correlation key
-        // (correlation always keys on a single scalar) — fail closed with
-        // a typed rejection rather than silently degrading it.
-        Some(proto_value::Kind::ArrayValue(_)) => Err(Status::invalid_argument(
-            "correlation keys must be scalar (bool/i64/str/ref), not an array",
-        )),
-        None => Ok(Value::Bool(false)),
-    }
+        None => serde_json::Value::Bool(false),
+    };
+    correlation_key_string(&scalar).map_err(|error| Status::invalid_argument(error.to_string()))
 }
 
 fn proto_to_orch_flags(

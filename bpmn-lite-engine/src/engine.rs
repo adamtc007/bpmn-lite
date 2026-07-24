@@ -1010,16 +1010,28 @@ impl BpmnLiteEngine {
                     .values()
                     .filter(|fiber| fiber.wait == WaitState::Running)
                 {
-                    let Some(Instr::V2WaitMsg { name, corr_reg }) =
+                    let Some(Instr::V2WaitMsg { name }) =
                         artifact.envelope().instructions().get(fiber.pc.index())
                     else {
                         continue;
                     };
-                    let correlation = fiber
-                        .regs
-                        .get(*corr_reg as usize)
-                        .cloned()
-                        .unwrap_or(Value::Bool(false));
+                    // §28: resolve this wait's correlation key from process
+                    // data via its `v2_corr_sources` entry; a source that
+                    // can't resolve to a scalar claims nothing (fail closed),
+                    // rather than claiming on a wrong/default key.
+                    let Some(source) = artifact
+                        .envelope()
+                        .metadata()
+                        .v2_corr_sources()
+                        .get(&fiber.pc)
+                    else {
+                        continue;
+                    };
+                    let Ok(correlation_key) =
+                        bpmn_lite_types::ffi_bindings::resolve_correlation_key(instance, source)
+                    else {
+                        continue;
+                    };
                     let message_name = artifact
                         .envelope()
                         .metadata()
@@ -1032,7 +1044,7 @@ impl BpmnLiteEngine {
                         .claim_buffered_message(
                             &TenantId::new(instance.tenant_id.clone())?,
                             &message_name,
-                            &value_key(&correlation),
+                            &correlation_key,
                             DEFAULT_MESSAGE_CLAIM_MS,
                         )
                         .await?
@@ -1321,11 +1333,10 @@ impl BpmnLiteEngine {
         domain_payload_hash: Option<[u8; 32]>,
         _msg_id: Option<&str>,
     ) -> Result<()> {
-        let corr_key = parse_signal_corr_key(corr_key);
         self.signal_with_value(
             instance_id,
             _msg_name,
-            corr_key,
+            corr_key.to_string(),
             domain_payload,
             domain_payload_hash,
             _msg_id,
@@ -1333,11 +1344,15 @@ impl BpmnLiteEngine {
         .await
     }
 
+    /// `corr_key` is the content correlation key (§28) — matched by string
+    /// equality against the key a waiting subscription resolved from its own
+    /// process data. Callers at the gRPC boundary canonicalize the wire value
+    /// via `correlation_key_string` before this point.
     pub async fn signal_with_value(
         &self,
         instance_id: Uuid,
         msg_name: &str,
-        corr_key: Value,
+        corr_key: String,
         domain_payload: Option<&str>,
         domain_payload_hash: Option<[u8; 32]>,
         msg_id: Option<&str>,
@@ -1351,7 +1366,7 @@ impl BpmnLiteEngine {
             Command::MessageDelivered {
                 message_id: msg_id.to_string(),
                 name: msg_name.to_string(),
-                correlation_key: value_key(&corr_key),
+                correlation_key: corr_key,
                 payload: domain_payload.map(str::as_bytes).unwrap_or(&[]).to_vec(),
                 payload_hash: domain_payload_hash,
                 expires_at: now + DEFAULT_MESSAGE_TTL_MS as i64,
@@ -1821,53 +1836,6 @@ fn parse_job_key(job_key: &str) -> Result<(Uuid, String, u32)> {
         .parse()
         .map_err(|e| anyhow!("Invalid pc in job_key: {}", e))?;
     Ok((instance_id, service_task_id, pc))
-}
-
-fn parse_signal_corr_key(corr_key: &str) -> Value {
-    if corr_key.is_empty() {
-        return Value::Bool(false);
-    }
-    if corr_key == "true" {
-        return Value::Bool(true);
-    }
-    if corr_key == "false" {
-        return Value::Bool(false);
-    }
-    if let Ok(n) = corr_key.parse::<i64>() {
-        return Value::I64(n);
-    }
-    if let Some(rest) = corr_key.strip_prefix("str_") {
-        if let Ok(n) = rest.parse::<u32>() {
-            return Value::Str(n);
-        }
-    }
-    if let Some(rest) = corr_key.strip_prefix("ref_") {
-        if let Ok(n) = rest.parse::<u32>() {
-            return Value::Ref(n);
-        }
-    }
-    Value::Bool(false)
-}
-
-fn value_key(value: &Value) -> String {
-    match value {
-        Value::Bool(b) => format!("b:{b}"),
-        Value::I64(n) => format!("i:{n}"),
-        Value::Str(s) => format!("s:{s}"),
-        Value::Ref(r) => format!("r:{r}"),
-        // §18 ruling K Part 2: `Value::Array` is new. Same "a:" + hex of
-        // canonical bytes convention as the other `value_key` copies in
-        // this workspace (`bpmn-lite-kernel`, `bpmn-lite-store`,
-        // `bpmn-lite-store-postgres`) — deterministic and unambiguous.
-        Value::Array(_) => format!(
-            "a:{}",
-            value
-                .to_canonical_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        ),
-    }
 }
 
 // ── A8 FFI helpers ────────────────────────────────────────────────────────────
