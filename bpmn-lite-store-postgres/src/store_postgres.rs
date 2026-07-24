@@ -371,24 +371,42 @@ impl PostgresWorkflowStore {
             .iter()
             .any(|event| matches!(event, RuntimeEvent::V2ScopeCancelled { .. }));
         let (guard_budgets, default_budget) = if has_cancel {
-            let hash = ArtifactHash::from_bytes(transition.next_snapshot().bytecode_version);
-            match self
-                .load_artifact(hash)
-                .await
-                .map_err(|error| StoreError::Unavailable(error.to_string()))?
-            {
-                Some(workflow) => {
-                    let metadata = workflow.envelope().metadata();
-                    (
-                        metadata.v2_guard_budgets().clone(),
-                        metadata.default_guard_budget(),
-                    )
-                }
-                None => (
-                    std::collections::BTreeMap::new(),
-                    ScopeFailureBudget::conservative_default(),
-                ),
-            }
+            // Source the per-guard ceiling with a tx-scoped, pure read of the
+            // instance's pinned artifact — same connection as the commit, no
+            // second pool checkout, no self-healing writes escaping `tx`. A
+            // missing or non-canonical pinned artifact on a guard cancellation
+            // is an integrity violation, NOT a licence to apply a lenient
+            // default that could weaken a stricter declared budget: fail closed.
+            let hash = transition.next_snapshot().bytecode_version;
+            let bytes: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT canonical_bytes FROM compiled_programs WHERE bytecode_version = $1",
+            )
+            .bind(&hash[..])
+            .fetch_optional(&mut **tx)
+            .await
+            .persistence()?
+            .flatten();
+            let Some(bytes) = bytes else {
+                return Err(StoreError::Integrity(format!(
+                    "guard cancellation on instance {instance_id}: pinned artifact {:?} is \
+                     absent or pre-canonical; refusing to apply a guessed failure budget",
+                    ArtifactHash::from_bytes(hash)
+                )));
+            };
+            // Full verify (not a bare decode) is defensible here: guard
+            // cancellations are rare, and the whole-corpus verify gate proves
+            // every stored artifact admissible at cutover — this is the
+            // belt-and-suspenders read, not the primary admission point.
+            let workflow = ExecutableWorkflow::verify(&bytes).map_err(|error| {
+                StoreError::Integrity(format!(
+                    "pinned artifact failed verification on guard cancellation: {error}"
+                ))
+            })?;
+            let metadata = workflow.envelope().metadata();
+            (
+                metadata.v2_guard_budgets().clone(),
+                metadata.default_guard_budget(),
+            )
         } else {
             (
                 std::collections::BTreeMap::new(),
@@ -2826,7 +2844,13 @@ impl RuntimeStore for PostgresWorkflowStore {
             &concurrency_table,
         )
         .await
-        .map_err(|error| CommitError::Unavailable(error.to_string()))?;
+        // Preserve the error kind: a fail-closed integrity violation (e.g. a
+        // guard cancellation whose pinned artifact is absent) must NOT be
+        // reported as `Unavailable`, which reads as transient/retryable.
+        .map_err(|error| match error {
+            StoreError::Integrity(message) => CommitError::Integrity(message),
+            other => CommitError::Unavailable(other.to_string()),
+        })?;
         let snapshot_envelope = SnapshotEnvelope::new(
             CURRENT_ARTIFACT_ABI,
             persisted_instance.bytecode_version,
@@ -4493,6 +4517,45 @@ mod tests {
         }
     }
 
+    /// V6.4 fail-closed budget read: a guard cancellation requires the
+    /// instance's pinned artifact to be present. Stores a minimal verifying
+    /// guarded artifact with an EMPTY per-guard budget table and the given
+    /// workflow-level default, returning its hash for the instance to pin.
+    async fn store_default_budget_artifact(
+        store: &PostgresWorkflowStore,
+        default_max: u32,
+    ) -> [u8; 32] {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![
+                Instr::V2Guard { handler: Addr::new(3) },
+                Instr::V2GuardEnd,
+                Instr::End,
+                Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            BTreeMap::new(),
+            bpmn_lite_types::ScopeFailureBudget::new(1, default_max).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v6-4-default-budget")
+                .unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+        workflow.hash().into_bytes()
+    }
+
     /// T-PG-1: Instance round-trip
     #[tokio::test]
     async fn test_pg_instance_round_trip() {
@@ -5612,7 +5675,8 @@ mod tests {
     async fn test_guard_failure_budget_quarantines_after_repeated_automatic_rollback() {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
-        let instance = make_instance(instance_id);
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
         store.save_instance("guard-budget-fixture", &instance).await.unwrap();
         let guard_addr = Addr::new(7);
 
@@ -5657,6 +5721,51 @@ mod tests {
             quarantine.as_deref(),
             Some("guard_failure_budget_exhausted"),
             "5 automatic rollbacks of the same guard address must exhaust the built-in budget"
+        );
+    }
+
+    /// V6.4 (§31.1) fail-closed: a guard cancellation whose pinned artifact is
+    /// absent (or pre-canonical) must ABORT the commit with an integrity error,
+    /// never silently fall back to a lenient default that could weaken a
+    /// stricter declared guard. `make_instance` pins `[0u8; 32]`, and `setup()`
+    /// truncates `compiled_programs`, so the tx-scoped budget read finds nothing.
+    #[tokio::test]
+    async fn test_guard_cancellation_with_missing_artifact_fails_closed() {
+        let (_pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("no-artifact", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record =
+            ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(Addr::new(0));
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+            .delete_fiber(fiber_id)
+            .event(RuntimeEvent::V2ScopeCancelled {
+                record_id,
+                fiber_id,
+                cancelled_records: vec![],
+                cancelled_fibers: vec![],
+            })
+            .build();
+        let result = store.commit_transition(&claim, &transition).await;
+        assert!(
+            matches!(result, Err(CommitError::Integrity(_))),
+            "a guard cancellation with no pinned artifact must fail closed, got {result:?}"
         );
     }
 
@@ -5845,7 +5954,8 @@ mod tests {
     async fn test_guard_failure_budget_ignores_explicit_cancel_scope() {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
-        let instance = make_instance(instance_id);
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
         store.save_instance("guard-budget-fixture", &instance).await.unwrap();
         let guard_addr = Addr::new(9);
 
@@ -5902,7 +6012,8 @@ mod tests {
     async fn test_guard_failure_budget_resets_on_successful_close() {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
-        let instance = make_instance(instance_id);
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
         store.save_instance("guard-budget-fixture", &instance).await.unwrap();
         let guard_addr = Addr::new(11);
 
