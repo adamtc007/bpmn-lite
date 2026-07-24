@@ -1208,6 +1208,39 @@ async fn setup_ni_guard(
     (engine, store, iid, job_key, hash)
 }
 
+// ── T-NI-1b: a plain (non-cycle) boundary timer fires exactly once,
+// not indefinitely ──
+
+#[tokio::test]
+async fn t_ni_1b_non_cycle_timer_does_not_rearm_after_first_fire() {
+    let (engine, _store, iid, _job_key, _hash) = setup_ni_guard(NI_BOUNDARY_BPMN).await;
+
+    engine
+        .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+        .await
+        .unwrap();
+    engine.tick_instance(iid).await.unwrap();
+
+    // A rearmed timer's new due_at is fired_at + interval_ms, so a second
+    // sweep must use a later "as of" timestamp to reach it.
+    engine
+        .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS + 60_000, 10, 30_000)
+        .await
+        .unwrap();
+    engine.tick_instance(iid).await.unwrap();
+
+    let escalation_jobs = engine
+        .activate_jobs(&["send_reminder".to_string()], 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        escalation_jobs.len(),
+        1,
+        "a non-cycle boundary timer must fire exactly once, got {} escalation jobs",
+        escalation_jobs.len()
+    );
+}
+
 // ── T-NI-1: Non-interrupting GUARD-TIMER> fires → spawns escalation job,
 // host fiber's own job wait is unaffected ──
 

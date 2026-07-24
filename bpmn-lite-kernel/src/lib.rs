@@ -2212,32 +2212,14 @@ fn apply_tick(
                 let due_at = context.logical_time().saturating_add(duration.max(0) as u64);
                 let effect_id =
                     EffectId::for_instruction(instance.instance_id, fiber.fiber_id, fiber.pc.into());
-                // Post-close remediation (V&S §13 amendment v0.5, ruling A,
-                // restored to GUARD-TIMER>'s own timer-fire path): a
-                // non-interrupting `GUARD-N>` record re-arms after trigger
-                // "by default... nothing... expresses a non-re-arming
-                // variant." A `GUARD-TIMER>`-armed `GUARD-N>` therefore
-                // gets an UNBOUNDED repeat spec here (`remaining:
-                // u32::MAX`) unless the immediately-following
-                // `GUARD-TIMER-CYCLE>` narrows it (below) — that word
-                // patches this very effect's `repeat_spec` before this
-                // tick ends, so `changes.effects` never actually observes
-                // the unbounded default in a bounded-cycle program.
-                // `GUARD>`/`GUARD-R>` (interrupting) retire their record on
-                // trigger regardless (`v2_trigger_guard_changes`/
-                // `apply_v2_guard_timer_rollback`), so a repeat spec would
-                // be dead weight for them — left `None`, unchanged from
-                // ruling I's original fire-once behaviour, matching every
-                // pre-existing interrupting-guard fixture byte-for-byte.
-                // `record_id` may exist only in `changes`, not yet
-                // `snapshot`: `V2GuardN`/`V2GuardArmTimer` are
-                // verifier-enforced adjacent, so the record can be opened
-                // by the immediately-preceding instruction this same tick.
+                // Bounded to 1 fire by default (a plain boundary timer
+                // fires once); GUARD-TIMER-CYCLE>, if present, overwrites
+                // `remaining` outright rather than narrowing it.
                 let record_kind = fetch_record_in_transition(snapshot, &changes, record_id)
                     .map(|record| record.kind);
                 let repeat_spec = match record_kind {
                     Some(RecordKind::Guard { interrupting: false }) => {
-                        Some(TimerRepeatSpec::new(duration.max(0) as u64, u32::MAX, 0))
+                        Some(TimerRepeatSpec::new(duration.max(0) as u64, 1, 0))
                     }
                     _ => None,
                 };
@@ -2354,7 +2336,7 @@ fn apply_tick(
                         // panic/silent no-op for a malformed or
                         // hand-assembled-and-unverified program.
                         return Err(TransitionError::InvalidCommand(
-                            "V2GuardTimerCycle: no unbounded GUARD-TIMER> repeat spec to narrow",
+                            "V2GuardTimerCycle: no GUARD-TIMER> repeat spec to set",
                         ));
                     }
                 }
