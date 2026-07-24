@@ -3987,30 +3987,36 @@ async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
 /// `bpmn-lite-kernel`, not to anything `verifier.rs`/`lowering.rs` control.
 ///
 /// A separate, unrelated, pre-existing bug was ALSO found while isolating
-/// this one (reported alongside it, not fixed here — out of this task's
-/// scope, which is the §9/V10 count-gate lift only): `lowering.rs`'s
-/// `topo_order` lays out bytecode addresses via a naive BFS over the
-/// graph, which can place a shared join's address earlier than a longer
-/// sibling branch's own instructions if the join is FIRST discovered via
-/// a shorter branch — producing a `verify_bytecode` "backward jump"
-/// rejection. Confirmed to require NEITHER `GatewayInclusive` nor multiple
-/// pairs at all: a bare `GatewayAnd` fork with one 3-task branch and one
-/// 1-task sibling branch, compiled via `engine.compile` (not the
-/// `lowering::lower` free function the compiler-level pairing tests call
-/// directly, which never runs `verify_bytecode` and so never catches
-/// this), already fails to compile with the same "backward jump" error.
-/// This is why this test's own branch shapes below are carefully
-/// length-balanced (to avoid tripping THAT bug) while still tripping the
-/// K-1 bug above — both are real, both are reported to Adam as open
-/// findings, neither is fixed by this landing.
+/// this one (`lowering.rs`'s `topo_order`, the naive-BFS address-layout
+/// backward-jump bug) — fixed separately, see the address-layout fix's own
+/// post-close entry; this test's branch shapes remain length-balanced from
+/// that investigation but no longer need to be, now that both bugs are
+/// fixed.
+///
+/// **FIXED 2026-07-24 — root cause confirmed the SAME as
+/// `t_and_v2_nested_gateway_inside_branch_compiles_and_completes`'s
+/// (`bpmn-lite-kernel/src/lib.rs`), not a separate inclusive-gateway-
+/// specific defect**, exactly per Adam's own prediction ("it may be a
+/// symptom rather than a separate defect"): `apply_tick` runs one fibre
+/// across potentially many instructions in a single transition without
+/// re-snapshotting between them. A nested barrier's survivor can pop an
+/// inner `V2Join` (correctly reconciling the OUTER barrier's own
+/// membership via `v2_reconcile_ancestor_membership`, staged into
+/// `changes`) and then, without blocking, immediately execute the OUTER
+/// `V2Join` in the SAME transition — which used to read the outer
+/// record straight from `snapshot` (fixed at the transition's start,
+/// blind to this transition's own in-flight writes) and silently
+/// overwrite the just-staged reconciliation with its own stale
+/// re-`Insert` (last-write-wins on `Insert`-by-key). Fixed by
+/// `fetch_record_in_transition`, a shared pending-aware lookup (mirroring
+/// `v2_reconcile_ancestor_membership`'s own pre-existing "check `changes`
+/// before `snapshot`" idiom) now used at every mid-transition record read.
+/// Independently confirmed via 100 standalone process runs post-fix, zero
+/// failures (pre-fix: intermittent, ~1-in-15 to 1-in-40, since which fibre
+/// is selected first — and hence whether both `V2Join`s land in one
+/// transition — depends on `BTreeMap`-order-of-derived-UUIDs, which varies
+/// by process run).
 #[tokio::test]
-#[ignore = "KNOWN BUG (found while building this task's end-to-end proof, not caused by it): \
-            GatewayInclusive nested under a GatewayAnd branch, resolving with dynamic arity \
-            below its declared branch count, corrupts kernel K-1 (bpmn-lite-kernel's \
-            check_k_invariants) on the next tick after the matched branch's job completes. See \
-            this test's own doc comment for the full reproduction and a second, unrelated \
-            lowering::topo_order backward-jump bug found in the same investigation. Reported to \
-            Adam, not fixed — orthogonal to the §9/V10 count-gate lift this landing implements."]
 async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently() {
     let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -4325,41 +4331,46 @@ async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes(
 /// longer linear branch — exercises the region-boundary recursion, not
 /// just a flat two-branch shape.
 ///
-/// **KNOWN BUG, independently confirmed 2026-07-24, deterministically
-/// reproducing (not flaky — confirmed via 5 direct standalone runs, each
-/// hitting the identical error class):** `engine.compile` and the first
-/// several execution rounds succeed — proving the address-layout fix
-/// itself works correctly here, this topology could not even compile
-/// before that fix — but a later tick raises `Ring 3 runtime integrity
-/// violation: K-1 violated: record <id> (armed) has member <id>, no live
-/// fibre`, the SAME error class as the separately-tracked, already-`
-/// #[ignore]`d `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_
+/// **Independently confirmed 2026-07-24, INTERMITTENT (not deterministic —
+/// an earlier note calling this "5/5 deterministic" was a misread; actual
+/// behavior is ~1-in-15 to 1-in-40 process runs, since it depends on
+/// which fibre `apply_tick` selects first, which in turn depends on
+/// `BTreeMap`-order-of-derived-UUIDs, which varies by process run):**
+/// `engine.compile` and the first several execution rounds succeed —
+/// proving the address-layout fix itself works correctly here, this
+/// topology could not even compile before that fix — but a later tick
+/// used to raise `Ring 3 runtime integrity violation: K-1 violated: record
+/// <id> (armed) has member <id>, no live fibre`, the SAME error class as
+/// `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_
 /// independently`.
 ///
-/// **This significantly broadens that bug's known scope.** The prior
+/// **This significantly broadened that bug's known scope**, exactly as
+/// Adam predicted ("its trigger is broader than I guessed"). The prior
 /// finding was framed as "a `GatewayInclusive` nested under a `GatewayAnd`
 /// branch, resolving with dynamic arity BELOW its declared count" —
 /// implicitly scoping it to inclusive-gateway dynamic-arity mismatch. This
 /// fixture has NO `GatewayInclusive` anywhere and NO arity mismatch —
 /// every branch of both the outer and inner `GatewayAnd` forks always
-/// runs, nothing skips. The trigger is simply "a `GatewayAnd` fork nested
-/// inside one branch of another `GatewayAnd` fork" — a barrier nested
-/// inside a barrier — full stop. This was unreachable before the
-/// address-layout fix (this exact shape could never compile), so this is
-/// the first time it's been exercisable at all, not a regression the
-/// layout fix introduced (the failure is a kernel K-1 assertion firing
-/// several ticks into execution, well after compilation and the first
-/// rounds of job activation/completion succeed correctly).
+/// runs, nothing skips. The trigger is "a `GatewayAnd` fork nested inside
+/// one branch of another `GatewayAnd` fork" — a barrier nested inside a
+/// barrier — full stop.
 ///
-/// Not fixed here — out of the address-layout task's scope, per Adam's own
-/// instruction to report, not fix, K-1 findings from this landing.
+/// **FIXED 2026-07-24** (`bpmn-lite-kernel/src/lib.rs`): confirmed, by
+/// adding temporary tracing and running to a captured failure, that the
+/// root cause is `apply_tick` running one fibre across many instructions
+/// in a single transition without re-snapshotting between them — a nested
+/// barrier's survivor pops an inner `V2Join` (correctly reconciling the
+/// OUTER barrier's own membership into `changes`), then, without blocking,
+/// immediately executes the OUTER `V2Join` in the SAME transition, which
+/// used to read the outer record straight from the transition-start
+/// `snapshot` (blind to this transition's own in-flight writes) and
+/// silently overwrite the just-staged reconciliation with its own stale
+/// re-`Insert`. Fixed by `fetch_record_in_transition`, a shared
+/// pending-aware lookup used at every mid-transition record read,
+/// mirroring `v2_reconcile_ancestor_membership`'s own pre-existing
+/// "check `changes` before `snapshot`" idiom. Independently confirmed via
+/// 100 standalone process runs post-fix, zero failures.
 #[tokio::test]
-#[ignore = "KNOWN BUG (independently confirmed, deterministic, not flaky): plain nested \
-            GatewayAnd-inside-GatewayAnd (no GatewayInclusive, no arity mismatch) corrupts \
-            kernel K-1 several ticks into execution. Broadens the scope of the previously \
-            reported K-1 finding (t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_ \
-            independently) beyond inclusive-gateway dynamic arity to nested-barrier bookkeeping \
-            in general. See this test's own doc comment. Reported to Adam, not fixed."]
 async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
     let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"

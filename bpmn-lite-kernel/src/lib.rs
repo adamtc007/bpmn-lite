@@ -1818,13 +1818,17 @@ fn apply_tick(
                     fiber_id: fiber.fiber_id,
                     handle,
                 });
-                let mut record = snapshot
-                    .concurrency_table()
-                    .get(handle)
-                    .cloned()
-                    .ok_or(TransitionError::InvalidCommand(
-                        "V2Join: unknown barrier handle",
-                    ))?;
+                // `fetch_record_in_transition`, not a raw `snapshot` read:
+                // a nested barrier's survivor can pop an inner V2Join
+                // (whose cancellation reconciles the OUTER barrier's own
+                // membership, staged into `changes`) and then, without
+                // blocking, immediately execute the OUTER V2Join in the
+                // SAME transition — a raw `snapshot` read here would see
+                // the outer record as it stood before that reconciliation
+                // and silently clobber it on this arm's own re-`Insert`.
+                let mut record = fetch_record_in_transition(snapshot, &changes, handle).ok_or(
+                    TransitionError::InvalidCommand("V2Join: unknown barrier handle"),
+                )?;
                 record.counters.count = record.counters.count.saturating_sub(1);
                 if record.counters.count == 0 {
                     // Last arrival (V&S v0.4 §5/§12 ruling B): sole survivor,
@@ -3536,9 +3540,60 @@ fn apply_job_completion(
 /// cancelled members) without the record itself being retired in the same
 /// transition (a retired record's membership is moot — K-2/K-1 are scoped
 /// to `Armed` records, see `check_k_invariants`'s doc comment).
+#[derive(Debug)]
 enum MembershipOp {
     Add(Uuid),
     Remove(Uuid),
+}
+
+/// Fetch a concurrency record by handle the way every mid-transition read
+/// must: preferring whatever `changes` has already staged for this exact
+/// `handle` earlier in the SAME transition over `snapshot`, which is fixed
+/// at the transition's start and never sees the transition's own in-flight
+/// writes. `apply_tick` runs one fibre to its next block point across
+/// potentially many instructions in a single transition — a nested
+/// barrier's survivor can pop an inner `V2Join` (triggering
+/// `v2_reconcile_ancestor_membership` against the OUTER barrier's record)
+/// and then, without blocking, immediately execute the OUTER `V2Join`
+/// itself, all before this transition's `Changes` are ever committed to a
+/// new snapshot. A read that goes straight to `snapshot` at that second
+/// site sees the outer record as it was BEFORE the inner join's
+/// reconciliation, and its own routine re-`Insert` (decrementing `count`)
+/// silently overwrites — last-write-wins on `Insert`-by-key — the
+/// reconciliation that already ran. This is the root cause of a K-1
+/// violation independently confirmed 2026-07-24 on exactly this shape (a
+/// `GatewayAnd` fork nested inside a `GatewayAnd` branch): the losing
+/// member of the inner barrier is correctly computed as needing removal
+/// from the outer barrier's membership, that removal is correctly staged,
+/// and then discarded before commit by the outer `V2Join`'s own stale
+/// read. Every one-time-per-transition record fetch across this file
+/// (`Instr::V2Join`, `v2_reconcile_ancestor_membership`'s own lookup) goes
+/// through this helper for that reason — never `snapshot.concurrency_
+/// table().get(...)` directly for a handle whose record another word in
+/// the SAME transition might already have touched.
+///
+/// A `Retire`/`Remove` staged for `handle` earlier in this transition
+/// means the record is gone as of THIS transition — stops the search and
+/// returns `None` rather than falling through to a stale, still-`Armed`
+/// snapshot copy (the record predates this transition, but this
+/// transition has already disposed of it).
+fn fetch_record_in_transition(
+    snapshot: &Snapshot,
+    changes: &Changes,
+    handle: RecordId,
+) -> Option<ConcurrencyRecord> {
+    for mutation in changes.concurrency_mutations.iter().rev() {
+        match mutation {
+            ConcurrencyMutation::Insert(record) if record.id == handle => {
+                return Some((**record).clone());
+            }
+            ConcurrencyMutation::Retire(id) | ConcurrencyMutation::Remove(id) if *id == handle => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    snapshot.concurrency_table().get(handle).cloned()
 }
 
 /// K-1/K-2 discharge helper (V&S §7): every word that creates a fibre
@@ -3567,25 +3622,13 @@ fn v2_reconcile_ancestor_membership(
         if exclude.contains(handle) {
             continue;
         }
-        // An ancestor record may have been freshly `Insert`ed earlier in
-        // this very transition (e.g. `V2Guard` opening the record that
-        // `V2Fork` inherits onto its children in the same tick) — that
-        // Insert has not been materialized into `snapshot` yet, so it must
-        // be found here first; only fall back to `snapshot` for a record
-        // that predates this transition.
-        let pending = changes.concurrency_mutations.iter().rev().find_map(|m| match m {
-            ConcurrencyMutation::Insert(record) if record.id == *handle => Some((**record).clone()),
-            _ => None,
-        });
-        let Some(record) = touched
+        let Some(mut record) = touched
             .get(handle)
             .cloned()
-            .or(pending)
-            .or_else(|| snapshot.concurrency_table().get(*handle).cloned())
+            .or_else(|| fetch_record_in_transition(snapshot, changes, *handle))
         else {
             continue;
         };
-        let mut record = record;
         match op {
             MembershipOp::Add(fiber_id) => {
                 record.members.insert(*fiber_id);
