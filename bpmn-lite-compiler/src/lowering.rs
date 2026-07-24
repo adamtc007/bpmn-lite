@@ -2869,6 +2869,101 @@ mod tests {
         );
     }
 
+    /// V8 (§31) per-guard proof: two guarded tasks in one workflow carry
+    /// *different* `failureBudget`s and lower to two *distinct* guard
+    /// addresses, each keyed to its own declared ceiling — the artifact
+    /// table is genuinely per-guard, not one shared workflow value.
+    #[test]
+    fn v8_two_guards_lower_to_distinct_addresses_with_distinct_budgets() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let host_a = graph.add_node(IRNode::ServiceTask {
+            id: "host_a".to_string(),
+            name: "HostA".to_string(),
+            task_type: "work_a".to_string(),
+        });
+        let host_b = graph.add_node(IRNode::ServiceTask {
+            id: "host_b".to_string(),
+            name: "HostB".to_string(),
+            task_type: "work_b".to_string(),
+        });
+        let normal_end = graph.add_node(IRNode::End {
+            id: "normal_end".to_string(),
+            terminate: false,
+        });
+        let boundary_a = graph.add_node(IRNode::BoundaryTimer {
+            id: "timeout_a".to_string(),
+            attached_to: "host_a".to_string(),
+            spec: TimerSpec::Duration { ms: 5000 },
+            interrupting: true,
+            failure_budget: Some(2),
+        });
+        let escalate_a = graph.add_node(IRNode::ServiceTask {
+            id: "escalate_a".to_string(),
+            name: "EscalateA".to_string(),
+            task_type: "escalate_a".to_string(),
+        });
+        let tend_a = graph.add_node(IRNode::End {
+            id: "timeout_end_a".to_string(),
+            terminate: false,
+        });
+        let boundary_b = graph.add_node(IRNode::BoundaryTimer {
+            id: "timeout_b".to_string(),
+            attached_to: "host_b".to_string(),
+            spec: TimerSpec::Duration { ms: 7000 },
+            interrupting: true,
+            failure_budget: Some(4),
+        });
+        let escalate_b = graph.add_node(IRNode::ServiceTask {
+            id: "escalate_b".to_string(),
+            name: "EscalateB".to_string(),
+            task_type: "escalate_b".to_string(),
+        });
+        let tend_b = graph.add_node(IRNode::End {
+            id: "timeout_end_b".to_string(),
+            terminate: false,
+        });
+
+        graph.add_edge(start, host_a, IREdge { id: "f1".to_string(), condition: None });
+        graph.add_edge(host_a, host_b, IREdge { id: "f2".to_string(), condition: None });
+        graph.add_edge(host_b, normal_end, IREdge { id: "f3".to_string(), condition: None });
+        graph.add_edge(boundary_a, escalate_a, IREdge { id: "f4".to_string(), condition: None });
+        graph.add_edge(escalate_a, tend_a, IREdge { id: "f5".to_string(), condition: None });
+        graph.add_edge(boundary_b, escalate_b, IREdge { id: "f6".to_string(), condition: None });
+        graph.add_edge(escalate_b, tend_b, IREdge { id: "f7".to_string(), condition: None });
+
+        verifier::verify_or_err(&graph).unwrap();
+        let program = lower_v2(&graph).unwrap();
+
+        // Two distinct guard-open addresses.
+        let guard_addrs: Vec<u32> = program
+            .program()
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| matches!(i, Instr::V2Guard { .. }))
+            .map(|(idx, _)| idx as u32)
+            .collect();
+        assert_eq!(guard_addrs.len(), 2, "two interrupting boundaries open two guards");
+        assert_ne!(guard_addrs[0], guard_addrs[1], "the two guards must occupy distinct addresses");
+
+        // Exactly two budget entries, each keyed to a real guard address.
+        let budgets = program.v2_guard_budgets();
+        assert_eq!(budgets.len(), 2, "each guard contributes exactly one budget entry");
+        let mut declared: Vec<u32> = guard_addrs
+            .iter()
+            .map(|a| {
+                budgets
+                    .get(&Addr::new(*a))
+                    .unwrap_or_else(|| panic!("guard at {a} must carry a budget"))
+                    .max_failures()
+            })
+            .collect();
+        declared.sort_unstable();
+        assert_eq!(declared, vec![2, 4], "each guard keeps its own declared ceiling, not a shared one");
+
+        crate::Compiler::lower_v2(&graph).expect("two-guard workflow must verify end-to-end");
+    }
+
     /// V5 boundary-timer: non-interrupting case opens `V2GuardN`, closed by
     /// `V2GuardNEnd` — distinct opcodes, not a flag (mirrors `GUARD>`/
     /// `GUARD-N>`'s existing v2 encoding).
