@@ -25,9 +25,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
     let start_idx = find_start(graph).ok_or_else(|| anyhow!("No Start node in IR graph"))?;
 
-    // Topological traversal to assign bytecode addresses.
-    // We do a BFS from start to get a linear ordering.
-    let order = topo_order(graph, start_idx);
+    // Structural (NOT plain-BFS) traversal to assign bytecode addresses AND
+    // drive instruction-emission order — see `compute_region_map`/
+    // `structured_order`'s doc comments for why: BFS visits nodes
+    // level-by-level, not in the graph's true nesting order, so a
+    // `GatewayAnd`/`GatewayInclusive`/`GatewayXor` fork with branches of
+    // unequal length can get its SHORTER branch's own trailing edge into
+    // the shared merge discovered (and therefore addressed) before the
+    // LONGER branch's own instructions are laid out — producing a forward
+    // reference that is actually a BACKWARD `Addr` once instructions are
+    // emitted in that same wrong order, which `verify_bytecode` correctly
+    // rejects. Same root cause, same DFS-clone-the-stack-per-branch
+    // discipline as `compute_gateway_pairing` (Direction A) — applied here
+    // to ADDRESS LAYOUT rather than fork/join PAIRING IDENTITY.
+    let region_map = compute_region_map(graph, start_idx);
+    let order = structured_order(graph, start_idx, &region_map);
 
     // String interning for task_types and flag names
     let mut task_intern: HashMap<String, u32> = HashMap::new();
@@ -843,39 +855,236 @@ pub fn lower_v2(graph: &IRGraph) -> Result<CompiledProgram> {
     lower(graph)
 }
 
-fn topo_order(graph: &IRGraph, start: NodeIndex) -> Vec<NodeIndex> {
-    let mut visited = HashSet::new();
-    let mut order = Vec::new();
-    let mut queue = std::collections::VecDeque::new();
+/// Divergence↔convergence `NodeIndex` region map — the address-layout
+/// counterpart of `compute_gateway_pairing`'s (Direction A's) fork/join
+/// PAIRING map, computed the SAME way (DFS, clone-the-stack-per-branch
+/// before recursing) but generalized from "kind-tagged `GatewayAnd`/
+/// `GatewayInclusive` only" to "ANY node with out-degree > 1 pairs with the
+/// unique node its branches structurally reconverge at" — this is what
+/// `structured_order` needs to lay out each branch's own body CONTIGUOUSLY
+/// before its shared merge, for EVERY branching construct in this IR
+/// (`GatewayXor` included: see the module-level investigation note on
+/// `structured_order` for why a bare `GatewayXor` merge is exposed to the
+/// identical backward-jump hazard as `GatewayAnd`/`GatewayInclusive`, even
+/// though it needs no `Addr`-valued pairing field of its own).
+///
+/// Degree-based rather than kind-based is the key generalization over
+/// `compute_gateway_pairing`: this IR has no dedicated "GatewayXor
+/// converging" node — an XOR merge is just an ordinary node (often a plain
+/// `ServiceTask`) with more than one incoming edge — so kind-matching
+/// (`IRNode::GatewayAnd { direction: Converging, .. }`, etc.) cannot find
+/// it. Out-degree/in-degree can, and — under this codebase's settled SESE
+/// topology (CLAUDE.md) — every genuine branch point's reconvergence node
+/// (if one exists; two branches may legitimately run to distinct `End`
+/// nodes with no shared merge at all) has in-degree exactly matching the
+/// number of branches that structurally lead to it, the same invariant
+/// `compute_gateway_pairing` relies on for `GatewayAnd`/`GatewayInclusive`.
+///
+/// Two-pass, exactly mirroring `topo_order`'s old shape (this is the
+/// replacement for its addressing role): Pass 1 walks forward from `start`;
+/// Pass 2 sweeps any node NOT reachable from `start` via forward edges
+/// (boundary-timer/error escalation entry points) so a construct nested
+/// inside a handler chain gets its own region facts too, not just the
+/// mainline flow.
+fn compute_region_map(graph: &IRGraph, start: NodeIndex) -> HashMap<NodeIndex, NodeIndex> {
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    let mut region_map: HashMap<NodeIndex, NodeIndex> = HashMap::new();
 
-    // Pass 1: BFS from start (normal flow)
-    queue.push_back(start);
-    visited.insert(start);
-    while let Some(node) = queue.pop_front() {
-        order.push(node);
-        for neighbor in graph.neighbors(node) {
-            if visited.insert(neighbor) {
-                queue.push_back(neighbor);
-            }
+    let mut stack: Vec<NodeIndex> = Vec::new();
+    region_dfs(graph, start, &mut visited, &mut stack, &mut region_map);
+
+    // Pass 2: sweep ALL unvisited nodes (escalation paths, future constructs).
+    for idx in graph.node_indices() {
+        if !visited.contains(&idx) {
+            let mut stack = Vec::new();
+            region_dfs(graph, idx, &mut visited, &mut stack, &mut region_map);
         }
     }
 
-    // Pass 2: sweep ALL unvisited nodes (escalation paths, future constructs)
+    region_map
+}
+
+/// DFS worker for `compute_region_map` — structurally identical to
+/// `gateway_pairing_dfs` (clone `stack` into each branch before recursing;
+/// a converging node pops-and-matches on EVERY arrival, first or
+/// subsequent), generalized from kind-tagged gateway matching to plain
+/// out-degree/in-degree: pushes `curr` into each branch's own stack clone
+/// whenever `curr` has more than one successor, pops (and records
+/// `div → curr`) whenever `curr` has more than one predecessor. Idempotent
+/// insert (`entry().or_insert`) because a 3+-way branch's every sibling
+/// independently pops the SAME `(div, curr)` fact from its own clone —
+/// consistent, not a race, under well-nested (SESE) topology.
+fn region_dfs(
+    graph: &IRGraph,
+    curr: NodeIndex,
+    visited: &mut HashSet<NodeIndex>,
+    stack: &mut Vec<NodeIndex>,
+    region_map: &mut HashMap<NodeIndex, NodeIndex>,
+) {
+    let in_degree = graph
+        .edges_directed(curr, petgraph::Direction::Incoming)
+        .count();
+    if in_degree > 1 {
+        if let Some(div) = stack.pop() {
+            region_map.entry(div).or_insert(curr);
+        }
+    }
+
+    if !visited.insert(curr) {
+        // Already explored `curr`'s own continuation on a previous arrival
+        // — this arrival's only job was the pop-and-match above.
+        return;
+    }
+
+    let neighbors: Vec<NodeIndex> = graph.neighbors(curr).collect();
+    if neighbors.len() > 1 {
+        // Branch point — clone `stack` into EACH branch, pushing `curr`
+        // onto every clone (never the incoming `stack` itself), so a
+        // sibling branch's pushes/pops never leak into this branch's
+        // traversal (the exact defect `compute_gateway_pairing`'s own doc
+        // comment describes for the pairing problem).
+        for neighbor in neighbors {
+            let mut branch_stack = stack.clone();
+            branch_stack.push(curr);
+            region_dfs(graph, neighbor, visited, &mut branch_stack, region_map);
+        }
+    } else {
+        for neighbor in neighbors {
+            region_dfs(graph, neighbor, visited, stack, region_map);
+        }
+    }
+}
+
+/// Structured, region-aware replacement for the old plain-BFS `topo_order`
+/// — assigns bytecode addressing/emission order by recursively laying out
+/// each branch's own body CONTIGUOUSLY (fully, including any further
+/// nested branch constructs) before its shared merge node, rather than
+/// using raw graph-traversal discovery order as a stand-in for structure.
+///
+/// **Why plain BFS was wrong (the bug this replaces):** BFS visits nodes
+/// level-by-level. When a fork has two branches of different lengths, the
+/// SHORTER branch's own trailing edge into the shared merge can be
+/// discovered — and therefore addressed — before the LONGER branch's own
+/// instructions are laid out, producing a `Jump`/`V2Join` target that is a
+/// BACKWARD `Addr` relative to the instruction that needs to reach it.
+/// Confirmed reproducible with the simplest possible case: a bare
+/// `GatewayAnd` fork, one 3-task branch, one 1-task branch — no
+/// `GatewayInclusive`, no multiple pairs — compiled via the real XML
+/// frontend (`engine.compile`) fails outright with a `verify_bytecode`
+/// "Backward jump" rejection.
+///
+/// **Why a plain reverse-postorder DFS is not, by itself, the right fix:**
+/// reverse-postorder IS provably correct for "no backward jump on a
+/// forward-flow edge" (every DAG edge points from an earlier position to a
+/// later one) — but it does NOT guarantee a single logical region (one
+/// branch's own body) occupies a CONTIGUOUS address range; depending on
+/// neighbor-visitation order and how recursion unwinds across sibling
+/// branches, a generic reverse-postorder numbering can interleave unrelated
+/// instructions from different branches through the address space while
+/// still being technically "no backward jump." Nothing in this codebase's
+/// existing address-layout invariants (`instr_count_for`'s own per-node
+/// sizing, boundary-timer/error guard-wrapping, `v2_verifier.rs`'s
+/// control-stack walk) is PROVEN to strictly require branch-level
+/// contiguity — `v2_verifier.rs` walks the decoded program structurally, by
+/// following each instruction's own successor/target, not by assuming
+/// raw address adjacency across unrelated branches — but a topologically
+/// valid, non-contiguous layout would be architecturally alien to how the
+/// rest of this compiler already reasons about regions (one region, one
+/// address range), and untested by anything that exists today. This
+/// function produces genuinely contiguous per-branch regions, not merely a
+/// valid topological order, by construction.
+///
+/// **`GatewayXor` investigation (see `compute_region_map`'s doc comment):**
+/// this IR has no dedicated "converging `GatewayXor`" node — two XOR
+/// branches of different lengths CAN reconverge directly on a shared
+/// downstream node (often a plain `ServiceTask`) with no gateway element at
+/// that join point at all. `verify_bytecode`'s backward-jump check applies
+/// uniformly to `Jump`/`BrIf`/`BrIfNot` regardless of which construct
+/// emitted them, so an XOR merge reached out of order is exposed to the
+/// IDENTICAL hazard as a `GatewayAnd`/`GatewayInclusive` join — confirmed
+/// by construction (`test_xor_merge_unequal_branch_lengths_compiles`
+/// below), not assumed. `compute_region_map` is therefore degree-based
+/// (out-degree/in-degree), not gateway-kind-based, specifically so it
+/// covers this case for free, without a separate XOR-only code path.
+///
+/// Two-pass, mirroring the replaced `topo_order`'s own shape: Pass 1 lays
+/// out everything reachable from `start` via forward edges; Pass 2 sweeps
+/// any node still unvisited (boundary-timer/error escalation entry points
+/// — alternate entry points, not converging branches, but run through the
+/// same structured walk rather than a separately-trusted BFS so an
+/// escalation chain that itself contained a fork/join would not silently
+/// reintroduce this bug).
+///
+/// No loop back-edges to preserve here: unlike `dsl/frontend.rs`'s
+/// S-expression pipeline (which emits `Instr::BrCounterLt` for bounded
+/// loops), this XML→IR→bytecode pipeline (`lowering.rs`) never emits
+/// `BrCounterLt` at all — grep confirms zero occurrences — so `IRGraph`, as
+/// produced by `parser.rs` for this pipeline, is a genuine DAG; no
+/// "intentionally backward" edge exists for this function to special-case.
+fn structured_order(
+    graph: &IRGraph,
+    start: NodeIndex,
+    region_map: &HashMap<NodeIndex, NodeIndex>,
+) -> Vec<NodeIndex> {
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    let mut order: Vec<NodeIndex> = Vec::new();
+
+    layout_region(graph, start, None, region_map, &mut visited, &mut order);
+
+    // Pass 2: sweep ALL unvisited nodes (escalation paths, future constructs).
     for idx in graph.node_indices() {
-        if visited.insert(idx) {
-            queue.push_back(idx);
-            while let Some(node) = queue.pop_front() {
-                order.push(node);
-                for neighbor in graph.neighbors(node) {
-                    if visited.insert(neighbor) {
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
+        if !visited.contains(&idx) {
+            layout_region(graph, idx, None, region_map, &mut visited, &mut order);
         }
     }
 
     order
+}
+
+/// Recursive worker for `structured_order`. Lays out `node`'s own
+/// continuation, stopping (without emitting) if/when it reaches `stop_at`
+/// — the caller's own region boundary, `None` for the outermost call. At a
+/// branch point with a known region-map entry, every branch is laid out
+/// FULLY and CONTIGUOUSLY (one branch at a time, each bounded by the SAME
+/// merge node) before the merge node itself is emitted exactly once and the
+/// outer walk continues from it. A branch point with NO region-map entry
+/// (branches genuinely diverge to distinct sinks — no shared reconvergence
+/// exists) lays out each branch independently, respecting only the
+/// OUTER `stop_at` boundary, since there is no merge of its own to bound
+/// them.
+fn layout_region(
+    graph: &IRGraph,
+    node: NodeIndex,
+    stop_at: Option<NodeIndex>,
+    region_map: &HashMap<NodeIndex, NodeIndex>,
+    visited: &mut HashSet<NodeIndex>,
+    order: &mut Vec<NodeIndex>,
+) {
+    if Some(node) == stop_at {
+        return;
+    }
+    if !visited.insert(node) {
+        return;
+    }
+    order.push(node);
+
+    let neighbors: Vec<NodeIndex> = graph.neighbors(node).collect();
+    match neighbors.len() {
+        0 => {}
+        1 => layout_region(graph, neighbors[0], stop_at, region_map, visited, order),
+        _ => {
+            if let Some(&merge) = region_map.get(&node) {
+                for neighbor in &neighbors {
+                    layout_region(graph, *neighbor, Some(merge), region_map, visited, order);
+                }
+                layout_region(graph, merge, stop_at, region_map, visited, order);
+            } else {
+                for neighbor in &neighbors {
+                    layout_region(graph, *neighbor, stop_at, region_map, visited, order);
+                }
+            }
+        }
+    }
 }
 
 fn get_successors(graph: &IRGraph, node: NodeIndex) -> Vec<NodeIndex> {
@@ -3589,6 +3798,97 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, Instr::V2Fork { targets, .. } if targets.len() == 3)),
             "expected a V2Fork with declared_max targets"
+        );
+    }
+
+    /// Independent-review probe (2026-07-24): `region_dfs` records a
+    /// `div → curr` region-map entry on ANY node with static in-degree > 1,
+    /// with no check that `curr` is actually where ALL of `div`'s own
+    /// branches converge. Constructs the review's counterexample directly
+    /// against `compute_region_map` (bypassing XML/BoundaryError plumbing
+    /// entirely): a `GatewayAnd` fork `a` with branch1 = `t1 -> m` and
+    /// branch2 = `t2 -> d -> m`, where `d` also receives an unrelated
+    /// incoming edge from `x` (modeling e.g. a boundary-error escalation
+    /// landing on a node inside one branch) — `d` has in-degree 2 for
+    /// reasons unrelated to `a`'s own fork, `m` is `a`'s TRUE join.
+    ///
+    /// Expected-if-review-is-right (and this is what's asserted below):
+    /// `region_map[a] == d`, not `m` — the wrong node — because branch2's
+    /// DFS arrival at `d` pops `a` off its stack and records `a -> d` via
+    /// `or_insert` BEFORE branch1 or branch2 ever reaches the true join `m`.
+    #[test]
+    fn test_region_dfs_misattributes_merge_to_unrelated_indegree_node() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let a = graph.add_node(IRNode::GatewayAnd {
+            id: "a".to_string(),
+            name: "fork".to_string(),
+            direction: GatewayDirection::Diverging,
+        });
+        let t1 = graph.add_node(IRNode::ServiceTask {
+            id: "t1".to_string(),
+            name: "T1".to_string(),
+            task_type: "t1".to_string(),
+        });
+        let t2 = graph.add_node(IRNode::ServiceTask {
+            id: "t2".to_string(),
+            name: "T2".to_string(),
+            task_type: "t2".to_string(),
+        });
+        let x = graph.add_node(IRNode::ServiceTask {
+            id: "x".to_string(),
+            name: "X".to_string(),
+            task_type: "x".to_string(),
+        });
+        let d = graph.add_node(IRNode::ServiceTask {
+            id: "d".to_string(),
+            name: "D".to_string(),
+            task_type: "d".to_string(),
+        });
+        let m = graph.add_node(IRNode::GatewayAnd {
+            id: "m".to_string(),
+            name: "join".to_string(),
+            direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End {
+            id: "end".to_string(),
+            terminate: false,
+        });
+
+        let e = |g: &mut IRGraph, from, to, id: &str| {
+            g.add_edge(
+                from,
+                to,
+                IREdge {
+                    id: id.to_string(),
+                    condition: None,
+                },
+            );
+        };
+        e(&mut graph, start, a, "f_start_a");
+        e(&mut graph, a, t1, "f_a_t1");
+        e(&mut graph, a, t2, "f_a_t2");
+        e(&mut graph, t1, m, "f_t1_m");
+        e(&mut graph, t2, d, "f_t2_d");
+        e(&mut graph, start, x, "f_start_x"); // unrelated incoming edge into d
+        e(&mut graph, x, d, "f_x_d");
+        e(&mut graph, d, m, "f_d_m");
+        e(&mut graph, m, end, "f_m_end");
+
+        let region_map = compute_region_map(&graph, start);
+
+        assert_eq!(
+            region_map.get(&a),
+            Some(&d),
+            "confirms the misattribution: region_map[a] is `d` (an unrelated \
+             in-degree-2 node) rather than `m` (a's true join) — region_dfs \
+             has no check that `curr`'s in-degree is fully accounted for by \
+             branches reachable from `div`. If this assertion ever fails \
+             because the code was fixed to record `m` instead, replace it \
+             with `assert_eq!(region_map.get(&a), Some(&m))` and update this \
+             comment — the bug is fixed, not just relocated."
         );
     }
 }

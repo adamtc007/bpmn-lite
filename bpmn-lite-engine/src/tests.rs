@@ -4132,6 +4132,406 @@ async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently(
     );
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// `lowering::topo_order` backward-jump fix (structured/region-aware
+// address layout, replacing plain BFS) — see `structured_order`'s doc
+// comment in `bpmn-lite-compiler/src/lowering.rs` for the full design
+// record. The fixture immediately below is the EXACT minimal reproduction
+// reported alongside `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_
+// route_independently` above (that test's own doc comment references it):
+// a bare `GatewayAnd` fork, one 3-task branch, one 1-task sibling branch —
+// no `GatewayInclusive`, no multiple pairs — compiled via `engine.compile`
+// (the real XML frontend, which runs `verify_bytecode`). Before the fix
+// this failed outright with "Backward jump at addr 12 to 6 — only
+// BrCounterLt may jump backward"; confirmed genuinely red by temporarily
+// reverting `structured_order`/`compute_region_map` back to the old
+// `topo_order` BFS and re-running this exact test.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Red-before/green-after reproduction for the reported bug: a bare
+/// `GatewayAnd` fork with unequal-length branches (3 tasks vs. 1 task) must
+/// compile through the real XML frontend without a backward-jump rejection.
+#[tokio::test]
+async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="task_b1" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "bare GatewayAnd fork with unequal-length branches (3 tasks vs. 1) must compile",
+    );
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-unequal-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+    let first_jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(first_jobs.len(), 2, "both branches must activate concurrent work");
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut pending = first_jobs;
+    for _ in 0..10 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        for job in &pending {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        pending = engine.run_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// Broader sweep (1): THREE branches of three DIFFERENT lengths (1, 2, and
+/// 4 tasks) off a single `GatewayAnd` fork — not just the minimal two-branch
+/// case above.
+#[tokio::test]
+async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c1"><bpmn:extensionElements><zeebe:taskDefinition type="task_c1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c2"><bpmn:extensionElements><zeebe:taskDefinition type="task_c2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c3"><bpmn:extensionElements><zeebe:taskDefinition type="task_c3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_c4"><bpmn:extensionElements><zeebe:taskDefinition type="task_c4"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="and_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="and_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="and_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="and_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="task_b1" targetRef="task_b2"/>
+    <bpmn:sequenceFlow id="fb2" sourceRef="task_b2" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fc0" sourceRef="and_fork" targetRef="task_c1"/>
+    <bpmn:sequenceFlow id="fc1" sourceRef="task_c1" targetRef="task_c2"/>
+    <bpmn:sequenceFlow id="fc2" sourceRef="task_c2" targetRef="task_c3"/>
+    <bpmn:sequenceFlow id="fc3" sourceRef="task_c3" targetRef="task_c4"/>
+    <bpmn:sequenceFlow id="fc4" sourceRef="task_c4" targetRef="and_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="and_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("GatewayAnd fork with three differently-lengthed branches must compile");
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-3way-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+
+    // Drain jobs across ticks until all three branches have completed and
+    // the instance reaches a terminal state (branch C needs 4 sequential
+    // jobs, one per tick-drain round).
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..20 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        for job in &jobs {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// Broader sweep (2): a branch containing a NESTED further `GatewayAnd`
+/// fork/join pair (own unequal-length sub-branches), sibling to a plain
+/// longer linear branch — exercises the region-boundary recursion, not
+/// just a flat two-branch shape.
+///
+/// **KNOWN BUG, independently confirmed 2026-07-24, deterministically
+/// reproducing (not flaky — confirmed via 5 direct standalone runs, each
+/// hitting the identical error class):** `engine.compile` and the first
+/// several execution rounds succeed — proving the address-layout fix
+/// itself works correctly here, this topology could not even compile
+/// before that fix — but a later tick raises `Ring 3 runtime integrity
+/// violation: K-1 violated: record <id> (armed) has member <id>, no live
+/// fibre`, the SAME error class as the separately-tracked, already-`
+/// #[ignore]`d `t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_
+/// independently`.
+///
+/// **This significantly broadens that bug's known scope.** The prior
+/// finding was framed as "a `GatewayInclusive` nested under a `GatewayAnd`
+/// branch, resolving with dynamic arity BELOW its declared count" —
+/// implicitly scoping it to inclusive-gateway dynamic-arity mismatch. This
+/// fixture has NO `GatewayInclusive` anywhere and NO arity mismatch —
+/// every branch of both the outer and inner `GatewayAnd` forks always
+/// runs, nothing skips. The trigger is simply "a `GatewayAnd` fork nested
+/// inside one branch of another `GatewayAnd` fork" — a barrier nested
+/// inside a barrier — full stop. This was unreachable before the
+/// address-layout fix (this exact shape could never compile), so this is
+/// the first time it's been exercisable at all, not a regression the
+/// layout fix introduced (the failure is a kernel K-1 assertion firing
+/// several ticks into execution, well after compilation and the first
+/// rounds of job activation/completion succeed correctly).
+///
+/// Not fixed here — out of the address-layout task's scope, per Adam's own
+/// instruction to report, not fix, K-1 findings from this landing.
+#[tokio::test]
+#[ignore = "KNOWN BUG (independently confirmed, deterministic, not flaky): plain nested \
+            GatewayAnd-inside-GatewayAnd (no GatewayInclusive, no arity mismatch) corrupts \
+            kernel K-1 several ticks into execution. Broadens the scope of the previously \
+            reported K-1 finding (t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_ \
+            independently) beyond inclusive-gateway dynamic arity to nested-barrier bookkeeping \
+            in general. See this test's own doc comment. Reported to Adam, not fixed."]
+async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="outer_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="b_pre"><bpmn:extensionElements><zeebe:taskDefinition type="b_pre"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="inner_fork" gatewayDirection="Diverging"/>
+    <bpmn:serviceTask id="task_b1"><bpmn:extensionElements><zeebe:taskDefinition type="task_b1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b2"><bpmn:extensionElements><zeebe:taskDefinition type="task_b2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_b3"><bpmn:extensionElements><zeebe:taskDefinition type="task_b3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:parallelGateway id="inner_join" gatewayDirection="Converging"/>
+    <bpmn:parallelGateway id="outer_join" gatewayDirection="Converging"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="outer_fork"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="outer_fork" targetRef="task_a1"/>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="outer_join"/>
+    <bpmn:sequenceFlow id="fb_pre" sourceRef="outer_fork" targetRef="b_pre"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="b_pre" targetRef="inner_fork"/>
+    <bpmn:sequenceFlow id="fb1" sourceRef="inner_fork" targetRef="task_b1"/>
+    <bpmn:sequenceFlow id="fb2" sourceRef="task_b1" targetRef="task_b2"/>
+    <bpmn:sequenceFlow id="fb3" sourceRef="task_b2" targetRef="inner_join"/>
+    <bpmn:sequenceFlow id="fb4" sourceRef="inner_fork" targetRef="task_b3"/>
+    <bpmn:sequenceFlow id="fb5" sourceRef="task_b3" targetRef="inner_join"/>
+    <bpmn:sequenceFlow id="fb6" sourceRef="inner_join" targetRef="outer_join"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="outer_join" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "GatewayAnd branch containing a further nested GatewayAnd pair must compile",
+    );
+
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-and-nested-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..20 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        let jobs = engine.run_instance(instance_id).await.unwrap();
+        for job in &jobs {
+            let payload = "{}";
+            let hash = bpmn_lite_vm::compute_hash(payload);
+            engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await
+                .unwrap();
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
+/// `GatewayXor` investigation: this IR has no dedicated "converging
+/// GatewayXor" node — two XOR branches can reconverge directly on a shared
+/// downstream `ServiceTask` with no gateway element at the merge point at
+/// all. Proves that shape, with unequal-length branches (skewing raw BFS
+/// discovery order the same way the GatewayAnd reproduction above does),
+/// compiles and routes correctly through the real XML frontend.
+#[tokio::test]
+async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
+    let bpmn_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:exclusiveGateway id="xor_split"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a3"><bpmn:extensionElements><zeebe:taskDefinition type="task_a3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="merge_task"><bpmn:extensionElements><zeebe:taskDefinition type="merge_task"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="xor_split"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="xor_split" targetRef="task_a1">
+      <bpmn:conditionExpression>= take_a == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="task_a3"/>
+    <bpmn:sequenceFlow id="fa3" sourceRef="task_a3" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="xor_split" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="merge_task" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("GatewayXor with unequal-length branches reconverging on a shared task must compile");
+
+    // Take the DEFAULT (short) branch straight to merge_task — the flag is
+    // left unset, so `take_a` is false.
+    let instance_id = engine
+        .start(
+            "test",
+            compiled.bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-xor-merge-1",
+        )
+        .await
+        .unwrap();
+    engine.tick_instance(instance_id).await.unwrap();
+    let jobs = engine.run_instance(instance_id).await.unwrap();
+    assert_eq!(jobs.len(), 1, "default branch should reach merge_task directly");
+    assert_eq!(jobs[0].task_type, "merge_task");
+
+    let payload = "{}";
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    engine
+        .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
+        .await
+        .unwrap();
+
+    let mut inst = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..5 {
+        if inst.state.is_terminal() {
+            break;
+        }
+        engine.tick_instance(instance_id).await.unwrap();
+        inst = store
+            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        matches!(inst.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        inst.state
+    );
+}
+
 /// V5 post-close (§18 ruling I): a v2-lowered interrupting boundary timer
 /// — `V2Guard` + `GUARD-TIMER>` wrapping the host task (`lowering::
 /// lower_boundary_guarded_task_v2`) — actually fires end-to-end through
