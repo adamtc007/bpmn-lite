@@ -11,7 +11,17 @@ use std::collections::BTreeMap;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = legacy_program! {
         bytecode_version: [7u8; 32],
-        program: vec![Instr::V2Fork { targets: vec![Addr::new(1), Addr::new(2)].into(), pairing: Addr::new(0) }, Instr::End, Instr::End],
+        // Minimal balanced SESE fork/join: FORK spawns two branches that each
+        // JOIN the same barrier and jump to the shared End. An unbalanced
+        // shape (fork with no matching join) is rejected by V-1 at verify.
+        program: vec![
+            /* 0 */ Instr::V2Fork { targets: vec![Addr::new(1), Addr::new(3)].into(), pairing: Addr::new(0) },
+            /* 1 */ Instr::V2Join { pairing: Addr::new(0) },
+            /* 2 */ Instr::Jump { target: Addr::new(5) },
+            /* 3 */ Instr::V2Join { pairing: Addr::new(0) },
+            /* 4 */ Instr::Jump { target: Addr::new(5) },
+            /* 5 */ Instr::End,
+        ],
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
