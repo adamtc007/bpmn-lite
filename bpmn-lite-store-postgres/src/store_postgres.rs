@@ -4018,6 +4018,44 @@ impl AdminProjectionStore for PostgresWorkflowStore {
 }
 
 impl PostgresWorkflowStore {
+    /// V6.4 cutover-readiness gate: verify EVERY stored artifact, not just the
+    /// ones a running instance happens to load. Closes the lazy-verification
+    /// gap — `load_artifact` verifies on demand, so a corrupt or pre-canonical
+    /// row can sit undetected until claimed. Fails closed, naming every
+    /// offending `bytecode_version`; a NULL `canonical_bytes` (pre-canonical
+    /// legacy row) is itself a failure — a cutover-clean corpus has none.
+    /// Returns the count verified.
+    pub async fn verify_artifact_corpus(&self) -> Result<usize> {
+        use sqlx::Row;
+        let rows = sqlx::query("SELECT bytecode_version, canonical_bytes FROM compiled_programs")
+            .fetch_all(&self.pool)
+            .await
+            .persistence()?;
+        let mut failures = Vec::new();
+        for row in &rows {
+            let version: Vec<u8> = row.get("bytecode_version");
+            let canonical: Option<Vec<u8>> = row.get("canonical_bytes");
+            let hash_hex: String = version.iter().map(|b| format!("{b:02x}")).collect();
+            match canonical {
+                None => failures.push(format!("{hash_hex}: pre-canonical (canonical_bytes IS NULL)")),
+                Some(bytes) => {
+                    if let Err(error) = ExecutableWorkflow::verify(&bytes) {
+                        failures.push(format!("{hash_hex}: {error}"));
+                    }
+                }
+            }
+        }
+        if !failures.is_empty() {
+            return Err(StoreError::Integrity(format!(
+                "artifact corpus verification failed for {} of {} artifact(s): {}",
+                failures.len(),
+                rows.len(),
+                failures.join("; ")
+            )));
+        }
+        Ok(rows.len())
+    }
+
     async fn dequeue_jobs_inner(
         tx: &mut TenantTx<'_>,
         task_types: &[String],
@@ -5766,6 +5804,131 @@ mod tests {
         assert!(
             matches!(result, Err(CommitError::Integrity(_))),
             "a guard cancellation with no pinned artifact must fail closed, got {result:?}"
+        );
+    }
+
+    /// V6.4 whole-corpus verify gate: every stored artifact verifies
+    /// (`Ok(count)`), and a corrupted `canonical_bytes` row is caught by the
+    /// gate — fail-closed at cutover, not surfaced lazily only when the
+    /// instance is eventually claimed.
+    #[tokio::test]
+    async fn test_verify_artifact_corpus_catches_a_corrupt_row() {
+        let (pool, store, _lock) = setup().await;
+        // Two valid artifacts (distinct defaults => distinct canonical bytes
+        // => distinct hashes => two rows).
+        let _h1 = store_default_budget_artifact(&store, 3).await;
+        let good_hash = store_default_budget_artifact(&store, 7).await;
+
+        let count = store.verify_artifact_corpus().await.unwrap();
+        assert_eq!(count, 2, "both stored artifacts must verify");
+
+        // Corrupt one row's canonical_bytes; the gate must now fail closed.
+        sqlx::query("UPDATE compiled_programs SET canonical_bytes = $1 WHERE bytecode_version = $2")
+            .bind(&b"not a valid canonical envelope"[..])
+            .bind(&good_hash[..])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = store.verify_artifact_corpus().await;
+        assert!(
+            matches!(&result, Err(StoreError::Integrity(message)) if message.contains("corpus verification failed")),
+            "a corrupt artifact row must fail the corpus gate closed, got {result:?}"
+        );
+    }
+
+    /// V6.4 destructive cutover: the shipped `scripts/cutover-wipe.sql` clears
+    /// the artifact corpus and all per-instance runtime state — including the
+    /// FORCE-RLS V8 `guard_failure_budget` table, transitively via
+    /// `TRUNCATE workflow_instances CASCADE` — and the store then cold-starts
+    /// ready: the corpus gate passes on the empty corpus and a freshly stored
+    /// artifact + instance is immediately claimable.
+    #[tokio::test]
+    async fn test_cutover_wipe_clears_runtime_state_and_store_cold_starts() {
+        let (pool, store, _lock) = setup().await;
+
+        // Seed: an artifact, an instance pinned to it, and — on a tenant-scoped
+        // connection, since guard_failure_budget FORCEs RLS — a budget row.
+        let hash = store_default_budget_artifact(&store, 5).await;
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = hash;
+        store.save_instance("cutover-seed", &instance).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("SELECT set_config('app.current_tenant', 'default', false)")
+            .execute(conn.as_mut())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO guard_failure_budget (tenant_id, instance_id, guard_addr, failure_count, updated_at) \
+             VALUES ('default', $1, 0, 1, now())",
+        )
+        .bind(instance_id)
+        .execute(conn.as_mut())
+        .await
+        .unwrap();
+        let pre_budget: i64 = sqlx::query_scalar("SELECT count(*) FROM guard_failure_budget")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(pre_budget, 1, "seed must create a guard_failure_budget row");
+        assert_eq!(
+            store.verify_artifact_corpus().await.unwrap(),
+            1,
+            "seed must store one artifact"
+        );
+
+        // Execute the shipped cutover wipe script statement-by-statement.
+        let sql = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scripts/cutover-wipe.sql"
+        ))
+        .unwrap();
+        for statement in sql.split(';') {
+            let trimmed = statement.trim();
+            if trimmed.is_empty()
+                || trimmed
+                    .lines()
+                    .all(|line| line.trim().is_empty() || line.trim_start().starts_with("--"))
+            {
+                continue;
+            }
+            sqlx::query(trimmed).execute(&pool).await.unwrap();
+        }
+
+        // Runtime state and corpus cleared; guard_failure_budget cascaded away.
+        let post_budget: i64 = sqlx::query_scalar("SELECT count(*) FROM guard_failure_budget")
+            .fetch_one(conn.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            post_budget, 0,
+            "TRUNCATE workflow_instances CASCADE must clear guard_failure_budget"
+        );
+        assert_eq!(
+            store.verify_artifact_corpus().await.unwrap(),
+            0,
+            "the artifact corpus must be empty and verify as ready after the wipe"
+        );
+
+        // Cold start: a freshly stored artifact + instance is immediately claimable.
+        let fresh_hash = store_default_budget_artifact(&store, 4).await;
+        let fresh_id = Uuid::now_v7();
+        let mut fresh = make_instance(fresh_id);
+        fresh.bytecode_version = fresh_hash;
+        store.save_instance("cold-start", &fresh).await.unwrap();
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                fresh_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap();
+        assert!(
+            claim.is_some(),
+            "a fresh instance must be claimable on the cold-started store"
         );
     }
 
