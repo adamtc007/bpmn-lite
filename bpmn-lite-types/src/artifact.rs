@@ -342,6 +342,21 @@ fn verify_program(
             )));
         }
     }
+    // V8 (§31): a per-guard budget must key an actual guard-open instruction —
+    // a budget keyed to a non-guard address is a lowering defect, rejected at
+    // admission, never silently ignored.
+    for address in metadata.v2_guard_budgets.keys().copied() {
+        require_address(address, len, address, "v2 guard budget table")?;
+        if !matches!(
+            instructions[address.index()],
+            Instr::V2Guard { .. } | Instr::V2GuardN { .. } | Instr::V2GuardR
+        ) {
+            return Err(ArtifactError::InvalidMetadata(format!(
+                "guard budget address {address} is not a guard-opening instruction \
+                 (V2Guard/V2GuardN/V2GuardR)"
+            )));
+        }
+    }
     let referenced_joins: BTreeSet<JoinId> = BTreeSet::new();
     for (address, instruction) in instructions.iter().enumerate() {
         match instruction {
@@ -925,6 +940,27 @@ mod v2_fixtures {
             "re-encoding a decoded v2 envelope must reproduce the exact original bytes"
         );
         envelope
+    }
+
+    /// V8 (§31): a per-guard budget keyed to an address that is not a
+    /// guard-open instruction is a lowering defect — rejected at admission,
+    /// never silently ignored.
+    #[test]
+    fn v8_guard_budget_keyed_to_non_guard_address_is_rejected() {
+        let mut program = empty_compiled_program(vec![Instr::End]);
+        program.v2_guard_budgets.insert(
+            Addr::new(0),
+            crate::transition::ScopeFailureBudget::new(1, 3).unwrap(),
+        );
+        let result = ArtifactEnvelope::from_legacy_program(program, "v8-bad-budget");
+        assert!(
+            matches!(
+                &result,
+                Err(ArtifactError::InvalidMetadata(message))
+                    if message.contains("guard budget address")
+            ),
+            "a budget keyed to a non-guard address must reject as InvalidMetadata, got {result:?}"
+        );
     }
 
     /// EX-oracle-shaped: an interrupting guard (`V2Guard`) wraps a parallel
