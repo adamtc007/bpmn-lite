@@ -620,6 +620,22 @@ E6 (EOP meta-rule, "no success-by-default"): no failure class reaches correct ha
 
 **Blind review closed (CAREFUL tier):** one HIGH finding — the kernel `V2WaitMsg` buffered-before-wait path consumed `buffered_messages().first()` without matching name+key against the executing fibre, mis-routing a sibling's buffered message under an intra-instance concurrent-wait split — fixed (name+key `find`, red→green regression test), the fix mirroring the arrival-time `apply_message` gate. All other priority items (single-derivation across the four correlation sites, address keying, canonicalization, fail-closed, `Fiber::regs` deletion, golden bytes) independently verified sound. The one deferred Camunda-8 boundary (message start events) stands, confirmed acceptable by Adam.
 
+## 29. Deviation (2026-07-24) — Ring 4 scoped to detect-and-surface; proactive fleet replay descoped in favour of snapshot/PITR recovery
+
+**Supersedes §6 Ring 4's "nightly from-checkpoint replay fleet-wide" clause.** Raised by Adam while scoping V6.1: *why proactive replay at all?* The challenge holds.
+
+**The reasoning.** D3's own doctrine is "detection, not correction — fail-stop, never repair" (§6). Detection is already load-time and cast-iron: the claim/hydrate path verifies Ring 1 (BLAKE3 over raw bytes, pre-decode), canonical-form fixed-point, and Ring 2 (snapshot head ⇔ the *independent* `workflow_journal` hash chain) **before a corrupt frame reaches the deserializer or executes** — including for a parked instance, which is checked on its next claim. A proactive nightly replay adds nothing a snapshot/PITR recovery design does not already have:
+
+- Random bit rot → Ring 1 catches it at load → restore.
+- Correlated logical rewrite of snapshot+frame_hash → Ring 2's *separate-table* journal chain catches it at load → restore.
+- Corruption of the journal itself → replay cannot help (the journal *is* replay's source of truth); only restore helps.
+
+In every corruption class the recovery is a point-in-time restore, and detection already fires at load. A fleet-wide from-checkpoint sweep is therefore redundant with the recovery design, and its only real cost is unbounded: from-genesis replay is O(journal length) per instance, growing monotonically for the life of a long-lived custody/KYC case.
+
+**Ruling (Adam, 2026-07-24): no fleet-wide proactive scan. On detection, isolate and surface for point-in-time restore.** `replay()` (the from-genesis primitive, test-proven) is **retained as an on-demand forensic tool** for incident investigation, not wired to run automatically. The §6 failure-model row "kernel bug writing inconsistent state → Ring 3 + Ring 4" is served by **Ring 3** (unconditional structural asserts at every park/resume): a bug-written inconsistent frame is caught at the next resume; an instance that never resumes is inert. If proactive scanning is ever wanted, it rides the planned mark-and-sweep GC walk over the wf universe as verify-on-visit, not a separate subsystem — no periodic-checkpoint retention, so no new store surface.
+
+**The one hardening this requires (V6.1 = detect → isolate → surface):** the postgres claim path already quarantines on a load-time `IntegrityError` (sets `quarantine_state='replay_integrity_violation'`, de-leases, returns `ClaimError::Integrity`), but two gaps defeated "surface for PITR": (A) the claim predicate filtered only on lease, so a quarantined instance was re-claimed → re-checked → re-quarantined each tick (fail-closed but not isolated); (B) the claim-path quarantine was a *silent column set* — it did not emit the `InstanceQuarantined` audit event the explicit `quarantine_instance` op emits, so an operator watching the event log never saw it and PITR was never triggered. Both closed: (A) `AND quarantine_state IS NULL` added to the claim predicate (a re-claim of a quarantined instance returns `None`, not churny re-detection); (B) the claim-path quarantine emits the same `InstanceQuarantined` event + notify. Both red→green.
+
 ---
 
 *Ratification of D1–D4 unblocks EOP-EX-BPMN-ISA-002 (oracle) and EOP-PLAN-BPMN-ISA-002 (tranches V1–V6). Nothing in this document alters the KERNEL-001 durability substrate.*

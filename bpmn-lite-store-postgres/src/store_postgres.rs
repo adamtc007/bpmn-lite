@@ -1191,6 +1191,7 @@ impl RuntimeStore for PostgresWorkflowStore {
                 END
             WHERE tenant_id = $1
               AND instance_id = $2
+              AND quarantine_state IS NULL
               AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
             RETURNING revision, fence, bytecode_version, snapshot_schema_version,
                       artifact_abi, snapshot_envelope, frame_hash
@@ -1332,6 +1333,42 @@ impl RuntimeStore for PostgresWorkflowStore {
             .execute(&mut *tx)
             .await
             .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            // Detection is fail-stop; recovery is point-in-time restore. The
+            // operator only learns to restore from the audit log, so the
+            // claim-path quarantine must emit the same InstanceQuarantined
+            // event as the explicit op — never a silent column set.
+            let event = RuntimeEvent::InstanceQuarantined {
+                instance_id,
+                tenant_id: tenant_id.as_str().to_string(),
+                detection_point: "scheduler_claim".to_string(),
+                failure_reason: reason.clone(),
+                detected_at: chrono::Utc::now().timestamp_millis(),
+            };
+            let event_json = serde_json::to_value(&event)
+                .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            sqlx::query(
+                r#"
+                WITH seq AS (
+                    INSERT INTO event_sequences (instance_id, next_seq, tenant_id)
+                    VALUES ($1, 1, $3)
+                    ON CONFLICT (instance_id) DO UPDATE
+                        SET next_seq = event_sequences.next_seq + 1
+                    RETURNING next_seq, tenant_id
+                )
+                INSERT INTO event_log (instance_id, seq, event, tenant_id)
+                SELECT $1, seq.next_seq, $2, seq.tenant_id
+                FROM seq
+                "#,
+            )
+            .bind(instance_id)
+            .bind(&event_json)
+            .bind(tenant_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
+            notify_event_tx(&mut tx, instance_id)
+                .await
+                .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
             tx.commit()
                 .await
                 .map_err(|error| ClaimError::Unavailable(error.to_string()))?;
@@ -8905,6 +8942,141 @@ mod tests {
                 .await
                 .unwrap();
         assert!(lease_owner.is_none());
+    }
+
+    /// V6.1 isolate: once an instance is quarantined on a load-time integrity
+    /// violation, a subsequent claim must not re-select it. Without the
+    /// `quarantine_state IS NULL` claim predicate the poisoned instance is
+    /// re-claimed → re-checked → re-quarantined every tick (fail-closed but
+    /// never isolated). The second claim must return `Ok(None)`, not another
+    /// `Err(Integrity)`.
+    #[tokio::test]
+    async fn test_quarantined_instance_is_not_reclaimed() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let mut envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let flip = envelope_bytes.len() / 2;
+        envelope_bytes[flip] ^= 0xFF;
+        sqlx::query("UPDATE workflow_instances SET snapshot_envelope = $1 WHERE instance_id = $2")
+            .bind(&envelope_bytes)
+            .bind(instance_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // First claim detects, quarantines, and fails closed.
+        let first = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(matches!(first, Err(ClaimError::Integrity(_))));
+
+        // Second claim must find nothing to claim — the row is isolated.
+        let second = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(
+            matches!(second, Ok(None)),
+            "a quarantined instance must not be re-claimed, got {second:?}"
+        );
+    }
+
+    /// V6.1 surface: the claim-path quarantine must emit an
+    /// `InstanceQuarantined` audit event, not merely set the column. Recovery
+    /// is point-in-time restore, which an operator only initiates on seeing
+    /// the event — a silent column set is invisible and never triggers it.
+    #[tokio::test]
+    async fn test_claim_path_quarantine_emits_audit_event() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store.save_instance("integrity-fixture", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .commit_transition(&claim, &TransitionBuilder::new(instance).build())
+            .await
+            .unwrap();
+
+        let mut envelope_bytes: Vec<u8> = sqlx::query_scalar(
+            "SELECT snapshot_envelope FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let flip = envelope_bytes.len() / 2;
+        envelope_bytes[flip] ^= 0xFF;
+        sqlx::query("UPDATE workflow_instances SET snapshot_envelope = $1 WHERE instance_id = $2")
+            .bind(&envelope_bytes)
+            .bind(instance_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "recovery",
+                30_000,
+            )
+            .await;
+        assert!(matches!(result, Err(ClaimError::Integrity(_))));
+
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM event_log WHERE instance_id = $1 AND event::text LIKE '%InstanceQuarantined%'",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            event_count, 1,
+            "claim-path quarantine must emit exactly one InstanceQuarantined audit event"
+        );
     }
 
     /// V2.5 Ring 2: directly corrupts the journal head's `prior_state_hash`
