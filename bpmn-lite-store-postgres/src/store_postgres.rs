@@ -5746,6 +5746,98 @@ mod tests {
         );
     }
 
+    /// V&S §31 per-guard store read: a NON-empty `v2_guard_budgets` entry for
+    /// the cancelling guard's address overrides the workflow default — the
+    /// headline "per-guard, not just default" claim, proven at the store (the
+    /// sibling test above only exercises the `unwrap_or(default)` fallback).
+    /// A strict per-guard budget of 1 must quarantine after ONE rollback even
+    /// though the workflow default is a lenient 9.
+    #[tokio::test]
+    async fn test_per_guard_budget_entry_overrides_the_workflow_default() {
+        let (pool, store, _lock) = setup().await;
+        // Address 0 is a real guard-open in this minimal verifying program, so
+        // the V8.3 admission gate (budget key must resolve to a guard-opener)
+        // accepts the non-empty table — mirrors v2_verifier's minimal guard.
+        let guard_addr = Addr::new(0);
+        let mut budgets = BTreeMap::new();
+        budgets.insert(guard_addr, bpmn_lite_types::ScopeFailureBudget::new(1, 1).unwrap());
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [0u8; 32],
+            program: vec![
+                Instr::V2Guard { handler: Addr::new(3) },
+                Instr::V2GuardEnd,
+                Instr::End,
+                Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        }
+        .with_v2_guard_budgets(
+            budgets,
+            // Lenient workflow default — the per-guard entry must win over it.
+            bpmn_lite_types::ScopeFailureBudget::new(1, 9).unwrap(),
+        );
+        let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-per-guard-1").unwrap(),
+        )
+        .unwrap();
+        store.store_artifact(&workflow).await.unwrap();
+
+        let instance_id = Uuid::now_v7();
+        let mut instance = make_instance(instance_id);
+        instance.bytecode_version = workflow.hash().into_bytes();
+        store.save_instance("per-guard-budget", &instance).await.unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let record_id = RecordId::new(Uuid::now_v7());
+        let fiber_id = Uuid::now_v7();
+        let mut record =
+            ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        record.opened_at = Some(guard_addr);
+        record.state = RecordState::Retired;
+        let transition = TransitionBuilder::new(instance.clone())
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
+            .delete_fiber(fiber_id)
+            .event(RuntimeEvent::V2ScopeCancelled {
+                record_id,
+                fiber_id,
+                cancelled_records: vec![],
+                cancelled_fibers: vec![],
+            })
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        let quarantine: Option<String> = sqlx::query_scalar(
+            "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            quarantine.as_deref(),
+            Some("guard_failure_budget_exhausted"),
+            "the per-guard budget of 1 must quarantine after ONE rollback, \
+             overriding the lenient workflow default of 9"
+        );
+    }
+
     /// V&S §15 (v0.7) ruling F: an explicit, in-line `V2CancelScope`
     /// (the triggering fibre survives — not in `fibers_delete()`) must
     /// never count against the budget, however many times it fires.
