@@ -224,6 +224,65 @@ async fn test_engine_full_lifecycle() {
     assert!(events.len() >= 2); // At least InstanceStarted + Completed
 }
 
+/// R4 (baseline review F3): a start command whose `initial_payload` is not
+/// valid JSON must be REJECTED at admission — previously it was silently
+/// accepted (`.ok().filter(is_object)`) and only failed later at Ring 2
+/// frame-hash time, an integrity error deferred from the one place it could
+/// have been a clean typed rejection.
+#[tokio::test]
+async fn start_with_malformed_payload_fails_closed_at_admission() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                          xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+          <bpmn:process id="reject_proc" isExecutable="true">
+            <bpmn:startEvent id="start" />
+            <bpmn:endEvent id="end" />
+            <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="end" />
+          </bpmn:process>
+        </bpmn:definitions>"#;
+    let compile_result = engine.compile(bpmn).await.unwrap();
+
+    let payload = "not json at all {";
+    let result = engine
+        .start_with_params(StartParams {
+            process_key: "reject_proc".to_string(),
+            bytecode_version: compile_result.bytecode_version,
+            domain_payload: payload.to_string(),
+            domain_payload_hash: compute_hash(payload),
+            correlation_id: "corr-reject".to_string(),
+            session_stack: SessionStackState::default(),
+            entry_id: Uuid::new_v4(),
+            runbook_id: Uuid::new_v4(),
+            expected_preconditions: None,
+        })
+        .await;
+    let error = result.expect_err("malformed initial_payload must be rejected at admission");
+    assert!(
+        error.to_string().contains("not valid JSON"),
+        "rejection must name the defect, got: {error}"
+    );
+
+    // Green counterpart: VALID but non-object JSON is legal — object-ness
+    // gates only placeholder extraction, never admission.
+    let payload = r#"[1, 2, 3]"#;
+    engine
+        .start_with_params(StartParams {
+            process_key: "reject_proc".to_string(),
+            bytecode_version: compile_result.bytecode_version,
+            domain_payload: payload.to_string(),
+            domain_payload_hash: compute_hash(payload),
+            correlation_id: "corr-array".to_string(),
+            session_stack: SessionStackState::default(),
+            entry_id: Uuid::new_v4(),
+            runbook_id: Uuid::new_v4(),
+            expected_preconditions: None,
+        })
+        .await
+        .expect("valid non-object JSON payload must be admitted");
+}
+
 #[tokio::test]
 async fn test_start_with_session_stack_copies_value() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());

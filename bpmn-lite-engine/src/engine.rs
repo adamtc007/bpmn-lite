@@ -749,10 +749,16 @@ impl BpmnLiteEngine {
             return Ok(instance_id);
         }
         let instance_id = command.instance_id();
-        let initial_placeholders =
-            serde_json::from_str::<serde_json::Value>(command.initial_payload())
-                .ok()
-                .filter(serde_json::Value::is_object);
+        // Fail closed at admission: the Ring 2 frame hash requires
+        // `domain_payload` to parse as JSON, so a malformed payload accepted
+        // here would only surface as an integrity error at first hash time —
+        // reject it now instead. Any VALID JSON is legal (object-ness gates
+        // only placeholder extraction below, not admission).
+        let payload_value = serde_json::from_str::<serde_json::Value>(command.initial_payload())
+            .map_err(|error| {
+                anyhow!("start command initial_payload is not valid JSON: {error}")
+            })?;
+        let initial_placeholders = Some(payload_value).filter(serde_json::Value::is_object);
         let instance = ProcessInstance {
             instance_id,
             tenant_id: self.tenant_id.to_string(),
