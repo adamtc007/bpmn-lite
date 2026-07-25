@@ -357,6 +357,23 @@ fn verify_program(
             )));
         }
     }
+    // §28 correlation sources: every entry must key one of the three message
+    // words that actually consult the table at run time — the kernel fails
+    // closed on a MISSING entry, so an entry keyed to a non-message address
+    // is dead weight that can only mean a lowering defect. Same admission
+    // discipline as the guard-budget table above.
+    for address in metadata.v2_corr_sources.keys().copied() {
+        require_address(address, len, address, "v2 correlation source table")?;
+        if !matches!(
+            instructions[address.index()],
+            Instr::V2WaitMsg { .. } | Instr::V2ArmMsg { .. } | Instr::PublishMessage { .. }
+        ) {
+            return Err(ArtifactError::InvalidMetadata(format!(
+                "correlation source address {address} is not a message word \
+                 (V2WaitMsg/V2ArmMsg/PublishMessage)"
+            )));
+        }
+    }
     let referenced_joins: BTreeSet<JoinId> = BTreeSet::new();
     for (address, instruction) in instructions.iter().enumerate() {
         match instruction {
@@ -961,6 +978,43 @@ mod v2_fixtures {
             ),
             "a budget keyed to a non-guard address must reject as InvalidMetadata, got {result:?}"
         );
+    }
+
+    /// §28 correlation sources, admission symmetry with the guard-budget
+    /// table: an entry keyed to an address that is not one of the three
+    /// message words (`V2WaitMsg`/`V2ArmMsg`/`PublishMessage`) is a lowering
+    /// defect — rejected at admission, never silently carried as dead weight.
+    #[test]
+    fn corr_source_keyed_to_non_message_address_is_rejected() {
+        let mut program = empty_compiled_program(vec![Instr::End]);
+        program.v2_corr_sources.insert(
+            Addr::new(0),
+            crate::ffi_bindings::BindingSource::Literal(crate::ffi_bindings::Literal::Bool(false)),
+        );
+        let result = ArtifactEnvelope::from_legacy_program(program, "bad-corr-source");
+        assert!(
+            matches!(
+                &result,
+                Err(ArtifactError::InvalidMetadata(message))
+                    if message.contains("correlation source address")
+            ),
+            "a corr source keyed to a non-message address must reject as InvalidMetadata, got {result:?}"
+        );
+    }
+
+    /// Green counterpart: the same entry keyed to an actual `V2WaitMsg` is
+    /// admitted (the address/opcode check is satisfied — the rest of the
+    /// program is the minimal wait-then-end shape).
+    #[test]
+    fn corr_source_keyed_to_message_word_is_admitted() {
+        let mut program = empty_compiled_program(vec![Instr::V2WaitMsg { name: 0 }, Instr::End]);
+        program.message_name_map.insert(0, "msg".to_string());
+        program.v2_corr_sources.insert(
+            Addr::new(0),
+            crate::ffi_bindings::BindingSource::Literal(crate::ffi_bindings::Literal::Bool(false)),
+        );
+        ArtifactEnvelope::from_legacy_program(program, "good-corr-source")
+            .expect("a corr source keyed to a V2WaitMsg must be admitted");
     }
 
     /// EX-oracle-shaped: an interrupting guard (`V2Guard`) wraps a parallel
