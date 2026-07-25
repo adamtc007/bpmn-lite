@@ -556,9 +556,12 @@ impl BpmnLiteEngine {
                 MAX_BPMN_XML_BYTES
             ));
         }
-        let ir = parser::parse_bpmn(bpmn_xml)?;
+        let (ir, process_meta) = parser::parse_bpmn_with_meta(bpmn_xml)?;
         enforce_ir_limits(&ir)?;
-        let artifact = bpmn_lite_compiler::Compiler::lower(&ir)?;
+        let artifact = bpmn_lite_compiler::Compiler::lower_with_default(
+            &ir,
+            process_meta.default_failure_budget,
+        )?;
         enforce_artifact_limits(&artifact)?;
         let bytecode_version = artifact.hash().into_bytes();
         let task_types = artifact.envelope().metadata().task_manifest().to_vec();

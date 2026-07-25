@@ -22,7 +22,7 @@ pub mod verifier;
 // `use bpmn_lite_compiler::ir::IRGraph` (module-qualified).
 pub use ir::*;
 pub use lowering::{compute_post_dominators, compute_region_map, gateway_pairs, lower, lower_v2};
-pub use parser::parse_bpmn;
+pub use parser::{parse_bpmn, parse_bpmn_with_meta, ProcessMeta};
 pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
 use anyhow::{anyhow, Result};
@@ -41,16 +41,27 @@ impl WorkflowFrontend for XmlFrontend {
     type Source = str;
 
     fn lower(source: &str) -> Result<VerifiedWorkflow, FrontendError> {
-        let graph =
-            parse_bpmn(source).map_err(|error| FrontendError::Artifact(error.to_string()))?;
-        Compiler::lower(&graph).map_err(|error| FrontendError::Artifact(error.to_string()))
+        let (graph, meta) = parser::parse_bpmn_with_meta(source)
+            .map_err(|error| FrontendError::Artifact(error.to_string()))?;
+        Compiler::lower_with_default(&graph, meta.default_failure_budget)
+            .map_err(|error| FrontendError::Artifact(error.to_string()))
     }
 }
 
 impl Compiler {
     pub fn lower(graph: &IRGraph) -> Result<VerifiedWorkflow> {
+        Self::lower_with_default(graph, None)
+    }
+
+    /// R2: `lower` carrying `ProcessMeta`'s process-level
+    /// `defaultFailureBudget` through to the artifact's workflow-level
+    /// guard-budget default.
+    pub fn lower_with_default(
+        graph: &IRGraph,
+        default_failure_budget: Option<u32>,
+    ) -> Result<VerifiedWorkflow> {
         verify_or_err(graph)?;
-        let legacy = lowering::lower(graph)?;
+        let legacy = lowering::lower_with_default(graph, default_failure_budget)?;
         let bytecode_errors = verify_bytecode(&legacy);
         if !bytecode_errors.is_empty() {
             let messages = bytecode_errors

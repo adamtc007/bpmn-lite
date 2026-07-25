@@ -33,6 +33,24 @@ fn boundary_failure_budget(graph: &IRGraph, idx: NodeIndex) -> Option<u32> {
 /// V5.3's "delete v1 instruction emission from both compilers" mandate —
 /// not gated on a value nothing ever sets differently any more.
 pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
+    lower_with_default(graph, None)
+}
+
+/// R2 (§31 follow-up): `lower` with the process-level `defaultFailureBudget`
+/// from `parse_bpmn_with_meta`'s `ProcessMeta`. `None` = not declared →
+/// compiled-in conservative default; `Some(0)` is rejected (a zero ceiling
+/// would quarantine on the first rollback of every guard — declare that
+/// per-guard if it is really meant).
+pub fn lower_with_default(
+    graph: &IRGraph,
+    default_failure_budget: Option<u32>,
+) -> Result<CompiledProgram> {
+    let default_guard_budget = match default_failure_budget {
+        Some(max_failures) => ScopeFailureBudget::new(1, max_failures).map_err(|error| {
+            anyhow!("process defaultFailureBudget {max_failures} is invalid: {error}")
+        })?,
+        None => ScopeFailureBudget::conservative_default(),
+    };
     let start_idx = find_start(graph).ok_or_else(|| anyhow!("No Start node in IR graph"))?;
 
     // Structural (NOT plain-BFS, NOT in-degree heuristic) traversal to
@@ -885,7 +903,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
         ffi_task_decls: ffi_task_decls,
     }
     .with_v2_corr_sources(v2_corr_sources)
-    .with_v2_guard_budgets(v2_guard_budgets, ScopeFailureBudget::conservative_default()))
+    .with_v2_guard_budgets(v2_guard_budgets, default_guard_budget))
 }
 
 /// V5.3 (§18, landed 2026-07-23): thin alias, retained for the existing
@@ -2913,6 +2931,56 @@ mod tests {
         assert!(
             unbudgeted.v2_guard_budgets().is_empty(),
             "a guard with no failureBudget must not appear in the table"
+        );
+    }
+
+    /// R2 (§31 follow-up): `<bpmn:process defaultFailureBudget="2">` reaches
+    /// the artifact's workflow-level guard-budget default through the full
+    /// XML pipeline; an undeclared process keeps the compiled-in
+    /// conservative default; `"0"` is rejected (a zero ceiling is never a
+    /// default, same rule as the per-guard attribute).
+    #[test]
+    fn r2_process_default_failure_budget_reaches_artifact_default() {
+        let xml = |attr: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+      <bpmn:process id="p" isExecutable="true"{attr}>
+        <bpmn:startEvent id="start" />
+        <bpmn:endEvent id="end" />
+        <bpmn:sequenceFlow id="f" sourceRef="start" targetRef="end" />
+      </bpmn:process>
+    </bpmn:definitions>"#
+            )
+        };
+
+        let (graph, meta) =
+            crate::parse_bpmn_with_meta(&xml(r#" defaultFailureBudget="2""#)).unwrap();
+        assert_eq!(meta.default_failure_budget, Some(2));
+        let workflow = crate::Compiler::lower_with_default(&graph, meta.default_failure_budget)
+            .expect("declared default must compile");
+        assert_eq!(
+            workflow.envelope().metadata().default_guard_budget().max_failures(),
+            2,
+            "the process-level default must land in the artifact"
+        );
+
+        let (graph, meta) = crate::parse_bpmn_with_meta(&xml("")).unwrap();
+        assert_eq!(meta.default_failure_budget, None);
+        let workflow = crate::Compiler::lower_with_default(&graph, None).unwrap();
+        assert_eq!(
+            workflow.envelope().metadata().default_guard_budget().max_failures(),
+            5,
+            "undeclared keeps the compiled-in conservative default"
+        );
+
+        let (graph, meta) =
+            crate::parse_bpmn_with_meta(&xml(r#" defaultFailureBudget="0""#)).unwrap();
+        assert_eq!(meta.default_failure_budget, Some(0));
+        let result = crate::Compiler::lower_with_default(&graph, meta.default_failure_budget);
+        assert!(
+            result.is_err(),
+            "defaultFailureBudget=0 must be rejected at lowering, got {result:?}"
         );
     }
 

@@ -14,7 +14,26 @@ const MAX_TIMER_CYCLE_FIRES: u32 = 1_000;
 ///
 /// Accepts both prefixed (`bpmn:startEvent`) and default-namespace (`startEvent`) forms.
 /// Only elements in the canonical mapping table are accepted; all others produce a compile error.
+/// Process-level metadata that has no home on any single `IRNode` — the
+/// side channel R2 (§31 follow-up) adds so `<bpmn:process>` attributes can
+/// reach lowering. Kept deliberately minimal: one field, extended only when
+/// another process-scoped attribute earns its way in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcessMeta {
+    /// `<bpmn:process defaultFailureBudget="N">` — the workflow-level
+    /// guard-failure ceiling every guard without its own `failureBudget`
+    /// inherits. `None` = not declared (lowering falls back to the
+    /// compiled-in conservative default). `0` is rejected at lowering,
+    /// same as the per-guard attribute.
+    pub default_failure_budget: Option<u32>,
+}
+
 pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
+    parse_bpmn_with_meta(xml).map(|(graph, _)| graph)
+}
+
+pub fn parse_bpmn_with_meta(xml: &str) -> Result<(IRGraph, ProcessMeta)> {
+    let mut process_meta = ProcessMeta::default();
     let mut reader = Reader::from_str(xml);
 
     let mut graph = IRGraph::new();
@@ -66,6 +85,14 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
         let event = reader.read_event_into(&mut buf);
         match event {
             Ok(Event::Start(ref e)) => {
+                // Process-level metadata side channel (R2): captured here in
+                // the loop rather than threading yet another &mut through
+                // handle_open_tag's parameter list.
+                if local_name(e.name().as_ref()) == "process" {
+                    process_meta.default_failure_budget =
+                        get_attr_opt(e, "defaultFailureBudget")
+                            .and_then(|v| v.trim().parse::<u32>().ok());
+                }
                 handle_open_tag(
                     e,
                     false,
@@ -198,7 +225,7 @@ pub fn parse_bpmn(xml: &str) -> Result<IRGraph> {
         );
     }
 
-    Ok(graph)
+    Ok((graph, process_meta))
 }
 
 // ─── Tag handlers ─────────────────────────────────────────────
