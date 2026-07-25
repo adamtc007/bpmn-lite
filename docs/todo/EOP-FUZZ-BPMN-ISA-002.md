@@ -212,5 +212,43 @@ matches the established convention in-repo.
    real nightly run's uploaded summary.
 5. **F5 (deferred, separate sign-off):** P2 targets.
 
+## 9. Implementation status (2026-07-25)
+
+- **F1 landed** (`493c1e3`): xtask fuzz {list,run,smoke,regress,seed,clean},
+  results capture, `artifact_verify` + `envelope_decode` targets, compiled-
+  artifact seed corpus. Smoke green (4 targets, ~16M execs, 0 crashes;
+  seeded artifact_verify cov 3575). Red path proven with a temporary
+  planted-crash target (found in 917 execs; reproducer captured; exit 1).
+- **F2 landed**: `bpmn-lite-kernel/fuzz` with byte-tape generator
+  (fork/join correct-by-construction + hostile arm), admission via the
+  public path only, `kernel_step` flagship under O1/O2/O4/O5. Cement
+  receipts: admission rate ≥30% over 1000 deterministic tapes;
+  120s live run 389k execs / cov 4322 / 0 crashes.
+- **FINDING F2-KERNEL-001 (fixed same day):** the O5 oracle fired on the
+  harness's FIRST benign run — `Command::Cancel`/`Terminate` against any
+  in-flight fork (armed record) was rejected by Ring 3 with a K-1
+  violation (terminal cleanup deleted fibres but never swept the
+  concurrency table): in-flight instances were un-cancellable and
+  un-terminatable. Sibling of #103e (EndTerminate had the sweep; the
+  command path didn't). Fixed via `retire_all_armed_records` + red→green
+  cement test `terminal_commands_succeed_mid_fork_and_leave_a_k_clean_frame`.
+  This is the harness's real planted-defect receipt — the defect was
+  already planted.
+- **F3 landed**: `kernel_replay` (O3: journal built during live stepping,
+  `replay` must accept it and reproduce the final state_hash),
+  `kernel_replay_hostile` (drop/dup/swap/byte-flip corruption, no-panic
+  fail-closed), `verifier_admission` (generator → admission at max rate).
+- **F4 landed**: `nightly-fuzz.yml` (20 min/target nightly, corpus cached
+  across nights, receipts + crash artifacts uploaded) + `fuzz-regressions`
+  job in production-gates (blocking; toolchain install conditioned on a
+  non-empty regression set, emptiness reported explicitly).
+- **Deviation flagged for review:** kernel `materialize_snapshot` made
+  `pub` (one-implementation rationale, mirrors `check_k_invariants`) so
+  the stepper folds transitions through the production path instead of a
+  drifting local copy. Not in the ratified plan text; veto reverts to a
+  harness-local copy, argued against in §4's no-trap-doors terms.
+- **F5 (P2 engine tier)** remains deferred per fork F-E.
+
 ---
-*v0.1 drafted 2026-07-25. Amend in place on review; lock on sign-off.*
+*v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);
+§9 status appended during implementation. Amend in place; lock on F4 review.*

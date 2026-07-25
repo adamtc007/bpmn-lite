@@ -1,0 +1,56 @@
+# EOP-FUZZ-BPMN-ISA-002 F4 (fork F-D: separate from nightly-chaos —
+# chaos = Postgres cut-points, fuzz = kernel/admission findings; distinct
+# failure semantics). Evolved corpora are cached per target across nights
+# so coverage compounds; crash artifacts are uploaded on failure.
+name: nightly-fuzz
+
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      # The workspace pins stable 1.95 via rust-toolchain.toml; cargo-fuzz
+      # needs nightly alongside it. The xtask runner invokes `cargo
+      # +nightly fuzz` explicitly and hard-errors if nightly is absent.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Restore evolved corpora
+        uses: actions/cache@v4
+        with:
+          path: |
+            bpmn-lite-types/fuzz/corpus
+            bpmn-lite-kernel/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+      - name: Regression corpus (committed crash reproducers)
+        run: cargo run -p xtask -- fuzz regress
+      - name: Fuzz all targets (20 min each)
+        run: cargo run -p xtask -- fuzz run --time 1200
+      - name: Upload run receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-results
+          path: fuzz-results/
+          if-no-files-found: warn
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-artifacts
+          path: |
+            bpmn-lite-types/fuzz/artifacts
+            bpmn-lite-kernel/fuzz/artifacts
+          if-no-files-found: warn

@@ -89,3 +89,31 @@ jobs:
           cargo build -p bpmn-lite-kernel --target wasm32-wasip2
           wasmtime target/wasm32-wasip2/debug/replay_fixture.wasm > wasm-replay.txt
           cmp native-replay.txt wasm-replay.txt
+
+  # EOP-FUZZ F4: every committed fuzz-crash reproducer is a permanent
+  # blocking gate (cement-locked). Toolchain install is conditioned on the
+  # regression set being non-empty — an empty set gates nothing, and that
+  # emptiness is checked and reported explicitly, never silently skipped.
+  fuzz-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for committed regression inputs
+        id: regress-check
+        run: |
+          count=$(find . -path '*/fuzz/regressions/*' -type f ! -name '.gitkeep' | wc -l)
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "${count} committed fuzz regression input(s)"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.regress-check.outputs.count != '0'
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.regress-check.outputs.count != '0'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.regress-check.outputs.count != '0'
+      - name: Install cargo-fuzz
+        if: steps.regress-check.outputs.count != '0'
+        run: cargo install cargo-fuzz --locked
+      - name: Run regression corpus
+        if: steps.regress-check.outputs.count != '0'
+        run: cargo run -p xtask -- fuzz regress
