@@ -238,7 +238,14 @@ pub fn replay(
     Ok(current)
 }
 
-fn materialize_snapshot(
+/// Fold one `Transition` into the next persisted snapshot. `pub` for the
+/// same reason as `check_k_invariants` (V4.2): `replay` above and the
+/// kernel fuzz harness (EOP-FUZZ-BPMN-ISA-002 F2) must consult the ONE
+/// fold implementation — a harness-local reimplementation that drifted
+/// from this would make every downstream oracle (K-invariants, limits
+/// conformance, replay determinism) meaningless. Pure function, no
+/// fuzz-only semantics.
+pub fn materialize_snapshot(
     prior: &PersistedSnapshotState,
     transition: &Transition,
     artifact_abi: u32,
@@ -710,12 +717,12 @@ pub fn apply(
                     });
                 }
             }
-            Ok(builder
+            builder = builder
                 .event(RuntimeEvent::Cancelled {
                     reason: reason.clone(),
                 })
-                .terminal_cleanup(TerminalCleanup::new(true, true, true))
-                .build())
+                .terminal_cleanup(TerminalCleanup::new(true, true, true));
+            Ok(retire_all_armed_records(snapshot, builder).build())
         }
         Command::Tick { .. } => apply_tick(workflow, snapshot, command, context),
         Command::EffectCompleted {
@@ -751,10 +758,10 @@ pub fn apply(
                 .unwrap_or_else(Uuid::nil);
             let mut next = snapshot.instance().clone();
             next.state = ProcessState::Terminated { at };
-            Ok(TransitionBuilder::new(next)
+            let builder = TransitionBuilder::new(next)
                 .event(RuntimeEvent::Terminated { at, fiber_id })
-                .terminal_cleanup(TerminalCleanup::new(true, true, true))
-                .build())
+                .terminal_cleanup(TerminalCleanup::new(true, true, true));
+            Ok(retire_all_armed_records(snapshot, builder).build())
         }
         Command::ResolveIncident {
             incident_id,
@@ -3516,6 +3523,30 @@ fn fetch_record_in_transition(
 /// for callers that need the full set rather than one record by handle.
 /// Same rationale as `fetch_record_in_transition` — a record opened
 /// earlier this transition may exist only in `changes`.
+/// #103e's sibling for the COMMAND path (found by the EOP-FUZZ F2 O5
+/// oracle, 2026-07-25): `Command::Cancel`/`Command::Terminate` emit
+/// `TerminalCleanup` that deletes every fibre but — before this helper —
+/// left every armed concurrency record in place, so the Ring 3
+/// post-transition frame check rejected the transition with a K-1
+/// violation ("armed record has member, no live fibre") on ANY instance
+/// holding an armed barrier/guard/race (i.e. any in-flight fork). That
+/// made such instances un-cancellable and un-terminatable — a direct
+/// violation of the poisoned-instance discipline documented on `apply`.
+/// Bulk retirement over the snapshot table, same rationale as
+/// `Instr::EndTerminate`'s sweep. Routed through the allowlisted
+/// `armed_record_ids_in_transition` (read-safety lint) with an empty
+/// `Changes`: command arms stage no prior mutations this tick, so folding
+/// the default `Changes` is exact, not an approximation.
+fn retire_all_armed_records(
+    snapshot: &Snapshot,
+    mut builder: TransitionBuilder,
+) -> TransitionBuilder {
+    for record_id in armed_record_ids_in_transition(snapshot, &Changes::default()) {
+        builder = builder.concurrency_mutation(ConcurrencyMutation::Retire(record_id));
+    }
+    builder
+}
+
 fn armed_record_ids_in_transition(snapshot: &Snapshot, changes: &Changes) -> Vec<RecordId> {
     let mut table = snapshot.concurrency_table().clone();
     for mutation in &changes.concurrency_mutations {
@@ -7923,6 +7954,117 @@ mod tests {
     /// instead returns `Err(Integrity(Ring3Runtime(..)))` on tick 3 — the
     /// two fixes independently catch the same defect via different paths,
     /// as intended.) Green after restoring both: `Completed`.
+    #[test]
+    fn terminal_commands_succeed_mid_fork_and_leave_a_k_clean_frame() {
+        // EOP-FUZZ F2 finding (O5 oracle, 2026-07-25), cement-locked:
+        // before `retire_all_armed_records`, `Command::Terminate` and
+        // `Command::Cancel` against a mid-fork snapshot (armed barrier,
+        // live children) were REJECTED by the Ring 3 frame check — the
+        // terminal cleanup deleted every fibre but left the armed barrier
+        // with members, a K-1 violation — making any in-flight fork
+        // un-cancellable and un-terminatable. Red under the pre-fix
+        // kernel; green now.
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [25u8; 32],
+            program: vec![
+                /* 0 */ Instr::V2Fork {
+                    targets: Box::new([Addr::new(1), Addr::new(3)]),
+                    pairing: Addr::new(0),
+                },
+                /* 1 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 2 */ Instr::Jump { target: Addr::new(5) },
+                /* 3 */ Instr::V2Join { pairing: Addr::new(0) },
+                /* 4 */ Instr::Jump { target: Addr::new(5) },
+                /* 5 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec![],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "fuzz-f2-terminal-sweep").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, context) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot =
+            Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+
+        // Tick: V2Fork arms the barrier and spawns both children.
+        let t1 = apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context).unwrap();
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+        let mid_fork =
+            materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+        // Precondition: the mid-fork frame is K-clean and holds an armed record.
+        check_k_invariants(mid_fork.state().fibers(), mid_fork.state().concurrency_table())
+            .expect("mid-fork frame must be K-clean before the terminal command");
+        assert!(
+            mid_fork
+                .state()
+                .concurrency_table()
+                .iter()
+                .any(|(_, record)| record.state == RecordState::Armed),
+            "test precondition: an armed barrier record must exist mid-fork"
+        );
+        let mid_fork_snapshot = Snapshot::new(
+            mid_fork.state().instance().clone(),
+            mid_fork.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(mid_fork.state().concurrency_table().clone());
+
+        for (label, command) in [
+            ("Terminate", Command::Terminate),
+            (
+                "Cancel",
+                Command::Cancel {
+                    reason: "operator cancel mid-fork".to_string(),
+                },
+            ),
+        ] {
+            let transition = apply(&workflow, &mid_fork_snapshot, &command, &context)
+                .unwrap_or_else(|error| {
+                    panic!("{label} must succeed against a mid-fork snapshot: {error:?}")
+                });
+            let after = materialize_snapshot(
+                mid_fork.state(),
+                &transition,
+                workflow.envelope().abi_version(),
+                2,
+            );
+            assert!(after.state().fibers().is_empty(), "{label}: all fibres deleted");
+            assert!(
+                after
+                    .state()
+                    .concurrency_table()
+                    .iter()
+                    .all(|(_, record)| record.state != RecordState::Armed),
+                "{label}: no armed record may survive terminal cleanup"
+            );
+            check_k_invariants(after.state().fibers(), after.state().concurrency_table())
+                .unwrap_or_else(|message| {
+                    panic!("{label}: post-terminal frame violates K-invariants: {message}")
+                });
+        }
+    }
+
     #[test]
     fn v2_fork_join_end_completes_instance_not_stuck_running() {
         let program = bpmn_lite_types::legacy_program! {
