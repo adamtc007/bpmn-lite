@@ -31,6 +31,7 @@ jobs:
           path: |
             bpmn-lite-types/fuzz/corpus
             bpmn-lite-kernel/fuzz/corpus
+            bpmn-lite-engine/fuzz/corpus
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-
@@ -53,4 +54,5 @@ jobs:
           path: |
             bpmn-lite-types/fuzz/artifacts
             bpmn-lite-kernel/fuzz/artifacts
+            bpmn-lite-engine/fuzz/artifacts
           if-no-files-found: warn

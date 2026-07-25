@@ -247,7 +247,23 @@ matches the established convention in-repo.
   the stepper folds transitions through the production path instead of a
   drifting local copy. Not in the ratified plan text; veto reverts to a
   harness-local copy, argued against in §4's no-trap-doors terms.
-- **F5 (P2 engine tier)** remains deferred per fork F-E.
+- **F5 un-deferred (Adam, 2026-07-25) and landed:** fork F-E's deferral
+  rescinded by ruling. `bpmn-lite-engine/fuzz::engine_commands` drives the
+  full engine over MemoryStore (compile → start → adversarial tape of
+  run/complete/fail/signal/tick/cancel/inspect) under E-O1 no-panic,
+  E-O2 known-good-fixtures-must-compile, and E-O5 cancel-succeeds-on-
+  non-terminal (the engine-level net over F2-KERNEL-001). Toolchain note:
+  nightlies 2026-07-17/24 ICE compiling tokio ≥1.53 under sancov — the
+  fuzz crate pins `tokio <1.53` with the rationale in its manifest.
+  Fixture gaps recorded in the target header (exclusive-gateway routing,
+  boundary timers, MI XML) — next fixtures to lift from the test corpus.
+- **Generator gaps filled (same ruling):** guard/GuardN/timer-armed-guard,
+  race, and wait blocks are now correct-by-construction (shapes lifted
+  from the verifier's admitted fixtures); corr sources key to real message
+  words half the time (R3 accept branch); TimerKind::Race commands.
+  Receipt: per-construct standalone-admission cement test (7 shapes) +
+  kernel_step cov 4322 → 5997. Remaining: MI opcodes (need collection
+  setup — covered end-to-end by F5's fixture path once MI XML lands).
 
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);
