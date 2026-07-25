@@ -37,48 +37,14 @@
 // V-11 zero-match incident rule end-to-end).
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use bpmn_lite_engine::{BpmnLiteEngine, RuntimeContext, RuntimeContextError};
+use bpmn_lite_engine::BpmnLiteEngine;
+use bpmn_lite_engine_fuzz::{FuzzClock, Tape};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::WorkflowStore;
-use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid};
+use bpmn_lite_types::{EffectId, ErrorClass, TenantId};
 use libfuzzer_sys::fuzz_target;
-
-/// Tape-driven clock + deterministic ID source — the fuzz exec's only
-/// time/identity boundary. Wall time never enters an exec.
-struct FuzzClock {
-    now_ms: AtomicI64,
-    next_id: AtomicU64,
-}
-
-impl FuzzClock {
-    /// Deterministic epoch (mid-2025 in ms), far from 0 and from the
-    /// timestamp range edge even after a full tape of maximal jumps.
-    const GENESIS_MS: i64 = 1_750_000_000_000;
-
-    fn new() -> Self {
-        Self {
-            now_ms: AtomicI64::new(Self::GENESIS_MS),
-            next_id: AtomicU64::new(1),
-        }
-    }
-
-    fn advance(&self, delta_ms: i64) {
-        self.now_ms.fetch_add(delta_ms, Ordering::Relaxed);
-    }
-}
-
-impl RuntimeContext for FuzzClock {
-    fn logical_time(&self) -> Result<Timestamp, RuntimeContextError> {
-        Ok(self.now_ms.load(Ordering::Relaxed))
-    }
-
-    fn new_id(&self) -> Uuid {
-        Uuid::from_u128(u128::from(self.next_id.fetch_add(1, Ordering::Relaxed)))
-    }
-}
 
 const LINEAR_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -185,25 +151,6 @@ const MI_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="f2" sourceRef="verify_docs" targetRef="end"/>
   </bpmn:process>
 </bpmn:definitions>"#;
-
-struct Tape<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Tape<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-    fn u8(&mut self) -> u8 {
-        let byte = self.data.get(self.pos).copied().unwrap_or(0);
-        self.pos += 1;
-        byte
-    }
-    fn bool(&mut self) -> bool {
-        self.u8() & 1 == 1
-    }
-}
 
 async fn drive(data: &[u8]) {
     let mut tape = Tape::new(data);

@@ -292,6 +292,30 @@ matches the established convention in-repo.
   cemented by `t_xor_v2_merge_unequal_branch_lengths`).
   (e) Stale harness-header notes corrected (guard/race/wait ARE
   correct-by-construction; `TimerKind::Race` IS emitted).
+- **F6 ratified and landed (Adam, 2026-07-25 — "the shape of the DAG is
+  the source; tokens are ordered by it"):**
+  `bpmn-lite-engine/fuzz::engine_graph` — tape → SESE shape grammar
+  (flat composition: task / AND 2-3×1-2 / XOR guarded+empty-default →
+  shared merge / boundary timer both variants / parallel MI) → real BPMN
+  XML → the REAL compiler under **G-A must-admit** (a rejection of a
+  grammar-legal graph is a lowering finding per the liveness thesis) →
+  tape-driven token interleavings under **G-T shape-derived conservation**
+  (per task, distinct observed job keys ≤ the bound the authored shape
+  implies: plain/host/handler/merge 1, flag-false guarded branch 0 —
+  subsuming E-O3 — MI = collection length; sound because job keys are
+  `{instance}:{task_id}:{pc}:{loop_epoch}`, stable across retries and
+  redeliveries) + E-O5. Closes the tier gap: kernel fuzzing generates
+  shapes but bypasses the compiler; F5 runs the compiler on 5 fixed
+  shapes; F6 fuzzes the shape THROUGH the compiler. Receipts: 5 cement
+  tests — 100-shape deterministic must-admit population green (proves
+  multi-task AND branches, both boundary variants, XOR+merge, MI all
+  lower), dangling-flow red for G-A, bounds-derivation, G-T red→green
+  (distinct-key duplication flagged, same-key redelivery not, off-shape
+  task flagged), 25-tape benign drive clean. Recorded limits in the lib
+  header: gateway nesting is the v2 widening; empty-default XOR tears can
+  be dedupe-masked at the merge (two-sided catch needs a task-bearing
+  default branch, pending a compiler receipt for that shape). `FuzzClock`
+  + `Tape` hoisted to the engine fuzz lib, shared with F5.
 
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);

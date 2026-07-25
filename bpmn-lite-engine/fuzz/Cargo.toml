@@ -35,3 +35,10 @@ path = "fuzz_targets/engine_commands.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "engine_graph"
+path = "fuzz_targets/engine_graph.rs"
+test = false
+doc = false
+bench = false
