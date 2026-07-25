@@ -77,7 +77,8 @@ impl<'a> Tape<'a> {
 /// the admission-reject and admit paths stay hot.
 pub fn gen_program(tape: &mut Tape) -> CompiledProgram {
     let mut instrs = Vec::new();
-    emit_region(&mut instrs, tape, 2);
+    let mut msg_words = Vec::new();
+    emit_region(&mut instrs, tape, 2, true, &mut msg_words);
     instrs.push(Instr::End);
 
     let mut program = bpmn_lite_types::legacy_program! {
@@ -86,35 +87,47 @@ pub fn gen_program(tape: &mut Tape) -> CompiledProgram {
         debug_map: BTreeMap::new(),
         join_plan: BTreeMap::new(),
         wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
+        message_name_map: BTreeMap::from([
+            (0u32, "msg-0".to_string()),
+            (1u32, "msg-1".to_string()),
+            (2u32, "msg-2".to_string()),
+            (3u32, "msg-3".to_string()),
+        ]),
         write_set: BTreeMap::new(),
         task_manifest: vec![],
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
     };
-    // Hostile-metadata probe (R3/V8.3 admission checks): a corr source
-    // keyed to a random address is only admissible if that address happens
-    // to hold a message word — which this generator never emits, so this
-    // arm is a pure reject-path probe today.
-    if tape.u8() % 8 == 0 {
+    // Corr-source metadata probe (R3/V8.3 admission checks): keyed either
+    // to a REAL message word emitted above (must ADMIT — exercises the
+    // accept branch of the R3 check) or to a random address (reject probe).
+    if tape.u8() % 4 == 0 {
         let mut sources = BTreeMap::new();
-        sources.insert(
-            Addr::new(u32::from(tape.u16()) % ADDR_PROBE_RANGE),
-            BindingSource::Literal(Literal::Bool(false)),
-        );
+        let address = if !msg_words.is_empty() && tape.bool() {
+            msg_words[usize::from(tape.u8()) % msg_words.len()]
+        } else {
+            Addr::new(u32::from(tape.u16()) % ADDR_PROBE_RANGE)
+        };
+        sources.insert(address, BindingSource::Literal(Literal::Bool(false)));
         program = program.with_v2_corr_sources(sources);
     }
     program
 }
 
-fn emit_region(instrs: &mut Vec<Instr>, tape: &mut Tape, fork_depth: u8) {
+pub fn emit_region(
+    instrs: &mut Vec<Instr>,
+    tape: &mut Tape,
+    fork_depth: u8,
+    top_level: bool,
+    msg_words: &mut Vec<Addr>,
+) {
     let blocks = 1 + tape.u8() % 3;
     for _ in 0..blocks {
         if tape.exhausted() || instrs.len() >= MAX_PROGRAM_LEN {
             return;
         }
-        match tape.u8() % 10 {
+        match tape.u8() % 16 {
             0..=4 => match tape.u8() % 3 {
                 0 => {
                     instrs.push(Instr::PushBool(tape.bool()));
@@ -128,7 +141,7 @@ fn emit_region(instrs: &mut Vec<Instr>, tape: &mut Tape, fork_depth: u8) {
                     instrs.push(Instr::Pop);
                 }
             },
-            5..=7 if fork_depth > 0 => emit_fork_join(instrs, tape, fork_depth - 1),
+            5..=7 if fork_depth > 0 => emit_fork_join(instrs, tape, fork_depth - 1, msg_words),
             8 => match tape.u8() % 4 {
                 // Hostile arm: tape-driven control flow that the verifier
                 // must either prove sound or reject — never admit-and-crash.
@@ -145,15 +158,129 @@ fn emit_region(instrs: &mut Vec<Instr>, tape: &mut Tape, fork_depth: u8) {
                     code: u32::from(tape.u8()),
                 }),
             },
+            // Wait words (r.1: duration/deadline on the operand stack).
+            9 => {
+                instrs.push(Instr::PushI64(1 + i64::from(tape.u8())));
+                instrs.push(Instr::V2WaitFor);
+            }
+            10 => {
+                let name = u32::from(tape.u8() % 4);
+                msg_words.push(Addr::new(instrs.len() as u32));
+                instrs.push(Instr::V2WaitMsg { name });
+            }
+            11 => emit_race(instrs, tape, msg_words),
+            // Guard family: handler-entry semantics differ per kind (V-4),
+            // and a plain-guard handler is entered PRE-push, so its `End`
+            // only admits when the surrounding stack is empty — hence
+            // top-level only.
+            12 | 13 if top_level => {
+                let variant = tape.u8() % 3;
+                emit_guard(instrs, tape, fork_depth, variant, msg_words)
+            }
             _ => {}
         }
     }
 }
 
+/// Guard block in the verifier-canonical shape (EX-oracle fixture /
+/// v4_guard_handler_entry_state tests):
+///
+///   [PushI64 dur]?          (only for the timer-armed variant)
+///   V2Guard{handler: H}     (or V2GuardN)
+///   [V2GuardArmTimer]?      (must IMMEDIATELY follow its guard open)
+///   <body region>
+///   V2GuardEnd / V2GuardNEnd
+///   Jump cont               (skip the handler)
+///   H: handler — plain guard enters PRE-push (End on empty stack);
+///      GuardN enters POST-push (V2GuardNEnd pops own token, then End)
+///   cont:
+fn emit_guard(
+    instrs: &mut Vec<Instr>,
+    tape: &mut Tape,
+    fork_depth: u8,
+    variant: u8,
+    msg_words: &mut Vec<Addr>,
+) {
+    let non_interrupting = variant == 1;
+    let timer_armed = variant == 2;
+    if timer_armed {
+        instrs.push(Instr::PushI64(1 + i64::from(tape.u8())));
+    }
+    let guard_at = instrs.len();
+    instrs.push(if non_interrupting {
+        Instr::V2GuardN { handler: Addr::new(0) }
+    } else {
+        Instr::V2Guard { handler: Addr::new(0) }
+    });
+    if timer_armed {
+        instrs.push(Instr::V2GuardArmTimer);
+    }
+    emit_region(instrs, tape, fork_depth, false, msg_words);
+    instrs.push(if non_interrupting {
+        Instr::V2GuardNEnd
+    } else {
+        Instr::V2GuardEnd
+    });
+    let skip_at = instrs.len();
+    instrs.push(Instr::Jump { target: Addr::new(0) });
+    let handler = Addr::new(instrs.len() as u32);
+    if non_interrupting {
+        instrs.push(Instr::V2GuardNEnd);
+    }
+    instrs.push(Instr::End);
+    let continuation = Addr::new(instrs.len() as u32);
+    instrs[guard_at] = if non_interrupting {
+        Instr::V2GuardN { handler }
+    } else {
+        Instr::V2Guard { handler }
+    };
+    instrs[skip_at] = Instr::Jump {
+        target: continuation,
+    };
+}
+
+/// Race block in the EX-oracle fixture's canonical shape: open, timer arm
+/// (duration pushed first, r.1), message arm, close; arm resume targets
+/// jump to the continuation past the close.
+fn emit_race(instrs: &mut Vec<Instr>, tape: &mut Tape, msg_words: &mut Vec<Addr>) {
+    let name = u32::from(tape.u8() % 4);
+    instrs.push(Instr::V2RaceOpen { arm_count: 2 });
+    instrs.push(Instr::PushI64(1 + i64::from(tape.u8())));
+    let arm_timer_at = instrs.len();
+    instrs.push(Instr::V2ArmTimer { target: Addr::new(0) });
+    let arm_msg_at = instrs.len();
+    msg_words.push(Addr::new(arm_msg_at as u32));
+    instrs.push(Instr::V2ArmMsg { target: Addr::new(0), name });
+    instrs.push(Instr::V2RaceClose);
+    let timer_resume = instrs.len();
+    instrs.push(Instr::Jump { target: Addr::new(0) });
+    let msg_resume = instrs.len();
+    instrs.push(Instr::Jump { target: Addr::new(0) });
+    let continuation = Addr::new(instrs.len() as u32);
+    instrs[arm_timer_at] = Instr::V2ArmTimer {
+        target: Addr::new(timer_resume as u32),
+    };
+    instrs[arm_msg_at] = Instr::V2ArmMsg {
+        target: Addr::new(msg_resume as u32),
+        name,
+    };
+    instrs[timer_resume] = Instr::Jump {
+        target: continuation,
+    };
+    instrs[msg_resume] = Instr::Jump {
+        target: continuation,
+    };
+}
+
 /// Correct-by-construction SESE fork/join block mirroring the kernel
 /// fixture's canonical shape: fork targets branch starts; every branch
 /// ends `V2Join{pairing: fork addr}` + `Jump{continuation}`.
-fn emit_fork_join(instrs: &mut Vec<Instr>, tape: &mut Tape, fork_depth: u8) {
+fn emit_fork_join(
+    instrs: &mut Vec<Instr>,
+    tape: &mut Tape,
+    fork_depth: u8,
+    msg_words: &mut Vec<Addr>,
+) {
     let branch_count = 2 + usize::from(tape.u8() % 2);
     let fork_at = instrs.len();
     instrs.push(Instr::V2Fork {
@@ -165,7 +292,7 @@ fn emit_fork_join(instrs: &mut Vec<Instr>, tape: &mut Tape, fork_depth: u8) {
     for _ in 0..branch_count {
         branch_starts.push(Addr::new(instrs.len() as u32));
         if fork_depth > 0 && tape.bool() {
-            emit_region(instrs, tape, fork_depth);
+            emit_region(instrs, tape, fork_depth, false, msg_words);
         }
         instrs.push(Instr::V2Join {
             pairing: Addr::new(fork_at as u32),
@@ -301,7 +428,19 @@ fn gen_command(tape: &mut Tape, state: &PersistedSnapshotState) -> Command {
                         fiber_id,
                     ),
                     u64::from(tape.u16()),
-                    TimerKind::Wait,
+                    if tape.bool() {
+                        TimerKind::Wait
+                    } else {
+                        TimerKind::Race {
+                            race_id: u32::from(tape.u8()),
+                            arm_index: usize::from(tape.u8() % 2),
+                            resume_at: u32::from(tape.u8()),
+                            interrupting: tape.bool(),
+                            job_key: None,
+                            boundary_element_id: None,
+                            arm_count: 2,
+                        }
+                    },
                     None,
                     Uuid::from_u128(0xC1A1),
                 ),
@@ -484,6 +623,46 @@ mod tests {
             rate >= 30,
             "admission rate {rate}% < 30% ({admitted}/{RUNS}) — generator needs retuning"
         );
+    }
+
+    /// Each correct-by-construction block shape must be admitted STANDALONE
+    /// — a per-construct receipt, so a verifier-canonical-shape drift shows
+    /// up as a named failure here, not as a silent admission-rate collapse.
+    #[test]
+    fn every_generator_block_shape_is_admitted_standalone() {
+        // (label, tape bytes that force one specific block then padding)
+        // emit_region reads: blocks=(b0%3)+1 → 1 block; selector b1%16.
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            // selector 9: PushI64+V2WaitFor
+            ("wait_for", vec![0, 9, 5]),
+            // selector 10: V2WaitMsg
+            ("wait_msg", vec![0, 10, 1]),
+            // selector 11: race block
+            ("race", vec![0, 11, 2, 7]),
+            // selector 12, variant 0: plain guard, empty body
+            ("guard", vec![0, 12, 0, 0, 15]),
+            // selector 12, variant 1: GuardN, empty body
+            ("guard_n", vec![0, 12, 1, 0, 15]),
+            // selector 12, variant 2: timer-armed guard, empty body
+            ("guard_arm_timer", vec![0, 12, 2, 9, 0, 15]),
+            // selector 5 (fork), branch-body bools read the 2-padding (false)
+            ("fork_join", vec![0, 5, 0]),
+        ];
+        for (label, bytes) in cases {
+            // Trailing 2s: an exhausted tape reads 0, and gen_program's
+            // final corr-source gate (u8 % 4 == 0) would then fire with a
+            // zero address — a deliberate reject probe under fuzzing, but
+            // noise here. 2-padding keeps that gate closed (2 % 4 != 0),
+            // reads as bool=false for optional branch bodies, and as a
+            // benign PushI64/Pop block wherever a body consumes it.
+            let bytes: Vec<u8> = bytes.into_iter().chain([2u8; 16]).collect();
+            let mut tape = Tape::new(&bytes);
+            let program = gen_program(&mut tape);
+            assert!(
+                admit(program).is_some(),
+                "{label}: canonical block shape was REJECTED by admission"
+            );
+        }
     }
 
     /// Admitted programs must step without tripping any oracle on benign
