@@ -13,9 +13,22 @@
 //   E-O2 static fixtures must COMPILE: these XMLs are known-good; a
 //        compile rejection is a compiler/verifier regression, not fuzz
 //        noise.
+//   E-O3 XOR exclusivity: `task_a1` sits behind `take_a == true`
+//        (semantics cemented by the engine test corpus's
+//        t_xor_v2_merge_unequal_branch_lengths test) — activating it on
+//        any other payload means the split routed a token down a branch
+//        whose guard is false.
 //   E-O5 engine-level terminate discipline: `cancel` on a non-terminal
 //        instance must succeed (the engine-level regression net over
 //        F2-KERNEL-001, which made mid-fork instances un-cancellable).
+//
+// Time is TAPE-DRIVEN (`FuzzClock` via `new_with_runtime_context`): the
+// tick arms jump logical time forward by tape-chosen deltas (0..=25.5s in
+// 100ms grains), which is the only way the boundary fixture's PT1S timer
+// — or any due-timer path — can actually fire inside a microsecond-scale
+// exec. Under `SystemRuntimeContext` that coverage was dead, and IDs from
+// `Uuid::now_v7()` made crash repro nondeterministic; both now come from
+// the tape/counter.
 //
 // Fixture set (all lifted from the engine test corpus's known-good XML):
 // linear, parallel fork/join, XOR with unequal branches reconverging on a
@@ -24,13 +37,48 @@
 // V-11 zero-match incident rule end-to-end).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use bpmn_lite_engine::BpmnLiteEngine;
+use bpmn_lite_engine::{BpmnLiteEngine, RuntimeContext, RuntimeContextError};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::WorkflowStore;
-use bpmn_lite_types::{EffectId, ErrorClass};
+use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid};
 use libfuzzer_sys::fuzz_target;
+
+/// Tape-driven clock + deterministic ID source — the fuzz exec's only
+/// time/identity boundary. Wall time never enters an exec.
+struct FuzzClock {
+    now_ms: AtomicI64,
+    next_id: AtomicU64,
+}
+
+impl FuzzClock {
+    /// Deterministic epoch (mid-2025 in ms), far from 0 and from the
+    /// timestamp range edge even after a full tape of maximal jumps.
+    const GENESIS_MS: i64 = 1_750_000_000_000;
+
+    fn new() -> Self {
+        Self {
+            now_ms: AtomicI64::new(Self::GENESIS_MS),
+            next_id: AtomicU64::new(1),
+        }
+    }
+
+    fn advance(&self, delta_ms: i64) {
+        self.now_ms.fetch_add(delta_ms, Ordering::Relaxed);
+    }
+}
+
+impl RuntimeContext for FuzzClock {
+    fn logical_time(&self) -> Result<Timestamp, RuntimeContextError> {
+        Ok(self.now_ms.load(Ordering::Relaxed))
+    }
+
+    fn new_id(&self) -> Uuid {
+        Uuid::from_u128(u128::from(self.next_id.fetch_add(1, Ordering::Relaxed)))
+    }
+}
 
 const LINEAR_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -160,7 +208,9 @@ impl<'a> Tape<'a> {
 async fn drive(data: &[u8]) {
     let mut tape = Tape::new(data);
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
-    let engine = BpmnLiteEngine::new(store);
+    let clock = Arc::new(FuzzClock::new());
+    let engine =
+        BpmnLiteEngine::new_with_runtime_context(store, TenantId::default(), clock.clone());
 
     let (process_key, xml) = match tape.u8() % 5 {
         0 => ("fuzz_linear", LINEAR_XML),
@@ -175,10 +225,14 @@ async fn drive(data: &[u8]) {
         .await
         .expect("E-O2: known-good fixture must compile");
 
+    let mut xor_take_a = false;
     let payload = match process_key {
         // XOR routing flag: true / false / absent (absent = default branch).
         "fuzz_xor" => match tape.u8() % 3 {
-            0 => r#"{"take_a":true}"#.to_string(),
+            0 => {
+                xor_take_a = true;
+                r#"{"take_a":true}"#.to_string()
+            }
             1 => r#"{"take_a":false}"#.to_string(),
             _ => "{}".to_string(),
         },
@@ -211,6 +265,14 @@ async fn drive(data: &[u8]) {
         match tape.u8() % 12 {
             0..=3 => {
                 if let Ok(activations) = engine.run_instance(instance_id).await {
+                    // E-O3: the guarded branch must be unreachable unless
+                    // its condition held at the split.
+                    if process_key == "fuzz_xor" && !xor_take_a {
+                        assert!(
+                            activations.iter().all(|job| job.task_type != "task_a1"),
+                            "E-O3: XOR split activated the guarded branch with take_a != true"
+                        );
+                    }
                     job_keys.extend(activations.into_iter().map(|job| job.job_key));
                 }
             }
@@ -262,9 +324,14 @@ async fn drive(data: &[u8]) {
                     .await;
             }
             8 => {
+                // Tape-driven time jump (0..=25.5s, 100ms grains): the
+                // PT1S boundary timer's due edge gets straddled from both
+                // sides across execs; a 0-jump probes same-instant ticks.
+                clock.advance(i64::from(tape.u8()) * 100);
                 let _ = engine.tick_instance(instance_id).await;
             }
             9 => {
+                clock.advance(i64::from(tape.u8()) * 100);
                 let _ = engine.tick_all().await;
             }
             10 => {

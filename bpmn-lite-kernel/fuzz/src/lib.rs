@@ -11,27 +11,37 @@
 //! plan's oracles:
 //!
 //!   O1 no-panic        — any panic below is a finding (libFuzzer oracle)
-//!   O2 K-invariants    — `check_k_invariants` after every accepted step
+//!   O2 K-invariants    — `check_k_invariants` after every accepted step;
+//!                        a `TransitionError::Integrity` reject is ALSO a
+//!                        finding, not a legal reject — Ring 3 fires only
+//!                        on a frame the kernel itself computed, and every
+//!                        snapshot in this harness is kernel-produced
 //!   O4 limits          — observed peaks never exceed `VerifiedLimits`
 //!   O5 terminate       — `Terminate` succeeds on any reachable
 //!                        non-terminal state
+//!   O7 quiescence      — a non-terminal end state retains an external
+//!                        unblock channel (`check_progressable`); an
+//!                        all-fibres-barrier-parked frame is a deadlock
+//!                        sinkhole the verifier's SESE proofs claim to
+//!                        exclude — verifier-soundness class, same as O4
 //!
-//! Known generator gaps (no silent caps): guard/race/wait/MI opcodes are
-//! emitted only via the low-weight hostile arm, not correct-by-
-//! construction, so their *admitted* forms are underrepresented until the
-//! generator grows dedicated block shapes for them; `TimerFired` claims
-//! are synthesized with `TimerKind::Wait` only.
+//! Known generator gaps (no silent caps): MI opcodes still lack a
+//! correct-by-construction block shape (they need collection setup; the
+//! path is covered end-to-end by F5's multi-instance fixture);
+//! guard/race/wait blocks ARE correct-by-construction since the F5
+//! ruling, and `TimerFired` claims are synthesized with both
+//! `TimerKind::Wait` and `TimerKind::Race`.
 
 use std::collections::BTreeMap;
 
-use bpmn_lite_kernel::DeterministicContext;
+use bpmn_lite_kernel::{DeterministicContext, TransitionError};
 use bpmn_lite_types::ffi_bindings::{BindingSource, Literal};
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::{
     Addr, ArtifactEnvelope, ClaimedTimer, ClaimedTimerIdentity, Command, CommandEnvelope,
     CompiledProgram, ConcurrencyTable, EffectId, EffectOutput, ErrorClass, ExecutableWorkflow,
     Fiber, Instr, JournalCommand, JournalRecord, PersistedSnapshotState, ProcessInstance,
-    ProcessState, RecordState, SnapshotEnvelope, TenantId, TimerKind,
+    ProcessState, RecordState, SnapshotEnvelope, TenantId, TimerKind, WaitState,
 };
 use uuid::Uuid;
 
@@ -463,6 +473,44 @@ fn gen_command(tape: &mut Tape, state: &PersistedSnapshotState) -> Command {
     }
 }
 
+/// O7 — structural quiescence check: a non-terminal state is progressable
+/// iff some EXTERNAL channel can still advance it. Internal-only waits
+/// (`V2Barrier`, v1 `Join`) are advanced solely by sibling fibres
+/// arriving, so a frame where every live fibre is barrier-parked — and no
+/// incident is open (`ResolveIncident` is a channel) — can never move
+/// again. Soundness (no false positives, given K-invariants): every armed
+/// barrier has count ≥ 1 (K-3), so ≥ 1 member has not arrived and is
+/// parked at a DIFFERENT barrier; finitely many fibres forces that
+/// dependency chain into a cycle — a genuine deadlock. Structural on
+/// purpose: it derives progressability from `WaitState` alone rather than
+/// probing `apply` with synthesized commands, so command-validation
+/// strictness cannot fake a sinkhole. Scope (no silent gaps): it does NOT
+/// catch semantically-dead external waits (a message name nothing will
+/// publish, a timer no scheduler tracks) — those need the P2 differential
+/// oracle.
+pub fn check_progressable(
+    fibers: &BTreeMap<Uuid, Fiber>,
+    has_open_incident: bool,
+) -> Result<(), String> {
+    if fibers.is_empty() {
+        return Err("zero live fibres in a non-terminal state".to_string());
+    }
+    if has_open_incident {
+        return Ok(());
+    }
+    let externally_unblockable = fibers
+        .values()
+        .any(|fiber| !matches!(fiber.wait, WaitState::V2Barrier { .. } | WaitState::Join { .. }));
+    if externally_unblockable {
+        Ok(())
+    } else {
+        Err(format!(
+            "all {} live fibres are parked on internal barriers — no external unblock channel",
+            fibers.len()
+        ))
+    }
+}
+
 pub struct StepOutcome {
     pub genesis: SnapshotEnvelope,
     pub final_envelope: SnapshotEnvelope,
@@ -496,10 +544,19 @@ pub fn step_workflow(workflow: &ExecutableWorkflow, tape: &mut Tape) -> StepOutc
             revision + 1,
         );
         let snapshot = current.state().to_runtime_snapshot();
-        let Ok(transition) = bpmn_lite_kernel::apply(workflow, &snapshot, &command, &context)
-        else {
-            // A clean reject is a legal outcome for a hostile command.
-            continue;
+        let transition = match bpmn_lite_kernel::apply(workflow, &snapshot, &command, &context) {
+            Ok(transition) => transition,
+            // `Integrity` is emitted ONLY by the Ring 3 shadow check over
+            // the frame the kernel itself computed (entry validation uses
+            // `ResourceLimitExceeded`), and every snapshot here is
+            // kernel-produced — so this reject is production fail-closing
+            // on a kernel defect, and letting it `continue` would mask a
+            // finding as a clean reject.
+            Err(TransitionError::Integrity(violation)) => {
+                panic!("O2: kernel computed a Ring 3-invalid frame (masked as a reject): {violation}")
+            }
+            // Any other reject is a legal outcome for a hostile command.
+            Err(_) => continue,
         };
         let prior_state_hash = current.state_hash();
         let prior_revision = revision as i64;
@@ -571,6 +628,20 @@ pub fn step_workflow(workflow: &ExecutableWorkflow, tape: &mut Tape) -> StepOutc
             "O4: {armed} armed records exceeds verified max_records {}",
             limits.max_records()
         );
+    }
+
+    // O7 — quiescence: a non-terminal end state must retain an external
+    // unblock channel or a runnable fibre. All-fibres-parked-on-internal-
+    // barriers (a cross-barrier wait cycle) can never move again; the
+    // verifier's SESE proofs claim to exclude that shape at admission, so
+    // reaching it is a verifier-soundness defect, same class as O4.
+    if !current.state().instance().state.is_terminal() {
+        if let Err(message) = check_progressable(
+            current.state().fibers(),
+            !current.state().incidents().is_empty(),
+        ) {
+            panic!("O7: deadlock sinkhole in a non-terminal end state: {message}");
+        }
     }
 
     // O5 — Terminate must succeed on ANY reachable non-terminal state
@@ -663,6 +734,43 @@ mod tests {
                 "{label}: canonical block shape was REJECTED by admission"
             );
         }
+    }
+
+    /// O7 red→green receipt: an all-barrier-parked frame must be flagged
+    /// as a sinkhole (red); an open incident, a runnable fibre, or any
+    /// externally-unblockable wait clears the same frame (green). Zero
+    /// fibres non-terminal is red too (the Ring 3 guard's own shape,
+    /// defense-in-depth here).
+    #[test]
+    fn quiescence_check_flags_all_barrier_parked_frames_only() {
+        let record_id = bpmn_lite_types::concurrency::RecordId::new(Uuid::from_u128(0xB0));
+        let barrier_parked = |id: u128| {
+            let mut fiber = Fiber::new(Uuid::from_u128(id), 0);
+            fiber.wait = WaitState::V2Barrier { record_id };
+            (fiber.fiber_id, fiber)
+        };
+        let all_parked: BTreeMap<_, _> = [barrier_parked(1), barrier_parked(2)].into();
+        assert!(
+            check_progressable(&all_parked, false).is_err(),
+            "red: all-barrier-parked frame not flagged as a sinkhole"
+        );
+        assert!(
+            check_progressable(&all_parked, true).is_ok(),
+            "green: an open incident is an external channel"
+        );
+
+        let mut with_runner = all_parked.clone();
+        let runner = Fiber::new(Uuid::from_u128(3), 0);
+        with_runner.insert(runner.fiber_id, runner);
+        assert!(
+            check_progressable(&with_runner, false).is_ok(),
+            "green: a runnable fibre is an external channel"
+        );
+
+        assert!(
+            check_progressable(&BTreeMap::new(), false).is_err(),
+            "red: zero live fibres in a non-terminal state"
+        );
     }
 
     /// Admitted programs must step without tripping any oracle on benign

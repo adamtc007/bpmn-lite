@@ -60,6 +60,7 @@ the trap-door version of this):
 | O4 Limits conformance | observed runtime peaks (control depth, barriers, records) **never exceed** the envelope's `VerifiedLimits` — a runtime excursion above verified bounds is a verifier soundness bug | V-7 |
 | O5 Terminate-always-succeeds | `Cancel`/`Terminate` succeed even against an instance poisoned by oversized/deep `Value::Array` | documented invariant, lib.rs:671-684 |
 | O6 Decode idempotence | `from_canonical_bytes(b) = Ok(x)` ⇒ `to_canonical_bytes(x)` re-decodes to `x` (and, where canonical-unique, equals the accepted prefix) | canonical.rs |
+| O7 Quiescence | a non-terminal end state retains an external unblock channel — every-fibre-barrier-parked (a cross-barrier wait cycle, provably a deadlock given K-3) is a sinkhole the SESE proofs claim to exclude at admission | `check_progressable` (kernel fuzz lib); verifier-soundness class, same as O4 |
 
 ## 3. Target inventory & coverage plan
 
@@ -264,6 +265,33 @@ matches the established convention in-repo.
   Receipt: per-construct standalone-admission cement test (7 shapes) +
   kernel_step cov 4322 → 5997. Remaining: MI opcodes (need collection
   setup — covered end-to-end by F5's fixture path once MI XML lands).
+- **Oracle strengthening (2026-07-25, post-F5 review — objective split:
+  primary = logic/verifier-soundness flaws, secondary = gating leakage /
+  implementation defects; O4/O7 serve the primary, O1/E-O2/hash-discipline
+  the secondary):**
+  (a) **O7 quiescence** landed in `step_workflow`: a non-terminal end
+  state must keep an external unblock channel; structural over
+  `WaitState` (no `apply`-probing false positives), sound given K-3.
+  Red→green cement test `quiescence_check_flags_all_barrier_parked_frames_only`.
+  Scope gap recorded in its doc: semantically-dead external waits need
+  the P2 differential oracle.
+  (b) **`Integrity` rejects are findings**: `kernel_step`'s reject arm no
+  longer `continue`s on `TransitionError::Integrity` — Ring 3 fires only
+  on kernel-computed frames and every harness snapshot is kernel-produced,
+  so a fail-closed reject there masks a real defect. Now a panic.
+  (c) **F5 clock is tape-driven** (`FuzzClock` via
+  `new_with_runtime_context`): tick arms jump logical time 0..=25.5s in
+  100ms grains, un-deadening the PT1S boundary-timer fire path that
+  `SystemRuntimeContext` (wall clock) made unreachable inside
+  microsecond execs; counter IDs replace `now_v7` for crash repro
+  determinism. Kernel tier unchanged and deliberate: events injected
+  directly (incl. spurious/stale/duplicate fires) is strictly stronger
+  than clock simulation there.
+  (d) **E-O3 XOR exclusivity** in F5: `task_a1` activating with
+  `take_a != true` is a routing finding (one-sided oracle; semantics
+  cemented by `t_xor_v2_merge_unequal_branch_lengths`).
+  (e) Stale harness-header notes corrected (guard/race/wait ARE
+  correct-by-construction; `TimerKind::Race` IS emitted).
 
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);
