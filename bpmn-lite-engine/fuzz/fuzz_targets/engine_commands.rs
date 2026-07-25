@@ -17,10 +17,11 @@
 //        instance must succeed (the engine-level regression net over
 //        F2-KERNEL-001, which made mid-fork instances un-cancellable).
 //
-// Known coverage gaps (no silent caps): fixtures don't yet include
-// exclusive-gateway placeholder routing, boundary timers, or
-// multi-instance — those XML shapes should be added as fixtures once
-// their canonical admitted forms are lifted from the engine test corpus.
+// Fixture set (all lifted from the engine test corpus's known-good XML):
+// linear, parallel fork/join, XOR with unequal branches reconverging on a
+// shared task (flag-routed), non-interrupting boundary timer, and
+// multi-instance (tape-varied collection length — length 0 probes the
+// V-11 zero-match incident rule end-to-end).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -66,6 +67,77 @@ const PARALLEL_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </bpmn:process>
 </bpmn:definitions>"#;
 
+const XOR_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="fuzz_xor" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:exclusiveGateway id="xor_split"/>
+    <bpmn:serviceTask id="task_a1"><bpmn:extensionElements><zeebe:taskDefinition type="task_a1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="task_a2"><bpmn:extensionElements><zeebe:taskDefinition type="task_a2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="merge_task"><bpmn:extensionElements><zeebe:taskDefinition type="merge_task"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f0" sourceRef="start" targetRef="xor_split"/>
+    <bpmn:sequenceFlow id="fa0" sourceRef="xor_split" targetRef="task_a1">
+      <bpmn:conditionExpression>= take_a == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fa1" sourceRef="task_a1" targetRef="task_a2"/>
+    <bpmn:sequenceFlow id="fa2" sourceRef="task_a2" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fb0" sourceRef="xor_split" targetRef="merge_task"/>
+    <bpmn:sequenceFlow id="fend" sourceRef="merge_task" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+const BOUNDARY_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="fuzz_boundary" isExecutable="true">
+    <bpmn:startEvent id="start" />
+    <bpmn:serviceTask id="long_task" name="Long Running Task">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="long_work" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="reminder" attachedToRef="long_task" cancelActivity="false">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT1S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="send_reminder" name="Send Reminder">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="send_reminder" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_normal" />
+    <bpmn:endEvent id="end_reminder" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="long_task" />
+    <bpmn:sequenceFlow id="f2" sourceRef="long_task" targetRef="end_normal" />
+    <bpmn:sequenceFlow id="f3" sourceRef="reminder" targetRef="send_reminder" />
+    <bpmn:sequenceFlow id="f4" sourceRef="send_reminder" targetRef="end_reminder" />
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+const MI_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="fuzz_mi" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="verify_docs">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="verify_doc"/>
+      </bpmn:extensionElements>
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="doc_count" maxInstances="4"/>
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="verify_docs"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="verify_docs" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
 struct Tape<'a> {
     data: &'a [u8],
     pos: usize,
@@ -90,10 +162,12 @@ async fn drive(data: &[u8]) {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store);
 
-    let (process_key, xml) = if tape.bool() {
-        ("fuzz_linear", LINEAR_XML)
-    } else {
-        ("fuzz_parallel", PARALLEL_XML)
+    let (process_key, xml) = match tape.u8() % 5 {
+        0 => ("fuzz_linear", LINEAR_XML),
+        1 => ("fuzz_parallel", PARALLEL_XML),
+        2 => ("fuzz_xor", XOR_XML),
+        3 => ("fuzz_boundary", BOUNDARY_XML),
+        _ => ("fuzz_mi", MI_XML),
     };
     // E-O2: known-good fixture — a rejection here is a real regression.
     let compiled = engine
@@ -101,7 +175,22 @@ async fn drive(data: &[u8]) {
         .await
         .expect("E-O2: known-good fixture must compile");
 
-    let payload = format!(r#"{{"case":{}}}"#, tape.u8());
+    let payload = match process_key {
+        // XOR routing flag: true / false / absent (absent = default branch).
+        "fuzz_xor" => match tape.u8() % 3 {
+            0 => r#"{"take_a":true}"#.to_string(),
+            1 => r#"{"take_a":false}"#.to_string(),
+            _ => "{}".to_string(),
+        },
+        // MI collection: tape-varied length 0..=4; length 0 probes the
+        // V-11 zero-match incident rule end-to-end.
+        "fuzz_mi" => {
+            let len = usize::from(tape.u8() % 5);
+            let items: Vec<String> = (0..len).map(|i| i.to_string()).collect();
+            format!(r#"{{"doc_count":[{}]}}"#, items.join(","))
+        }
+        _ => format!(r#"{{"case":{}}}"#, tape.u8()),
+    };
     let mut current_hash = EffectId::content_hash(payload.as_bytes());
     let Ok(instance_id) = engine
         .start(
