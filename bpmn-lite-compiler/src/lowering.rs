@@ -964,7 +964,13 @@ pub fn lower_v2(graph: &IRGraph) -> Result<CompiledProgram> {
 /// every path onward from it (e.g. an XOR whose branches lead to two
 /// genuinely distinct `End` events with nothing else shared); callers
 /// treat "no entry" as exactly that case, same as before this rewrite.
-fn compute_post_dominators(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
+///
+/// Crate-boundary export (R8/C2): this is THE shared structural oracle —
+/// pairing, region layout, and any Designer-side pairing construction all
+/// derive from this one computation. Input must be acyclic (the compiler
+/// verifier's cyclicity gate guards that precondition; external callers
+/// must reject cyclic graphs before calling).
+pub fn compute_post_dominators(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
     let mut work = graph.clone();
     let virtual_exit = work.add_node(IRNode::End {
         id: "__pdom_virtual_exit__".to_string(),
@@ -1076,7 +1082,12 @@ fn compute_post_dominators(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
 /// rewrite from an in-degree heuristic to genuine dominance, since they
 /// only ever consume the `NodeIndex → NodeIndex` shape, never how it was
 /// derived.
-fn compute_region_map(
+/// Crate-boundary export (R8/C2): the merge-region map — every node with
+/// out-degree > 1 mapped to its immediate post-dominator. Derived from
+/// [`compute_post_dominators`]; this is the region oracle the lowering
+/// layout consumes, exposed for Designer-side consumers so region
+/// construction shares THE oracle instead of re-deriving it.
+pub fn compute_region_map(
     graph: &IRGraph,
     post_doms: &HashMap<NodeIndex, NodeIndex>,
 ) -> HashMap<NodeIndex, NodeIndex> {
@@ -1256,6 +1267,39 @@ fn get_successors(graph: &IRGraph, node: NodeIndex) -> Vec<NodeIndex> {
 /// Returns `(fork_pairing, inclusive_join_addr, inclusive_fork_addr)` —
 /// the exact three output maps `lower()`'s emission pass already consumes;
 /// see the call site's doc comment for the full framing rationale.
+/// Crate-boundary export (R8/C2): graph-level gateway pairing — every
+/// diverging `GatewayAnd`/`GatewayInclusive` mapped to its paired
+/// converging gateway (its immediate post-dominator, admitted iff it is a
+/// converging gateway of the SAME kind). This is exactly the kind-filter
+/// `compute_gateway_pairing` applies before address translation, exposed
+/// without the lowering-internal address/branch plumbing so a Designer-side
+/// consumer derives pairs from THE oracle rather than re-implementing it.
+/// Same acyclic-input precondition as [`compute_post_dominators`].
+pub fn gateway_pairs(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
+    let post_doms = compute_post_dominators(graph);
+    let mut pairs = HashMap::new();
+    for diverging_idx in graph.node_indices() {
+        let Some(&join_idx) = post_doms.get(&diverging_idx) else {
+            continue;
+        };
+        let paired = match (&graph[diverging_idx], &graph[join_idx]) {
+            (
+                IRNode::GatewayAnd { direction: GatewayDirection::Diverging, .. },
+                IRNode::GatewayAnd { direction: GatewayDirection::Converging, .. },
+            ) => true,
+            (
+                IRNode::GatewayInclusive { direction: GatewayDirection::Diverging, .. },
+                IRNode::GatewayInclusive { direction: GatewayDirection::Converging, .. },
+            ) => true,
+            _ => false,
+        };
+        if paired {
+            pairs.insert(diverging_idx, join_idx);
+        }
+    }
+    pairs
+}
+
 fn compute_gateway_pairing(
     graph: &IRGraph,
     post_doms: &HashMap<NodeIndex, NodeIndex>,
@@ -2870,6 +2914,73 @@ mod tests {
             unbudgeted.v2_guard_budgets().is_empty(),
             "a guard with no failureBudget must not appear in the table"
         );
+    }
+
+    /// R8 (C2): the crate-boundary pairing oracle. Built THROUGH the public
+    /// path (`bpmn_lite_compiler::gateway_pairs`) — an AND pair with an
+    /// inclusive pair nested in one branch resolves both diverging gateways
+    /// to their own converging partners, and an XOR (different kind) gets no
+    /// entry. This is the Designer-side consumption contract.
+    #[test]
+    fn r8_public_gateway_pairs_resolves_both_kinds_and_skips_non_gateways() {
+        let mut graph = IRGraph::new();
+        let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        let and_d = graph.add_node(IRNode::GatewayAnd {
+            id: "and_d".to_string(),
+            name: "and_d".to_string(),
+            direction: GatewayDirection::Diverging,
+        });
+        let t1 = graph.add_node(IRNode::ServiceTask {
+            id: "t1".to_string(),
+            name: "T1".to_string(),
+            task_type: "t1".to_string(),
+        });
+        let ig_d = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_d".to_string(),
+            name: "ig_d".to_string(),
+            direction: GatewayDirection::Diverging,
+        });
+        let t2 = graph.add_node(IRNode::ServiceTask {
+            id: "t2".to_string(),
+            name: "T2".to_string(),
+            task_type: "t2".to_string(),
+        });
+        let t3 = graph.add_node(IRNode::ServiceTask {
+            id: "t3".to_string(),
+            name: "T3".to_string(),
+            task_type: "t3".to_string(),
+        });
+        let ig_c = graph.add_node(IRNode::GatewayInclusive {
+            id: "ig_c".to_string(),
+            name: "ig_c".to_string(),
+            direction: GatewayDirection::Converging,
+        });
+        let and_c = graph.add_node(IRNode::GatewayAnd {
+            id: "and_c".to_string(),
+            name: "and_c".to_string(),
+            direction: GatewayDirection::Converging,
+        });
+        let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
+
+        for (a, b, id) in [
+            (start, and_d, "f1"),
+            (and_d, t1, "f2"),
+            (t1, and_c, "f3"),
+            (and_d, ig_d, "f4"),
+            (ig_d, t2, "f5"),
+            (ig_d, t3, "f6"),
+            (t2, ig_c, "f7"),
+            (t3, ig_c, "f8"),
+            (ig_c, and_c, "f9"),
+            (and_c, end, "f10"),
+        ] {
+            graph.add_edge(a, b, IREdge { id: id.to_string(), condition: None });
+        }
+
+        let pairs = crate::gateway_pairs(&graph);
+        assert_eq!(pairs.get(&and_d), Some(&and_c), "AND pair must resolve to its own join");
+        assert_eq!(pairs.get(&ig_d), Some(&ig_c), "nested inclusive pair must resolve to its own join");
+        assert_eq!(pairs.len(), 2, "only the two diverging gateways carry entries");
     }
 
     /// V8 (§31) per-guard proof: two guarded tasks in one workflow carry

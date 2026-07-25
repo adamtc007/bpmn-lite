@@ -21,7 +21,7 @@ pub mod verifier;
 // either `use bpmn_lite_compiler::IRGraph` (flat) or
 // `use bpmn_lite_compiler::ir::IRGraph` (module-qualified).
 pub use ir::*;
-pub use lowering::{lower, lower_v2};
+pub use lowering::{compute_post_dominators, compute_region_map, gateway_pairs, lower, lower_v2};
 pub use parser::parse_bpmn;
 pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
