@@ -633,7 +633,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .persistence()?;
 
         let row = sqlx::query(
-            "SELECT fiber_id, pc, stack, regs, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3",
         )
         .bind(tenant_id.as_str())
         .bind(instance_id)
@@ -678,7 +678,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .persistence()?;
 
         let rows = sqlx::query(
-            "SELECT fiber_id, pc, stack, regs, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2",
         )
         .bind(tenant_id.as_str())
         .bind(instance_id)
@@ -1654,16 +1654,14 @@ impl RuntimeStore for PostgresWorkflowStore {
         for fiber in transition.fibers_upsert() {
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
-                .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             sqlx::query(
                 r#"
-                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
-                    pc = EXCLUDED.pc, stack = EXCLUDED.stack, regs = EXCLUDED.regs,
+                    pc = EXCLUDED.pc, stack = EXCLUDED.stack,
                     wait_state = EXCLUDED.wait_state, loop_epoch = EXCLUDED.loop_epoch
                 "#,
             )
@@ -1671,7 +1669,6 @@ impl RuntimeStore for PostgresWorkflowStore {
             .bind(fiber.fiber_id)
             .bind(fiber.pc.get() as i32)
             .bind(stack)
-            .bind(regs)
             .bind(wait)
             .bind(fiber.loop_epoch as i32)
             .bind(claim.tenant_id().as_str())
@@ -2494,22 +2491,19 @@ impl RuntimeStore for PostgresWorkflowStore {
             let fiber = child.root_fiber();
             let stack = serde_json::to_value(&fiber.stack)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
-            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new())
-                .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let fiber_insert = sqlx::query(
                 r#"
                 INSERT INTO fibers
-                    (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7)
                 "#,
             )
             .bind(instance.instance_id)
             .bind(fiber.fiber_id)
             .bind(fiber.pc.get() as i32)
             .bind(stack)
-            .bind(regs)
             .bind(wait)
             .bind(fiber.loop_epoch as i32)
             .bind(claim.tenant_id().as_str())
@@ -2695,7 +2689,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             })?
         };
         let fiber_rows = sqlx::query(
-            "SELECT fiber_id, pc, stack, regs, wait_state, loop_epoch FROM fibers WHERE instance_id = $1 ORDER BY fiber_id",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE instance_id = $1 ORDER BY fiber_id",
         )
         .bind(claim.instance_id())
         .fetch_all(&mut *tx)
@@ -6798,8 +6792,8 @@ mod tests {
         let fib_id_b = Uuid::now_v7();
         sqlx::query(
             r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-            VALUES ($1, $2, 0, '[]'::jsonb, '{}'::jsonb, 'null'::jsonb, 0, $3)
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, 0, '[]'::jsonb, 'null'::jsonb, 0, $3)
             "#
         )
         .bind(iid_b)
@@ -7020,8 +7014,8 @@ mod tests {
         // Assert writes with Tenant B tenant_id under Tenant A context are rejected by WITH CHECK
         let write_fib_res = sqlx::query(
             r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-            VALUES ($1, $2, 0, '[]'::jsonb, '{}'::jsonb, 'null'::jsonb, 0, $3)
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, 0, '[]'::jsonb, 'null'::jsonb, 0, $3)
             "#
         )
         .bind(iid_b)
@@ -10192,17 +10186,15 @@ mod tests {
                 .persistence()?;
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             let result = sqlx::query(
             r#"
-            INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                 pc = EXCLUDED.pc,
                 stack = EXCLUDED.stack,
-                regs = EXCLUDED.regs,
                 wait_state = EXCLUDED.wait_state,
                 loop_epoch = EXCLUDED.loop_epoch
             "#,
@@ -10211,7 +10203,6 @@ mod tests {
         .bind(fiber.fiber_id)
         .bind(fiber.pc.get() as i32)
         .bind(&stack)
-        .bind(&regs)
         .bind(&wait_state)
         .bind(fiber.loop_epoch as i32)
         .bind(&tenant_id)
@@ -10492,17 +10483,15 @@ mod tests {
             }
 
             let stack = serde_json::to_value(&fiber.stack).persistence()?;
-            let regs = serde_json::to_value(Vec::<bpmn_lite_types::Value>::new()).persistence()?;
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             sqlx::query(
                 r#"
-                INSERT INTO fibers (instance_id, fiber_id, pc, stack, regs, wait_state, loop_epoch, tenant_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                     pc = EXCLUDED.pc,
                     stack = EXCLUDED.stack,
-                    regs = EXCLUDED.regs,
                     wait_state = EXCLUDED.wait_state,
                     loop_epoch = EXCLUDED.loop_epoch
                 "#,
@@ -10511,7 +10500,6 @@ mod tests {
             .bind(fiber.fiber_id)
             .bind(fiber.pc.get() as i32)
             .bind(&stack)
-            .bind(&regs)
             .bind(&wait_state)
             .bind(fiber.loop_epoch as i32)
             .bind(&tx.tenant_id)
