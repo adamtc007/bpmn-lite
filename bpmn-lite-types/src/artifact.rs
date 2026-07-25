@@ -93,6 +93,10 @@ pub struct ArtifactMetadata {
     v2_guard_budgets: BTreeMap<Addr, crate::transition::ScopeFailureBudget>,
     #[serde(default = "crate::transition::ScopeFailureBudget::conservative_default")]
     default_guard_budget: crate::transition::ScopeFailureBudget,
+    /// R5 (F4) — workflow-level transient-effect retry policy. See doc on
+    /// `CompiledProgram::default_retry_policy`.
+    #[serde(default = "crate::transition::RetryPolicy::conservative_default")]
+    default_retry_policy: crate::transition::RetryPolicy,
 }
 
 fn default_guard_budgets_map() -> BTreeMap<Addr, crate::transition::ScopeFailureBudget> {
@@ -146,6 +150,10 @@ impl ArtifactMetadata {
 
     pub fn default_guard_budget(&self) -> crate::transition::ScopeFailureBudget {
         self.default_guard_budget
+    }
+
+    pub fn default_retry_policy(&self) -> crate::transition::RetryPolicy {
+        self.default_retry_policy
     }
 
     pub fn v2_corr_sources(&self) -> &BTreeMap<Addr, crate::ffi_bindings::BindingSource> {
@@ -207,6 +215,7 @@ impl ArtifactEnvelope {
             v2_corr_sources: program.v2_corr_sources.clone(),
             v2_guard_budgets: program.v2_guard_budgets.clone(),
             default_guard_budget: program.default_guard_budget,
+            default_retry_policy: program.default_retry_policy,
         };
         let limits = verify_program(&program.program, &metadata)?;
         Ok(Self {
@@ -290,6 +299,7 @@ impl ExecutableWorkflow {
             v2_corr_sources: metadata.v2_corr_sources.clone(),
             v2_guard_budgets: metadata.v2_guard_budgets.clone(),
             default_guard_budget: metadata.default_guard_budget,
+            default_retry_policy: metadata.default_retry_policy,
         }
     }
 }
@@ -941,6 +951,7 @@ mod v2_fixtures {
             v2_corr_sources: BTreeMap::new(),
             v2_guard_budgets: BTreeMap::new(),
             default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
+            default_retry_policy: crate::transition::RetryPolicy::conservative_default(),
         }
     }
 
@@ -977,6 +988,36 @@ mod v2_fixtures {
                     if message.contains("guard budget address")
             ),
             "a budget keyed to a non-guard address must reject as InvalidMetadata, got {result:?}"
+        );
+    }
+
+    /// R5 (F4): a declared workflow-level retry policy survives the envelope
+    /// round-trip (encode → decode) and an undeclared one decodes to the
+    /// conservative default — the artifact, not the engine, now owns the
+    /// retry ceiling.
+    #[test]
+    fn r5_default_retry_policy_round_trips_through_the_envelope() {
+        let policy = crate::transition::RetryPolicy::new(2, 3, 500, 10_000).unwrap();
+        let program =
+            empty_compiled_program(vec![Instr::End]).with_default_retry_policy(policy);
+        let envelope = ArtifactEnvelope::from_legacy_program(program, "r5-retry").unwrap();
+        let bytes = envelope.canonical_bytes().unwrap();
+        let decoded = ExecutableWorkflow::verify(&bytes).unwrap();
+        assert_eq!(
+            decoded.envelope().metadata().default_retry_policy(),
+            policy,
+            "a declared retry policy must survive the envelope round-trip"
+        );
+
+        let undeclared = ArtifactEnvelope::from_legacy_program(
+            empty_compiled_program(vec![Instr::End]),
+            "r5-default",
+        )
+        .unwrap();
+        assert_eq!(
+            undeclared.metadata().default_retry_policy(),
+            crate::transition::RetryPolicy::conservative_default(),
+            "undeclared decodes to the conservative default (the retired engine values)"
         );
     }
 

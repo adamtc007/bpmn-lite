@@ -571,6 +571,20 @@ impl RetryPolicy {
         })
     }
 
+    /// R5 (F4, mirrors `ScopeFailureBudget::conservative_default`): the
+    /// compiled-in fallback an artifact carries when its author declared no
+    /// retry policy — exactly the values the engine used to hardcode, so
+    /// retiring the hardcode changes no behaviour for undeclared workflows.
+    /// Satisfies `new`'s bounds by construction (all non-zero, cap ≥ base).
+    pub const fn conservative_default() -> Self {
+        Self {
+            version: 1,
+            max_attempts: 5,
+            base_delay_ms: 1_000,
+            max_delay_ms: 60_000,
+        }
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }

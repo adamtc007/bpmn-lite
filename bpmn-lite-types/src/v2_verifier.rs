@@ -972,6 +972,7 @@ mod tests {
             v2_corr_sources: StdBTreeMap::new(),
             v2_guard_budgets: StdBTreeMap::new(),
             default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
+            default_retry_policy: crate::transition::RetryPolicy::conservative_default(),
         }
     }
 

@@ -454,8 +454,37 @@ impl BpmnLiteEngine {
         logical_time: u64,
         message: String,
     ) -> Result<Option<EffectResponse>> {
-        let policy = RetryPolicy::new(1, 5, 1_000, 60_000)
-            .map_err(|error| anyhow!("invalid built-in effect retry policy: {error}"))?;
+        // R5 (F4, §31 treatment): the retry ceiling is artifact-resident —
+        // read from the effect's instance's pinned artifact, retiring the
+        // engine's hardcoded RetryPolicy::new(1,5,1_000,60_000). Fail closed
+        // on a missing instance/artifact (same rule as the guard budget):
+        // guessing a policy for an unresolvable instance is the hazard, not
+        // the failure.
+        let instance = self
+            .store
+            .load_instance(effect.tenant_id(), effect.instance_id())
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "transient effect retry for unknown instance {}: refusing to guess a policy",
+                    effect.instance_id()
+                )
+            })?;
+        let artifact_hash = ArtifactHash::from_bytes(instance.bytecode_version);
+        let policy = self
+            .store
+            .load_artifact(artifact_hash)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "transient effect retry: pinned artifact is absent for instance {}; \
+                     refusing to guess a policy",
+                    effect.instance_id()
+                )
+            })?
+            .envelope()
+            .metadata()
+            .default_retry_policy();
         if effect.policy_version() != policy.version() {
             return Err(anyhow!(
                 "effect retry policy version {} is unavailable",

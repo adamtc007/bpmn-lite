@@ -1253,6 +1253,13 @@ pub struct CompiledProgram {
     /// V8 (§31) — the workflow-level default budget for guards not named in
     /// `v2_guard_budgets`. Defaults to `ScopeFailureBudget::conservative_default()`.
     pub(crate) default_guard_budget: crate::transition::ScopeFailureBudget,
+
+    /// R5 (F4, §31 treatment) — the workflow-level transient-effect retry
+    /// policy, retiring the engine's hardcoded `RetryPolicy::new(1,5,...)`.
+    /// Artifact-resident like `default_guard_budget`: a policy change is an
+    /// artifact change (re-hashed, re-pinned). Defaults to
+    /// `RetryPolicy::conservative_default()` (the exact retired values).
+    pub(crate) default_retry_policy: crate::transition::RetryPolicy,
 }
 
 /// Field-less compatibility tuple used only while pre-T7 callers migrate.
@@ -1304,6 +1311,7 @@ impl CompiledProgram {
             v2_corr_sources: BTreeMap::new(),
             v2_guard_budgets: BTreeMap::new(),
             default_guard_budget: crate::transition::ScopeFailureBudget::conservative_default(),
+            default_retry_policy: crate::transition::RetryPolicy::conservative_default(),
         }
     }
 
@@ -1356,6 +1364,21 @@ impl CompiledProgram {
 
     pub fn default_guard_budget(&self) -> crate::transition::ScopeFailureBudget {
         self.default_guard_budget
+    }
+
+    /// Set the workflow-level transient-effect retry policy. Not part of
+    /// `LegacyProgramParts` — see field doc on `default_retry_policy`.
+    #[doc(hidden)]
+    pub fn with_default_retry_policy(
+        mut self,
+        policy: crate::transition::RetryPolicy,
+    ) -> Self {
+        self.default_retry_policy = policy;
+        self
+    }
+
+    pub fn default_retry_policy(&self) -> crate::transition::RetryPolicy {
+        self.default_retry_policy
     }
 
     pub fn bytecode_version(&self) -> [u8; 32] {
