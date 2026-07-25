@@ -4560,6 +4560,57 @@ mod tests {
         }
     }
 
+    /// R7 (baseline-review F6): the SCHEDULER claim path
+    /// (`claim_running_instances`) filters on a LITERAL SQL predicate
+    /// (`state = '"Running"'::jsonb`), duplicating
+    /// `ProcessState::is_schedulable()`'s semantics. This test cements the
+    /// duplication: for EVERY variant, appearing in a scheduler sweep must
+    /// equal the Rust predicate. Adding a variant breaks `is_schedulable()`'s
+    /// exhaustive match first (compile error in bpmn-lite-types); this test
+    /// then proves the SQL literal actually agrees — no silent drift.
+    ///
+    /// Deliberately NOT asserted for `claim_instance_for_transition`: the
+    /// direct by-id claim intentionally has no state filter — it must claim
+    /// an `Incidented` instance for `ResolveIncident` and a
+    /// `WaitingOnInvocation` instance for child-result delivery. Only the
+    /// scheduler sweep encodes schedulability.
+    #[tokio::test]
+    async fn test_scheduler_claim_predicate_agrees_with_is_schedulable_for_every_state() {
+        let (_pool, store, _lock) = setup().await;
+        let now = 1_700_000_000_000i64;
+        let states: Vec<ProcessState> = vec![
+            ProcessState::Running,
+            ProcessState::Completed { at: now },
+            ProcessState::Cancelled { reason: "r".to_string(), at: now },
+            ProcessState::Terminated { at: now },
+            ProcessState::Failed { incident_id: Uuid::now_v7() },
+            ProcessState::Incidented { incident_id: Uuid::now_v7() },
+            ProcessState::WaitingOnSubmission {
+                callout_id: Uuid::now_v7(),
+                node_id: "n".to_string(),
+            },
+            ProcessState::WaitingOnInvocation {
+                execution_id: Uuid::now_v7(),
+                node_id: "n".to_string(),
+            },
+        ];
+        for state in states {
+            let instance_id = Uuid::now_v7();
+            let mut instance = make_instance(instance_id);
+            instance.state = state.clone();
+            store.save_instance("claim-predicate", &instance).await.unwrap();
+            let claimed = store
+                .claim_running_instances(&TenantId::new("default").unwrap(), "sweep", 100, 30_000)
+                .await
+                .unwrap();
+            assert_eq!(
+                claimed.contains(&instance_id),
+                state.is_schedulable(),
+                "scheduler SQL predicate disagrees with ProcessState::is_schedulable() for {state:?}"
+            );
+        }
+    }
+
     /// V6.4 fail-closed budget read: a guard cancellation requires the
     /// instance's pinned artifact to be present. Stores a minimal verifying
     /// guarded artifact with an EMPTY per-guard budget table and the given
