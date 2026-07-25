@@ -179,14 +179,26 @@ fi
 
 echo "== bpmn-lite transition read-safety guard =="
 
+# Scan EVERY kernel source file, not just lib.rs — a raw read moved into a
+# new module would otherwise silently escape the lint (baseline-review F5).
+# lib.rs must still exist (the anchor); additional files are picked up
+# automatically.
 if [ ! -f "$KERNEL_FILE" ]; then
   note "expected file missing: $KERNEL_FILE — this lint's target has moved, update this script"
-elif ! run_check "$KERNEL_FILE"; then
-  fail=1
+fi
+scanned=0
+while IFS= read -r kernel_src; do
+  scanned=$((scanned + 1))
+  if ! run_check "$kernel_src"; then
+    fail=1
+  fi
+done < <(find bpmn-lite-kernel/src -name '*.rs' | sort)
+if [ "$scanned" -eq 0 ]; then
+  note "no kernel source files found under bpmn-lite-kernel/src — the lint scanned nothing"
 fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "  OK — every .concurrency_table() call in $KERNEL_FILE is inside a helper or an allowlisted verified-safe function."
+  echo "  OK — every .concurrency_table() call across $scanned kernel source file(s) is inside a helper or an allowlisted verified-safe function."
 else
   echo ""
   echo "== Transition read-safety guard FAILED =="

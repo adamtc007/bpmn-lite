@@ -3490,14 +3490,22 @@ fn fetch_record_in_transition(
     handle: RecordId,
 ) -> Option<ConcurrencyRecord> {
     for mutation in changes.concurrency_mutations.iter().rev() {
+        // Exhaustive, no wildcard: a new `ConcurrencyMutation` variant MUST
+        // fail compilation here, forcing a decision about its pending-fold
+        // semantics — a guarded-arm + `_ => {}` shape would silently ignore
+        // it, which is exactly the partial-pending-awareness hazard this
+        // helper exists to prevent.
         match mutation {
-            ConcurrencyMutation::Insert(record) if record.id == handle => {
-                return Some((**record).clone());
+            ConcurrencyMutation::Insert(record) => {
+                if record.id == handle {
+                    return Some((**record).clone());
+                }
             }
-            ConcurrencyMutation::Retire(id) | ConcurrencyMutation::Remove(id) if *id == handle => {
-                return None;
+            ConcurrencyMutation::Retire(id) | ConcurrencyMutation::Remove(id) => {
+                if *id == handle {
+                    return None;
+                }
             }
-            _ => {}
         }
     }
     snapshot.concurrency_table().get(handle).cloned()
