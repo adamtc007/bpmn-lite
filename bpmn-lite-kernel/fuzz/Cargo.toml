@@ -1,0 +1,49 @@
+[package]
+name = "bpmn-lite-kernel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+uuid = "1"
+
+[dependencies.bpmn-lite-kernel]
+path = ".."
+
+[dependencies.bpmn-lite-types]
+path = "../../bpmn-lite-types"
+
+[[bin]]
+name = "kernel_step"
+path = "fuzz_targets/kernel_step.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kernel_replay"
+path = "fuzz_targets/kernel_replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kernel_replay_hostile"
+path = "fuzz_targets/kernel_replay_hostile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verifier_admission"
+path = "fuzz_targets/verifier_admission.rs"
+test = false
+doc = false
+bench = false
