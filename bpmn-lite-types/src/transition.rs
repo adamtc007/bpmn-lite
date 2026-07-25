@@ -1445,7 +1445,18 @@ pub struct Transition {
 }
 
 impl Transition {
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+    /// serde_json serialization of the whole Transition — NOT the Ring 2
+    /// canonical codec (`canonical.rs` never encodes a `Transition`; the
+    /// hash domain is `SnapshotEnvelope::state_hash`, a separate path).
+    /// Sole consumer: the native/WASM replay parity gate, which compares
+    /// this byte-for-byte across two builds of the SAME code — serde_json
+    /// determinism is sound there because both sides run identical
+    /// serialization code. Renamed from `canonical_bytes` (baseline review
+    /// F1): the old name claimed a codec this does not use. A true
+    /// canonical-codec Transition encoding (~14 new impl pairs incl. the
+    /// RuntimeEvent/Command enums, goldens, proptests) is a deferred
+    /// CAREFUL tranche, not this function.
+    pub fn parity_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(self)
     }
     pub fn next_snapshot(&self) -> &ProcessInstance {

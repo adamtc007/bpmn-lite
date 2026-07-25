@@ -4592,8 +4592,8 @@ mod tests {
         let first = apply(&workflow, &snapshot, &command, &context).unwrap();
         let second = apply(&workflow, &snapshot, &command, &context).unwrap();
         assert_eq!(
-            first.canonical_bytes().unwrap(),
-            second.canonical_bytes().unwrap()
+            first.parity_bytes().unwrap(),
+            second.parity_bytes().unwrap()
         );
     }
 
@@ -4604,8 +4604,8 @@ mod tests {
         let before_crash = apply(&workflow, &snapshot, &command, &context).unwrap();
         let after_restart = apply(&workflow, &snapshot, &command, &context).unwrap();
         assert_eq!(
-            before_crash.canonical_bytes().unwrap(),
-            after_restart.canonical_bytes().unwrap()
+            before_crash.parity_bytes().unwrap(),
+            after_restart.parity_bytes().unwrap()
         );
     }
 
@@ -6405,7 +6405,7 @@ mod tests {
             &context5,
         )
         .unwrap();
-        assert_eq!(t5.canonical_bytes().unwrap(), t5_replay.canonical_bytes().unwrap());
+        assert_eq!(t5.parity_bytes().unwrap(), t5_replay.parity_bytes().unwrap());
     }
 
     /// V4.1 `V2CancelScope` (Adam-ratified V&S §10 Q4: reuses the

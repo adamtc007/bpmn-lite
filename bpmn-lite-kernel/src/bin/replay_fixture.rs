@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &Command::Tick { fiber_id: None },
         &context,
     )?;
-    for byte in transition.canonical_bytes()? {
+    for byte in transition.parity_bytes()? {
         print!("{byte:02x}");
     }
     println!();
