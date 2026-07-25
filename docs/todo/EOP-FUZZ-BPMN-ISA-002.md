@@ -1,6 +1,9 @@
 # EOP-FUZZ-BPMN-ISA-002 — Fuzzing strategy & coverage plan v0.1 (FOR REVIEW)
 
-Status: **DRAFT — awaiting Adam's review. No harness implementation until sign-off.**
+Status: **RATIFIED v0.1 (Adam, 2026-07-25) — all five fork recommendations accepted
+(F-A byte-tape generators, F-B public-surface-only, F-C per-crate layout,
+F-D separate nightly-fuzz.yml, F-E engine tier deferred to P2). Implementation
+proceeding F1→F4.**
 Scope: cargo-fuzz across the bpmn-lite workspace, unified under `cargo xtask fuzz`,
 heavily weighted toward the runtime kernel / stack machine, Postgres-independent.
 

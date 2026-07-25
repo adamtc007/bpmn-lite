@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
+mod fuzz;
+
 const DEFAULT_DOCKER_IMAGE: &str = "bpmn-lite-server:local";
 const DEFAULT_INSTANCE_NAME: &str = "default";
 const DEFAULT_DOCKER_SERVER_PORT: u16 = 50071;
@@ -43,6 +45,7 @@ fn main() -> Result<()> {
             pack_build_command(&args[1])
         }
         "run-pack" => run_pack_command(),
+        "fuzz" => fuzz::fuzz_command(&workspace_root()?, &args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -1171,6 +1174,11 @@ fn print_help() {
   cargo run -p xtask -- docker-ha-subscription-fanout [--instance-name NAME] [--server-port PORT] [--db-port PORT] [--server-replicas N] [--keep-running] [harness args...]
   cargo run -p xtask -- pack-build <domain>
   cargo run -p xtask -- run-pack
+  cargo run -p xtask -- fuzz list
+  cargo run -p xtask -- fuzz run [--target NAME] [--time SECS]
+  cargo run -p xtask -- fuzz smoke
+  cargo run -p xtask -- fuzz regress
+  cargo run -p xtask -- fuzz clean
 
 Examples:
   cargo run -p xtask -- smoke --spawn-server

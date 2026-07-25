@@ -28,3 +28,17 @@ path = "fuzz_targets/canonical_decode_value.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "artifact_verify"
+path = "fuzz_targets/artifact_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope_decode"
+path = "fuzz_targets/envelope_decode.rs"
+test = false
+doc = false
+bench = false
