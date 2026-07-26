@@ -1,0 +1,31 @@
+[package]
+name = "bpmn-lite-server-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+prost = "0.13"
+# <1.53: rustc nightly ICEs compiling tokio 1.53's multi_thread runtime
+# under cargo-fuzz's sancov flags (same pin + rationale as
+# bpmn-lite-engine/fuzz). Caps this fuzz workspace's unified resolution.
+tokio = { version = ">=1.38, <1.53", features = ["rt", "time", "macros"] }
+
+[dependencies.bpmn-lite-server]
+path = ".."
+
+[dependencies.bpmn-lite-types]
+path = "../../bpmn-lite-types"
+
+[[bin]]
+name = "wire_decode"
+path = "fuzz_targets/wire_decode.rs"
+test = false
+doc = false
+bench = false

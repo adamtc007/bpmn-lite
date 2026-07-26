@@ -96,7 +96,7 @@ impl RequestLimits {
     }
 
     #[allow(clippy::result_large_err)]
-    fn check_bytes(&self, field: &str, len: usize, max: usize) -> Result<(), Status> {
+    pub fn check_bytes(&self, field: &str, len: usize, max: usize) -> Result<(), Status> {
         if len > max {
             return Err(Status::resource_exhausted(format!(
                 "{} is {} bytes; max is {}",
@@ -107,12 +107,12 @@ impl RequestLimits {
     }
 
     #[allow(clippy::result_large_err)]
-    fn check_string(&self, field: &str, value: &str) -> Result<(), Status> {
+    pub fn check_string(&self, field: &str, value: &str) -> Result<(), Status> {
         self.check_bytes(field, value.len(), self.max_string_bytes)
     }
 
     #[allow(clippy::result_large_err)]
-    fn check_orch_flags(&self, flags: &HashMap<String, ProtoValue>) -> Result<(), Status> {
+    pub fn check_orch_flags(&self, flags: &HashMap<String, ProtoValue>) -> Result<(), Status> {
         if flags.len() > self.max_orch_flags {
             return Err(Status::resource_exhausted(format!(
                 "orch_flags has {} entries; max is {}",
@@ -164,7 +164,10 @@ impl RequestLimits {
 /// decode-time-not-after-the-fact reasoning `Value::canonical_decode`
 /// documents for the depth bound's actual purpose (bounding recursion,
 /// not merely rejecting the final result).
-fn check_proto_value_array_limits(value: &ProtoValue) -> Result<(), ValueLimitError> {
+// Visibility note: the pure decode/validate helpers below are `pub` so the
+// wire-boundary fuzz target (bpmn-lite-server/fuzz) can drive them as
+// bytes -> Result units without a running server. No behavior change.
+pub fn check_proto_value_array_limits(value: &ProtoValue) -> Result<(), ValueLimitError> {
     check_proto_value_array_limits_at_depth(value, 0)
 }
 
@@ -310,7 +313,7 @@ fn value_to_proto(v: &Value) -> ProtoValue {
     }
 }
 
-fn proto_to_value(pv: &ProtoValue) -> Value {
+pub fn proto_to_value(pv: &ProtoValue) -> Value {
     match &pv.kind {
         Some(proto_value::Kind::BoolValue(b)) => Value::Bool(*b),
         Some(proto_value::Kind::I64Value(n)) => Value::I64(*n),
@@ -333,7 +336,7 @@ fn proto_to_value(pv: &ProtoValue) -> Value {
 /// subscription derives from its own process data via `correlation_key_string`
 /// — string keys pass through verbatim (a dynamic `case_id` like `"ACME-42"`),
 /// integers/bools canonicalize identically on both sides.
-fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status> {
+pub fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status> {
     use bpmn_lite_types::ffi_bindings::correlation_key_string;
     let scalar = match pv.as_ref().and_then(|value| value.kind.as_ref()) {
         Some(proto_value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
@@ -351,7 +354,7 @@ fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status>
     correlation_key_string(&scalar).map_err(|error| Status::invalid_argument(error.to_string()))
 }
 
-fn proto_to_orch_flags(
+pub fn proto_to_orch_flags(
     map: &std::collections::HashMap<String, ProtoValue>,
 ) -> BTreeMap<String, Value> {
     map.iter()
@@ -360,19 +363,19 @@ fn proto_to_orch_flags(
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_uuid(s: &str) -> Result<Uuid, Status> {
+pub fn parse_uuid(s: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(s).map_err(|e| Status::invalid_argument(format!("Invalid UUID: {}", e)))
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_bytecode_version(bytes: &[u8]) -> Result<[u8; 32], Status> {
+pub fn parse_bytecode_version(bytes: &[u8]) -> Result<[u8; 32], Status> {
     bytes
         .try_into()
         .map_err(|_| Status::invalid_argument("bytecode_version must be exactly 32 bytes"))
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_hash(bytes: &[u8]) -> Result<[u8; 32], Status> {
+pub fn parse_hash(bytes: &[u8]) -> Result<[u8; 32], Status> {
     bytes
         .try_into()
         .map_err(|_| Status::invalid_argument("domain_payload_hash must be exactly 32 bytes"))
