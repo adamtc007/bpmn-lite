@@ -346,6 +346,37 @@ matches the established convention in-repo.
   clean under all oracles deterministically in CI. Recorded limits:
   Boundary adjacency/singles only; depth 3 remains the random grammar's
   territory, reached by mutation from the seeds.
+- **F7b alphabet widening (2026-07-26, Adam: "ok do that"):** the three
+  gaps closed — (1) task-bearing XOR default regions (both switch
+  outcomes; the untaken side bounded 0 in BOTH directions — the
+  two-sided tear catch the empty-default shape dedupe-masked); (2)
+  Boundary under XOR via an `under_barrier` grammar flag — legality is
+  barrier-ANCESTOR, not barrier-parent: Boundary-in-XOR compiles,
+  Boundary-under-XOR-inside-AND and Boundary-in-OR-branch are rejected
+  (both hypothesis cells CONFIRMED against the real compiler, cemented
+  in the legality-matrix test); (3) OR/inclusiveGateway as a gateway
+  letter (2-3 branches, per-branch activation flags, named-subset
+  outcomes {both, one, none}; all-false = ruling-J zero-match → incident,
+  cemented). Covering corpus regenerated for the widened alphabet: 15
+  archetypes × 6 gateway letters → 748 seeds (was 194), seed writer
+  pre-cleans stale `cov-*.bin`.
+- **HARNESS DEFECT found by the widening (the two-sided catch went red
+  on its first shape):** XOR routing was NEVER exercised — the engine's
+  flag table starts empty, the start payload is opaque domain data, and
+  routing flags are only writable via completion `orch_flags`
+  (`flag_<u32>`, resolved through `flag_symbol_table`). The old
+  start-payload flag fields were doubly dead (completions also overwrite
+  `domain_payload`). Every XOR in every prior run fell to its default
+  flow; invisible because G-T is upper-bound-only (0 ≤ bound always
+  passes). Fix: every generated graph opens with an `init` task; the
+  driver delivers the shape's full flag-intent set on every completion.
+  Lower-bound cement `routing_follows_delivered_flags`: taken guard runs
+  its branch and NOT the default (and vice versa), OR subsets
+  {both,one,none} route exactly, zero-match raises exactly one incident.
+  NOT an engine bug — engine routing is correct once flags are actually
+  delivered — but it retroactively voids "XOR guarded-path dynamics
+  covered" claims for earlier engine_graph runs; structural admission
+  (G-A) and all other oracles were unaffected.
 
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);

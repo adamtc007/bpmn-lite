@@ -28,25 +28,41 @@
 //!                        guarded branch's bound is 0 when its flag is
 //!                        false.
 //!
-//! Grammar scope (2026-07-26 — v2 nesting widening landed):
-//! - Gateways NEST: an AND branch or XOR guarded branch is itself a nested
+//! Grammar scope (2026-07-26 — v2 nesting widening + v3 alphabet
+//! widening landed):
+//! - Gateways NEST: an AND/OR branch or XOR region is itself a nested
 //!   SESE region (1-3 blocks), recursively, up to `MAX_DEPTH` levels, with
 //!   `BLOCK_BUDGET` a hard ceiling on total emitted blocks. This is the
 //!   shape family where the compiler's dominance-based pairing/region
 //!   logic does its real work; a legal-SESE compile rejection at depth is
 //!   the finding this widening exists to catch (surfaced by G-A, never
-//!   silenced). Leaf blocks: Task / Boundary-timer / parallel-MI.
-//! - Boundary-timer blocks emit at the TOP-LEVEL region only: a boundary
-//!   handler routes to its own end event, which escapes an enclosing
-//!   parallel branch and leaves that branch's join barrier open forever
-//!   (V-1) — a real SESE constraint the compiler enforces, not a defect
-//!   (cemented in `boundary_in_parallel_branch_is_correctly_rejected`).
-//!   Nested AND/XOR/MI have no such escape and nest freely.
-//! - A both-paths XOR tear with the EMPTY default branch can be masked at
-//!   the merge task by job-key dedupe (the key excludes fiber id); the
-//!   two-sided catch needs a task-bearing default branch (pending a
-//!   compiler receipt for that shape). Flag-false guarded activation IS
-//!   caught (bound 0, folded through nesting).
+//!   silenced).
+//! - XOR carries an optional TASK-BEARING default region: the untaken
+//!   side's bound is 0 in BOTH directions (guarded when the flag is
+//!   false, default when it is true) — the two-sided tear catch the
+//!   empty-default shape masked via merge-task job-key dedupe. Receipt:
+//!   `xor_default_and_or_bounds_are_two_sided`,
+//!   `routing_follows_delivered_flags`.
+//! - OR (inclusiveGateway) is a gateway letter: 2-3 branches, each with
+//!   its own activation flag; named-subset outcomes {both, one, none} —
+//!   all-false is the ruling-J zero-match probe (incident, not skip, not
+//!   crash; cemented in `routing_follows_delivered_flags`).
+//! - Boundary-timer blocks emit wherever NO And/Or ANCESTOR exists
+//!   (`under_barrier` in the grammar): a boundary handler routes to its
+//!   own end event, which escapes an enclosing synchronizing barrier and
+//!   leaves its join open forever (V-1). XOR is not a barrier, so
+//!   Boundary nests under XOR — but an XOR wrapper does not launder a
+//!   boundary out of an enclosing AND/OR (barrier-ANCESTOR rule; full
+//!   matrix cemented in `boundary_in_parallel_branch_is_correctly_rejected`).
+//! - FLAG DELIVERY: the engine's flag table starts empty and the start
+//!   payload is opaque domain data — routing flags are only writable via
+//!   `orch_flags` (`flag_<u32>`) at job completion. Every graph therefore
+//!   opens with an `init` task and the driver passes the shape's full
+//!   flag-intent set on every completion. Before this (harness defect,
+//!   found by the two-sided widening going red): the guarded XOR branch
+//!   was UNREACHABLE in every run, invisibly, because G-T is
+//!   upper-bound-only. `routing_follows_delivered_flags` is the
+//!   lower-bound cement.
 //! - Timers: tape-driven `FuzzClock` (shared with F5) — tick arms jump
 //!   logical time, so PT1S boundary timers genuinely fire in-exec.
 
@@ -58,7 +74,7 @@ use std::sync::Arc;
 use bpmn_lite_engine::{BpmnLiteEngine, RuntimeContext, RuntimeContextError};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::WorkflowStore;
-use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid};
+use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid, Value};
 
 pub mod covering;
 
@@ -145,11 +161,27 @@ pub enum Block {
     /// Parallel fork/join; each branch is a nested SESE region (≥1 block).
     And { branches: Vec<Vec<Block>> },
     /// Exclusive split: a nested guarded region behind `= g{n} == true`,
-    /// empty default flow, both reconverging on a shared merge task (the
-    /// corpus-proven no-converging-gateway shape).
-    Xor { take_guarded: bool, guarded: Vec<Block> },
+    /// reconverging with the default path on a shared merge task. The
+    /// default path is empty when `default` is empty (the original
+    /// corpus-proven shape) or a task-bearing nested region — the
+    /// two-sided tear catch: with the guard TAKEN, the default region's
+    /// bound is 0, so a token down both paths is no longer dedupe-masked
+    /// at the merge.
+    Xor {
+        take_guarded: bool,
+        guarded: Vec<Block>,
+        default: Vec<Block>,
+    },
+    /// Inclusive (OR) split/join: every branch carries its own activation
+    /// flag (`= o{n}b{i} == true`); the activated SUBSET runs and the
+    /// converging inclusive gateway synchronizes exactly that subset (the
+    /// named-subset interlocking). All-false probes the zero-match
+    /// incident path at runtime.
+    Or { branches: Vec<(bool, Vec<Block>)> },
     /// Host task with an attached PT1S boundary timer and a handler task
-    /// routed to its own end event. Leaf (no nesting inside).
+    /// routed to its own end event. Leaf; legal only with NO synchronizing
+    /// barrier (And/Or) ancestor — the handler's end event escapes such a
+    /// branch and the join barrier never closes (V-1).
     Boundary { interrupting: bool },
     /// Parallel multi-instance task over a payload collection
     /// (`maxInstances="4"`); length 0 probes the V-11 zero-match rule. Leaf.
@@ -164,49 +196,69 @@ pub struct Shape {
 pub fn gen_shape(tape: &mut Tape) -> Shape {
     let mut budget = BLOCK_BUDGET;
     Shape {
-        blocks: gen_blocks(tape, MAX_DEPTH, &mut budget),
+        blocks: gen_blocks(tape, MAX_DEPTH, false, &mut budget),
     }
 }
 
 /// A region: 1-3 blocks, each drawn at `depth`. Always ≥1 block so no
 /// gateway branch is empty (an empty branch is a distinct shape with no
-/// compiler receipt yet).
-fn gen_blocks(tape: &mut Tape, depth: u8, budget: &mut u32) -> Vec<Block> {
+/// compiler receipt yet). `under_barrier` is true iff any ancestor is a
+/// synchronizing barrier (And/Or branch) — the Boundary legality flag.
+fn gen_blocks(tape: &mut Tape, depth: u8, under_barrier: bool, budget: &mut u32) -> Vec<Block> {
     let count = 1 + tape.u8() % 3;
-    (0..count).map(|_| gen_block(tape, depth, budget)).collect()
+    (0..count)
+        .map(|_| gen_block(tape, depth, under_barrier, budget))
+        .collect()
 }
 
-fn gen_block(tape: &mut Tape, depth: u8, budget: &mut u32) -> Block {
+fn gen_block(tape: &mut Tape, depth: u8, under_barrier: bool, budget: &mut u32) -> Block {
     // Budget exhausted → force a leaf, no decrement, no further branching.
     if *budget == 0 {
         return Block::Task;
     }
     *budget -= 1;
-    match tape.u8() % 8 {
+    match tape.u8() % 10 {
         // Gateway blocks only while depth remains; branches recurse one
         // level shallower. When depth is exhausted these selectors fall
         // through to a plain task.
         3 | 4 if depth > 0 => Block::And {
             branches: (0..(2 + tape.u8() % 2))
-                .map(|_| gen_blocks(tape, depth - 1, budget))
+                .map(|_| gen_blocks(tape, depth - 1, true, budget))
                 .collect(),
         },
-        5 if depth > 0 => Block::Xor {
-            take_guarded: tape.bool(),
-            guarded: gen_blocks(tape, depth - 1, budget),
-        },
-        // Boundary ONLY at the top-level region (depth == MAX_DEPTH): its
-        // handler routes to a separate end event, which escapes any
-        // enclosing parallel branch and leaves that branch's join barrier
-        // permanently open (V-1) — a legal-SESE violation the compiler
-        // correctly rejects, proven in
-        // `boundary_in_parallel_branch_is_correctly_rejected`. So a nested
-        // selector-6 degrades to a plain task instead.
-        6 if depth == MAX_DEPTH => Block::Boundary {
+        5 if depth > 0 => {
+            let take_guarded = tape.bool();
+            let has_default = tape.bool();
+            let guarded = gen_blocks(tape, depth - 1, under_barrier, budget);
+            let default = if has_default {
+                gen_blocks(tape, depth - 1, under_barrier, budget)
+            } else {
+                Vec::new()
+            };
+            Block::Xor {
+                take_guarded,
+                guarded,
+                default,
+            }
+        }
+        // Boundary iff NO synchronizing-barrier ancestor: inside an
+        // And/Or branch its handler's end event escapes the branch and
+        // the join barrier never closes (V-1) — the compiler correctly
+        // rejects that (cemented in the legality-matrix test). Inside an
+        // XOR region (no barrier) it is legal and now emitted.
+        6 if !under_barrier => Block::Boundary {
             interrupting: tape.bool(),
         },
         7 => Block::Mi {
             collection_len: tape.u8() % 5,
+        },
+        8 | 9 if depth > 0 => Block::Or {
+            branches: (0..(2 + tape.u8() % 2))
+                .map(|_| {
+                    let active = tape.bool();
+                    (active, gen_blocks(tape, depth - 1, true, budget))
+                })
+                .collect(),
         },
         _ => Block::Task,
     }
@@ -218,8 +270,19 @@ pub struct GeneratedProcess {
     pub xml: String,
     /// task_type → max distinct job keys this shape can legally produce.
     pub bounds: BTreeMap<String, u32>,
-    /// Start payload carrying every XOR flag and MI collection.
+    /// Start payload carrying every MI collection. Routing flags do NOT
+    /// live here: the engine's flag table starts empty and the start
+    /// payload is opaque domain data — flags are only writable through
+    /// `orch_flags` at job completion (kernel `apply_completion`,
+    /// `flag_<u32>` keys). The driver delivers `flag_intents` there.
     pub payload: String,
+    /// Symbolic flag name → intended value (XOR `g{u}` = take_guarded,
+    /// OR `o{u}b{i}` = branch active). The driver resolves names to
+    /// interned `flag_<u32>` keys via the compile result's
+    /// `flag_symbol_table` and passes them on EVERY `complete_job` —
+    /// the emitted `init` task guarantees at least one completion lands
+    /// before any split can evaluate a condition.
+    pub flag_intents: BTreeMap<String, bool>,
 }
 
 /// Emission scratch state. A single monotonic `uid` gives every node a
@@ -231,6 +294,7 @@ struct EmitCtx {
     flows: String,
     bounds: BTreeMap<String, u32>,
     payload_fields: Vec<String>,
+    flag_intents: BTreeMap<String, bool>,
     flow_n: usize,
     uid: usize,
 }
@@ -306,6 +370,7 @@ fn emit_block(block: &Block, mult: u32, ctx: &mut EmitCtx) -> (String, String) {
         Block::Xor {
             take_guarded,
             guarded,
+            default,
         } => {
             let u = ctx.uid();
             let split = format!("xs{u}");
@@ -318,14 +383,45 @@ fn emit_block(block: &Block, mult: u32, ctx: &mut EmitCtx) -> (String, String) {
             );
             ctx.service_task(&merge);
             ctx.bounds.insert(merge.clone(), mult); // merge always reached
-            ctx.payload_fields.push(format!(r#""{flag}":{take_guarded}"#));
-            // Guarded region: zeroed out when the flag is false, folded
-            // through the enclosing mult otherwise.
+            ctx.flag_intents.insert(flag.clone(), *take_guarded);
+            // Exclusive routing: exactly one path runs. Guarded region is
+            // zeroed when the flag is false; the default region is zeroed
+            // when the flag is TRUE — the two-sided tear catch: a token
+            // down both paths now trips a bound-0 task instead of being
+            // dedupe-masked at the merge.
             let guarded_mult = mult * u32::from(*take_guarded);
             let condition = format!("= {flag} == true");
             emit_region(guarded, &split, &merge, Some(&condition), guarded_mult, ctx);
-            ctx.flow(&split, &merge, None); // empty default flow
+            if default.is_empty() {
+                ctx.flow(&split, &merge, None); // empty default flow
+            } else {
+                let default_mult = mult * u32::from(!*take_guarded);
+                emit_region(default, &split, &merge, None, default_mult, ctx);
+            }
             (split, merge)
+        }
+        Block::Or { branches } => {
+            let u = ctx.uid();
+            let fork = format!("of{u}");
+            let join = format!("oj{u}");
+            let _ = write!(
+                ctx.elements,
+                r#"    <bpmn:inclusiveGateway id="{fork}" gatewayDirection="Diverging"/>
+    <bpmn:inclusiveGateway id="{join}" gatewayDirection="Converging"/>
+"#
+            );
+            // Every branch carries its own activation flag; the activated
+            // subset runs and the converging inclusive gateway
+            // synchronizes exactly that subset. All-false = zero-match at
+            // runtime (every branch bound 0).
+            for (branch_n, (active, region)) in branches.iter().enumerate() {
+                let flag = format!("o{u}b{branch_n}");
+                ctx.flag_intents.insert(flag.clone(), *active);
+                let condition = format!("= {flag} == true");
+                let branch_mult = mult * u32::from(*active);
+                emit_region(region, &fork, &join, Some(&condition), branch_mult, ctx);
+            }
+            (fork, join)
         }
         Block::Boundary { interrupting } => {
             let u = ctx.uid();
@@ -400,7 +496,15 @@ fn emit_region(
 
 pub fn emit_process(shape: &Shape) -> GeneratedProcess {
     let mut ctx = EmitCtx::default();
-    emit_region(&shape.blocks, "start", "end", None, 1, &mut ctx);
+    // Routing flags are deliverable only via a job completion's
+    // `orch_flags`, so every graph opens with an `init` task: its
+    // completion carries the full flag-intent set BEFORE any split can
+    // evaluate a condition. Without it a leading XOR/OR reads an empty
+    // flag table (LoadFlag defaults false) and routing is untestable.
+    ctx.service_task("init");
+    ctx.bounds.insert("init".to_string(), 1);
+    ctx.flow("start", "init", None);
+    emit_region(&shape.blocks, "init", "end", None, 1, &mut ctx);
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -418,6 +522,7 @@ pub fn emit_process(shape: &Shape) -> GeneratedProcess {
         xml,
         bounds: ctx.bounds,
         payload,
+        flag_intents: ctx.flag_intents,
     }
 }
 
@@ -483,6 +588,21 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
         )
     });
 
+    // Flag delivery: resolve symbolic intents to interned `flag_<u32>`
+    // keys through the compile result's symbol table; passed on EVERY
+    // completion (idempotent) so routing is armed from the `init`
+    // completion onward.
+    let orch_flags: BTreeMap<String, Value> = compiled
+        .flag_symbol_table
+        .iter()
+        .filter_map(|(key, name)| {
+            generated
+                .flag_intents
+                .get(name)
+                .map(|intent| (format!("flag_{key}"), Value::Bool(*intent)))
+        })
+        .collect();
+
     let mut current_hash = EffectId::content_hash(generated.payload.as_bytes());
     let Ok(instance_id) = engine
         .start(
@@ -525,7 +645,7 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
                 let result_payload = format!(r#"{{"result":{}}}"#, tape.u8());
                 let hash = if tape.bool() { current_hash } else { [tape.u8(); 32] };
                 if engine
-                    .complete_job(&key, &result_payload, hash, BTreeMap::new())
+                    .complete_job(&key, &result_payload, hash, orch_flags.clone())
                     .await
                     .is_ok()
                 {
@@ -685,7 +805,7 @@ mod tests {
         let shape = Shape {
             blocks: vec![
                 Block::Task,                                                  // uid 1 → t1
-                Block::Xor { take_guarded: false, guarded: vec![Block::Task] }, // uid 2 (xm2,g2), inner t3
+                Block::Xor { take_guarded: false, guarded: vec![Block::Task], default: vec![] }, // uid 2 (xm2,g2), inner t3
                 Block::Mi { collection_len: 3 },                             // uid 4 → mi4,c4
                 Block::And { branches: vec![vec![Block::Task], vec![Block::Task]] }, // uid 5, t6/t7
             ],
@@ -697,7 +817,48 @@ mod tests {
         assert_eq!(generated.bounds.get("mi4"), Some(&3), "MI = collection len");
         assert_eq!(generated.bounds.get("t6"), Some(&1));
         assert_eq!(generated.bounds.get("t7"), Some(&1));
-        assert_eq!(generated.payload, r#"{"g2":false,"c4":[0,1,2]}"#);
+        assert_eq!(generated.bounds.get("init"), Some(&1), "flag-carrier task");
+        // Payload carries only MI collections; routing flags travel as
+        // completion orch_flags intents.
+        assert_eq!(generated.payload, r#"{"c4":[0,1,2]}"#);
+        assert_eq!(generated.flag_intents.get("g2"), Some(&false));
+    }
+
+    /// Two-sided XOR/OR bounds: the untaken side is bounded at 0 in BOTH
+    /// directions (guarded when the flag is false, task-bearing default
+    /// when the flag is true; OR branches per activation flag) — the
+    /// unmasked two-sided tear catch.
+    #[test]
+    fn xor_default_and_or_bounds_are_two_sided() {
+        // uid 1 (xs1/xm1/g1), guarded t2, default t3.
+        let taken = emit_process(&Shape {
+            blocks: vec![Block::Xor {
+                take_guarded: true,
+                guarded: vec![Block::Task],
+                default: vec![Block::Task],
+            }],
+        });
+        assert_eq!(taken.bounds.get("t2"), Some(&1), "taken guarded task");
+        assert_eq!(taken.bounds.get("t3"), Some(&0), "default zeroed when guard taken");
+        let untaken = emit_process(&Shape {
+            blocks: vec![Block::Xor {
+                take_guarded: false,
+                guarded: vec![Block::Task],
+                default: vec![Block::Task],
+            }],
+        });
+        assert_eq!(untaken.bounds.get("t2"), Some(&0), "guarded zeroed when untaken");
+        assert_eq!(untaken.bounds.get("t3"), Some(&1), "default runs when untaken");
+        // uid 1 (of1/oj1), branch0 t2 active, branch1 t3 inactive.
+        let or = emit_process(&Shape {
+            blocks: vec![Block::Or {
+                branches: vec![(true, vec![Block::Task]), (false, vec![Block::Task])],
+            }],
+        });
+        assert_eq!(or.bounds.get("t2"), Some(&1), "activated OR branch");
+        assert_eq!(or.bounds.get("t3"), Some(&0), "inactive OR branch");
+        assert_eq!(or.flag_intents.get("o1b0"), Some(&true));
+        assert_eq!(or.flag_intents.get("o1b1"), Some(&false));
     }
 
     /// The v2 widening's load-bearing property: an untaken guard zeroes
@@ -711,6 +872,7 @@ mod tests {
                 guarded: vec![Block::And {
                     branches: vec![vec![Block::Task], vec![Block::Task]],
                 }],
+                default: vec![],
             }],
         };
         let generated = emit_process(&shape);
@@ -786,6 +948,170 @@ mod tests {
                 .await,
                 "top-level boundary must compile"
             );
+            // XOR is not a synchronizing barrier: the handler's end event
+            // escapes nothing — legal, and the grammar now emits it.
+            assert!(
+                compiles(Shape {
+                    blocks: vec![Block::Xor {
+                        take_guarded: true,
+                        guarded: vec![Block::Boundary { interrupting: false }],
+                        default: vec![],
+                    }],
+                })
+                .await,
+                "boundary inside an XOR region must compile (no barrier to escape)"
+            );
+            // Barrier-ANCESTOR rule, not barrier-parent: an XOR wrapper
+            // does not launder a boundary out of an enclosing AND barrier.
+            assert!(
+                !compiles(Shape {
+                    blocks: vec![Block::And {
+                        branches: vec![
+                            vec![Block::Xor {
+                                take_guarded: true,
+                                guarded: vec![Block::Boundary { interrupting: false }],
+                                default: vec![],
+                            }],
+                            vec![Block::Task],
+                        ],
+                    }],
+                })
+                .await,
+                "boundary under XOR-inside-AND must be rejected (AND ancestor barrier)"
+            );
+            // OR joins synchronize their activated subset — same escape
+            // hazard as AND.
+            assert!(
+                !compiles(Shape {
+                    blocks: vec![Block::Or {
+                        branches: vec![
+                            (true, vec![Block::Boundary { interrupting: false }]),
+                            (true, vec![Block::Task]),
+                        ],
+                    }],
+                })
+                .await,
+                "boundary inside an OR branch must be rejected (inclusive join barrier)"
+            );
+        });
+    }
+
+    /// Routing fidelity — the LOWER-bound receipt G-T (upper-bound-only)
+    /// cannot give: the branch the delivered flags select actually RUNS,
+    /// and the deselected branch does not. Red before the orch_flags
+    /// delivery fix: the flag table stayed empty, LoadFlag defaulted
+    /// false, and every XOR fell to its default — the guarded branch was
+    /// unreachable in ALL runs (masked because 0 ≤ bound always passes).
+    /// Also cements the OR named-subset outcomes and the zero-match
+    /// incident (ruling J) live at the engine tier.
+    #[test]
+    fn routing_follows_delivered_flags() {
+        /// Deterministically complete every activation until quiescence;
+        /// distinct job keys per task_type, plus open-incident count.
+        async fn run_counts(shape: &Shape) -> (BTreeMap<String, usize>, usize) {
+            let generated = emit_process(shape);
+            let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+            let engine = BpmnLiteEngine::new_with_runtime_context(
+                store,
+                TenantId::default(),
+                Arc::new(FuzzClock::new()),
+            );
+            let compiled = engine.compile(&generated.xml).await.expect("compile");
+            let orch_flags: BTreeMap<String, Value> = compiled
+                .flag_symbol_table
+                .iter()
+                .filter_map(|(key, name)| {
+                    generated
+                        .flag_intents
+                        .get(name)
+                        .map(|intent| (format!("flag_{key}"), Value::Bool(*intent)))
+                })
+                .collect();
+            let mut hash = EffectId::content_hash(generated.payload.as_bytes());
+            let instance_id = engine
+                .start(
+                    "fuzz_graph",
+                    compiled.bytecode_version,
+                    &generated.payload,
+                    hash,
+                    "corr-routing",
+                )
+                .await
+                .expect("start");
+            let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for _ in 0..32 {
+                let Ok(jobs) = engine.run_instance(instance_id).await else {
+                    break;
+                };
+                if jobs.is_empty() {
+                    break;
+                }
+                for job in jobs {
+                    seen.entry(job.task_type.clone())
+                        .or_default()
+                        .insert(job.job_key.clone());
+                    engine
+                        .complete_job(&job.job_key, r#"{"ok":true}"#, hash, orch_flags.clone())
+                        .await
+                        .expect("complete");
+                    hash = EffectId::content_hash(br#"{"ok":true}"#);
+                }
+            }
+            let incidents = engine
+                .inspect(instance_id)
+                .await
+                .expect("inspect")
+                .incidents
+                .len();
+            let counts = seen.into_iter().map(|(t, keys)| (t, keys.len())).collect();
+            (counts, incidents)
+        }
+
+        fn xor_default(take_guarded: bool) -> Shape {
+            Shape {
+                blocks: vec![Block::Xor {
+                    take_guarded,
+                    guarded: vec![Block::Task],
+                    default: vec![Block::Task],
+                }],
+            }
+        }
+        fn or2(first: bool, second: bool) -> Shape {
+            Shape {
+                blocks: vec![Block::Or {
+                    branches: vec![(first, vec![Block::Task]), (second, vec![Block::Task])],
+                }],
+            }
+        }
+
+        runtime().block_on(async {
+            // uid 1 = gateway; guarded/branch0 task = t2, default/branch1 = t3.
+            let (counts, incidents) = run_counts(&xor_default(true)).await;
+            assert_eq!(counts.get("t2"), Some(&1), "taken guard must run its branch");
+            assert_eq!(counts.get("t3"), None, "default must NOT run when guard taken");
+            assert_eq!(incidents, 0);
+
+            let (counts, incidents) = run_counts(&xor_default(false)).await;
+            assert_eq!(counts.get("t2"), None, "untaken guard branch must not run");
+            assert_eq!(counts.get("t3"), Some(&1), "default must run when guard untaken");
+            assert_eq!(incidents, 0);
+
+            let (counts, incidents) = run_counts(&or2(true, true)).await;
+            assert_eq!(counts.get("t2"), Some(&1), "OR both: first branch runs");
+            assert_eq!(counts.get("t3"), Some(&1), "OR both: second branch runs");
+            assert_eq!(incidents, 0);
+
+            let (counts, incidents) = run_counts(&or2(true, false)).await;
+            assert_eq!(counts.get("t2"), Some(&1), "OR one: active branch runs");
+            assert_eq!(counts.get("t3"), None, "OR one: inactive branch must not run");
+            assert_eq!(incidents, 0);
+
+            // All-false subset: ruling J zero-match — an incident, not a
+            // silent skip and not a crash.
+            let (counts, incidents) = run_counts(&or2(false, false)).await;
+            assert_eq!(counts.get("t2"), None, "OR none: no branch runs");
+            assert_eq!(counts.get("t3"), None, "OR none: no branch runs");
+            assert_eq!(incidents, 1, "OR zero-match must raise exactly one incident");
         });
     }
 }
