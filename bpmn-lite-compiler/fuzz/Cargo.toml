@@ -1,0 +1,26 @@
+[package]
+name = "bpmn-lite-compiler-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.bpmn-lite-compiler]
+path = ".."
+
+[dependencies.bpmn-lite-types]
+path = "../../bpmn-lite-types"
+
+[[bin]]
+name = "dsl_compile"
+path = "fuzz_targets/dsl_compile.rs"
+test = false
+doc = false
+bench = false
