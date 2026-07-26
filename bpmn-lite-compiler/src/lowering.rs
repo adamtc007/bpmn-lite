@@ -381,7 +381,13 @@ pub fn lower_with_default(
                 let mut default_target = None;
                 for edge in &outgoing {
                     let target_idx = edge.target();
-                    let target_addr = node_addr.get(&target_idx).copied().expect("lowering: successor has no assigned address");
+                    let target_addr = node_addr.get(&target_idx).copied().ok_or_else(|| {
+                        anyhow!(
+                            "lowering: XOR '{}' routes to '{}', which has no lowered address - dangling or non-well-formed successor (fail-closed reject)",
+                            graph[node_idx].id(),
+                            graph[target_idx].id()
+                        )
+                    })?;
 
                     if let Some(cond) = &edge.weight().condition {
                         let flag_key = intern_flag(&mut flag_intern, &cond.flag_name);
@@ -434,8 +440,16 @@ pub fn lower_with_default(
                     let successors = get_successors(graph, node_idx);
                     let targets: Box<[Addr]> = successors
                         .iter()
-                        .map(|s| node_addr.get(s).copied().expect("lowering: successor has no assigned address"))
-                        .collect();
+                        .map(|s| {
+                            node_addr.get(s).copied().ok_or_else(|| {
+                                anyhow!(
+                                    "lowering: fork '{}' branch head '{}' has no lowered address (fail-closed reject)",
+                                    graph[node_idx].id(),
+                                    graph[*s].id()
+                                )
+                            })
+                        })
+                        .collect::<Result<_>>()?;
                     instructions.push(Instr::V2Fork {
                         targets,
                         pairing: base,
@@ -469,7 +483,12 @@ pub fn lower_with_default(
                     let next = successors
                         .first()
                         .and_then(|s| node_addr.get(s).copied())
-                        .expect("lowering: successor has no assigned address");
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "lowering: node '{}' has no lowered successor - dangling or spliced flow (fail-closed reject)",
+                                graph[node_idx].id()
+                            )
+                        })?;
                     instructions.push(Instr::Jump { target: next });
                 }
             },
@@ -498,7 +517,7 @@ pub fn lower_with_default(
                     &node_addr,
                     &mut flag_intern,
                     &mut instructions,
-                );
+                )?;
             }
             IRNode::GatewayInclusive {
                 direction: GatewayDirection::Converging,
@@ -519,7 +538,12 @@ pub fn lower_with_default(
                 let next = successors
                     .first()
                     .and_then(|s| node_addr.get(s).copied())
-                    .expect("lowering: successor has no assigned address");
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "lowering: node '{}' has no lowered successor - dangling or spliced flow (fail-closed reject)",
+                            graph[node_idx].id()
+                        )
+                    })?;
                 instructions.push(Instr::Jump { target: next });
             }
 
@@ -580,7 +604,13 @@ pub fn lower_with_default(
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
+                    let target = node_addr.get(next).copied().ok_or_else(|| {
+                        anyhow!(
+                            "lowering: node '{}' routes to '{}', which has no lowered address (fail-closed reject)",
+                            graph[node_idx].id(),
+                            graph[*next].id()
+                        )
+                    })?;
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -600,7 +630,13 @@ pub fn lower_with_default(
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
+                    let target = node_addr.get(next).copied().ok_or_else(|| {
+                        anyhow!(
+                            "lowering: node '{}' routes to '{}', which has no lowered address (fail-closed reject)",
+                            graph[node_idx].id(),
+                            graph[*next].id()
+                        )
+                    })?;
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -628,7 +664,13 @@ pub fn lower_with_default(
 
                 let successors = get_successors(graph, node_idx);
                 if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().expect("lowering: successor has no assigned address");
+                    let target = node_addr.get(next).copied().ok_or_else(|| {
+                        anyhow!(
+                            "lowering: node '{}' routes to '{}', which has no lowered address (fail-closed reject)",
+                            graph[node_idx].id(),
+                            graph[*next].id()
+                        )
+                    })?;
                     instructions.push(Instr::Jump { target });
                 }
             }
@@ -1900,7 +1942,7 @@ fn lower_inclusive_diverging_v2(
     node_addr: &HashMap<NodeIndex, Addr>,
     flag_intern: &mut HashMap<String, FlagKey>,
     instructions: &mut Vec<Instr>,
-) {
+) -> Result<()> {
     struct Branch {
         always_live: bool,
         flag_name: Option<String>,
@@ -1956,7 +1998,13 @@ fn lower_inclusive_diverging_v2(
         let real_target = node_addr
             .get(&branch.target_idx)
             .copied()
-            .expect("lowering: successor has no assigned address");
+            .ok_or_else(|| {
+                anyhow!(
+                    "lowering: inclusive fork '{}' branch head '{}' has no lowered address (fail-closed reject)",
+                    graph[node_idx].id(),
+                    graph[branch.target_idx].id()
+                )
+            })?;
         if branch.always_live {
             instructions.push(Instr::Jump { target: real_target });
         } else {
@@ -1970,6 +2018,7 @@ fn lower_inclusive_diverging_v2(
             instructions.push(Instr::Jump { target: real_target });
         }
     }
+    Ok(())
 }
 
 /// §18 ruling K: lower a parallel multi-instance activity to `V2Fork`
@@ -2128,7 +2177,12 @@ fn lower_multi_instance_v2(
     let next = successors
         .first()
         .and_then(|s| node_addr.get(s).copied())
-        .expect("lowering: successor has no assigned address");
+        .ok_or_else(|| {
+            anyhow!(
+                "lowering: MI activity '{}' has no lowered successor - dangling or spliced flow (fail-closed reject)",
+                graph[node_idx].id()
+            )
+        })?;
     instructions.push(Instr::Jump { target: next });
 
     Ok(())

@@ -1513,6 +1513,28 @@ mod tests {
                 .xml
                 .replace(r#"targetRef="end""#, r#"targetRef="nowhere""#)
                 .into_bytes(), // dangling flow ref
+            // F8-COMPILER-001 minimal shape: an MI activity with NO
+            // outgoing flow reached lowering and panicked at the
+            // successor-address expect instead of rejecting. Found by
+            // this target's first 30-min soak (spliced-document mutant);
+            // all 9 successor-resolution sites in lowering.rs are now
+            // fail-closed Errs naming the node.
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="p" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="mi1">
+      <bpmn:extensionElements><zeebe:taskDefinition type="mi1"/></bpmn:extensionElements>
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:extensionElements><zeebe:loopCharacteristics inputCollection="c" maxInstances="4"/></bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="mi1"/>
+  </bpmn:process>
+</bpmn:definitions>"#
+                .to_vec(), // MI with no successor (F8-COMPILER-001)
         ];
         runtime().block_on(async {
             for case in &cases {

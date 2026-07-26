@@ -434,6 +434,31 @@ Postgres test suite's territory (recorded, not skipped silently).
 Fleet after F8: 15 targets across types / kernel / engine / compiler /
 server, all auto-discovered by xtask fuzz and the nightly workflow.
 
+**First F8 soak (2026-07-26/27, 30min/target × 15): 14 clean, 1 CRASH —
+F8-COMPILER-001, found and FIXED.**
+- Soak numbers (execs / cov): dsl_compile 8.4M/4144; engine_commands
+  878k/12202; engine_graph 321k/17587 (up from 15516 — error boundaries
+  + flag routing); engine_flagstorm 290k/16086; kernel_step 2.6M/6083;
+  kernel_replay 2.0M/6315; kernel_replay_hostile 2.5M/10181;
+  verifier_admission 31M/2025; wire_decode 39.7M/782; canonical_decode
+  1.6M/1452; canonical_decode_value 256M/104; artifact_verify 94M/4994;
+  envelope_decode 84M/2468; engine_recovery clean.
+- **F8-COMPILER-001** (X-O1, xml_compile, first soak): lowering PANICKED
+  at the successor-address `.expect` when a parseable-but-malformed
+  document (spliced double-XML mutant) produced an MI activity with no
+  successor — fail-closed violation: crash instead of localized reject.
+  Sweep found NINE sibling `.expect("lowering: successor has no
+  assigned address")` sites (XOR edge targets, AND fork branch heads,
+  task/wait/send/human-wait successors, inclusive branch heads, MI).
+  All nine converted to `anyhow!` Errs naming the source and dangling
+  node; `lower_inclusive_diverging_v2` became `Result`. Receipts: crash
+  artifact re-runs clean and is committed as seed
+  `regress-f8-compiler-001.xml`; minimal MI-no-successor cement case in
+  `hostile_xml_rejects_without_panic`; compiler suite 134 green, engine
+  suite green. Note: this vindicates X-O1 specifically — the parser and
+  IR admitted the shape, and only the raw-bytes tier could reach it
+  (the graph grammar never emits flow-less nodes).
+
 **SURFACED FINDINGS from the F8 reconnaissance (design forks — Adam to
 rule; none fixed unilaterally):**
 1. **REST DSL path stops halfway across the admission seam.** Every
