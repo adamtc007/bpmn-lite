@@ -103,6 +103,25 @@ fn seed(root: &Path) -> Result<()> {
         fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
         println!("seeded {} ({} bytes)", path.display(), bytes.len());
     }
+
+    // F7 covering-array seeds for engine_graph: the enumerated
+    // local-logic-alphabet corpus, written by the fuzz crate's own
+    // (ignored) seed-writer test so the encoder stays next to the grammar
+    // it mirrors.
+    println!("== generating engine_graph covering seeds ==");
+    let status = Command::new("cargo")
+        .arg("test")
+        .arg("--manifest-path")
+        .arg(root.join("bpmn-lite-engine/fuzz/Cargo.toml"))
+        .arg("write_covering_seeds")
+        .arg("--")
+        .arg("--ignored")
+        .current_dir(root)
+        .status()
+        .context("spawn covering-seed writer")?;
+    if !status.success() {
+        bail!("covering-seed writer failed ({status})");
+    }
     Ok(())
 }
 

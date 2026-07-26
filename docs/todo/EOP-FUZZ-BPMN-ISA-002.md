@@ -316,6 +316,36 @@ matches the established convention in-repo.
   be dedupe-masked at the merge (two-sided catch needs a task-bearing
   default branch, pending a compiler receipt for that shape). `FuzzClock`
   + `Tape` hoisted to the engine fuzz lib, shared with F5.
+- **F6 v2 nesting widening landed (`5861bae`, 2026-07-26, Adam: "deeper
+  shapes are very likely where logic issues will be lurking"):**
+  `Block::And.branches`/`Block::Xor.guarded` are now recursive
+  `Vec<Block>` regions (MAX_DEPTH=3, BLOCK_BUDGET=24); conservation
+  bounds fold multiplicatively through nesting (untaken guard zeroes its
+  whole subtree). Broke the coverage plateau: 13,591 → 14,951 in 5 min.
+  One constraint surfaced and RESOLVED as grammar overreach, not a
+  compiler bug: Boundary inside a parallel AND branch is correctly
+  rejected (handler end-event escapes the branch → join barrier never
+  closes, V-1); isolated by minimal-shape probes, cemented in
+  `boundary_in_parallel_branch_is_correctly_rejected`, Boundary now
+  top-level-only in the grammar.
+- **F7 covering-array topology corpus (ratified 2026-07-26):** Adam's
+  constraint on the cartesian explosion of valid execution graphs —
+  cover the LOCAL logic alphabet (typed node-pair `(node → next)` +
+  switch semantics the verb allows) deterministically instead of
+  sampling whole DAGs; composition explosion tamed t-wise
+  (covering-array), with NESTING DEPTH as an explicit factor so the
+  non-local pairing cases pure pairwise adjacency would miss stay
+  covered. `covering` module: 194 enumerated canonical shapes = every
+  ordered archetype adjacency (10×10) + every switch outcome (XOR
+  taken/untaken; MI {0,1,4}) + every (gateway, content) depth-1 and
+  (gateway, gateway′, content) depth-2 nesting. Hybrid: enumeration owns
+  STRUCTURE, libFuzzer owns DYNAMICS (`fuzz seed` writes the shapes as
+  tape seeds; the runtime suffix mutates). Cement receipts: coverage
+  witness RECOMPUTED from the shapes via classification;
+  encode↔grammar round-trip locked; full corpus compiles and steps
+  clean under all oracles deterministically in CI. Recorded limits:
+  Boundary adjacency/singles only; depth 3 remains the random grammar's
+  territory, reached by mutation from the seeds.
 
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);

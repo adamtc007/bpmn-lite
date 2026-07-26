@@ -60,6 +60,8 @@ use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::WorkflowStore;
 use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid};
 
+pub mod covering;
+
 // ─── Tape (shared with the engine_commands target) ───────────────────
 
 pub struct Tape<'a> {
@@ -458,7 +460,14 @@ impl ConservationTracker {
 pub async fn drive_graph(data: &[u8]) {
     let mut tape = Tape::new(data);
     let shape = gen_shape(&mut tape);
-    let generated = emit_process(&shape);
+    drive_shape(&shape, &mut tape).await;
+}
+
+/// Drive one shape with the remaining tape as runtime dynamics — split
+/// from `drive_graph` so the covering corpus (F7) can drive an ENUMERATED
+/// shape directly, without round-tripping through tape decoding.
+pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
+    let generated = emit_process(shape);
 
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let clock = Arc::new(FuzzClock::new());
