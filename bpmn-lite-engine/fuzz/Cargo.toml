@@ -57,3 +57,10 @@ path = "fuzz_targets/engine_recovery.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "engine_flagstorm"
+path = "fuzz_targets/engine_flagstorm.rs"
+test = false
+doc = false
+bench = false

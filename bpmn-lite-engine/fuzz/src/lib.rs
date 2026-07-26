@@ -767,6 +767,121 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
     }
 }
 
+// ─── F8.7 flag-storm driver ──────────────────────────────────────────
+
+/// F8.7: routing flags are instance-global MUTABLE state — every
+/// completion may rewrite them. The intent-faithful driver
+/// (`drive_shape`) always delivers one consistent assignment; this
+/// driver deliberately delivers INCONSISTENT flag histories (each
+/// completion re-draws every flag from the tape) to hammer split
+/// evaluation, guard rollback snapshots, and OR-subset synchronization
+/// under mid-run re-routing.
+///
+/// Oracles are the structural subset — G-T's intent-derived bounds are
+/// UNSOUND here by construction (a split evaluates whatever the flags
+/// say at split time), so conservation is relaxed to shape membership:
+///   S-O1 no-panic; S-O2 every activated task belongs to the generated
+///   shape (an off-shape task type is a routing corruption regardless of
+///   flag history); S-O3 = E-O5 final cancel on non-terminal states.
+pub async fn drive_flag_storm(data: &[u8]) {
+    let mut tape = Tape::new(data);
+    let shape = gen_shape(&mut tape);
+    let generated = emit_process(&shape);
+
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let clock = Arc::new(FuzzClock::new());
+    let engine =
+        BpmnLiteEngine::new_with_runtime_context(store, TenantId::default(), clock.clone());
+    let compiled = engine.compile(&generated.xml).await.unwrap_or_else(|error| {
+        panic!("G-A red (flag-storm tier): {error}\nshape: {shape:?}")
+    });
+    let flag_keys: Vec<(String, String)> = compiled
+        .flag_symbol_table
+        .iter()
+        .filter(|(_, name)| generated.flag_intents.contains_key(*name))
+        .map(|(key, name)| (format!("flag_{key}"), name.clone()))
+        .collect();
+
+    let mut current_hash = EffectId::content_hash(generated.payload.as_bytes());
+    let Ok(instance_id) = engine
+        .start(
+            "fuzz_graph",
+            compiled.bytecode_version,
+            &generated.payload,
+            current_hash,
+            "corr-flagstorm",
+        )
+        .await
+    else {
+        return;
+    };
+
+    let steps = 8 + usize::from(tape.u8() % 17);
+    for _ in 0..steps {
+        match tape.u8() % 8 {
+            0..=3 => {
+                if let Ok(activations) = engine.run_instance(instance_id).await {
+                    for job in &activations {
+                        // S-O2: membership, not bounds — flag histories
+                        // are inconsistent on purpose.
+                        assert!(
+                            generated.bounds.contains_key(&job.task_type),
+                            "S-O2: off-shape task '{}' activated under flag storm\nshape: {shape:?}",
+                            job.task_type
+                        );
+                    }
+                    let jobs: Vec<_> = activations.into_iter().collect();
+                    for job in jobs {
+                        // Every completion re-draws EVERY flag.
+                        let storm_flags: BTreeMap<String, Value> = flag_keys
+                            .iter()
+                            .map(|(key, _)| (key.clone(), Value::Bool(tape.bool())))
+                            .collect();
+                        let result_payload = format!(r#"{{"s":{}}}"#, tape.u8());
+                        if engine
+                            .complete_job(&job.job_key, &result_payload, current_hash, storm_flags)
+                            .await
+                            .is_ok()
+                        {
+                            current_hash = EffectId::content_hash(result_payload.as_bytes());
+                        }
+                    }
+                }
+            }
+            4 => {
+                clock.advance(i64::from(tape.u8()) * 100);
+                let _ = engine.tick_instance(instance_id).await;
+            }
+            5 => {
+                let _ = engine.inspect(instance_id).await;
+            }
+            6 => {
+                let _ = engine
+                    .fail_job(
+                        "nonexistent-key",
+                        ErrorClass::Transient,
+                        "flag-storm noise",
+                    )
+                    .await;
+            }
+            _ => {
+                clock.advance(i64::from(tape.u8()) * 100);
+                let _ = engine.tick_all().await;
+            }
+        }
+    }
+
+    // S-O3 = E-O5: cancel discipline holds regardless of flag history.
+    if let Ok(inspection) = engine.inspect(instance_id).await {
+        if !inspection.state.is_terminal() {
+            engine
+                .cancel(instance_id, "flag-storm final cancel")
+                .await
+                .expect("E-O5: cancel rejected on a non-terminal instance (flag storm)");
+        }
+    }
+}
+
 // ─── F8.1 raw-XML robustness driver ──────────────────────────────────
 
 /// F8.1 (EOP-FUZZ §10): arbitrary bytes at the XML frontend. Unlike F6,
@@ -1358,6 +1473,20 @@ mod tests {
             assert_eq!(counts.get("t2"), None, "OR none: no branch runs");
             assert_eq!(counts.get("t3"), None, "OR none: no branch runs");
             assert_eq!(incidents, 1, "OR zero-match must raise exactly one incident");
+        });
+    }
+
+    /// F8.7: deterministic tape population through the flag-storm driver
+    /// — inconsistent flag histories every completion, structural oracles
+    /// quiet throughout.
+    #[test]
+    fn flag_storm_driver_steps_clean_over_tape_population() {
+        let mut seed: u64 = 0x8F0C_ED0D_2F8A_11B7;
+        runtime().block_on(async {
+            for _ in 0..60 {
+                let bytes = lcg_bytes(&mut seed, 128);
+                drive_flag_storm(&bytes).await;
+            }
         });
     }
 

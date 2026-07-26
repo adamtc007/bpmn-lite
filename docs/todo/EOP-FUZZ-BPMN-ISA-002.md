@@ -378,6 +378,92 @@ matches the established convention in-repo.
   covered" claims for earlier engine_graph runs; structural admission
   (G-A) and all other oracles were unaffected.
 
+## §10 — F8 gap-closure batch (ratified 2026-07-26, Adam: "next batch —
+I want to test the shit out of this - as far as its feasible to do")
+
+Scope = the capability-audit not-fuzzed list plus the two gaps the F7b
+work exposed (store/recovery tier, mutable-flag dynamics). Feasibility
+line: everything below is Postgres-independent and in-process; true
+kill-9/multi-process durability and lease-expiry recovery remain the
+Postgres test suite's territory (recorded, not skipped silently).
+
+- **F8.1 xml_compile** — arbitrary bytes at the XML frontend. X-O1
+  no-panic (parse/lower/admission); X-O2 admit-honest: whatever compile
+  ADMITS must start, step, and cancel clean (the fail-closed complement
+  of G-A). Receipts: hostile corpus rejects without panic (incl. 4000-
+  deep nesting bomb, invalid UTF-8, dangling refs); valid shapes step
+  clean through the same raw-bytes driver; 17 well-formed seeds. Smoke
+  2.6M execs / 2min, clean.
+- **F8.2/F8.3 engine_recovery** — FaultStore wraps MemoryStore behind
+  the full WorkflowStore surface (43 methods) with a tape-seeded fault
+  plan: fail BEFORE the store sees the call or AFTER the durable effect
+  (response lost — at-least-once hazard); tape-chosen engine RESTARTS
+  (fresh transition owner, same store). R-O1 no-panic; R-O2 G-T
+  conservation across faults+restarts (job keys redelivery-stable);
+  R-O3 post-storm the instance is finishable or cancellable by some
+  owned engine — a stuck instance is the finding. Receipts: engine
+  reconstruction over a live store (previously untested ANYWHERE, per
+  the store-surface probe), full-storm red receipt, 40-tape population.
+  Smoke 41k execs / 2min, clean.
+- **F8.4 error-boundary grammar** — Block::ErrBoundary: specific arm
+  (errorCode R7 via definitions-level catalog + errorRef) or catch-all.
+  Legality cells confirmed against the real compiler (top-level/in-XOR
+  admit, in-AND reject — barrier-ancestor rule shared with the timer
+  boundary). Runtime cement: R7 match routes to the handler and
+  completes; foreign code raises an incident and parks (reject-don't-
+  skip), still cancellable; catch-all catches any code. Covering
+  alphabet now 17 archetypes / 818 seeds.
+- **F8.5 dsl_compile** (bpmn-lite-compiler/fuzz) — hostile bytes at
+  dsl::compile (lex→parse→lint→dag, demo-bindings registry), admitted
+  plans continue through lower_plan to bytecode admission. D-O1
+  no-panic; D-O2 gate parity: frontend-admitted plans MUST lower+verify.
+  Smoke 970k execs / 90s, clean, D-O2 never fired.
+- **F8.6 wire_decode** (bpmn-lite-server/fuzz) — the gRPC boundary's
+  pure decode/validate units as bytes→Result (prost ProtoValue decode,
+  array-limit admission, conversions, parse_*). W-O1 no-panic; W-O2
+  limit parity: wire-admitted values must sit within the shared kernel
+  MAX_VALUE_ARRAY_LEN/DEPTH on recomputation. Visibility-only pub
+  widening in grpc.rs (R8 precedent). Smoke 1.9M execs / 90s, clean.
+- **F8.7 engine_flagstorm** — inconsistent flag histories: every
+  completion re-draws every routing flag, hammering split evaluation /
+  guard rollback / OR-subset sync under mid-run re-routing. Structural
+  oracles only (S-O1 no-panic, S-O2 shape membership, S-O3 cancel
+  discipline) — intent-derived G-T is unsound under mutable flags by
+  construction and stays engine_graph's tier.
+
+Fleet after F8: 15 targets across types / kernel / engine / compiler /
+server, all auto-discovered by xtask fuzz and the nightly workflow.
+
+**SURFACED FINDINGS from the F8 reconnaissance (design forks — Adam to
+rule; none fixed unilaterally):**
+1. **REST DSL path stops halfway across the admission seam.** Every
+   bpmn-lite-server REST call site (rest.rs:261, 1170, 1826, 1943,
+   2103) invokes `dsl::compile` only — the resulting
+   WorkflowExecutionPlan is stored/used WITHOUT `lower_plan` →
+   `verify_program` bytecode admission. `lower_plan` is invoked only in
+   tests. The DSL path substitutes lint+validate_dag+SESE for the
+   graph verifier (defensible, separate regimes) but the live REST flow
+   never reaches the ONE shared admission gate. G4-adjacent: if
+   admission is the product, a served path that skips it is a hollow
+   gate. Recommend: route REST DSL compile through lower_plan+verify
+   before store_plan, or record an explicit ruling why plan-tier
+   admission suffices there.
+2. **Non-interrupting error boundaries are silently downgraded.** The
+   parser reads `cancelActivity` for every boundary event but DISCARDS
+   it in the error arm (parser.rs boundary-close): a
+   `cancelActivity="false"` error boundary parses fine and runs as
+   interrupting. Trap-door class (silent semantic rewrite of author
+   intent). Recommend: reject `cancelActivity="false"` +
+   errorEventDefinition at parse with a diagnostic until
+   non-interrupting error semantics are modeled.
+3. **Exporter emits unresolvable errorRef.** export_bpmn.rs writes
+   `errorRef="<code>"` on errorEventDefinition but never emits the
+   matching top-level `<bpmn:error id=... errorCode=...>` catalog
+   entry, so a re-import resolves to error_code None (catch-all) — a
+   silent semantic widening on round-trip. Recommend: emit the catalog
+   entry (fix is mechanical).
+
 ---
 *v0.1 drafted 2026-07-25; ratified same day (all recommendations accepted);
-§9 status appended during implementation. Amend in place; lock on F4 review.*
+§9 status appended during implementation; §10 F8 batch appended
+2026-07-26. Amend in place; lock on F4 review.*
