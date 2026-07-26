@@ -122,6 +122,24 @@ fn seed(root: &Path) -> Result<()> {
     if !status.success() {
         bail!("covering-seed writer failed ({status})");
     }
+
+    // F8.1 xml_compile seeds: one well-formed BPMN document per covering
+    // single, so libFuzzer mutates from valid structure instead of
+    // rediscovering XML syntax.
+    println!("== generating xml_compile seeds ==");
+    let status = Command::new("cargo")
+        .arg("test")
+        .arg("--manifest-path")
+        .arg(root.join("bpmn-lite-engine/fuzz/Cargo.toml"))
+        .arg("write_xml_seeds")
+        .arg("--")
+        .arg("--ignored")
+        .current_dir(root)
+        .status()
+        .context("spawn xml-seed writer")?;
+    if !status.success() {
+        bail!("xml-seed writer failed ({status})");
+    }
     Ok(())
 }
 

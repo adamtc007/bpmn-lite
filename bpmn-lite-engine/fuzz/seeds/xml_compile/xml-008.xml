@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="fuzz_graph" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="init"><bpmn:extensionElements><zeebe:taskDefinition type="init"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:inclusiveGateway id="of1" gatewayDirection="Diverging"/>
+    <bpmn:inclusiveGateway id="oj1" gatewayDirection="Converging"/>
+    <bpmn:serviceTask id="t2"><bpmn:extensionElements><zeebe:taskDefinition type="t2"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="t3"><bpmn:extensionElements><zeebe:taskDefinition type="t3"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="init"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="of1" targetRef="t2">
+      <bpmn:conditionExpression>= o1b0 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3" sourceRef="t2" targetRef="oj1"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="of1" targetRef="t3">
+      <bpmn:conditionExpression>= o1b1 == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f5" sourceRef="t3" targetRef="oj1"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="init" targetRef="of1"/>
+    <bpmn:sequenceFlow id="f7" sourceRef="oj1" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>

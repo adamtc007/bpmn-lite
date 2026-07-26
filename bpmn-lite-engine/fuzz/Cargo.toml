@@ -42,3 +42,10 @@ path = "fuzz_targets/engine_graph.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "xml_compile"
+path = "fuzz_targets/xml_compile.rs"
+test = false
+doc = false
+bench = false

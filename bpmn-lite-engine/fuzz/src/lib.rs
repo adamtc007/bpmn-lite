@@ -696,6 +696,64 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
     }
 }
 
+// ─── F8.1 raw-XML robustness driver ──────────────────────────────────
+
+/// F8.1 (EOP-FUZZ §10): arbitrary bytes at the XML frontend. Unlike F6,
+/// nothing here is grammar-legal — the parser/lowering/verifier chain is
+/// the system under test against HOSTILE input.
+///
+/// Oracles:
+///   X-O1 no-panic     — any byte sequence either compiles or is rejected
+///                       with an error; a panic/abort in parse, lowering,
+///                       or admission is the finding.
+///   X-O2 admit-honest — an ADMITTED artifact is a promise, not a parse:
+///                       whatever compile accepts must then start, step,
+///                       and cancel without panic (E-O5 re-asserted on a
+///                       reachable non-terminal state). This is the
+///                       fail-closed complement of G-A: G-A says legal
+///                       shapes must be admitted; X-O2 says whatever IS
+///                       admitted must behave.
+pub async fn drive_xml_compile(data: &[u8]) {
+    let xml = String::from_utf8_lossy(data);
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine =
+        BpmnLiteEngine::new_with_runtime_context(store, TenantId::default(), Arc::new(FuzzClock::new()));
+    let Ok(compiled) = engine.compile(&xml).await else {
+        return; // X-O1: rejection is the legal outcome for hostile bytes
+    };
+    let payload = "{}";
+    let hash = EffectId::content_hash(payload.as_bytes());
+    let Ok(instance_id) = engine
+        .start("fuzz_xml", compiled.bytecode_version, payload, hash, "corr-xml")
+        .await
+    else {
+        return; // start may legitimately reject (e.g. key/artifact mismatch)
+    };
+    for _ in 0..6 {
+        let Ok(jobs) = engine.run_instance(instance_id).await else {
+            break;
+        };
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            let _ = engine
+                .complete_job(&job.job_key, payload, hash, BTreeMap::new())
+                .await;
+        }
+    }
+    // X-O2 ∋ E-O5: an admitted artifact's non-terminal instance must be
+    // cancellable — arbitrary-XML artifacts get no exemption.
+    if let Ok(inspection) = engine.inspect(instance_id).await {
+        if !inspection.state.is_terminal() {
+            engine
+                .cancel(instance_id, "xml fuzz final cancel")
+                .await
+                .expect("X-O2/E-O5: cancel rejected on a non-terminal instance (admitted XML)");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,5 +1171,110 @@ mod tests {
             assert_eq!(counts.get("t3"), None, "OR none: no branch runs");
             assert_eq!(incidents, 1, "OR zero-match must raise exactly one incident");
         });
+    }
+
+    /// F8.1 X-O1 red receipts: hostile bytes must REJECT, never panic —
+    /// each case runs the full driver (no-panic half) AND must be Err at
+    /// compile (fail-closed half; an Ok here would mean the parser
+    /// admitted garbage).
+    #[test]
+    fn hostile_xml_rejects_without_panic() {
+        let generated = emit_process(&Shape {
+            blocks: vec![Block::Task],
+        });
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"not xml at all".to_vec(),
+            vec![0xff, 0xfe, 0x00, 0x80, 0xc3], // invalid UTF-8
+            b"<bpmn:definitions".to_vec(),      // truncated open tag
+            format!("<a>{}</a>", "<b>".repeat(4000)).into_bytes(), // nesting bomb
+            generated
+                .xml
+                .replace("</bpmn:process>", "")
+                .into_bytes(), // unclosed process
+            generated
+                .xml
+                .replace(r#"targetRef="end""#, r#"targetRef="nowhere""#)
+                .into_bytes(), // dangling flow ref
+        ];
+        runtime().block_on(async {
+            for case in &cases {
+                // No-panic: the whole admit-or-reject-then-step driver.
+                drive_xml_compile(case).await;
+                // Fail-closed: these specific corruptions must reject.
+                let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+                let engine = BpmnLiteEngine::new_with_runtime_context(
+                    store,
+                    TenantId::default(),
+                    Arc::new(FuzzClock::new()),
+                );
+                assert!(
+                    engine.compile(&String::from_utf8_lossy(case)).await.is_err(),
+                    "hostile XML admitted: {:?}",
+                    String::from_utf8_lossy(case).chars().take(80).collect::<String>()
+                );
+            }
+        });
+    }
+
+    /// F8.1 X-O2 green receipt: valid XML through the SAME raw-bytes
+    /// driver compiles, starts, steps, and cancels clean — the admitted
+    /// path of the robustness target is live, not vacuous.
+    #[test]
+    fn admitted_xml_from_raw_bytes_steps_clean() {
+        let shapes = [
+            Shape { blocks: vec![Block::Task] },
+            Shape {
+                blocks: vec![Block::And {
+                    branches: vec![vec![Block::Task], vec![Block::Task]],
+                }],
+            },
+            Shape {
+                blocks: vec![Block::Xor {
+                    take_guarded: true,
+                    guarded: vec![Block::Task],
+                    default: vec![Block::Task],
+                }],
+            },
+        ];
+        runtime().block_on(async {
+            for shape in &shapes {
+                let generated = emit_process(shape);
+                drive_xml_compile(generated.xml.as_bytes()).await;
+            }
+        });
+    }
+
+    /// F8.1 seed writer (run via `cargo xtask fuzz seed`): valid BPMN
+    /// documents (one per covering single) so the fuzzer mutates from
+    /// well-formed structure instead of rediscovering XML. Pre-cleans
+    /// stale xml-*.xml.
+    #[test]
+    #[ignore = "writes files; invoked by cargo xtask fuzz seed"]
+    fn write_xml_seeds() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("seeds/xml_compile");
+        std::fs::create_dir_all(&dir).expect("create seeds dir");
+        for entry in std::fs::read_dir(&dir).expect("read seeds dir") {
+            let path = entry.expect("dir entry").path();
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("xml-") && n.ends_with(".xml"))
+            {
+                std::fs::remove_file(&path).expect("remove stale seed");
+            }
+        }
+        for (index, archetype) in covering::ALL_ARCHETYPES.iter().enumerate() {
+            let generated = emit_process(&Shape {
+                blocks: vec![archetype.block()],
+            });
+            std::fs::write(dir.join(format!("xml-{index:03}.xml")), generated.xml.as_bytes())
+                .expect("write seed");
+        }
+        println!(
+            "wrote {} xml seeds to {}",
+            covering::ALL_ARCHETYPES.len(),
+            dir.display()
+        );
     }
 }
