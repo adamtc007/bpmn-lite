@@ -77,6 +77,7 @@ use bpmn_lite_store::WorkflowStore;
 use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid, Value};
 
 pub mod covering;
+pub mod fault;
 
 // ─── Tape (shared with the engine_commands target) ───────────────────
 

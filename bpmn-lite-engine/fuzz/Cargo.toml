@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 serde_json = "1"
 uuid = "1"
+async-trait = "0.1"
 # <1.53: rustc nightly (2026-07-17 AND 2026-07-24) ICEs compiling tokio
 # 1.53's multi_thread runtime under cargo-fuzz's sancov flags
 # (rustc_codegen_ssa operand.rs:291 "not immediate"). The bound caps the
@@ -46,6 +47,13 @@ bench = false
 [[bin]]
 name = "xml_compile"
 path = "fuzz_targets/xml_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine_recovery"
+path = "fuzz_targets/engine_recovery.rs"
 test = false
 doc = false
 bench = false
