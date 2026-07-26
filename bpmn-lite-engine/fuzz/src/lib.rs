@@ -184,6 +184,14 @@ pub enum Block {
     /// barrier (And/Or) ancestor — the handler's end event escapes such a
     /// branch and the join barrier never closes (V-1).
     Boundary { interrupting: bool },
+    /// Host task with an attached ERROR boundary (guard-error family,
+    /// GUARD-ERROR> arms) and a handler task routed to its own end event.
+    /// The specific arm catches errorCode "R7" — the code the drive loop
+    /// deliberately throws — so match and miss are both reachable; the
+    /// catch-all arm (no errorRef) catches any BusinessRejection.
+    /// Interrupting only: the parser models no non-interrupting error
+    /// boundary. Leaf; same barrier-ancestor rule as Boundary.
+    ErrBoundary { catch_all: bool },
     /// Parallel multi-instance task over a payload collection
     /// (`maxInstances="4"`); length 0 probes the V-11 zero-match rule. Leaf.
     Mi { collection_len: u8 },
@@ -247,9 +255,17 @@ fn gen_block(tape: &mut Tape, depth: u8, under_barrier: bool, budget: &mut u32) 
         // the join barrier never closes (V-1) — the compiler correctly
         // rejects that (cemented in the legality-matrix test). Inside an
         // XOR region (no barrier) it is legal and now emitted.
-        6 if !under_barrier => Block::Boundary {
-            interrupting: tape.bool(),
-        },
+        6 if !under_barrier => {
+            if tape.bool() {
+                Block::ErrBoundary {
+                    catch_all: tape.bool(),
+                }
+            } else {
+                Block::Boundary {
+                    interrupting: tape.bool(),
+                }
+            }
+        }
         7 => Block::Mi {
             collection_len: tape.u8() % 5,
         },
@@ -293,6 +309,11 @@ pub struct GeneratedProcess {
 struct EmitCtx {
     elements: String,
     flows: String,
+    /// Definitions-level elements (error catalog) — the parser collects
+    /// `<bpmn:error>` only OUTSIDE the process, and boundary-close
+    /// resolution reads the catalog mid-parse, so these must precede the
+    /// process element in document order.
+    definitions: String,
     bounds: BTreeMap<String, u32>,
     payload_fields: Vec<String>,
     flag_intents: BTreeMap<String, bool>,
@@ -447,6 +468,47 @@ fn emit_block(block: &Block, mult: u32, ctx: &mut EmitCtx) -> (String, String) {
             ctx.flow(&handler, &handler_end, None);
             (host.clone(), host)
         }
+        Block::ErrBoundary { catch_all } => {
+            let u = ctx.uid();
+            let host = format!("h{u}");
+            let handler = format!("r{u}");
+            let handler_end = format!("be{u}");
+            let boundary = format!("bx{u}");
+            ctx.service_task(&host);
+            ctx.service_task(&handler);
+            ctx.bounds.insert(host.clone(), mult);
+            ctx.bounds.insert(handler.clone(), mult);
+            let event_definition = if *catch_all {
+                // No errorRef → error_code None → catch-all arm.
+                "<bpmn:errorEventDefinition/>".to_string()
+            } else {
+                // Specific arm: errorRef resolves through the
+                // definitions-level catalog to errorCode "R7" — the code
+                // the drive loop deliberately throws.
+                let error_def = format!("errdef{u}");
+                let _ = write!(
+                    ctx.definitions,
+                    r#"  <bpmn:error id="{error_def}" errorCode="R7"/>
+"#
+                );
+                format!(r#"<bpmn:errorEventDefinition errorRef="{error_def}"/>"#)
+            };
+            let _ = write!(
+                ctx.elements,
+                r#"    <bpmn:boundaryEvent id="{boundary}" attachedToRef="{host}">
+      {event_definition}
+    </bpmn:boundaryEvent>
+"#
+            );
+            ctx.flow(&boundary, &handler, None);
+            ctx.flow(&handler, &handler_end, None);
+            let _ = write!(
+                ctx.elements,
+                r#"    <bpmn:endEvent id="{handler_end}"/>
+"#
+            );
+            (host.clone(), host)
+        }
         Block::Mi { collection_len } => {
             let u = ctx.uid();
             let id = format!("mi{u}");
@@ -510,11 +572,12 @@ pub fn emit_process(shape: &Shape) -> GeneratedProcess {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
                   xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
-  <bpmn:process id="fuzz_graph" isExecutable="true">
+{definitions}  <bpmn:process id="fuzz_graph" isExecutable="true">
     <bpmn:startEvent id="start"/>
 {elements}    <bpmn:endEvent id="end"/>
 {flows}  </bpmn:process>
 </bpmn:definitions>"#,
+        definitions = ctx.definitions,
         elements = ctx.elements,
         flows = ctx.flows,
     );
@@ -658,9 +721,16 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
                     continue;
                 }
                 let key = job_keys[usize::from(tape.u8()) % job_keys.len()].clone();
-                let error_class = match tape.u8() % 3 {
+                let error_class = match tape.u8() % 4 {
                     0 => ErrorClass::Transient,
                     1 => ErrorClass::ContractViolation,
+                    // "R7" is the code every specific error-boundary arm
+                    // catches — a deliberate MATCH when the failed job is
+                    // an ErrBoundary host, an unmatched rejection
+                    // (incident path) anywhere else.
+                    2 => ErrorClass::BusinessRejection {
+                        rejection_code: "R7".to_string(),
+                    },
                     _ => ErrorClass::BusinessRejection {
                         rejection_code: format!("R{}", tape.u8()),
                     },
@@ -1052,6 +1122,123 @@ mod tests {
                 .await,
                 "boundary inside an OR branch must be rejected (inclusive join barrier)"
             );
+            // Error boundaries obey the same barrier-ancestor rule: the
+            // handler's end event has the identical V-1 escape.
+            assert!(
+                compiles(Shape {
+                    blocks: vec![Block::ErrBoundary { catch_all: false }],
+                })
+                .await,
+                "top-level error boundary must compile"
+            );
+            assert!(
+                compiles(Shape {
+                    blocks: vec![Block::Xor {
+                        take_guarded: true,
+                        guarded: vec![Block::ErrBoundary { catch_all: true }],
+                        default: vec![],
+                    }],
+                })
+                .await,
+                "error boundary inside an XOR region must compile"
+            );
+            assert!(
+                !compiles(Shape {
+                    blocks: vec![Block::And {
+                        branches: vec![
+                            vec![Block::ErrBoundary { catch_all: false }],
+                            vec![Block::Task],
+                        ],
+                    }],
+                })
+                .await,
+                "error boundary inside an AND branch must be rejected (barrier escape)"
+            );
+        });
+    }
+
+    /// F8.4 runtime receipt for the guard-error family: a BusinessRejection
+    /// with the arm's code routes to the handler (specific arm), any code
+    /// routes on a catch-all arm, and an UNMATCHED code on a specific arm
+    /// raises an incident — reject, don't skip — leaving the instance
+    /// cancellable.
+    #[test]
+    fn error_boundary_routing_matches_and_misses() {
+        async fn drive(
+            catch_all: bool,
+            rejection_code: &str,
+        ) -> (bool /* handler ran */, usize /* incidents */, bool /* terminal */) {
+            let shape = Shape {
+                blocks: vec![Block::ErrBoundary { catch_all }],
+            };
+            let generated = emit_process(&shape);
+            let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+            let engine = BpmnLiteEngine::new_with_runtime_context(
+                store,
+                TenantId::default(),
+                Arc::new(FuzzClock::new()),
+            );
+            let compiled = engine.compile(&generated.xml).await.expect("compile");
+            let mut hash = EffectId::content_hash(generated.payload.as_bytes());
+            let instance_id = engine
+                .start("fuzz_graph", compiled.bytecode_version, &generated.payload, hash, "c")
+                .await
+                .expect("start");
+            let mut handler_ran = false;
+            for _ in 0..12 {
+                let jobs = engine.run_instance(instance_id).await.expect("run");
+                if jobs.is_empty() {
+                    break;
+                }
+                for job in jobs {
+                    // uid 1: host h1, handler r1.
+                    if job.task_type == "h1" {
+                        engine
+                            .fail_job(
+                                &job.job_key,
+                                ErrorClass::BusinessRejection {
+                                    rejection_code: rejection_code.to_string(),
+                                },
+                                "cement failure",
+                            )
+                            .await
+                            .expect("fail host");
+                    } else {
+                        handler_ran |= job.task_type == "r1";
+                        engine
+                            .complete_job(&job.job_key, r#"{"ok":1}"#, hash, BTreeMap::new())
+                            .await
+                            .expect("complete");
+                        hash = EffectId::content_hash(br#"{"ok":1}"#);
+                    }
+                }
+            }
+            let inspection = engine.inspect(instance_id).await.expect("inspect");
+            let terminal = inspection.state.is_terminal();
+            if !terminal {
+                engine
+                    .cancel(instance_id, "cement cancel")
+                    .await
+                    .expect("E-O5 on incidented instance");
+            }
+            (handler_ran, inspection.incidents.len(), terminal)
+        }
+
+        runtime().block_on(async {
+            let (handler_ran, incidents, terminal) = drive(false, "R7").await;
+            assert!(handler_ran, "specific arm must catch its own code R7");
+            assert_eq!(incidents, 0, "matched rejection raises no incident");
+            assert!(terminal, "handler path must run to completion");
+
+            let (handler_ran, incidents, terminal) = drive(false, "R9").await;
+            assert!(!handler_ran, "specific arm must NOT catch a foreign code");
+            assert!(incidents >= 1, "unmatched rejection must raise an incident");
+            assert!(!terminal, "unmatched rejection parks the instance");
+
+            let (handler_ran, incidents, terminal) = drive(true, "R9").await;
+            assert!(handler_ran, "catch-all arm must catch any code");
+            assert_eq!(incidents, 0);
+            assert!(terminal);
         });
     }
 

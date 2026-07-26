@@ -65,12 +65,16 @@ pub enum Archetype {
     Or2None,
     BoundaryInterrupting,
     BoundaryNonInterrupting,
+    /// Error boundary, specific arm (errorCode "R7").
+    ErrBoundarySpecific,
+    /// Error boundary, catch-all arm (no errorRef).
+    ErrBoundaryCatchAll,
     Mi0,
     Mi1,
     Mi4,
 }
 
-pub const ALL_ARCHETYPES: [Archetype; 15] = [
+pub const ALL_ARCHETYPES: [Archetype; 17] = [
     Archetype::Task,
     Archetype::And2,
     Archetype::And3,
@@ -83,9 +87,20 @@ pub const ALL_ARCHETYPES: [Archetype; 15] = [
     Archetype::Or2None,
     Archetype::BoundaryInterrupting,
     Archetype::BoundaryNonInterrupting,
+    Archetype::ErrBoundarySpecific,
+    Archetype::ErrBoundaryCatchAll,
     Archetype::Mi0,
     Archetype::Mi1,
     Archetype::Mi4,
+];
+
+/// The boundary-family archetypes (timer + error) — the XOR-only nesting
+/// letters.
+pub const BOUNDARY_ARCHETYPES: [Archetype; 4] = [
+    Archetype::BoundaryInterrupting,
+    Archetype::BoundaryNonInterrupting,
+    Archetype::ErrBoundarySpecific,
+    Archetype::ErrBoundaryCatchAll,
 ];
 
 /// Gateway wrappers for the nesting factors — one letter per gateway
@@ -166,6 +181,8 @@ impl Archetype {
             Archetype::BoundaryNonInterrupting => Block::Boundary {
                 interrupting: false,
             },
+            Archetype::ErrBoundarySpecific => Block::ErrBoundary { catch_all: false },
+            Archetype::ErrBoundaryCatchAll => Block::ErrBoundary { catch_all: true },
             Archetype::Mi0 => Block::Mi { collection_len: 0 },
             Archetype::Mi1 => Block::Mi { collection_len: 1 },
             Archetype::Mi4 => Block::Mi { collection_len: 4 },
@@ -216,6 +233,8 @@ impl Archetype {
             Block::Boundary {
                 interrupting: false,
             } => Some(Archetype::BoundaryNonInterrupting),
+            Block::ErrBoundary { catch_all: false } => Some(Archetype::ErrBoundarySpecific),
+            Block::ErrBoundary { catch_all: true } => Some(Archetype::ErrBoundaryCatchAll),
             Block::Mi { collection_len: 0 } => Some(Archetype::Mi0),
             Block::Mi { collection_len: 1 } => Some(Archetype::Mi1),
             Block::Mi { collection_len: 4 } => Some(Archetype::Mi4),
@@ -317,10 +336,7 @@ pub fn covering_shapes() -> Vec<Shape> {
         }
     }
     for g in XOR_GATEWAYS {
-        for b in [
-            Archetype::BoundaryInterrupting,
-            Archetype::BoundaryNonInterrupting,
-        ] {
+        for b in BOUNDARY_ARCHETYPES {
             shapes.push(Shape {
                 blocks: vec![g.wrap(vec![b.block()])],
             });
@@ -415,7 +431,17 @@ fn encode_block(
                 "grammar never emits Boundary under a synchronizing barrier"
             );
             bytes.push(6);
+            bytes.push(0); // bool: not an error boundary
             bytes.push(u8::from(*interrupting));
+        }
+        Block::ErrBoundary { catch_all } => {
+            assert!(
+                !under_barrier,
+                "grammar never emits ErrBoundary under a synchronizing barrier"
+            );
+            bytes.push(6);
+            bytes.push(1); // bool: error boundary
+            bytes.push(u8::from(*catch_all));
         }
         Block::Mi { collection_len } => {
             assert!(*collection_len <= 4, "MI length 0-4");
@@ -502,10 +528,7 @@ mod tests {
             }
         }
         for g in XOR_GATEWAYS {
-            for b in [
-                Archetype::BoundaryInterrupting,
-                Archetype::BoundaryNonInterrupting,
-            ] {
+            for b in BOUNDARY_ARCHETYPES {
                 assert!(
                     depth1.contains(&(g, b)),
                     "missing XOR×Boundary nesting {g:?}({b:?})"

@@ -4,15 +4,17 @@
   <bpmn:process id="fuzz_graph" isExecutable="true">
     <bpmn:startEvent id="start"/>
     <bpmn:serviceTask id="init"><bpmn:extensionElements><zeebe:taskDefinition type="init"/></bpmn:extensionElements></bpmn:serviceTask>
-    <bpmn:serviceTask id="mi1">
-      <bpmn:extensionElements><zeebe:taskDefinition type="mi1"/></bpmn:extensionElements>
-      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
-        <bpmn:extensionElements><zeebe:loopCharacteristics inputCollection="c1" maxInstances="4"/></bpmn:extensionElements>
-      </bpmn:multiInstanceLoopCharacteristics>
-    </bpmn:serviceTask>
+    <bpmn:serviceTask id="h1"><bpmn:extensionElements><zeebe:taskDefinition type="h1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:serviceTask id="r1"><bpmn:extensionElements><zeebe:taskDefinition type="r1"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:boundaryEvent id="bx1" attachedToRef="h1">
+      <bpmn:errorEventDefinition/>
+    </bpmn:boundaryEvent>
+    <bpmn:endEvent id="be1"/>
     <bpmn:endEvent id="end"/>
     <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="init"/>
-    <bpmn:sequenceFlow id="f2" sourceRef="init" targetRef="mi1"/>
-    <bpmn:sequenceFlow id="f3" sourceRef="mi1" targetRef="end"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="bx1" targetRef="r1"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="r1" targetRef="be1"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="init" targetRef="h1"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="h1" targetRef="end"/>
   </bpmn:process>
 </bpmn:definitions>
