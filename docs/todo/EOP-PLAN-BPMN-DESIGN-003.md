@@ -618,6 +618,86 @@ changes a live wire contract, so surfacing rather than deciding.
 Full workspace sweep after all fixes: `cargo test --workspace` — 0 failures.
 **G2 remains OPEN pending Adam's ruling on BLOCKER 2.**
 
+Also worth a line: the executor's course-correction on BLOCKER 2 — tracing
+`load_plan`'s real consumer (`bpmn-lite-bus-handler`) before shipping the
+first-pass recommendation, catching that storing `ExecutableWorkflow`
+directly would have silently corrupted live template instantiation — is the
+trace-before-trust discipline (verify-don't-infer) doing its job. Recorded
+as a caught-by-process event, per Adam's ruling below.
+
+#### Ruling — BLOCKER 2: (a), with two riders (Adam, 2026-07-27)
+
+**(a)** — `DesignerDag`→`WorkflowExecutionPlan` projection, both session
+kinds converge on the one stored/consumed type — **ratified, with two
+riders that determine whether (a) is right or a trap:**
+
+- **Rider 1 — the projection is a call, not a construction.** The
+  `IRGraph → WorkflowExecutionPlan` step must be the production compiler's
+  own validate-and-lower path, invoked at save/publish — never a bespoke
+  mapping function. A hand-rolled projector would be a second lowering path
+  (the three-faces-of-one-root-cause lesson, §23) and a direct I16/I17
+  violation. If the existing compiler surface can't be called from the
+  endpoint's position, that's a HALT and a substrate ask, not a
+  reimplementation.
+- **Rider 2 — converging the plan store must not lose the authoring
+  truth.** `load_plan`'s ONE stored type is correct because that store
+  feeds instantiation and should only ever contain compiled artifacts (P5).
+  But the `DesignerDag` is the authoritative authored artifact (I1) and
+  must persist in the session/edit-log store with its declarations (C7)
+  intact so a graph-backed session can be reopened and edited. (a) as
+  sketched saves only the projection — fixing the bus-handler while
+  silently breaking G2's reopen-and-round-trip requirement is not a fix.
+  **Two stores, two roles: session store holds the DAG (already true —
+  `GraphEdit` events), plan store holds what the compiler produced from it.**
+
+**Why not (b)** (widen `load_plan` to a tagged union): puts an authoring
+representation into the execution consumer's contract — the bus-handler
+would be interpreting/lowering a source graph at instantiation time,
+exactly what P5 forbids, and spreads variant-handling into a shipped
+consumer where a future wildcard arm is one lazy edit away. The
+instantiation boundary receives compiled artifacts, full stop.
+
+**Receipts required (both, not one):** red→green fixture that (i) saves a
+graph-backed session, publishes, and instantiates end-to-end through
+`bpmn-lite-bus-handler`; (ii) reopens the same session for edit with the
+DAG and every declaration intact. The bug was silent precisely because
+only one side of the boundary was ever exercised.
+
+#### Trace result — Rider 1's condition IS triggered: HALT, substrate ask (2026-07-27)
+
+Dispatched a read-only research agent to determine whether an
+`IRGraph → WorkflowExecutionPlan` path already exists anywhere in the
+compiler, at any crate position (the question Rider 1's fallback anticipates).
+Finding, stronger than "not callable from this position" — **it does not
+exist in any form:**
+
+- `dsl::compile()`'s `lint()` phase (`linter.rs:261-288`) is what
+  constructs `WorkflowExecutionPlan`; it operates purely on the parsed AST
+  (`WorkflowSource`/`NodeAst`) and never builds or references an `IRGraph`
+  — zero references to `ir.rs` types anywhere in `dsl/`.
+- The IR path (`lowering.rs`'s `lower`/`lower_with_default`/`lower_v2`)
+  goes `IRGraph → CompiledProgram/VerifiedWorkflow` — bytecode-level,
+  never touches `WorkflowExecutionPlan`.
+- A third, independent route (`dsl/frontend.rs:44-49`, `lower_plan`) goes
+  `WorkflowExecutionPlan → VerifiedWorkflow` directly, bypassing `IRGraph`
+  entirely.
+
+Not a crate-boundary/visibility problem — `designer-graph` already depends
+on `bpmn-lite-compiler` and already calls into it (`to_ir`/`verify`/
+`Compiler::lower_with_default`); wiring a new call would be trivial. The
+function has simply never been written. `WorkflowExecutionPlan`'s
+`ExecutionNode` also carries placeholder-schema/delivery-mode fields
+(`plug`, `static_args`, `produces_placeholder`) `IRNode` has no equivalent
+for — not a mechanical reshuffle, but new compiler logic: how does
+IR-authored graph state resolve to placeholder bindings the AST path
+currently derives from source annotations?
+
+Per Rider 1 and the working contract's HALT discipline: not building this
+under implement-mode. **G2 stays OPEN, unchanged.** Needs Adam's scoping
+of the substrate tranche (a new `IRGraph → WorkflowExecutionPlan` lowering
+inside `bpmn-lite-compiler`, presumably CAREFUL-tier given it touches the
+compiler's ratified surface) before further BLOCKER 2 work proceeds.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
