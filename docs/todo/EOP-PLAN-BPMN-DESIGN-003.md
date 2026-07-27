@@ -797,6 +797,46 @@ The one remaining gap — the "spawn-instance" leg of receipt (i) — is
 infra, not code, and is captured as a concrete, re-runnable `#[ignore]`d
 spec rather than silently dropped.
 
+### GATE G2 — CLOSED (Adam, 2026-07-27)
+
+Both required criteria (line 89) are satisfied:
+
+- **Solicit-document workflow authored end to end + red-team script**:
+  closed earlier this session (`designer-graph/src/g2_receipts.rs`, 6
+  tests) — reminder cycle with `max_fires`, per-guard budget, correlation
+  source, published/re-opened with every declaration intact; red-team
+  script of deliberately invalid edits each refused at staging with the
+  correct theorem named. The one gap flagged at that closure (§6.3's
+  literal "guard the wait" shape) was resolved by the guarded-wait ruling
+  the same session (`g2_solicit_guarded_wait_admits_and_arms`,
+  `g2_guard_on_human_wait_admits_and_arms`).
+- **Full pipeline (board → tier-0 → disposition policy → I28 record)
+  demonstrably in the loop**: live since WS-B.4 landed
+  (`session_utterance_endpoint` branches on `is_graph_backed()`, running
+  the real `PositionalLegality` oracle + `project_ir` context for
+  graph-backed sessions) — plus the independent blind review this pass
+  ran against that exact surface (WS-B.4's session/graph-edit/save
+  endpoints), which is the CAREFUL-tier "blind review" half of the gate's
+  own name. Three real BLOCKERs found across two review passes, all
+  fixed with red→green (or honestly-labeled regression-guard) receipts;
+  zero BLOCKERs outstanding.
+
+**Known, tracked, non-blocking residuals** (none reopen the gate — each is
+either explicitly out of scope by design or a documented environment
+gap, not a silent omission):
+- `save_design_session_endpoint`'s `project_ir` scope is intentionally
+  conservative (Start/End/ServiceTask/matched AND+Inclusive gateway pairs
+  only) — `GatewayXor` and all v2-only wait/guard/MI/FFI node kinds fail
+  closed rather than saving as a template today. Widening this scope is
+  new compiler work, not a gate-closing item.
+- The "spawn-instance" leg of the bus-handler instantiation receipt is
+  `#[ignore]`d pending `data_designer`'s foreign migration-history gap
+  being fixed as ops housekeeping (tracked in the memory checkpoint's open
+  queue).
+
+Full `cargo test --workspace`: 0 failures at every stage of this arc,
+confirmed immediately before this closure.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
