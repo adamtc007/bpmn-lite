@@ -211,8 +211,9 @@ gating matcher/feedback/populate_embeddings with sqlx/pgvector optional;
 designer consumes `default-features = false`. Folded into the WS-C tier-0
 wiring task. Note for the WS-C brief: exact-match 1.0 / phonetic 0.95
 pins live in the pgvector matcher, so Designer tier-0 implements its own
-exact-match pinning. GOV.2 rider stands: `/dev/rust` still needs a remote
-before anything can rev-pin it.
+exact-match pinning. GOV.2 rider CLOSED 2026-07-27:
+`/dev/rust` pushed to private remote `adamtc007/ob-poc-rust` —
+`ob-semantic-matcher` is now rev-pinnable.
 
 **C4-residual — the design note (envelope ↔ instance-data mapping).**
 No contradiction with ISA-002 §28 found; no HALT. The mapping:
@@ -294,10 +295,11 @@ integrity). Disposition:
 | F8 | NOTE | I23 mechanism/backstop inverted (no per-op forward-only pre-gate yet) | **PINNED to WS-A.2 brief**: every edge-introducing operation pre-gates `has_path_connecting(to, from)`; verifier stays the backstop. Plus reviewer's `declared_max = 0` convention test |
 
 **Substrate finding F-DSGN-2 (surfaced, unfixed — awaiting Adam):**
-`verify_data_objects` (compiler verifier.rs:889) has ZERO non-test
-callers anywhere in the repo — a duplicate-data-object-id gate that never
-runs. Options: wire it into `verify()` (behavior change for the XML/DTO
-paths — needs its own red/green) or delete it. Recommendation: wire in.
+`verify_data_objects` (compiler verifier.rs) had ZERO non-test callers —
+a gate that never ran. **RULED wire-in (Adam) + IMPLEMENTED 2026-07-27**:
+`verify()` now runs it on every admission; cement
+`verify_runs_data_object_checks` (unresolved FFI var-ref refused — red
+that previously verified clean); full workspace sweep green.
 
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 

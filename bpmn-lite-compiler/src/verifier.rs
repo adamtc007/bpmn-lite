@@ -628,6 +628,11 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
         // offending node.
     }
 
+    // F-DSGN-2 (2026-07-27, Adam-ruled wire-in): verify_data_objects had
+    // ZERO non-test callers — a gate that never ran. FFI binding
+    // resolution and data-object id checks now run on every admission.
+    errors.extend(verify_data_objects(graph));
+
     errors
 }
 
@@ -992,6 +997,36 @@ pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
 ///   in `bpmn_lite_types::Value` (non-Bool, non-I64)
 #[cfg(test)]
 mod tests {
+    /// F-DSGN-2 cement: verify() now RUNS verify_data_objects — an
+    /// unresolved FFI input var-ref is a verify() refusal (red), and a
+    /// declared one admits (green). Before the wire-in this graph
+    /// verified clean because the gate had no callers.
+    #[test]
+    fn verify_runs_data_object_checks() {
+        use super::*;
+        use crate::ir::{Expression, FfiInputBinding};
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(IRNode::FfiServiceTask {
+            id: "ffi1".into(),
+            name: "ffi1".into(),
+            template_id: [0u8; 32],
+            inputs: vec![FfiInputBinding {
+                target_field: "x".into(),
+                expression: Expression::VarRef(vec!["undeclared_obj".into()]),
+            }],
+            outputs: vec![],
+        });
+        let e = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, e, IREdge { id: "e2".into(), condition: None });
+        let errs = verify(&g);
+        assert!(
+            errs.iter().any(|x| x.message.contains("undeclared_obj")),
+            "unresolved var ref must be refused by verify(): {errs:?}"
+        );
+    }
+
     /// WS-A.1 F3 cement: duplicate node/edge ids are a verify() refusal
     /// naming the id — red (dup) + green (unique) pair.
     #[test]
