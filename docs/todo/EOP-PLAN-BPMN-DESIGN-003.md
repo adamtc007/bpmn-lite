@@ -329,6 +329,34 @@ Config-by-hash registry (N3 rider) is a named WS-C item-6 (capture
 pipeline) obligation: records are reproducible only if configs are
 retrievable by `disposition_policy_hash`.
 
+### WS-C C-now items 4–6 — CLOSED 2026-07-27
+
+- **Item 4 (tier-0):** `ob-semantic-matcher` `pg` feature-gate landed
+  and pushed (`ob-poc-rust @ ff3f12c7` — C5 AMBER→GREEN; Candle slice
+  builds with no Postgres tree). `Tier0Retriever` trait is the producer
+  seam; `LexicalTier0` (the demoted keyword gate's ruled successor:
+  deterministic token overlap, designer-side exact-match 1.0 pin, NOTA
+  as overlap complement) and `EmbedTier0` (E3: rev-pinned Candle
+  embedder, on-the-fly board embedding, in-memory cosine; behind an
+  off-by-default `embed` feature so default builds stay network-free;
+  integration receipt `#[ignore]`d for cold-cache weight download).
+  **Pipeline-in-loop receipt green**: board → tier-0 → policy → I28
+  record end to end, gibberish abstains, deterministic (G2 criterion,
+  first light).
+- **Item 6 (capture, switch OFF):** `CapturePipeline::off()` sole
+  zero-arg constructor; ON requires a ratified Q9 charter reference
+  (D17 as mechanism); suppression visible, never silent; physical
+  Evaluation/Training/Audit sink separation. `ConfigRegistry` closes
+  the N3 rider (policy-hash → config, hash derived never supplied).
+- **Item 5 (metrics):** the §10.7 per-tier decomposition
+  (completeness / recall@K / ranking-given-inclusion / end-to-end /
+  abstention coverage) with zero-denominator honesty, plus
+  `assert_position_invariant` reusable against any producer.
+- utterance-engine suite 23/23 (+1 ignored embed integration);
+  workspace clean. **Next: WS-B day-one wiring** (session utterance
+  endpoint → `decide()` with `LexicalTier0`) = formal shadow start per
+  §C constraint 2; WS-B must supply `graph_identity` (C7 obligation).
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
