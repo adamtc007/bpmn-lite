@@ -148,6 +148,20 @@ Suggest-only → staged-patch promotion repeats G3 on live suggest-only data. **
 
 ---
 
+## E. Plan-level rulings (2026-07-27 — delegated by Adam "ok do it"; implementation-scope, no V&S clause touched)
+
+| # | Fork | Ruling |
+|---|---|---|
+| E1 | Sage identity in the standalone build | **Sage is a trait** (evidence producer + escalation/clarification renderer), two impls: deterministic stub (renders policy-produced clarifications only, no free dialogue — the default, so standalone runs keyless) and a live LLM adapter (Anthropic API, config-keyed). Honest under D7: the routine path never needed Sage, so a stub default hides nothing. |
+| E2 | Board-universe source | WS-C consumes the **registry interface** (the `ManifestPlaceholderRegistry` surface) behind a provider trait; T3's sealed pack becomes a drop-in provider behind the same trait when it lands. G2 does not require the sealed pack; T3 stays independently sequenced. |
+| E3 | Tier-0 integration shape | **In-process embed-and-score**: board candidates embedded on the fly via the matcher's Candle embedder (CPU, L2-normalised), cosine in memory — boards are tens of candidates; the pgvector ranking path is NOT used for Designer boards (no DB round-trip, no /dev/rust schema dependency, deterministic and hashable). Palette pre-embedding is a later optimisation, not the mechanism. |
+| E4 | UI stack | **Static HTML + vanilla JS (ES modules) + SVG**, served from bpmn-lite-server; renders the server-supplied DAG layout. No framework, no build toolchain. It is a window, not an editor — all mutation via endpoints; trivially Chrome-MCP-drivable. |
+| E5 | Initial shadow thresholds | Thresholds live in a **versioned config struct hashed into `disposition_policy_hash`** — never inline literals. Initial values are named PLACEHOLDERs (separation margin, abstention floor, NONE_OF_THE_ABOVE-wins → abstain), low-stakes in shadow, recalibrated at G3 where the threshold values are Adam's. The ruling is the mechanism, not the numbers. |
+
+**GOV.2 CLOSED (Adam confirmed 2026-07-27):** designer crates (`designer-graph`, `designer-ui`, `utterance-engine`) live in the **bpmn-lite workspace** as separate crates; ob-poc consumes later via git dependency with **exact rev pin** (never path-`[patch]`); extraction to an own repo deferred to the promotion gate when a second consumer exists. Rider: `/dev/rust` gets a private remote so `ob-semantic-matcher` is rev-pinnable.
+
+**Executor split (Adam, 2026-07-27: "I will keep fable"):** Fable runs all CAREFUL items, entry traces, dispatch-brief authoring, and blind-review orchestration; Sonnet executes GRIND tasks only against a frozen upstream interface and a dispatch brief (full skeletons, verbatim invariants, HALT conditions, receipt pair named). No GRIND dispatch before its interface freezes.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
