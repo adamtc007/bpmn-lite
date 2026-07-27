@@ -173,6 +173,104 @@ pub fn minimal(pack_identity: &str, graph_identity: &str) -> ContextProjection {
         .expect("minimal projection has no refusable content")
 }
 
+/// THE canonical node-kind vocabulary of the projection (blind-review
+/// finding 2 remediation): one mapping, here, used by every constructor.
+/// The compiler vocabulary IS the node kind (WS-A.1 schema ruling).
+pub fn ir_kind_str(node: &bpmn_lite_compiler::ir::IRNode) -> &'static str {
+    use bpmn_lite_compiler::ir::IRNode as N;
+    match node {
+        N::Start { .. } => "start",
+        N::End { .. } => "end",
+        N::ServiceTask { .. } => "service_task",
+        N::GatewayXor { .. } => "gateway_xor",
+        N::GatewayAnd { .. } => "gateway_and",
+        N::TimerWait { .. } => "timer_wait",
+        N::MessageWait { .. } => "message_wait",
+        N::HumanWait { .. } => "human_wait",
+        N::BoundaryTimer { .. } => "boundary_timer",
+        N::BoundaryError { .. } => "boundary_error",
+        N::GatewayInclusive { .. } => "gateway_inclusive",
+        N::DataObject { .. } => "data_object",
+        N::FfiServiceTask { .. } => "ffi_service_task",
+        N::SendTask { .. } => "send_task",
+        N::MultiInstance { .. } => "multi_instance",
+    }
+}
+
+/// THE shared DAG→projection constructor (blind-review finding 2, the A1
+/// HALT condition one layer up): both the corpus generator and the
+/// serving path construct projections HERE, from the projected IR graph
+/// (`DesignerDag::to_ir()` on the designer side). Anchor is a BPMN id;
+/// unknown anchor is a typed reject, never a silent whole-graph
+/// downgrade. Attached guards are read from the IR's own
+/// `attached_to` fields.
+///
+/// INTERIM LIMITATION (recorded, not hidden): the shadow session
+/// endpoint compiles DSL source to an execution plan, which has no IR
+/// graph — its projections are census-only via a plan-kind mapping and
+/// are NOT training-grade. Convergence point: WS-B's DesignerDag-backed
+/// sessions (substrate ask filed in the plan).
+pub fn project_ir(
+    graph: &petgraph::Graph<bpmn_lite_compiler::ir::IRNode, bpmn_lite_compiler::ir::IREdge>,
+    anchor_id: Option<&str>,
+    pack_identity: &str,
+    graph_identity: &str,
+) -> Result<ContextProjection> {
+    use petgraph::Direction;
+
+    let mut counts = std::collections::BTreeMap::<String, u32>::new();
+    for n in graph.node_weights() {
+        *counts.entry(ir_kind_str(n).to_owned()).or_insert(0) += 1;
+    }
+
+    let anchor = match anchor_id {
+        None => None,
+        Some(id) => {
+            let idx = graph
+                .node_indices()
+                .find(|i| graph[*i].id() == id)
+                .ok_or_else(|| {
+                    anyhow!("projection refused: anchor id {id:?} not present in the graph")
+                })?;
+            let summarize = |dir: Direction| -> Vec<NodeSummary> {
+                let mut v: Vec<NodeSummary> = graph
+                    .neighbors_directed(idx, dir)
+                    .map(|n| NodeSummary {
+                        kind: ir_kind_str(&graph[n]).to_owned(),
+                        id: graph[n].id().to_owned(),
+                    })
+                    .collect();
+                v.sort_by(|a, b| a.id.cmp(&b.id));
+                v
+            };
+            let predecessors = summarize(Direction::Incoming);
+            let successors = summarize(Direction::Outgoing);
+            let mut attached_guards: Vec<NodeSummary> = graph
+                .node_weights()
+                .filter(|n| {
+                    matches!(n,
+                        bpmn_lite_compiler::ir::IRNode::BoundaryTimer { attached_to, .. }
+                        | bpmn_lite_compiler::ir::IRNode::BoundaryError { attached_to, .. }
+                            if attached_to == id)
+                })
+                .map(|n| NodeSummary { kind: ir_kind_str(n).to_owned(), id: n.id().to_owned() })
+                .collect();
+            attached_guards.sort_by(|a, b| a.id.cmp(&b.id));
+            Some(AnchorContext {
+                node: NodeSummary {
+                    kind: ir_kind_str(&graph[idx]).to_owned(),
+                    id: id.to_owned(),
+                },
+                predecessors,
+                successors,
+                attached_guards,
+            })
+        }
+    };
+
+    ContextProjection::new(pack_identity, graph_identity, anchor, counts.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +367,99 @@ mod tests {
             vec![],
         );
         assert!(unsorted.unwrap_err().to_string().contains("sorted"));
+    }
+
+    /// Blind-review finding 2 remediation cement: the shared constructor,
+    /// driven cross-crate exactly the way the corpus generator will drive
+    /// it — seed(Start) → ops → to_ir → project_ir — produces pinned
+    /// canonical bytes. Anchored on the guarded task: neighbourhood and
+    /// attached guard come from the IR itself.
+    #[test]
+    fn project_ir_golden_from_designer_ops() {
+        use designer_graph::ops::{apply, GuardTrigger, Operation};
+        use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
+        use bpmn_lite_compiler::ir::{IRNode, TimerSpec};
+
+        let mut dag = DesignerDag::new("proj-fx");
+        let start = dag
+            .seed(
+                NodeKey(uuid::Uuid::new_v4()),
+                IRNode::Start { id: "start".into() },
+                Provenance::default(),
+            )
+            .unwrap();
+        // seed() is fail-closed: flow nodes must come through ops.
+        assert!(dag
+            .seed(
+                NodeKey(uuid::Uuid::new_v4()),
+                IRNode::ServiceTask { id: "smuggled".into(), name: "s".into(), task_type: "t".into() },
+                Provenance::default(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("seed refused"));
+
+        let t1 = NodeKey(uuid::Uuid::new_v4());
+        let guard = NodeKey(uuid::Uuid::new_v4());
+        let mut graph = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t1,
+                node: IRNode::ServiceTask {
+                    id: "send_request".into(),
+                    name: "send_request".into(),
+                    task_type: "noop".into(),
+                },
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t1,
+                key: NodeKey(uuid::Uuid::new_v4()),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::AttachRearmingGuard {
+                host: t1,
+                key: guard,
+                guard_id: "g_reminder".into(),
+                trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                    interval_ms: 1000,
+                    max_fires: 2,
+                }),
+            },
+        ] {
+            graph = apply(&graph, op, Provenance::default()).unwrap().candidate;
+        }
+        let ir = graph.to_ir().unwrap();
+
+        let proj = project_ir(&ir, Some("send_request"), "pack.none", "g-fixture").unwrap();
+        assert_eq!(
+            proj.serialize_canonical(),
+            "ctxproj.v1\n\
+             pack: pack.none\n\
+             graph: g-fixture\n\
+             anchor: service_task send_request\n\
+             predecessors:\n\
+             - start start\n\
+             successors:\n\
+             - end end\n\
+             attached_guards:\n\
+             - boundary_timer g_reminder\n\
+             nodes:\n\
+             - boundary_timer x1\n\
+             - end x1\n\
+             - service_task x1\n\
+             - start x1\n"
+        );
+        // Unknown anchor is a typed reject, never a whole-graph downgrade.
+        assert!(project_ir(&ir, Some("ghost"), "pack.none", "g-fixture")
+            .unwrap_err()
+            .to_string()
+            .contains("ghost"));
+        // Whole-graph projection carries the census with no anchor block.
+        let whole = project_ir(&ir, None, "pack.none", "g-fixture").unwrap();
+        assert!(whole.serialize_canonical().contains("anchor: none\n"));
     }
 
     /// Distinct projections hash distinctly (spot the obvious collisions:

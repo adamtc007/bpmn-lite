@@ -121,9 +121,9 @@ retrospective application is mechanical).
 - **C-seed.2**: tier-0 baseline numbers over the seed corpus recorded
   in receipts (the recall@K baseline every gate references, seed
   edition). **RECORDED 2026-07-27** (tier0.lexical.v1 over
-  synthetic.seed.v1, 92 cases): board completeness 1.00 · recall@5
-  0.61 · ranking-given-inclusion 0.14 · end-to-end 0.075 · abstention
-  coverage 1.00. The decomposition says precisely what §10.2 predicts:
+  synthetic.seed.v1, 92 cases): board completeness 1.0 · recall@5
+  0.6125 · ranking-given-inclusion 0.14285714285714285 · end-to-end
+  0.075 · abstention coverage 1.0 (exact harness output). The decomposition says precisely what §10.2 predicts:
   retrieval and abstention are serviceable, RANKING is the missing
   capability — the seed-trained cross-encoder's job, with 0.14/0.075
   as the floor it must beat.
@@ -454,6 +454,10 @@ formalization; blind review of the WS-B surface before the gate.
 **Positional legality oracle (`designer-graph/src/positional.rs`):** real §11.7 position-dependent boards over a `DesignerDag`. Two-layer rule table (staging-enforced mirrored + consistency-cemented against `apply`; admission-enforced mirrored from verifier theorems — F-DSGN-3 alignment: guard attachment proposed at task hosts ONLY, never at waits). Absolute exclusions cemented: CreateRace/CloseParallelRegion/AttachRollbackGuard/CallSubprocess + TimerMessageRace/CallDurableSubprocess/HumanReviewWithRework never boarded (the interim WholeGraphLegality boards the full catalogue including unbuildables — superseded for corpus work; endpoint swap rides WS-B wiring). Position-sensitivity receipts: same op present at one anchor, absent at another (A2.2's mechanism). Whole-graph = deterministic union; empty graph = NOTA-only board.
 
 **T3.4a shortlist (research receipt, candle support verified from candle-transformers source; loadability receipts still owed at Phase C per "verified not assumed"):** recommended four — `Alibaba-NLP/gte-reranker-modernbert-base` (149M, Apache-2.0, `models::modernbert` incl. SequenceClassification head, already a reranker); `cross-encoder/ms-marco-MiniLM-L6-v2` (22.7M, Apache-2.0/MIT base, `models::bert` + small head, only candidate comfortably sub-second CPU); `answerdotai/ModernBERT-base` (149M, Apache-2.0, clean-room fallback); `BAAI/bge-reranker-base` (278M, MIT, `models::xlm_roberta` incl. head — latency is its gate). Excluded: bge-reranker-v2-m3 (568M), mxbai v2 (Qwen), gte-multilingual (remote code), DeBERTa-v3 (candle head coverage + tokenizer conversion UNCERTAIN — flagged, not guessed). Latency caveat recorded: 149M tier needs batching/quantization receipts.
+
+#### Receipts — DIR-002 Phase A: spec + blind review (2026-07-27)
+
+EOP-SPEC-SLM-TRAIN-001 v0.1 authored; independent authorship-blind review returned 17 findings (3 BLOCKER / 11 CONCERN / 3 NIT — full disposition table in the spec §S8). Blockers, remediated same-session: (1) uncheckable loader board-hash check → S2 now stores the full §11.7 preimage; (2) **A1 skew one layer up — no shared DAG→projection CONSTRUCTOR existed** → `project_ir` + `ir_kind_str` (the one kind vocabulary) landed in `utterance-engine/src/context.rs`, `DesignerDag::seed` (fail-closed Start/DataObject-only public seeding) in designer-graph, golden cross-crate cement `project_ir_golden_from_designer_ops`; interim DSL-plan endpoint projections marked NON-training-grade — **substrate ask: WS-B DesignerDag-backed sessions are the convergence point**; (3) split rule could sever context-pair sides → split unit redefined as the connected component over family/pair-group/utterance-text. **OPEN RULING FOR ADAM (finding 5): listwise training lists — DIR-002 A4 says "over the board", the ratified §10.3/§10.6 inference contract scores the tier-0 RETRIEVED SUBSET; recommendation = train on the real retriever's K-subset + NOTA always appended. Phase B label generation holds until ruled.**
 
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 

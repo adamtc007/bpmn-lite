@@ -166,6 +166,30 @@ impl DesignerDag {
         Ok(())
     }
 
+    /// Public base-graph seeding (DIR-002 Phase B: the corpus generator
+    /// lives outside this crate and must construct base graphs). ONLY
+    /// `Start` and `DataObject` nodes may be seeded — every flow node,
+    /// edge, and guard arrives through the staged operation surface
+    /// (`ops::apply`), which is where the refusal discipline lives.
+    /// Seeding anything else is a typed reject, not a convenience.
+    pub fn seed(
+        &mut self,
+        key: NodeKey,
+        node: IRNode,
+        provenance: Provenance,
+    ) -> Result<NodeKey> {
+        match &node {
+            IRNode::Start { .. } | IRNode::DataObject { .. } => {
+                self.insert_node(key, node, None, provenance)
+            }
+            other => Err(anyhow!(
+                "seed refused: only Start/DataObject may be seeded (got '{}'); \
+                 flow construction goes through the operation surface",
+                other.id()
+            )),
+        }
+    }
+
     pub fn node(&self, key: NodeKey) -> Option<&DesignerNode> {
         self.key_index.get(&key).map(|idx| &self.graph[*idx])
     }
