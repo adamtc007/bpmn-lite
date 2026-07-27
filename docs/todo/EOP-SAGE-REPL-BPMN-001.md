@@ -46,6 +46,27 @@ concurrency is a requirement (N designers, isolated).
   isolation test (mutations to A never visible in B); save-as-template
   end-to-end (session → template → plan compiles).
 
+**T1 CLOSED 2026-07-27** (commits `fce546e` slice a, `e9f53e0` slice b):
+- Aggregate + store surface: `DesignSessionRecord` (append-only event
+  log, `current_source()` = last Revision, undo = revision walk) behind
+  5 `AdminProjectionStore` methods; MemoryStore full impl + Postgres
+  impl (`store_postgres.rs`, migration `059_design_sessions.sql`,
+  events JSONB, RLS alignment deferred to T5 — noted in migration
+  header).
+- Endpoints (demo router): create / list / get / revision / utterance /
+  save. Revision records ALWAYS (drafts may be broken) and returns
+  compile diagnostics; save is fail-closed (uncompilable draft → 400 +
+  diagnostics, catalog untouched) and pins `(name, version, plan_hash)`
+  back onto the session.
+- Receipts green: store-level `session_round_trip_and_undo_walk`,
+  `concurrent_sessions_are_isolated`,
+  `save_marks_pin_and_duplicate_create_rejects`; HTTP-level
+  `test_design_session_round_trip_and_save` (end-to-end save v1 +
+  Saved status + pin), `test_design_session_save_rejects_uncompilable_
+  draft` (must-reject red), `test_design_session_unknown_id_is_404`.
+- Postgres impl is compile-verified only (no live PG in this loop);
+  its behavioural parity rides the T5 standalone-boot receipt.
+
 ## T2 — Design-loop hardening (the never-reviewed layer)
 
 - Authorship-blind review of `dsl/macros.rs`, `dsl/refactor.rs`
