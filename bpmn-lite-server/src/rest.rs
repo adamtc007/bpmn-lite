@@ -196,6 +196,10 @@ pub fn demo_router(state: Arc<DemoState>) -> Router {
             "/api/dsl/sessions/:id/utterance",
             post(session_utterance_endpoint),
         )
+        .route(
+            "/api/dsl/sessions/:id/graph-edit",
+            post(session_graph_edit_endpoint),
+        )
         .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route("/designer", get(designer_page))
@@ -2298,6 +2302,14 @@ pub(crate) struct SessionRevisionResponse {
 #[derive(Deserialize)]
 pub(crate) struct SessionUtteranceBody {
     text: String,
+    /// WS-B.4: the BPMN id of the graph position the utterance was
+    /// issued from. Meaningful only for DesignerDag-backed sessions
+    /// (`is_graph_backed()`); ignored for legacy DSL-source sessions,
+    /// which have no `DesignerDag` to resolve it against. An id naming
+    /// no node in the reconstruction is a fail-closed 422, never a
+    /// silent whole-graph fallback.
+    #[serde(default)]
+    anchor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2413,9 +2425,11 @@ async fn session_revision_endpoint(
     .into_response()
 }
 
-/// v1 whole-graph legality: every operation/production legal (no
-/// anchor selection exists in the UI yet; position-dependent legality
-/// arrives with WS-A.2's LegalityOracle impl over the session DAG).
+/// v1 whole-graph legality: every operation/production legal. Serves
+/// sessions that have never accumulated a `GraphEdit` (the legacy
+/// DSL-source path — no `DesignerDag` exists to run the real oracle
+/// against). WS-B.4-graph-backed sessions use `PositionalLegality`
+/// instead (`reconstruct_designer_dag` below).
 struct WholeGraphLegality;
 impl designer_graph::board_candidate::LegalityOracle for WholeGraphLegality {
     type NodeKey = ();
@@ -2430,6 +2444,162 @@ impl designer_graph::board_candidate::LegalityOracle for WholeGraphLegality {
         _: Option<&()>,
     ) -> Vec<designer_graph::board_candidate::ProductionId> {
         designer_graph::board_candidate::ProductionId::ALL.to_vec()
+    }
+}
+
+// ── WS-B.4: DesignerDag-backed sessions ──────────────────────────────────
+//
+// A session accumulating `GraphEdit` events is DesignerDag-backed: its
+// `DesignerDag` is the replay product of a deterministically-seeded Start
+// node plus every accumulated operation sequence, in event order (schema.rs's
+// own module doc: "the durable surface is the edit log... the DAG is its
+// replay product"). Reconstruction is a pure function of the event log —
+// no snapshot is ever persisted (rider 2, same doc).
+
+/// The session's Start node key: derived from the session id via a fixed
+/// namespace so it is stable across every reconstruction and knowable to
+/// a client authoring the session's very first graph edit (returned in
+/// `create_design_session_endpoint`'s response once a session begins its
+/// graph-edit life — see `SEED_START_ID`/`seed_start_key`).
+const SEED_START_ID: &str = "start";
+fn seed_start_key(session_id: Uuid) -> designer_graph::schema::NodeKey {
+    const NAMESPACE: Uuid = Uuid::from_bytes([
+        0xb1, 0x3f, 0x1a, 0x02, 0xd2, 0x99, 0x4a, 0x71, 0x9c, 0x3e, 0x7a, 0x21, 0x5c, 0x0e, 0x8b,
+        0x44,
+    ]);
+    designer_graph::schema::NodeKey(Uuid::new_v5(&NAMESPACE, session_id.as_bytes()))
+}
+
+/// Replay a session's accumulated `GraphEdit` payloads into a
+/// `DesignerDag`. Fail-closed: a payload that fails to deserialize or
+/// fails to stage is a bug in what was already accepted at append time
+/// (the graph-edit endpoint validates before persisting) — surfaced as an
+/// error, never silently skipped mid-replay (a partial DAG would silently
+/// misrepresent the session).
+fn reconstruct_designer_dag(
+    record: &bpmn_lite_store::DesignSessionRecord,
+) -> anyhow::Result<designer_graph::schema::DesignerDag> {
+    use designer_graph::ops::Operation;
+    use designer_graph::productions::apply_production;
+    use designer_graph::schema::{DesignerDag, Provenance};
+
+    let mut dag = DesignerDag::new(record.name.clone());
+    dag.seed(
+        seed_start_key(record.id),
+        bpmn_lite_compiler::ir::IRNode::Start { id: SEED_START_ID.into() },
+        Provenance::default(),
+    )?;
+    for (i, payload) in record.graph_edit_payloads().into_iter().enumerate() {
+        let ops: Vec<Operation> = serde_json::from_str(payload)
+            .map_err(|e| anyhow::anyhow!("graph edit #{i} failed to deserialize: {e}"))?;
+        dag = apply_production(&dag, ops, Provenance::default())
+            .map_err(|e| anyhow::anyhow!("graph edit #{i} failed to replay: {e}"))?
+            .candidate;
+    }
+    Ok(dag)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SessionGraphEditBody {
+    /// The `Vec<designer_graph::ops::Operation>` to stage and, on
+    /// success, append. Sent as real JSON (not a pre-encoded string) —
+    /// the server is the only party that ever deserializes it; the store
+    /// persists the re-serialized form as an opaque string.
+    operations: Vec<designer_graph::ops::Operation>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SessionGraphEditResponse {
+    seq: u64,
+}
+
+/// Stage the submitted operations against the session's CURRENT
+/// reconstruction (never against a stale or hypothetical base — I18's
+/// discipline extended to the session layer) and append only on success.
+/// A refusal is reported and NOTHING is persisted — the edit log never
+/// carries a candidate that didn't admit-stage, so replay can never fail
+/// on data this endpoint itself accepted.
+async fn session_graph_edit_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SessionGraphEditBody>,
+) -> impl IntoResponse {
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let dag = match reconstruct_designer_dag(&record) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    if body.operations.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "empty operation sequence" })),
+        )
+            .into_response();
+    }
+    let staged = match designer_graph::productions::apply_production(
+        &dag,
+        body.operations.clone(),
+        designer_graph::schema::Provenance::default(),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("staging refused: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let _ = staged; // staged.candidate not persisted — only the op sequence is (rider 2)
+    let operations_json = match serde_json::to_string(&body.operations) {
+        Ok(j) => j,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("serialize: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    match demo
+        .store
+        .append_design_session_event(
+            &demo.tenant_id,
+            id,
+            &DesignSessionEventKind::GraphEdit { operations_json, note: body.note.clone() },
+        )
+        .await
+    {
+        Ok(seq) => Json(SessionGraphEditResponse { seq }).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
     }
 }
 
@@ -2504,53 +2674,128 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
-    let graph_identity = blake3::hash(
-        record_session.current_source().unwrap_or_default().as_bytes(),
-    )
-    .to_hex()
-    .to_string();
-
-    // DIR-002 A1: the context projection is built by the ONE canonical
-    // serializer from the session's compiled graph (node-kind census; no
-    // anchor — the UI has no cursor yet). A non-compiling source yields
-    // an empty census honestly, never a fabricated one.
-    let node_kind_counts = {
-        let registry = get_preview_registry();
-        match bpmn_lite_compiler::dsl::compile(
-            record_session.current_source().unwrap_or_default(),
-            &registry,
-        ) {
-            Ok(plan) => {
-                let graph = plan_to_visual_graph(&plan);
-                let mut counts = std::collections::BTreeMap::<String, u32>::new();
-                for n in &graph.nodes {
-                    *counts.entry(n.kind.clone()).or_insert(0) += 1;
-                }
-                counts.into_iter().collect::<Vec<_>>()
+    // WS-B.4: DesignerDag-backed sessions run the real PositionalLegality
+    // oracle and project_ir over the reconstructed IR graph — training-
+    // grade projections at last (context.rs's INTERIM LIMITATION note is
+    // resolved for exactly this class of session). Legacy DSL-source
+    // sessions (no GraphEdit ever appended) keep the WholeGraphLegality +
+    // census-only path unchanged — purely additive, no existing session's
+    // behavior shifts underneath it.
+    let pipeline_result: anyhow::Result<_> = if record_session.is_graph_backed() {
+        let dag = match reconstruct_designer_dag(&record_session) {
+            Ok(d) => d,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
+                )
+                    .into_response();
             }
-            Err(_) => Vec::new(),
-        }
-    };
+        };
+        let anchor_key = match &body.anchor {
+            Some(id) => match dag.key_for_bpmn_id(id) {
+                Some(k) => Some(k),
+                None => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!("anchor '{id}' names no node in this session's graph")
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+            None => None,
+        };
+        let ir = match dag.to_ir() {
+            Ok(ir) => ir,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("projection: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        // Same pattern as the DSL-source path: hash the actual revision
+        // content (here, the accumulated edit-log payloads — the DAG's
+        // sole source of truth) rather than a Debug-formatted derivative.
+        let graph_identity = {
+            let mut hasher = blake3::Hasher::new();
+            for payload in record_session.graph_edit_payloads() {
+                hasher.update(payload.as_bytes());
+                hasher.update(b"\0");
+            }
+            hasher.finalize().to_hex().to_string()
+        };
+        let oracle = designer_graph::positional::PositionalLegality { dag: &dag };
+        let anchor_pair = anchor_key.as_ref().zip(body.anchor.as_deref());
+        build_board(
+            &oracle,
+            anchor_pair,
+            Some(&graph_identity),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .and_then(|board| {
+            let context = utterance_engine::context::project_ir(
+                &ir,
+                body.anchor.as_deref(),
+                &board.context.pack_identity,
+                &graph_identity,
+            )?;
+            let evidence = LexicalTier0.retrieve(&body.text, &board)?;
+            let (disposition, record) =
+                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
+            Ok((board, disposition, record, context))
+        })
+    } else {
+        let graph_identity = blake3::hash(
+            record_session.current_source().unwrap_or_default().as_bytes(),
+        )
+        .to_hex()
+        .to_string();
 
-    let pipeline_result = build_board(
-        &WholeGraphLegality,
-        None,
-        Some(&graph_identity),
-        &EmptyUniverse,
-        &PolicyFilter::default(),
-    )
-    .and_then(|board| {
-        let context = utterance_engine::context::ContextProjection::new(
-            board.context.pack_identity.clone(),
-            graph_identity.clone(),
+        // DIR-002 A1 INTERIM LIMITATION: census-only, no anchor — the
+        // DSL-plan pipeline has no IRGraph for project_ir to run over.
+        let node_kind_counts = {
+            let registry = get_preview_registry();
+            match bpmn_lite_compiler::dsl::compile(
+                record_session.current_source().unwrap_or_default(),
+                &registry,
+            ) {
+                Ok(plan) => {
+                    let graph = plan_to_visual_graph(&plan);
+                    let mut counts = std::collections::BTreeMap::<String, u32>::new();
+                    for n in &graph.nodes {
+                        *counts.entry(n.kind.clone()).or_insert(0) += 1;
+                    }
+                    counts.into_iter().collect::<Vec<_>>()
+                }
+                Err(_) => Vec::new(),
+            }
+        };
+
+        build_board(
+            &WholeGraphLegality,
             None,
-            node_kind_counts,
-        )?;
-        let evidence = LexicalTier0.retrieve(&body.text, &board)?;
-        let (disposition, record) =
-            decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
-        Ok((board, disposition, record, context))
-    });
+            Some(&graph_identity),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .and_then(|board| {
+            let context = utterance_engine::context::ContextProjection::new(
+                board.context.pack_identity.clone(),
+                graph_identity.clone(),
+                None,
+                node_kind_counts,
+            )?;
+            let evidence = LexicalTier0.retrieve(&body.text, &board)?;
+            let (disposition, record) =
+                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
+            Ok((board, disposition, record, context))
+        })
+    };
     let (board, disposition, record, context) = match pipeline_result {
         Ok(t) => t,
         Err(e) => {
@@ -3773,5 +4018,264 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── WS-B.4: DesignerDag-backed sessions ──────────────────────────
+
+    fn task_ir(id: &str) -> bpmn_lite_compiler::ir::IRNode {
+        bpmn_lite_compiler::ir::IRNode::ServiceTask {
+            id: id.into(),
+            name: id.into(),
+            task_type: "noop".into(),
+        }
+    }
+
+    fn new_key() -> designer_graph::schema::NodeKey {
+        designer_graph::schema::NodeKey(Uuid::new_v4())
+    }
+
+    /// GREEN: a graph-edit sequence against the deterministic seed Start
+    /// stages, admits, and is persisted; a session that has never
+    /// accumulated one stays legacy (`is_graph_backed() == false`
+    /// server-side, exercised indirectly via the utterance path below).
+    #[tokio::test]
+    async fn test_session_graph_edit_admits_and_persists() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "graph session" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "build the chain" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        let seq = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                    serde_json::json!({ "operations": Vec::<designer_graph::ops::Operation>::new() }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        // Empty sequence is BAD_REQUEST, not silently accepted.
+        let _ = seq;
+
+        let record = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let events = record["events"].as_array().unwrap();
+        assert!(
+            events.iter().any(|e| e["kind"].get("GraphEdit").is_some()),
+            "GraphEdit event must be persisted: {events:?}"
+        );
+    }
+
+    /// RED: an operation sequence that refuses to stage (unknown anchor)
+    /// is REJECTED (422) and NOTHING is persisted — the edit log never
+    /// carries a candidate that failed to admit-stage.
+    #[tokio::test]
+    async fn test_session_graph_edit_refuses_invalid_ops_and_persists_nothing() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "refusal session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let ops = vec![designer_graph::ops::Operation::AppendNode {
+            anchor: new_key(), // unknown — no such node exists yet
+            key: new_key(),
+            node: task_ir("orphan"),
+            edge_id: "f1".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let record = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            !record["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"].get("GraphEdit").is_some()),
+            "a refused edit must persist nothing"
+        );
+    }
+
+    /// GREEN + the headline receipt: once a session is graph-backed, the
+    /// utterance endpoint's context projection is REAL `project_ir`
+    /// output (an anchor block, a real node census from the actual
+    /// graph) — not the DSL-source census fallback — and an unknown
+    /// anchor id is a fail-closed 422, never a silent whole-graph
+    /// downgrade.
+    #[tokio::test]
+    async fn test_session_utterance_uses_positional_legality_when_graph_backed() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "positional session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Unknown anchor: fail-closed 422, not a silent whole-graph fallback.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "insert a step", "anchor": "ghost_node" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Real anchor: training-grade projection.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "insert a step after this", "anchor": "review_documents" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        let record = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let utterance_event = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|e| e["kind"].get("Utterance"))
+            .expect("utterance event present");
+        let ctx_text = utterance_event["context_projection"].as_str().unwrap();
+        assert!(
+            ctx_text.contains("anchor: service_task review_documents"),
+            "project_ir must project the REAL anchor, not a census-only fallback: {ctx_text:?}"
+        );
+        assert!(ctx_text.contains("nodes:\n"), "node census present: {ctx_text:?}");
     }
 }

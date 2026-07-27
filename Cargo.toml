@@ -52,7 +52,7 @@ unreachable_pub = "deny"
 
 [workspace.dependencies]
 # Shared across bpmn-lite and dmn-lite crates
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 async-trait = "0.1"

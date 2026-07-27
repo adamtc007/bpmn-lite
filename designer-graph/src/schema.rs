@@ -166,6 +166,18 @@ impl DesignerDag {
         Ok(())
     }
 
+    /// WS-B.4: resolve a caller-facing BPMN id (what a REST client or
+    /// utterance body names as an anchor) to the internal `NodeKey` an
+    /// `Operation`/`LegalityOracle` call needs. `None` for an unknown id
+    /// — callers turn that into a fail-closed rejection, never a
+    /// silent whole-graph fallback.
+    pub fn key_for_bpmn_id(&self, id: &str) -> Option<NodeKey> {
+        self.graph
+            .node_weights()
+            .find(|n| n.ir.id() == id)
+            .map(|n| n.key)
+    }
+
     /// Public base-graph seeding (DIR-002 Phase B: the corpus generator
     /// lives outside this crate and must construct base graphs). ONLY
     /// `Start` and `DataObject` nodes may be seeded — every flow node,

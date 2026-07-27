@@ -485,6 +485,60 @@ Bank sweep for the new legality: 10 stale "waits can't host guards" NOTA entries
 
 `retrieve()` re-embedded every board candidate on every call; a corpus run reuses each enumeration-class board's small candidate set across hundreds of utterances, so this was O(entries × board_size) forward passes for what is really O(distinct descriptions). Fixed: `EmbedTier0` gained a `Mutex<HashMap<description, embedding>>` cache — exact, not approximate (`embed_target` is a pure function of its text, matcher contract), keyed by description so a future collision-in-id-but-not-text case stays correct by construction. Receipt (`embed_target_cache_is_exact_and_faster_on_repeat`, run against real pinned weights): a warm-cache retrieve is measurably faster than the cold one, AND re-running the cold utterance after the cache warms yields bit-identical `retrieved_subset_hash` and per-candidate scores (`to_bits()` equality) — caching never perturbs a score. **Measured end-to-end: full synthetic-v2-beta regeneration (567 examples + 98 held-out eval) dropped from >10 minutes to 4:19.** Still not fast enough alone for the 5,000-example S3-floor run at proportional scale — batching `embed_target` calls (the matcher crate already exposes a batch API) is the next lever, deferred until bank authoring actually scales that far.
 
+#### Receipts — WS-B.4: DesignerDag-backed sessions (2026-07-27)
+
+Architecture question (how sessions become DesignerDag-backed) resolved via a
+dedicated read-only research agent before implementation, per verify-don't-infer:
+exhaustive grep confirmed zero DSL-source↔DesignerDag round-trip code exists
+anywhere, live or dead; `schema.rs`'s own module doc explicitly forbids raw DAG
+snapshot persistence ("Any DAG snapshot persistence goes through a versioned
+envelope, never raw serde of these types") and designs for an edit-log-backed
+model instead; `g2_receipts.rs`'s `g2_solicit_edit_log_round_trips` already
+proves the serde round-trip + replay pattern. This made the opaque edit-log
+event kind the only architecturally-consistent option, not merely the
+cheapest one.
+
+Landed: `DesignSessionEventKind::GraphEdit { operations_json, note }` in
+`bpmn-lite-store` — stored as an opaque `String`, deserialized only
+server-side (`bpmn-lite-store` gains no new `designer-graph` dependency,
+mirroring the existing `Utterance`/`decision_record_json` precedent).
+`DesignerDag::key_for_bpmn_id` added to `designer-graph` (fail-closed
+`Option<NodeKey>` — an unknown anchor id is a typed `None`, never a silent
+whole-graph downgrade). `bpmn-lite-server/src/rest.rs`: deterministic
+Start-node seeding (`seed_start_key` via `Uuid::new_v5`, fixed namespace,
+so every replay reconstructs the identical key without persisting anything
+extra); `reconstruct_designer_dag` replays a session's accumulated
+`GraphEdit` payloads through `apply_production`; new
+`POST /api/dsl/sessions/:id/graph-edit` endpoint stages against the current
+reconstruction and persists only on admission (I18 clone-and-stage extended
+to the session layer — a refusal persists nothing); `session_utterance_endpoint`
+now branches on `is_graph_backed()`: graph-backed sessions resolve the
+request's `anchor` via `key_for_bpmn_id` (422 on unresolvable), compute
+`graph_identity` by hashing the accumulated edit-log payloads (the edit log
+IS the DAG's sole source of truth — not a Debug-formatted IR string, rejected
+mid-implementation as non-canonical), and drive the board/context through the
+real `PositionalLegality` oracle and `project_ir` — legacy DSL-source sessions
+are byte-for-byte unchanged (WholeGraphLegality + census-only fallback).
+
+Receipts (`cargo test -p bpmn-lite-server --lib`, 3 new, all green):
+`test_session_graph_edit_admits_and_persists` (valid two-op sequence stages/
+admits/persists; empty-operations POST → 400); `test_session_graph_edit_refuses_invalid_ops_and_persists_nothing`
+(unknown-anchor `AppendNode` → 422, zero `GraphEdit` events persisted —
+the RED half); `test_session_utterance_uses_positional_legality_when_graph_backed`
+(headline receipt: builds a 2-node chain via graph-edit, POSTs an utterance
+against a ghost anchor → 422 fail-closed, then against the real anchor → 200,
+then confirms the persisted `context_projection` text was produced by
+`project_ir`, not the census fallback). Full workspace sweep:
+`cargo test --workspace` — 0 failures across every crate.
+
+This is the convergence point flagged by the SLM-training blind review
+(finding 2, DIR-002 Phase A remediation): interim DSL-plan endpoint
+projections were marked non-training-grade pending exactly this substrate.
+Graph-backed session utterances now produce real `project_ir` context —
+future corpus generation can ingest real session data, not synthetic-only.
+Also closes the WS-B.4 half of G2's remaining open item (WS-B blind review
+is the other half, still open).
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.

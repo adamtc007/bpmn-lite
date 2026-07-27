@@ -39,6 +39,22 @@ pub enum DesignSessionEventKind {
         #[serde(default)]
         decision_record_json: Option<String>,
     },
+    /// WS-B.4 (2026-07-27): a validated slice of the Designer edit log —
+    /// a `Vec<designer_graph::ops::Operation>` that staged and admitted
+    /// against the session's DesignerDag reconstruction at append time.
+    /// Stored as OPAQUE JSON deliberately (schema.rs's own module doc:
+    /// "the durable surface is the edit log... the DAG is its replay
+    /// product" — this store crate has no `designer-graph` dependency
+    /// and none is added; only the server layer, which already depends
+    /// on `designer-graph`, ever deserializes `operations_json`). A
+    /// session accumulating GraphEdit events is DesignerDag-backed —
+    /// its context projections become training-grade (`project_ir` over
+    /// a real `IRGraph`, not the DSL-source census fallback) and its
+    /// board legality runs the real `PositionalLegality` oracle instead
+    /// of `WholeGraphLegality`. Sessions with zero GraphEdit events stay
+    /// on the legacy DSL-source path — purely additive, no session's
+    /// existing behavior changes underneath it.
+    GraphEdit { operations_json: String, note: String },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -74,8 +90,35 @@ impl DesignSessionRecord {
     pub fn current_source(&self) -> Option<&str> {
         self.events.iter().rev().find_map(|event| match &event.kind {
             DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
-            DesignSessionEventKind::Utterance { .. } => None,
+            DesignSessionEventKind::Utterance { .. }
+            | DesignSessionEventKind::GraphEdit { .. } => None,
         })
+    }
+
+    /// WS-B.4: every `GraphEdit` operations payload, in event order — the
+    /// exact replay sequence a `DesignerDag` reconstruction folds over.
+    /// Opaque here (`&str`, undeserialized) by the same store/server
+    /// split `GraphEdit`'s own doc comment states.
+    pub fn graph_edit_payloads(&self) -> Vec<&str> {
+        self.events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                DesignSessionEventKind::GraphEdit { operations_json, .. } => {
+                    Some(operations_json.as_str())
+                }
+                DesignSessionEventKind::Revision { .. }
+                | DesignSessionEventKind::Utterance { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Whether this session has ever accumulated a graph edit — the
+    /// switch between the legacy DSL-source path and the DesignerDag-
+    /// backed path (WS-B.4 module doc on `GraphEdit`).
+    pub fn is_graph_backed(&self) -> bool {
+        self.events
+            .iter()
+            .any(|event| matches!(event.kind, DesignSessionEventKind::GraphEdit { .. }))
     }
 }
 
