@@ -32,6 +32,8 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::ir::{IREdge, IRGraph, IRNode};
 use bpmn_lite_compiler::{verify, Compiler, VerifiedWorkflow, VerifyError};
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
+use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -237,6 +239,127 @@ impl DesignerDag {
                 element_id: None,
             }]
         })
+    }
+
+    // ── ops.rs support (WS-A.2) — NOT a public mutation surface ──────────
+    // The public mutation surface is `designer_graph::ops::apply` (I18).
+    // These are read/mutate primitives the deterministic operations need;
+    // none of them decide policy, mint identity, or run admission.
+
+    /// ops.rs support: petgraph index for a designer key, so I23's
+    /// pre-gate (`petgraph::algo::has_path_connecting`) can run against
+    /// the real graph. `None` if `key` is unknown.
+    pub(crate) fn index_of(&self, key: NodeKey) -> Option<NodeIndex> {
+        self.key_index.get(&key).copied()
+    }
+
+    /// ops.rs support: read-only access to the underlying graph for I23's
+    /// forward-only pre-gate. Not a public mutation surface.
+    pub(crate) fn graph(&self) -> &DiGraph<DesignerNode, DesignerEdge> {
+        &self.graph
+    }
+
+    /// ops.rs support: target keys of `key`'s outgoing edges, for
+    /// InsertAfter's re-pointing. Empty if `key` is unknown.
+    pub(crate) fn successors(&self, key: NodeKey) -> Vec<NodeKey> {
+        let idx = match self.key_index.get(&key) {
+            Some(&idx) => idx,
+            None => return Vec::new(),
+        };
+        self.graph
+            .edges_directed(idx, Direction::Outgoing)
+            .map(|e| self.graph[e.target()].key)
+            .collect()
+    }
+
+    /// ops.rs support: source keys of `key`'s incoming edges, for
+    /// InsertBefore's re-pointing. Empty if `key` is unknown.
+    pub(crate) fn predecessors(&self, key: NodeKey) -> Vec<NodeKey> {
+        let idx = match self.key_index.get(&key) {
+            Some(&idx) => idx,
+            None => return Vec::new(),
+        };
+        self.graph
+            .edges_directed(idx, Direction::Incoming)
+            .map(|e| self.graph[e.source()].key)
+            .collect()
+    }
+
+    /// ops.rs support: remove the edge `from -> to` and return it (id,
+    /// condition, provenance intact) so a caller can re-insert it under
+    /// new endpoints without losing identity (I23/F4 — re-pointing must
+    /// not mint a new flow id). Frees the edge id for reuse. Errs if
+    /// either node or the edge itself is unknown.
+    pub(crate) fn remove_edge_between(&mut self, from: NodeKey, to: NodeKey) -> Result<DesignerEdge> {
+        let f = *self
+            .key_index
+            .get(&from)
+            .ok_or_else(|| anyhow!("unknown from-node {from:?}"))?;
+        let t = *self
+            .key_index
+            .get(&to)
+            .ok_or_else(|| anyhow!("unknown to-node {to:?}"))?;
+        let eidx = self
+            .graph
+            .find_edge(f, t)
+            .ok_or_else(|| anyhow!("no edge {from:?} -> {to:?}"))?;
+        let edge = self
+            .graph
+            .remove_edge(eidx)
+            .expect("edge just located by find_edge");
+        self.edge_ids.remove(&edge.id);
+        Ok(edge)
+    }
+
+    /// ops.rs support: keys of nodes attached to `host` via
+    /// `attached_to_key` (i.e. boundary guards hosted on `host`). Used by
+    /// DeleteNode to refuse dangling attachments (review-F2's invariant:
+    /// attachment is NodeKey-level, so a delete must not leave one
+    /// pointing at nothing).
+    pub(crate) fn nodes_attached_to(&self, host: NodeKey) -> Vec<NodeKey> {
+        self.graph
+            .node_weights()
+            .filter(|n| n.attached_to_key == Some(host))
+            .map(|n| n.key)
+            .collect()
+    }
+
+    /// ops.rs support: remove `key` and all incident edges. Frees the
+    /// node's BPMN id and any incident edge ids for reuse (receipt 6).
+    /// Fixes up `key_index` for petgraph's swap-remove semantics (the
+    /// node previously at the last `NodeIndex` moves into the removed
+    /// slot). Errs if `key` is unknown. Caller (ops.rs) is responsible
+    /// for the dangling-attachment refusal BEFORE calling this — this
+    /// helper performs no such check itself.
+    pub(crate) fn remove_node(&mut self, key: NodeKey) -> Result<()> {
+        let idx = *self
+            .key_index
+            .get(&key)
+            .ok_or_else(|| anyhow!("unknown node {key:?}"))?;
+        let freed_edge_ids: Vec<String> = self
+            .graph
+            .edges_directed(idx, Direction::Outgoing)
+            .map(|e| e.weight().id.clone())
+            .chain(
+                self.graph
+                    .edges_directed(idx, Direction::Incoming)
+                    .map(|e| e.weight().id.clone()),
+            )
+            .collect();
+        let bpmn_id = self.graph[idx].ir.id().to_owned();
+        let last = NodeIndex::new(self.graph.node_count() - 1);
+        self.graph.remove_node(idx);
+        self.key_index.remove(&key);
+        self.bpmn_ids.remove(&bpmn_id);
+        if last != idx {
+            if let Some((&moved_key, _)) = self.key_index.iter().find(|(_, &v)| v == last) {
+                self.key_index.insert(moved_key, idx);
+            }
+        }
+        for id in freed_edge_ids {
+            self.edge_ids.remove(&id);
+        }
+        Ok(())
     }
 }
 
