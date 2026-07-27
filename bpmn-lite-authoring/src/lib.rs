@@ -32,6 +32,8 @@ pub mod export_bpmn;
 pub mod importer;
 pub mod ir_to_dto;
 pub mod lints;
+#[cfg(test)]
+mod oracle_boundary_tests;
 pub mod publish;
 pub mod registry;
 #[cfg(feature = "postgres")]

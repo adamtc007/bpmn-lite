@@ -162,6 +162,104 @@ Suggest-only → staged-patch promotion repeats G3 on live suggest-only data. **
 
 **Executor split (Adam, 2026-07-27: "I will keep fable"):** Fable runs all CAREFUL items, entry traces, dispatch-brief authoring, and blind-review orchestration; Sonnet executes GRIND tasks only against a frozen upstream interface and a dispatch brief (full skeletons, verbatim invariants, HALT conditions, receipt pair named). No GRIND dispatch before its interface freezes.
 
+## F. Receipts
+
+### WS-A.0 entry traces + WS-C C5 trace — CLOSED 2026-07-27 (findings-only, no HALT)
+
+**C2-residual: GREEN.** `compute_post_dominators`, `compute_region_map`,
+`gateway_pairs` are `pub` + crate-root re-exported with R8 doc tags
+(compiler lib.rs:24; lowering.rs:1028-1032, :1145-1149, :1330-1337); all
+input/output types public and externally constructible (`IRGraph` =
+petgraph `DiGraph<IRNode, IREdge>`, all-pub fields). Address-level
+`compute_gateway_pairing` + `InclusiveBranchInfo` stay private BY DESIGN
+— if WS-A.1 ever needs the `Addr`-level maps, that is a surfaced fork,
+not a workaround. Doc-assertion converted to build-lock:
+`bpmn-lite-authoring/src/oracle_boundary_tests.rs`
+(`pairing_oracle_is_consumable_across_the_crate_boundary`, green) —
+sibling-crate consumption of all three entry points, cement-locked.
+Interface facts for the WS-A.2 brief: (i) acyclicity pre-gating is the
+CALLER's responsibility; (ii) `compute_region_map`'s public contract is
+**diverging-gateway → region-closing partner**, NOT node → region
+membership; (iii) the public pairing name is `gateway_pairs`
+(`compute_gateway_pairing` is private).
+
+**C3: named-env-exists-but-no-runtime — claim UNSUPPORTED at HEAD; Q15
+disposition recorded.** Named typed binding envs exist compile-time only
+(dsl `BindingContext` HashMap<String, BindingInfo>, typed,
+binding_context.rs:94-96 — zero runtime readers/writers; bpmn-lite
+`PlaceholderSchema.slots` name-keyed untyped, plan.rs:238-253). NO macro
+expansion path resolves named bindings to earlier-step identifiers: dsl
+`MacroDefBody.expands_to` is an ordered opaque `Vec<serde_json::Value>`
+with zero executors (macro_def.rs:21); bpmn-lite macro apply is caller-
+param `%name%` textual substitution (macros.rs:124-160) + AstMutator
+insert — no read of any binding env. The only live earlier-step→later-step
+value path is POSITIONAL (`V2MiLoadElement` by array index). Order-
+dependence present → **Q15 resolves toward a versioned durable named
+representation** (per the WS-A.0 HALT-condition disposition). V&S §0 C3
+row should flip OPEN → REFUTED-as-runtime on next V&S amendment.
+
+**C5 (+E3 feasibility): AMBER — runtime path GREEN, build coupling
+blocks.** Embedder (`/dev/rust/crates/ob-semantic-matcher`, HEAD eb0b3b6,
+clean, NO remote) is DB-free at source level: Candle-only imports,
+`Device::Cpu`, deterministic (no RNG/dropout; BGE-small-en-v1.5 weights
+pinned to an immutable HF commit SHA; L2-normalised 384-dim; self-test
+asserts same-text cosine ≈ 1.0). In-memory cosine trivial. BLOCK:
+lib.rs:42-43 unconditionally compiles matcher/feedback; `sqlx`+`pgvector`
+are non-optional deps → consuming the embedder drags the Postgres tree
+into the designer build. REMEDY (chosen): default-on `pg` Cargo feature
+gating matcher/feedback/populate_embeddings with sqlx/pgvector optional;
+designer consumes `default-features = false`. Folded into the WS-C tier-0
+wiring task. Note for the WS-C brief: exact-match 1.0 / phonetic 0.95
+pins live in the pgvector matcher, so Designer tier-0 implements its own
+exact-match pinning. GOV.2 rider stands: `/dev/rust` still needs a remote
+before anything can rev-pin it.
+
+**C4-residual — the design note (envelope ↔ instance-data mapping).**
+No contradiction with ISA-002 §28 found; no HALT. The mapping:
+
+1. **The typed invocation envelope rides the JSON planes, never `Value`.**
+   `Value` has NO map/object variant (`Bool/I64/Str(interned)/Ref/Array`,
+   types.rs:132-150) — a nested tagged union is not representable in
+   `flags`. The envelope serialises as canonical JSON into
+   `StartCommand.initial_payload` → stored verbatim as `domain_payload`
+   AND (iff a JSON object; malformed = hard admission reject per R4)
+   seeded into `placeholder_values` (engine.rs:789-815).
+2. **Routing discriminants are top-level STRING keys.** Variant tags
+   (e.g. `"delivery_kind": "client_portal"`) surface as top-level
+   payload keys matched by `V2LoadPlaceholderMatch` →
+   `placeholder_matches` (types.rs:1096-1111), which compares String and
+   Bool ONLY (I64/arrays/objects never match — substrate rule, not a
+   bug to fix silently). Designer staging validates: every declared
+   routing discriminant is a string-or-bool top-level key.
+3. **Variant payloads stay nested inside the JSON plane** and are read
+   mid-flight via `bind_placeholder_from_payload` (absence = error,
+   never null) — pointer-not-cargo intact; the envelope carries refs.
+4. **Collections for MI ride `flags` as bounded `Value::Array`**
+   (≤ MAX_VALUE_ARRAY_LEN=4096, depth ≤ MAX_VALUE_ARRAY_DEPTH=8,
+   enforced at canonical decode + gRPC boundary + runtime backstop —
+   canonical.rs:557-581, grpc.rs:170-195, kernel lib.rs:919-924).
+   Per-element data is scalar/`Ref`/`Str`/nested-array by value
+   (`V2MiLoadElement` clones `items[index]`); object-shaped per-element
+   data must be flattened or carried as a `Ref` into the payload plane.
+5. **Late-bound results enter via completion `orch_flags`**
+   (`flag_<u32>` keys through the flag symbol table) — flags start
+   EMPTY at spawn; there is no working start-time flag seeding (see
+   finding F-DSGN-1 below).
+
+**Finding F-DSGN-1 (surfaced, not fixed — awaiting Adam):**
+`start_process` gRPC accepts and VALIDATES `req.orch_flags`
+(grpc.rs:529) then silently DROPS them — `StartParams` is built without
+them (grpc.rs:546-557); `StartCommand` has no flags field
+(transition.rs:102-116); spawn sets `flags: BTreeMap::new()`
+(engine.rs:802). The types.rs:167-174 comment describes spawn-time
+seeding that does not exist. Validated-then-discarded input is a
+trap-door-shaped defect under E6/fail-closed discipline. Options:
+(a) wire orch_flags through StartParams→StartCommand→spawn seeding
+(kernel/engine CAREFUL change; matches the comment's stated intent), or
+(b) reject non-empty orch_flags at start until (a) is designed.
+Recommendation: (b) now (small, fail-closed), (a) as a scheduled item —
+the C4 mapping above needs neither.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
