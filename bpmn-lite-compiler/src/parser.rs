@@ -822,6 +822,21 @@ fn handle_close_tag(
                         node_map.insert(id, idx);
                     }
                     Some(SubEventType::Error { error_ref }) => {
+                        // F2 ruling (2026-07-27): non-interrupting error
+                        // boundaries are not modeled — previously
+                        // cancelActivity="false" was silently DISCARDED
+                        // and the boundary ran as interrupting. Reject
+                        // with a diagnostic instead of rewriting author
+                        // intent.
+                        if !cancel_activity {
+                            return Err(anyhow!(
+                                "boundaryEvent '{}': cancelActivity=\"false\" with \
+                                 errorEventDefinition is not supported — non-interrupting \
+                                 error boundaries are not modeled; use \
+                                 cancelActivity=\"true\" (or omit the attribute)",
+                                id
+                            ));
+                        }
                         // Resolve errorRef → errorCode via error_defs lookup
                         let error_code = error_ref
                             .as_deref()
@@ -1829,5 +1844,59 @@ mod tests {
             format!("{err}").contains("inputCollection"),
             "error should name the missing inputCollection: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod f2_noninterrupting_error_tests {
+    use super::*;
+
+    const BASE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:error id="e1" errorCode="BIZ_FAIL"/>
+  <bpmn:process id="p" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="risky">
+      <bpmn:extensionElements><zeebe:taskDefinition type="risky"/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="catcher" attachedToRef="risky" cancelActivity="CANCEL">
+      <bpmn:errorEventDefinition errorRef="e1"/>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="handler">
+      <bpmn:extensionElements><zeebe:taskDefinition type="handler"/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:endEvent id="err_end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="risky"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="risky" targetRef="end"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="catcher" targetRef="handler"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="handler" targetRef="err_end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+
+    /// F2 ruling (2026-07-27): cancelActivity="false" on an error
+    /// boundary was silently DISCARDED (ran as interrupting). Now a
+    /// parse-time rejection with a diagnostic naming the boundary —
+    /// reject, don't rewrite author intent.
+    #[test]
+    fn non_interrupting_error_boundary_is_rejected_with_diagnostic() {
+        let xml = BASE.replace("CANCEL", "false");
+        let err = parse_bpmn(&xml).expect_err("cancelActivity=false + error must reject");
+        let msg = err.to_string();
+        assert!(msg.contains("catcher"), "diagnostic must name the boundary: {msg}");
+        assert!(
+            msg.contains("non-interrupting"),
+            "diagnostic must state the unsupported semantics: {msg}"
+        );
+    }
+
+    /// Green side: interrupting (explicit or default) still parses.
+    #[test]
+    fn interrupting_error_boundary_still_parses() {
+        let xml = BASE.replace("CANCEL", "true");
+        parse_bpmn(&xml).expect("cancelActivity=true must parse");
+        let xml = BASE.replace(r#" cancelActivity="CANCEL""#, "");
+        parse_bpmn(&xml).expect("absent cancelActivity (defaults interrupting) must parse");
     }
 }

@@ -478,8 +478,37 @@ F8-COMPILER-001, found and FIXED.**
   timer/event orderings are fuzzed deterministically and replays are
   exact.
 
-**SURFACED FINDINGS from the F8 reconnaissance (design forks — Adam to
-rule; none fixed unilaterally):**
+**F8 reconnaissance findings — RULED by Adam 2026-07-27 and closed:**
+- **Fork 1 (REST DSL admission) — RULED: plan-tier sufficient.** Adam's
+  ruling: lint + validate_dag + SESE (+ L4 closure) is the admission
+  gate for the served DSL surface. RATIONALE + BOUNDARY (recorded so
+  this is a decision, not a gap): the REST path executes plans through
+  the in-memory step simulator, never bytecode, so the bytecode
+  theorems (V-2..V-6 stack/guard/join interpretation, V-7 limits,
+  budget/corr-source resolution, artifact integrity) are not
+  load-bearing there. THE RULING HOLDS ONLY WHILE SERVED PLANS NEVER
+  FEED THE REAL KERNEL — any future lower-and-execute of a stored plan
+  must pass bytecode admission at that point. Continuous mitigation:
+  dsl_compile's D-O2 gate-parity fuzz oracle (frontend-admitted ⇒
+  lowers + verifies) runs nightly.
+- **Fork 2 (cancelActivity silent downgrade) — RULED (a), IMPLEMENTED:**
+  parse-time rejection of cancelActivity="false" + errorEventDefinition
+  with a diagnostic naming the boundary. Receipts:
+  `non_interrupting_error_boundary_is_rejected_with_diagnostic` (red)
+  + `interrupting_error_boundary_still_parses` (green).
+- **Fork 3 (exporter errorRef) — RULED (a), IMPLEMENTED:** exporter now
+  emits the definitions-level `<bpmn:error>` catalog and references it
+  by id. Receipt: `export_emits_error_catalog_and_reimport_preserves_
+  specific_code` (export → re-import keeps the specific code; the old
+  silent catch-all widening is the red).
+
+**Remaining open design forks (from the DSL capability audit, separate
+design session):** ratify-parallel-frontends vs build XML→DSL
+transpile; seal-the-pack-loop (runtime hash-verification of pack
+closures); dual-taxonomy ordering (build or drop); Sage embedding
+intent mapping.
+
+**Original findings text (pre-ruling), kept for the record:**
 1. **REST DSL path stops halfway across the admission seam.** Every
    bpmn-lite-server REST call site (rest.rs:261, 1170, 1826, 1943,
    2103) invokes `dsl::compile` only — the resulting

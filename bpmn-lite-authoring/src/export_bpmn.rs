@@ -77,6 +77,39 @@ pub fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
         r#"                  id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">"#
     )?;
 
+    // ── Error catalog (definitions level, BEFORE the process) ──
+    // The importer resolves a boundary event's `errorRef` only through
+    // top-level `<bpmn:error>` entries collected outside the process; an
+    // errorRef without its catalog entry silently degrades to a catch-all
+    // (error_code None) on re-import. Emit one catalog entry per distinct
+    // code so export → import preserves specific-code arms.
+    let mut error_catalog: Vec<&str> = dto
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            NodeDto::BoundaryError {
+                error_code: Some(code),
+                ..
+            } => Some(code.as_str()),
+            _ => None,
+        })
+        .collect();
+    error_catalog.sort_unstable();
+    error_catalog.dedup();
+    let error_ref_ids: HashMap<&str, String> = error_catalog
+        .iter()
+        .enumerate()
+        .map(|(i, code)| (*code, format!("errdef_{i}")))
+        .collect();
+    for code in &error_catalog {
+        writeln!(
+            xml,
+            r#"  <bpmn:error id="{}" errorCode="{}" />"#,
+            error_ref_ids[code],
+            xml_escape(code)
+        )?;
+    }
+
     writeln!(
         xml,
         r#"  <bpmn:process id="{}" isExecutable="true">"#,
@@ -225,9 +258,12 @@ pub fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
                 host, error_code, ..
             } => {
                 let host_bid = &bpmn_ids[host.as_str()];
+                // Reference the catalog entry emitted at definitions level
+                // (id, not the raw code) — the importer resolves through
+                // the catalog.
                 let err_attr = error_code
                     .as_deref()
-                    .map(|c| format!(r#" errorRef="{}""#, xml_escape(c)))
+                    .map(|c| format!(r#" errorRef="{}""#, error_ref_ids[c]))
                     .unwrap_or_default();
                 writeln!(
                     xml,
@@ -887,5 +923,77 @@ mod tests {
         assert!(has_start, "Round-trip should preserve Start");
         assert!(has_end, "Round-trip should preserve End");
         assert!(has_service, "Round-trip should preserve ServiceTask");
+    }
+}
+
+#[cfg(test)]
+mod error_catalog_tests {
+    use super::*;
+    use crate::dto::{EdgeDto, NodeDto, WorkflowGraphDto};
+
+    fn dto_with_error_boundary() -> WorkflowGraphDto {
+        WorkflowGraphDto {
+            id: "err_wf".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start { id: "start".to_string() },
+                NodeDto::ServiceTask {
+                    id: "risky".to_string(),
+                    task_type: "risky_work".to_string(),
+                    bpmn_id: None,
+                },
+                NodeDto::BoundaryError {
+                    id: "catcher".to_string(),
+                    host: "risky".to_string(),
+                    error_code: Some("BIZ_FAIL".to_string()),
+                },
+                NodeDto::ServiceTask {
+                    id: "handler".to_string(),
+                    task_type: "handle_it".to_string(),
+                    bpmn_id: None,
+                },
+                NodeDto::End { id: "end".to_string(), terminate: false },
+                NodeDto::End { id: "err_end".to_string(), terminate: false },
+            ],
+            edges: vec![
+                EdgeDto { from: "start".to_string(), to: "risky".to_string(), condition: None, is_default: false, on_error: None },
+                EdgeDto { from: "risky".to_string(), to: "end".to_string(), condition: None, is_default: false, on_error: None },
+                EdgeDto { from: "catcher".to_string(), to: "handler".to_string(), condition: None, is_default: false, on_error: None },
+                EdgeDto { from: "handler".to_string(), to: "err_end".to_string(), condition: None, is_default: false, on_error: None },
+            ],
+        }
+    }
+
+    /// F3 ruling (2026-07-27): the exporter must emit the definitions-level
+    /// error catalog so a re-import resolves the specific code — previously
+    /// errorRef pointed at nothing and the arm silently widened to
+    /// catch-all on round-trip.
+    #[test]
+    fn export_emits_error_catalog_and_reimport_preserves_specific_code() {
+        let xml = dto_to_bpmn_xml(&dto_with_error_boundary()).expect("export");
+        assert!(
+            xml.contains(r#"<bpmn:error id="errdef_0" errorCode="BIZ_FAIL" />"#),
+            "catalog entry must be emitted at definitions level:\n{xml}"
+        );
+        assert!(
+            xml.contains(r#"errorRef="errdef_0""#),
+            "boundary must reference the catalog id, not the raw code:\n{xml}"
+        );
+        // Round-trip: re-import must resolve the SPECIFIC code, not None.
+        let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).expect("re-import");
+        let code = graph
+            .node_indices()
+            .find_map(|idx| match &graph[idx] {
+                bpmn_lite_compiler::ir::IRNode::BoundaryError { error_code, .. } => {
+                    Some(error_code.clone())
+                }
+                _ => None,
+            })
+            .expect("re-imported graph must contain the error boundary");
+        assert_eq!(
+            code.as_deref(),
+            Some("BIZ_FAIL"),
+            "round-trip must preserve the specific error code (catch-all widening is the F3 defect)"
+        );
     }
 }
