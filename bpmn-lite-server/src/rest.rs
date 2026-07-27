@@ -198,6 +198,7 @@ pub fn demo_router(state: Arc<DemoState>) -> Router {
         )
         .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
+        .route("/designer", get(designer_page))
         .route(
             "/bpmn/templates",
             get(list_templates_endpoint).post(define_template_endpoint),
@@ -2818,6 +2819,14 @@ fn layered_layout(
     layout
 }
 
+/// The standalone designer window (plan ruling E4: static HTML +
+/// vanilla JS + SVG, no framework, no build toolchain). It renders the
+/// server-supplied graph/layout and drives ONLY the governed endpoints
+/// — a window, not an editor.
+async fn designer_page() -> impl IntoResponse {
+    axum::response::Html(include_str!("../static/designer.html"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3476,6 +3485,28 @@ mod tests {
         assert!(record["template_ref"].is_array());
         let events = record["events"].as_array().unwrap();
         assert!(events.len() >= 4); // seed + broken rev + good rev + utterance
+    }
+
+    /// UI smoke: the designer page serves and names itself.
+    #[tokio::test]
+    async fn test_designer_page_serves() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/designer")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(html.contains("BPMN-Lite Designer"));
+        assert!(html.contains("/api/dsl/sessions"), "drives the governed endpoints");
     }
 
     /// Graph-window receipt (merged T4 / WS-B.2): compiling session →
