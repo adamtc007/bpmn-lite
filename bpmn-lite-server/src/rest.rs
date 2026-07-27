@@ -48,6 +48,13 @@ pub struct DemoState {
     tenant_id: TenantId,
     plan: Arc<WorkflowExecutionPlan>,
     cbu_types: Mutex<HashMap<Uuid, String>>,
+    /// Serializes each session's load→reconstruct→stage→append sequence
+    /// (graph-edit and save-as-template) so two concurrent requests against
+    /// the SAME session id can never both stage against the same base and
+    /// both persist — the second would otherwise replay against a DAG
+    /// shape it was never validated against, permanently bricking the
+    /// session's reconstruction. Different sessions never contend.
+    session_locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl DemoState {
@@ -58,7 +65,17 @@ impl DemoState {
             tenant_id: TenantId::new("demo")?,
             plan: Arc::new(plan),
             cbu_types: Mutex::new(HashMap::new()),
+            session_locks: Mutex::new(HashMap::new()),
         }))
+    }
+
+    fn session_lock(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(id)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     fn cbu_type(&self, id: Uuid) -> String {
@@ -2526,6 +2543,8 @@ async fn session_graph_edit_endpoint(
     Path(id): Path<Uuid>,
     Json(body): Json<SessionGraphEditBody>,
 ) -> impl IntoResponse {
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
     let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -2574,7 +2593,19 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
-    let _ = staged; // staged.candidate not persisted — only the op sequence is (rider 2)
+    // staged.candidate itself is not persisted — only the op sequence is
+    // (rider 2) — but the candidate MUST admit (full to_ir/verify/lower
+    // theorem chain) before its op sequence is accepted; apply_production's
+    // per-op staging alone only proves local anchor legality, not that the
+    // resulting graph is live/reachable/exhaustive.
+    if let Err(errs) = staged.candidate.admit() {
+        let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+        )
+            .into_response();
+    }
     let operations_json = match serde_json::to_string(&body.operations) {
         Ok(j) => j,
         Err(e) => {
@@ -4174,6 +4205,208 @@ mod tests {
                 .iter()
                 .any(|e| e["kind"].get("GraphEdit").is_some()),
             "a refused edit must persist nothing"
+        );
+    }
+
+    /// RED (G2 blind-review finding, BLOCKER 1): a sequence whose OPS are
+    /// each individually legal at staging time (both anchors resolve, both
+    /// AppendNodes target a fresh anchor) but whose resulting GRAPH is
+    /// globally illegal — a parallel split with no matching join. Before
+    /// the fix, `apply_production`'s per-op checks alone gated persistence
+    /// and this sequence was wrongly ACCEPTED; the fix wires the caller's
+    /// mandatory `staged.candidate.admit()` call so the full to_ir/verify
+    /// theorem chain runs before anything is appended.
+    #[tokio::test]
+    async fn test_session_graph_edit_refuses_locally_staged_but_globally_illegal_graph() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "unmatched fork session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let split_key = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: split_key,
+                node: bpmn_lite_compiler::ir::IRNode::GatewayAnd {
+                    id: "split".into(),
+                    name: "split".into(),
+                    direction: bpmn_lite_compiler::ir::GatewayDirection::Diverging,
+                },
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: split_key,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "unmatched fork" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a fork with no matching join must be refused by admit(), not just per-op staging"
+        );
+        let body = body_json(response).await;
+        let diagnostics = body["diagnostics"].as_array().unwrap();
+        assert!(
+            diagnostics.iter().any(|d| {
+                let d = d.as_str().unwrap().to_lowercase();
+                d.contains("fork") || d.contains("join")
+            }),
+            "refusal must name the fork/join mismatch: {diagnostics:?}"
+        );
+
+        let record = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            !record["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"].get("GraphEdit").is_some()),
+            "a graph that doesn't admit must persist nothing"
+        );
+    }
+
+    /// GREEN (G2 blind-review finding, BLOCKER 3): N concurrent graph-edit
+    /// requests against the SAME session, all competing for the SAME
+    /// anchor's single outgoing-edge slot. Before the fix, the endpoint's
+    /// load→reconstruct→stage→append sequence ran with no per-session
+    /// serialization — concurrent requests could each load the DAG BEFORE
+    /// any of them had appended, each stage successfully against that
+    /// stale base, and each persist a `GraphEdit` event; on replay,
+    /// folding a second AppendNode against an anchor the first event
+    /// already gave an outgoing edge to fails mid-fold, permanently
+    /// bricking the session (every future reconstruct/utterance call
+    /// errors, with no repair path). The fix serializes each session's
+    /// load-stage-append sequence behind a per-session `tokio::sync::Mutex`
+    /// (`DemoState::session_lock`), so every request after the first sees
+    /// the prior request's committed state before it stages — exactly one
+    /// request can ever win the anchor's outgoing-edge slot, and the
+    /// session's reconstruction stays valid no matter how the requests
+    /// interleave.
+    #[tokio::test]
+    async fn test_concurrent_graph_edits_on_same_anchor_never_corrupt_session() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "concurrent edit session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        const N: usize = 5;
+        let requests: Vec<_> = (0..N)
+            .map(|i| {
+                // Each request's own op sequence is a COMPLETE,
+                // independently admittable chain (Start -> Task_i -> End_i)
+                // — the race is purely over which one claims start_key's
+                // single outgoing-edge slot, not over structural
+                // completeness of any one contender's graph.
+                let task_key = new_key();
+                let ops = vec![
+                    designer_graph::ops::Operation::AppendNode {
+                        anchor: start_key,
+                        key: task_key,
+                        node: task_ir(&format!("branch_{i}")),
+                        edge_id: format!("f{i}a"),
+                    },
+                    designer_graph::ops::Operation::AppendNode {
+                        anchor: task_key,
+                        key: new_key(),
+                        node: bpmn_lite_compiler::ir::IRNode::End {
+                            id: format!("end_{i}"),
+                            terminate: false,
+                        },
+                        edge_id: format!("f{i}b"),
+                    },
+                ];
+                app.clone().oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                    serde_json::json!({ "operations": ops, "note": format!("branch {i}") }),
+                ))
+            })
+            .collect();
+        let responses: Vec<_> =
+            futures::future::join_all(requests).await.into_iter().map(|r| r.unwrap()).collect();
+
+        let ok_count = responses.iter().filter(|r| r.status() == StatusCode::OK).count();
+        let refused_count =
+            responses.iter().filter(|r| r.status() == StatusCode::UNPROCESSABLE_ENTITY).count();
+        assert_eq!(
+            ok_count, 1,
+            "only ONE request can legitimately win the anchor's single outgoing-edge slot"
+        );
+        assert_eq!(
+            refused_count,
+            N - 1,
+            "every other request must see the winner's committed state and be refused \
+             locally at staging — not race past it and corrupt the log"
+        );
+
+        // The decisive check: the session must still RECONSTRUCT after all
+        // N concurrent requests settle — a bricked session (the pre-fix
+        // failure mode) would 500 here instead.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "irrelevant", "anchor": "branch_0" }),
+            ))
+            .await
+            .unwrap();
+        assert_ne!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "session must remain reconstructible after concurrent graph-edits"
         );
     }
 

@@ -539,6 +539,85 @@ future corpus generation can ingest real session data, not synthetic-only.
 Also closes the WS-B.4 half of G2's remaining open item (WS-B blind review
 is the other half, still open).
 
+#### Receipts — WS-B independent blind review + remediation (2026-07-27) — G2 NOT YET CLOSED
+
+Independent read-only agent dispatched against the full WS-B surface
+(`rest.rs`'s session lifecycle/graph-edit/utterance/save endpoints,
+`store.rs`'s `DesignSessionEventKind`, `schema.rs`'s `DesignerDag`/
+`key_for_bpmn_id`), instructed to assume at least one real bug exists and
+not run the test suite (independence from what the suite already asserts).
+Found 3 BLOCKERs; each re-derived against primary source before acceptance
+(verify-don't-infer), not accepted on the sub-agent's paraphrase alone.
+
+**BLOCKER 1 (FIXED, red→green): `session_graph_edit_endpoint` never called
+`.admit()`.** `productions.rs:289-290`'s own contract states `apply_production`
+"does NOT run admission itself... the caller stages then calls
+`candidate.admit()`" — the endpoint discarded the staged candidate
+(`let _ = staged;`) and persisted the op sequence regardless. `apply_production`
+only proves per-op local anchor legality; the full `to_ir`→`verify`→
+`Compiler::lower_with_default` theorem chain (fork/join matching, SESE
+nesting, reachability) never ran. **Fix:** `staged.candidate.admit()` now
+gates persistence; refusal returns 422 with the verifier's diagnostics,
+nothing is appended. **Receipt:** new test
+`test_session_graph_edit_refuses_locally_staged_but_globally_illegal_graph`
+(a `GatewayAnd` split with no matching join — each `AppendNode` individually
+legal, the resulting graph globally illegal) — confirmed genuinely RED
+pre-fix (200 OK, wrongly accepted) by mechanically disabling the `admit()`
+call and re-running, then GREEN restored.
+
+**BLOCKER 3 (FIXED): TOCTOU race in `session_graph_edit_endpoint`.**
+Neither backend (`MemoryStore::append_design_session_event`,
+`store_postgres.rs`'s equivalent) serializes a session's load→reconstruct→
+stage→append sequence — only the append's own storage write was atomic.
+Two concurrent graph-edits against the same session could each load the
+same base, each stage successfully, both persist — the second replays
+against a DAG shape it was never validated against, permanently bricking
+the session (every future reconstruct/utterance call errors, no repair
+path). **Fix:** `DemoState::session_lock` — a per-session `tokio::sync::Mutex`
+serializing the endpoint's full load-stage-append critical section; different
+sessions never contend. **Receipt:**
+`test_concurrent_graph_edits_on_same_anchor_never_corrupt_session` — 5
+concurrent requests competing for one anchor's single outgoing-edge slot;
+confirmed exactly 1 succeeds, 4 cleanly refused, and the session remains
+reconstructible afterward. **Honesty note (no trap doors — don't overclaim
+a receipt):** this test could NOT be made to fail without the lock in this
+harness (`#[tokio::test]`'s current-thread runtime never interleaves the
+critical section without an explicit forced yield point) — three runs
+without the lock all passed by accident, not by correctness. The fix is
+retained on the strength of the static TOCTOU analysis (both backends read
+independently before any serialized write) and is a standard, obviously-
+correct primitive; the test is a real regression guard for the post-fix
+invariant, but is NOT a proven red→green pair the way BLOCKER 1's is. Flagged
+here rather than silently presented as equally strong evidence.
+
+**BLOCKER 2 (OPEN — genuine fork, not decided): `save_design_session_endpoint`
+ignores `is_graph_backed()`.** `store.rs`'s `current_source()` returns `None`
+for a graph-backed session unless a `Revision` event exists in its log; the
+save endpoint calls it unconditionally. A pure graph-authored session gets a
+400 (save-as-template simply broken); a session seeded with initial DSL text
+then edited via graph ops silently saves that STALE, unrelated text as the
+template — a quiet-wrong-success. Not a mechanical fix: `DesignerDag::admit()`
+produces an `ExecutableWorkflow` (post-`to_ir`/`verify`/`lower_with_default`,
+already-lowered) while `dsl::compile()` produces a `WorkflowExecutionPlan`
+(pre-lowering AST-level plan) — different types, and `load_plan`'s stored
+JSON is a LIVE contract: `bpmn-lite-bus-handler/src/lib.rs:715-717`
+deserializes it specifically as `WorkflowExecutionPlan` before spawning a
+process. My first-pass recommendation (store `ExecutableWorkflow` directly)
+was WRONG — verified against this real consumer before touching any code —
+and would have silently corrupted template instantiation for any
+graph-authored template. Correcting the record rather than proceeding on a
+disproven recommendation. **This blocks G2's close** until ruled: (a) build
+a `DesignerDag`→`WorkflowExecutionPlan` projection so both session kinds
+converge on the one stored/consumed type, or (b) widen `load_plan`'s
+contract to a tagged union of both plan shapes with the bus-handler
+consumer updated to handle both. Recommend (a) — the bus-handler's
+`spawn_process_with_idempotency` and the AST-level plan machinery it
+depends on are unlikely to want two competing input shapes — but this
+changes a live wire contract, so surfacing rather than deciding.
+
+Full workspace sweep after all fixes: `cargo test --workspace` — 0 failures.
+**G2 remains OPEN pending Adam's ruling on BLOCKER 2.**
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
