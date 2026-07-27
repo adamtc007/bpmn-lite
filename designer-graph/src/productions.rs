@@ -167,6 +167,121 @@ pub fn reminder_then_escalate(b: ReminderThenEscalateBindings) -> Vec<Operation>
     ]
 }
 
+/// `prod.interrupting_timeout` (§12.2): an INTERRUPTING boundary guard on
+/// `anchor` with a `TimerSpec::Duration` trigger, composed with a
+/// timeout-continuation `AppendNode` off the guard and that continuation's
+/// own `End` (same shape as `reminder_then_escalate`'s remediation — the
+/// continuation IS the guard's escape flow, owned by the production; the
+/// production ALONE must admit, nothing left for the caller to complete).
+///
+/// `duration_ms` is typed as a bare `u64`, not a `TimerSpec` — the
+/// `TimerSpec::Duration` is built INSIDE this function. This is
+/// deliberate: a `Cycle` trigger is refused by `ops::apply`'s boundary
+/// rule 6 on an INTERRUPTING guard (`AttachGuard` only ever builds
+/// `interrupting: true`), so if `duration_ms` were instead a `TimerSpec`
+/// field, a caller could construct a `TimerSpec::Cycle { .. }` value that
+/// is accepted by the bindings struct but refused at `apply` time — a
+/// RED path with no corresponding GREEN. Typing the field `u64` makes
+/// that state UNREPRESENTABLE through these bindings: there is no test
+/// to write here, because there is no cycle-shaped value to construct.
+/// (The companion RED receipt, `production_ops_reject_via_ops_gates`,
+/// instead hand-builds the illegal `Vec<Operation>` directly — bypassing
+/// this production's bindings entirely — to prove the gate `ops::apply`
+/// itself enforces is still live.)
+pub struct InterruptingTimeoutBindings {
+    pub anchor: NodeKey,
+    pub guard_key: NodeKey,
+    pub guard_id: String,
+    pub duration_ms: u64,
+    pub continuation_key: NodeKey,
+    pub continuation_node: IRNode,
+    pub continuation_edge_id: String,
+    /// The continuation's own terminal (slice-2 topology rule: a guard's
+    /// escape path ends in its own End or merges through a gateway, never
+    /// a bare shared End).
+    pub continuation_end_key: NodeKey,
+    pub continuation_end_node: IRNode,
+    pub continuation_end_edge_id: String,
+}
+
+pub fn interrupting_timeout(b: InterruptingTimeoutBindings) -> Vec<Operation> {
+    vec![
+        Operation::AttachGuard {
+            host: b.anchor,
+            key: b.guard_key,
+            guard_id: b.guard_id,
+            trigger: GuardTrigger::Timer(bpmn_lite_compiler::ir::TimerSpec::Duration {
+                ms: b.duration_ms,
+            }),
+        },
+        Operation::AppendNode {
+            anchor: b.guard_key,
+            key: b.continuation_key,
+            node: b.continuation_node,
+            edge_id: b.continuation_edge_id,
+        },
+        Operation::AppendNode {
+            anchor: b.continuation_key,
+            key: b.continuation_end_key,
+            node: b.continuation_end_node,
+            edge_id: b.continuation_end_edge_id,
+        },
+    ]
+}
+
+/// `prod.non_interrupting_notification` (§12.2): a NON-INTERRUPTING
+/// (re-arming) boundary guard on `anchor` with a `TimerSpec::Cycle`
+/// trigger, composed with a notification `AppendNode` off the guard and
+/// that notification's own `End` (same shape as `reminder_then_escalate`
+/// — the notification IS the guard's escape flow, owned by the
+/// production; the production ALONE must admit).
+///
+/// `interval_ms`/`max_fires` are typed as bare `u64`/`u32`, not a
+/// `TimerSpec` — the `TimerSpec::Cycle` is built INSIDE this function,
+/// same discipline as `interrupting_timeout`'s `duration_ms` (F4: no new
+/// identity or ambiguity is introduced by exposing the raw `TimerSpec`
+/// enum on the bindings surface).
+pub struct NonInterruptingNotificationBindings {
+    pub anchor: NodeKey,
+    pub guard_key: NodeKey,
+    pub guard_id: String,
+    pub interval_ms: u64,
+    pub max_fires: u32,
+    pub notification_key: NodeKey,
+    pub notification_node: IRNode,
+    pub notification_edge_id: String,
+    /// The notification's own terminal (slice-2 topology rule, as above).
+    pub notification_end_key: NodeKey,
+    pub notification_end_node: IRNode,
+    pub notification_end_edge_id: String,
+}
+
+pub fn non_interrupting_notification(b: NonInterruptingNotificationBindings) -> Vec<Operation> {
+    vec![
+        Operation::AttachRearmingGuard {
+            host: b.anchor,
+            key: b.guard_key,
+            guard_id: b.guard_id,
+            trigger: GuardTrigger::Timer(bpmn_lite_compiler::ir::TimerSpec::Cycle {
+                interval_ms: b.interval_ms,
+                max_fires: b.max_fires,
+            }),
+        },
+        Operation::AppendNode {
+            anchor: b.guard_key,
+            key: b.notification_key,
+            node: b.notification_node,
+            edge_id: b.notification_edge_id,
+        },
+        Operation::AppendNode {
+            anchor: b.notification_key,
+            key: b.notification_end_key,
+            node: b.notification_end_node,
+            edge_id: b.notification_end_edge_id,
+        },
+    ]
+}
+
 /// Fold `ops` over ONE staged candidate cloned from `base`: step 2 sees
 /// step 1's result, step 3 sees step 2's, etc. The first refusal aborts
 /// immediately — `ops::apply` always operates on a clone (I18), so `base`
@@ -447,6 +562,125 @@ mod tests {
         assert_eq!(base.node_count(), 3);
     }
 
+    /// Receipt (GREEN): `interrupting_timeout` -> apply_production ->
+    /// full-chain admit() green, ALONE (no receipt-added completion ops
+    /// — slice-5 binding rule from slice-4's remediation). Projected IR
+    /// asserted: interrupting=true, TimerSpec::Duration.
+    #[test]
+    fn interrupting_timeout_admits_alone_with_interrupting_duration_guard() {
+        let (base, _s, t1, _e) = linear("prod-itimeout");
+        let ops = interrupting_timeout(InterruptingTimeoutBindings {
+            anchor: t1,
+            guard_key: key(),
+            guard_id: "itimeout_guard".into(),
+            duration_ms: 30_000,
+            continuation_key: key(),
+            continuation_node: task("itimeout_continuation"),
+            continuation_edge_id: "e_itimeout_continuation".into(),
+            continuation_end_key: key(),
+            continuation_end_node: end_node("itimeout_continuation_end"),
+            continuation_end_edge_id: "e_itimeout_continuation_end".into(),
+        });
+        let staged = apply_production(&base, ops, Provenance::default())
+            .expect("interrupting_timeout production must apply");
+
+        let ir = staged.candidate.to_ir().unwrap();
+        let (interrupting, spec) = ir
+            .node_indices()
+            .find_map(|i| match &ir[i] {
+                IRNode::BoundaryTimer { id, interrupting, spec, .. } if id == "itimeout_guard" => {
+                    Some((*interrupting, spec.clone()))
+                }
+                _ => None,
+            })
+            .expect("guard projected");
+        assert!(interrupting, "interrupting_timeout must produce an INTERRUPTING guard");
+        assert!(
+            matches!(spec, TimerSpec::Duration { .. }),
+            "guard trigger must be Duration: {spec:?}"
+        );
+
+        // The production ALONE must admit — no receipt-added completion
+        // ops (slice-5 binding rule).
+        staged.candidate.admit().expect("interrupting_timeout must admit alone");
+    }
+
+    /// Receipt (GREEN): `non_interrupting_notification` -> apply_production
+    /// -> full-chain admit() green, ALONE. Projected IR asserted:
+    /// interrupting=false, TimerSpec::Cycle.
+    #[test]
+    fn non_interrupting_notification_admits_alone_with_non_interrupting_cycle_guard() {
+        let (base, _s, t1, _e) = linear("prod-notify");
+        let ops = non_interrupting_notification(NonInterruptingNotificationBindings {
+            anchor: t1,
+            guard_key: key(),
+            guard_id: "notify_guard".into(),
+            interval_ms: 10_000,
+            max_fires: 5,
+            notification_key: key(),
+            notification_node: task("notify_task"),
+            notification_edge_id: "e_notify_task".into(),
+            notification_end_key: key(),
+            notification_end_node: end_node("notify_task_end"),
+            notification_end_edge_id: "e_notify_task_end".into(),
+        });
+        let staged = apply_production(&base, ops, Provenance::default())
+            .expect("non_interrupting_notification production must apply");
+
+        let ir = staged.candidate.to_ir().unwrap();
+        let (interrupting, spec) = ir
+            .node_indices()
+            .find_map(|i| match &ir[i] {
+                IRNode::BoundaryTimer { id, interrupting, spec, .. } if id == "notify_guard" => {
+                    Some((*interrupting, spec.clone()))
+                }
+                _ => None,
+            })
+            .expect("guard projected");
+        assert!(
+            !interrupting,
+            "non_interrupting_notification must produce a NON-interrupting guard"
+        );
+        assert!(matches!(spec, TimerSpec::Cycle { .. }), "guard trigger must be Cycle: {spec:?}");
+
+        // The production ALONE must admit — no receipt-added completion
+        // ops (slice-5 binding rule).
+        staged.candidate.admit().expect("non_interrupting_notification must admit alone");
+    }
+
+    /// Receipt (RED): `production_ops_reject_via_ops_gates` — a
+    /// cycle-timeout through `interrupting_timeout` is UNREPRESENTABLE
+    /// (the bindings only accept `duration_ms: u64`; see the doc comment
+    /// on `InterruptingTimeoutBindings`, which IS the receipt for that
+    /// claim). This test instead hand-builds the illegal op vector
+    /// directly (an `AttachGuard` with a `Cycle` trigger — the shape a
+    /// buggy/hostile caller of `apply_production` might submit bypassing
+    /// the production function entirely) and shows `apply_production`
+    /// refuses it via the same slice-2 `ops::apply` gate (boundary rule
+    /// 6: Cycle is only legal on a non-interrupting guard).
+    #[test]
+    fn production_ops_reject_via_ops_gates() {
+        let (base, _s, t1, _e) = linear("prod-reject-gate");
+        let base_count_before = base.node_count();
+        let illegal_ops = vec![Operation::AttachGuard {
+            host: t1,
+            key: key(),
+            guard_id: "illegal_cycle_guard".into(),
+            trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                interval_ms: 1_000,
+                max_fires: 2,
+            }),
+        }];
+
+        let err = apply_production(&base, illegal_ops, Provenance::default())
+            .expect_err("Cycle-on-interrupting must be refused by ops::apply's gate");
+        assert!(
+            err.to_string().contains("illegal_cycle_guard"),
+            "refusal must name the guard id: {err}"
+        );
+        assert_eq!(base.node_count(), base_count_before);
+    }
+
     /// Receipt: every production's `Vec<Operation>` round-trips serde
     /// (Q5 — these are the edit-log entries) and re-applies identically
     /// after the round trip.
@@ -505,5 +739,60 @@ mod tests {
             .candidate
             .admit()
             .expect("round-tripped candidate must still admit");
+    }
+
+    /// Receipt: `interrupting_timeout`'s `Vec<Operation>` round-trips
+    /// serde (Q5) and re-applies identically after the round trip, ALONE
+    /// (slice-5 binding rule — no receipt-added completion ops).
+    #[test]
+    fn interrupting_timeout_ops_serde_round_trips_and_reapplies_identically() {
+        let (base, _s, t1, _e) = linear("prod-itimeout-serde");
+        let ops = interrupting_timeout(InterruptingTimeoutBindings {
+            anchor: t1,
+            guard_key: key(),
+            guard_id: "itimeout_serde_guard".into(),
+            duration_ms: 45_000,
+            continuation_key: key(),
+            continuation_node: task("itimeout_serde_continuation"),
+            continuation_edge_id: "e_itimeout_serde_continuation".into(),
+            continuation_end_key: key(),
+            continuation_end_node: end_node("itimeout_serde_continuation_end"),
+            continuation_end_edge_id: "e_itimeout_serde_continuation_end".into(),
+        });
+
+        let json = serde_json::to_string(&ops).expect("Vec<Operation> must serialize");
+        let round_tripped: Vec<Operation> =
+            serde_json::from_str(&json).expect("Vec<Operation> must deserialize");
+
+        let staged_direct = apply_production(&base, ops, Provenance::default())
+            .expect("direct application must succeed");
+        let staged_round_tripped = apply_production(&base, round_tripped, Provenance::default())
+            .expect("round-tripped application must succeed");
+
+        let ir_direct = staged_direct.candidate.to_ir().unwrap();
+        let ir_round_tripped = staged_round_tripped.candidate.to_ir().unwrap();
+
+        let mut node_ids_direct: Vec<&str> =
+            ir_direct.node_indices().map(|i| ir_direct[i].id()).collect();
+        let mut node_ids_round_tripped: Vec<&str> =
+            ir_round_tripped.node_indices().map(|i| ir_round_tripped[i].id()).collect();
+        node_ids_direct.sort();
+        node_ids_round_tripped.sort();
+        assert_eq!(node_ids_direct, node_ids_round_tripped);
+
+        let mut edge_ids_direct: Vec<&str> =
+            ir_direct.edge_indices().map(|i| ir_direct[i].id.as_str()).collect();
+        let mut edge_ids_round_tripped: Vec<&str> =
+            ir_round_tripped.edge_indices().map(|i| ir_round_tripped[i].id.as_str()).collect();
+        edge_ids_direct.sort();
+        edge_ids_round_tripped.sort();
+        assert_eq!(edge_ids_direct, edge_ids_round_tripped);
+
+        // The production ALONE must admit — no receipt-added completion
+        // ops (slice-5 binding rule).
+        staged_round_tripped
+            .candidate
+            .admit()
+            .expect("round-tripped interrupting_timeout candidate must still admit alone");
     }
 }
