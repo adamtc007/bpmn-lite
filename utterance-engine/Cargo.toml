@@ -1,0 +1,13 @@
+[package]
+name = "utterance-engine"
+version = "0.1.0"
+edition = "2021"
+description = "WS-C (EOP-PLAN-BPMN-DESIGN-003): board construction, stable SLM contract, deterministic disposition policy, I28 records. Models supply evidence; policy issues dispositions (I27)."
+
+[dependencies]
+designer-graph = { path = "../designer-graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+uuid = { workspace = true }

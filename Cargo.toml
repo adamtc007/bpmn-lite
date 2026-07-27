@@ -2,6 +2,7 @@
 members = [
     "bpmn-lite-authoring",
     "designer-graph",
+    "utterance-engine",
     "bpmn-lite-compiler",
     "bpmn-lite-engine",
     "bpmn-lite-kernel",
