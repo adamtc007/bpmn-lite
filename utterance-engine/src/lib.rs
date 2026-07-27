@@ -18,3 +18,4 @@
 
 pub mod board;
 pub mod contract;
+pub mod policy;

@@ -22,8 +22,6 @@ use designer_graph::board_candidate::{BoardCandidate, LegalityOracle};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-use crate::contract::NONE_OF_THE_ABOVE;
-
 /// E2 provider trait: pack-scoped additions to the board universe
 /// (domain verbs, effects, messages, decisions) beyond the graph
 /// operations/productions the `LegalityOracle` supplies. Implementations
