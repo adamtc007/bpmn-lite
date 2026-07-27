@@ -89,6 +89,16 @@ pub enum Operation {
         node: IRNode,
         edge_id: String,
     },
+    /// Replace `target` with `node` (under `key`): the new node takes
+    /// over ALL of target's incoming and outgoing edges (ids/conditions/
+    /// provenance preserved), then target is removed. Refused if target
+    /// is unknown, or if any OTHER node's `attached_to_key` references
+    /// target (same rule as `DeleteNode` — replace-under-guard is an
+    /// explicit delete-guard + attach, not an implicit re-point). `key`'s
+    /// BPMN id may equal target's own id — target is removed (freeing
+    /// its id) BEFORE the replacement is inserted, so same-BPMN-id
+    /// rename-in-place is exactly the common case, not a special one.
+    ReplaceNode { target: NodeKey, key: NodeKey, node: IRNode },
     /// Connect two existing nodes (forward-only pre-gate, I23).
     Connect {
         from: NodeKey,
@@ -404,6 +414,59 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                     provenance: provenance.clone(),
                 },
             )?;
+        }
+
+        Operation::ReplaceNode { target, key, node } => {
+            if candidate.node(target).is_none() {
+                return Err(anyhow!("ReplaceNode refused: unknown target {target:?}"));
+            }
+            // Same rule as DeleteNode: a guard attached to `target` would
+            // dangle once target is removed — refuse, naming both ids.
+            let dependents = candidate.nodes_attached_to(target);
+            if !dependents.is_empty() {
+                let target_label = candidate
+                    .node(target)
+                    .map(|n| n.ir.id().to_owned())
+                    .unwrap_or_else(|| format!("{target:?}"));
+                let dependent_labels: Vec<String> = dependents
+                    .iter()
+                    .map(|k| {
+                        candidate
+                            .node(*k)
+                            .map(|n| n.ir.id().to_owned())
+                            .unwrap_or_else(|| format!("{k:?}"))
+                    })
+                    .collect();
+                return Err(anyhow!(
+                    "ReplaceNode refused: '{target_label}' ({target:?}) still hosts attached \
+                     guard(s) {dependent_labels:?}; delete/detach the guard(s) first (replace- \
+                     under-guard is an explicit delete-guard + attach, not an implicit re-point)"
+                ));
+            }
+            // Detach target's incident edges BEFORE removing it, preserving
+            // each edge's id/condition/provenance for re-pointing (F4).
+            let preds = candidate.predecessors(target);
+            let mut incoming = Vec::with_capacity(preds.len());
+            for source in preds {
+                let edge = candidate.remove_edge_between(source, target)?;
+                incoming.push((source, edge));
+            }
+            let succs = candidate.successors(target);
+            let mut outgoing = Vec::with_capacity(succs.len());
+            for dest in succs {
+                let edge = candidate.remove_edge_between(target, dest)?;
+                outgoing.push((dest, edge));
+            }
+            // Remove target FIRST — frees its BPMN id (and NodeKey) so the
+            // replacement may reuse the same BPMN id (rename-in-place).
+            candidate.remove_node(target)?;
+            candidate.insert_node(key, node, None, provenance.clone())?;
+            for (source, edge) in incoming {
+                candidate.insert_edge(source, key, edge)?;
+            }
+            for (dest, edge) in outgoing {
+                candidate.insert_edge(key, dest, edge)?;
+            }
         }
 
         Operation::DeleteNode { target } => {
@@ -1633,6 +1696,139 @@ mod tests {
         assert!(msg.contains(&format!("{a:?}")), "must still name to-key: {msg}");
         assert!(msg.contains("'a'"), "must name the from-node's BPMN id: {msg}");
         assert!(msg.contains("'b'"), "must name the to-node's BPMN id: {msg}");
+    }
+
+    // ── WS-A.2 slice 4 — ReplaceNode ───────────────────────────────────
+
+    /// Receipt 1 (GREEN): start->t1->end; ReplaceNode(target=t1, node
+    /// with the SAME BPMN id "t1") -> the replacement takes over both
+    /// t1's incoming and outgoing edges (ids preserved); full-chain
+    /// admit() green; base DAG unchanged. This is the common
+    /// rename-in-place shape (same BPMN id, new NodeKey).
+    #[test]
+    fn replace_node_takes_over_edges() {
+        let (base, s, t1, e) = linear("replace1");
+        let base_count_before = base.node_count();
+        let new_key = key();
+
+        let staged = apply(
+            &base,
+            Operation::ReplaceNode {
+                target: t1,
+                key: new_key,
+                node: task("t1"), // same BPMN id as the target — rename-in-place
+            },
+            Provenance::default(),
+        )
+        .expect("replace_node must succeed");
+
+        assert_eq!(staged.candidate.successors(s), vec![new_key]);
+        assert_eq!(staged.candidate.successors(new_key), vec![e]);
+        assert_eq!(staged.candidate.predecessors(new_key), vec![s]);
+        assert!(staged.candidate.node(t1).is_none(), "target must be gone");
+
+        let ir = staged.candidate.to_ir().unwrap();
+        let e1 = ir.edge_indices().find(|&i| ir[i].id == "e1").expect("e1 preserved");
+        let e2 = ir.edge_indices().find(|&i| ir[i].id == "e2").expect("e2 preserved");
+        let _ = (e1, e2);
+
+        staged.candidate.admit().expect("replaced chain must admit");
+        assert_eq!(base.node_count(), base_count_before, "I18: base DAG unchanged");
+        assert_eq!(base.node_count(), 3);
+    }
+
+    /// Receipt 1b (GREEN companion): ReplaceNode with a DIFFERENT BPMN id
+    /// also works (not just the rename-in-place case).
+    #[test]
+    fn replace_node_with_different_bpmn_id_admits() {
+        let (base, s, t1, e) = linear("replace1b");
+        let new_key = key();
+        let staged = apply(
+            &base,
+            Operation::ReplaceNode {
+                target: t1,
+                key: new_key,
+                node: task("t1_replacement"),
+            },
+            Provenance::default(),
+        )
+        .expect("replace_node with a new id must succeed");
+        assert_eq!(staged.candidate.successors(s), vec![new_key]);
+        assert_eq!(staged.candidate.successors(new_key), vec![e]);
+        staged.candidate.admit().expect("replaced chain must admit");
+    }
+
+    /// Receipt 2 (RED): task + boundary guard attached via
+    /// `attached_to_key` -> ReplaceNode(target=task) refused, naming both
+    /// the target's and the guard's ids (same rule as DeleteNode).
+    #[test]
+    fn replace_under_guard_refused() {
+        let mut dag = DesignerDag::new("replace2");
+        let s = dag
+            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .unwrap();
+        let t = dag.insert_node(key(), task("work"), None, Provenance::default()).unwrap();
+        let e = dag
+            .insert_node(key(), end_node("end"), None, Provenance::default())
+            .unwrap();
+        dag.insert_node(
+            key(),
+            IRNode::BoundaryTimer {
+                id: "guard".into(),
+                attached_to: "work".into(),
+                spec: TimerSpec::Duration { ms: 60_000 },
+                interrupting: true,
+                failure_budget: None,
+            },
+            Some(t),
+            Provenance::default(),
+        )
+        .unwrap();
+        dag.insert_edge(
+            s,
+            t,
+            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+        )
+        .unwrap();
+        dag.insert_edge(
+            t,
+            e,
+            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+        )
+        .unwrap();
+
+        let err = apply(
+            &dag,
+            Operation::ReplaceNode {
+                target: t,
+                key: key(),
+                node: task("work"),
+            },
+            Provenance::default(),
+        )
+        .expect_err("replace of a guarded node must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("work"), "error must name the target: {msg}");
+        assert!(msg.contains("guard"), "error must name the guard: {msg}");
+    }
+
+    /// Receipt 3 (RED): ReplaceNode on an unknown target is refused,
+    /// naming the key.
+    #[test]
+    fn replace_unknown_target_refused() {
+        let (base, ..) = linear("replace3");
+        let ghost = key();
+        let err = apply(
+            &base,
+            Operation::ReplaceNode {
+                target: ghost,
+                key: key(),
+                node: task("x"),
+            },
+            Provenance::default(),
+        )
+        .expect_err("replace of an unknown target must be refused");
+        assert!(err.to_string().contains(&format!("{ghost:?}")));
     }
 
     // ── WS-A.2 slice 3 — region operations ────────────────────────────

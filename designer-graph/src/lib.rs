@@ -15,4 +15,5 @@
 
 pub mod board_candidate;
 pub mod ops;
+pub mod productions;
 pub mod schema;
