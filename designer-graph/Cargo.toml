@@ -1,0 +1,14 @@
+[package]
+name = "designer-graph"
+version = "0.1.0"
+edition = "2021"
+description = "WS-A (EOP-PLAN-BPMN-DESIGN-003): canonical Designer DAG schema, deterministic graph operations/productions, staged-candidate transaction. Structural derivation is consumed from bpmn-lite-compiler's post-dominance oracle — never reimplemented (I16)."
+
+[dependencies]
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+petgraph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }

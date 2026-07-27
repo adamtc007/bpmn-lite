@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "bpmn-lite-authoring",
+    "designer-graph",
     "bpmn-lite-compiler",
     "bpmn-lite-engine",
     "bpmn-lite-kernel",
