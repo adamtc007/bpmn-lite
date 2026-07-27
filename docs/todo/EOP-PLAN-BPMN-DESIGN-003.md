@@ -1,7 +1,7 @@
 # EOP-PLAN-BPMN-DESIGN-003 — Implementation Plan: BPMN Designer, Sage/Repl UI, and the SLM Prototype
 
 **Version:** v0.2
-**Status:** DRAFT — for review; executes EOP-VS-BPMN-DESIGN-003 **v0.6 (RATIFIED)**; restructured per **EOP-DIR-BPMN-DESIGN-003-001** (Adam, 2026-07-27: SLM capability built IN-PHASE, concurrent with the Designer refactor, not a later tranche)
+**Status:** **RATIFIED (Adam, 2026-07-27)** — executes EOP-VS-BPMN-DESIGN-003 **v0.6 (RATIFIED)**; restructured per **EOP-DIR-BPMN-DESIGN-003-001** (SLM capability built IN-PHASE, concurrent with the Designer refactor). Changes from here are versioned amendments; receipts append in place (§F).
 **Document class:** Implementation plan (workstreams, gates, receipts)
 **Baseline:** EOP-VS-BPMN-ISA-002 v0.19 IMPLEMENTED; EOP-VS-BPMN-DESIGN-003 v0.6 ratified 2026-07-25
 **Working discipline (inherited, binding):** GRIND vs CAREFUL tiers; authorship-blind review at every CAREFUL close; Rule 7 — substrate/plan mismatch = executor HALTS and reports, never adapts; red→green for every remediation; receipts appended to this document per workstream; build proof over assertion; zero suppressions; every code claim marked and traced before anything rests on it; per-site rules converted to build failures when a class recurs.
