@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_engine::demo::{build_demo_plan, demo_initial_vars};
-use bpmn_lite_store::store::{AdminProjectionStore, ArtifactRepository, RuntimeStore};
+use bpmn_lite_store::store::{
+    AdminProjectionStore, ArtifactRepository, DesignSessionEventKind, RuntimeStore,
+};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::types::{ProcessInstance, ProcessState};
@@ -181,6 +183,20 @@ pub fn demo_router(state: Arc<DemoState>) -> Router {
             post(resolve_dsl_diagnostics),
         )
         .route("/api/dsl/sage/utter", post(sage_utterance_gate))
+        .route(
+            "/api/dsl/sessions",
+            get(list_design_sessions_endpoint).post(create_design_session_endpoint),
+        )
+        .route("/api/dsl/sessions/:id", get(get_design_session_endpoint))
+        .route(
+            "/api/dsl/sessions/:id/revision",
+            post(session_revision_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/utterance",
+            post(session_utterance_endpoint),
+        )
+        .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
         .route(
             "/bpmn/templates",
             get(list_templates_endpoint).post(define_template_endpoint),
@@ -2005,7 +2021,14 @@ pub(crate) struct UtteranceResponse {
 }
 
 async fn sage_utterance_gate(Json(body): Json<UtteranceRequest>) -> impl IntoResponse {
-    let text = body.utterance.trim().to_lowercase();
+    Json(utterance_intent(&body.utterance))
+}
+
+/// Keyword intent gate (T0 ruling: the v1 REPL contract). Pure so both
+/// the stateless endpoint and the session-scoped endpoint share it.
+fn utterance_intent(utterance: &str) -> UtteranceResponse {
+    let body_utterance = utterance;
+    let text = utterance.trim().to_lowercase();
 
     let is_escape = text.contains("exit")
         || text.contains("close editor")
@@ -2053,7 +2076,7 @@ async fn sage_utterance_gate(Json(body): Json<UtteranceRequest>) -> impl IntoRes
         )
     } else if text.starts_with("import ") || text.contains("unknown verb") {
         let verb = if text.starts_with("import ") {
-            body.utterance.trim()[7..].to_string()
+            body_utterance.trim()[7..].to_string()
         } else {
             "ob-poc:cbu.create".to_string()
         };
@@ -2075,12 +2098,12 @@ async fn sage_utterance_gate(Json(body): Json<UtteranceRequest>) -> impl IntoRes
         ("none", "Utterance processed. Continues editing mode.", None)
     };
 
-    Json(UtteranceResponse {
+    UtteranceResponse {
         escape_intent_detected: is_escape,
         suggested_action: suggested_action.to_string(),
         message: msg.to_string(),
         action_payload: payload,
-    })
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2236,6 +2259,307 @@ async fn get_template_version_endpoint(
             Json(serde_json::json!({ "error": e.to_string() })),
         ).into_response()
     }
+}
+
+
+// ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1) ────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct CreateSessionBody {
+    name: String,
+    #[serde(default)]
+    dsl_source: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CreateSessionResponse {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SessionRevisionBody {
+    dsl_source: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SessionRevisionResponse {
+    seq: u64,
+    /// Compile diagnostics for the NEW source — drafts may be invalid;
+    /// the revision is recorded either way (the REPL shows diagnostics,
+    /// it does not lose work).
+    compiles: bool,
+    diagnostics: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SessionUtteranceBody {
+    text: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SessionUtteranceResponse {
+    seq: u64,
+    #[serde(flatten)]
+    intent: UtteranceResponse,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SaveSessionBody {
+    template_name: String,
+}
+
+async fn create_design_session_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Json(body): Json<CreateSessionBody>,
+) -> impl IntoResponse {
+    let id = Uuid::now_v7();
+    match demo
+        .store
+        .create_design_session(&demo.tenant_id, id, &body.name, &body.dsl_source)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(CreateSessionResponse {
+                session_id: id.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn list_design_sessions_endpoint(State(demo): State<Arc<DemoState>>) -> impl IntoResponse {
+    match demo.store.list_design_sessions(&demo.tenant_id).await {
+        Ok(summaries) => Json(summaries).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_design_session_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(record)) => Json(record).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "session not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn session_revision_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SessionRevisionBody>,
+) -> impl IntoResponse {
+    let seq = match demo
+        .store
+        .append_design_session_event(
+            &demo.tenant_id,
+            id,
+            &DesignSessionEventKind::Revision {
+                dsl_source: body.dsl_source.clone(),
+                note: body.note.clone(),
+            },
+        )
+        .await
+    {
+        Ok(seq) => seq,
+        Err(bpmn_lite_store::StoreError::NotFound(_)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let registry = get_preview_registry();
+    let (compiles, diagnostics) =
+        match bpmn_lite_compiler::dsl::compile(&body.dsl_source, &registry) {
+            Ok(_) => (true, Vec::new()),
+            Err(bpmn_lite_compiler::dsl::CompileError::Parse(errs)) => (false, errs),
+            Err(bpmn_lite_compiler::dsl::CompileError::Lint(errs)) => {
+                (false, errs.iter().map(|e| format!("{e}")).collect())
+            }
+            Err(bpmn_lite_compiler::dsl::CompileError::Dag(errs)) => {
+                (false, errs.iter().map(|e| format!("{e}")).collect())
+            }
+        };
+    Json(SessionRevisionResponse {
+        seq,
+        compiles,
+        diagnostics,
+    })
+    .into_response()
+}
+
+async fn session_utterance_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SessionUtteranceBody>,
+) -> impl IntoResponse {
+    let intent = utterance_intent(&body.text);
+    match demo
+        .store
+        .append_design_session_event(
+            &demo.tenant_id,
+            id,
+            &DesignSessionEventKind::Utterance {
+                text: body.text.clone(),
+                response: intent.message.clone(),
+            },
+        )
+        .await
+    {
+        Ok(seq) => Json(SessionUtteranceResponse { seq, intent }).into_response(),
+        Err(bpmn_lite_store::StoreError::NotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "session not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// Save-as-template: compile the session's CURRENT source (fail-closed —
+/// an uncompilable draft cannot become a template), persist plan +
+/// catalog entry (same path as POST /bpmn/templates), and pin the
+/// template ref back onto the session.
+async fn save_design_session_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SaveSessionBody>,
+) -> impl IntoResponse {
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let Some(source) = record.current_source().map(str::to_owned) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "session has no revision to save" })),
+        )
+            .into_response();
+    };
+    let registry = get_preview_registry();
+    let plan = match bpmn_lite_compiler::dsl::compile(&source, &registry) {
+        Ok(plan) => plan,
+        Err(e) => {
+            let diagnostics: Vec<String> = match e {
+                bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                    errs.iter().map(|e| format!("{e}")).collect()
+                }
+                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                    errs.iter().map(|e| format!("{e}")).collect()
+                }
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "current revision does not compile",
+                    "diagnostics": diagnostics
+                })),
+            )
+                .into_response();
+        }
+    };
+    let plan_json = match serde_json::to_string(&plan) {
+        Ok(json) => json,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
+    if let Err(e) = demo.store.store_plan(hash, &plan_json).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("store plan: {e}") })),
+        )
+            .into_response();
+    }
+    let version = match demo
+        .store
+        .load_latest_template_version(&body.template_name)
+        .await
+    {
+        Ok(Some((v, _, _))) => v + 1,
+        _ => 1,
+    };
+    if let Err(e) = demo
+        .store
+        .store_template(&body.template_name, version, hash, &source)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("store template: {e}") })),
+        )
+            .into_response();
+    }
+    if let Err(e) = demo
+        .store
+        .mark_design_session_saved(&demo.tenant_id, id, &body.template_name, version, hash)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("mark saved: {e}") })),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({
+        "template_name": body.template_name,
+        "version": version,
+        "plan_hash": hex::encode(hash)
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -2759,5 +3083,233 @@ mod tests {
         assert!(summaries_arr_v2.iter().any(|t| t["name"] == "my-template"
             && t["latest_version"] == 2
             && t["plan_hash"] == second_hash));
+    }
+
+    const SESSION_DSL_OK: &str = r#"(workflow session-wf
+  (start-event :id start :next end)
+  (end-event :id end :status "OK"))"#;
+
+    async fn body_json(response: axum::response::Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn post_json(uri: &str, body: Value) -> Request<axum::body::Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_design_session_round_trip_and_save() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        // Create
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "kyc draft", "dsl_source": "" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = body_json(response).await;
+        let session_id = created["session_id"].as_str().unwrap().to_owned();
+
+        // List contains it
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/dsl/sessions")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let list = body_json(response).await;
+        assert!(list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == session_id.as_str() && s["name"] == "kyc draft"));
+
+        // Invalid revision is RECORDED (drafts may be broken) but reports diagnostics
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/revision"),
+                serde_json::json!({ "dsl_source": "(workflow broken", "note": "wip" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let rev = body_json(response).await;
+        assert_eq!(rev["compiles"], false);
+        assert!(!rev["diagnostics"].as_array().unwrap().is_empty());
+        let broken_seq = rev["seq"].as_u64().unwrap();
+
+        // Valid revision compiles clean
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/revision"),
+                serde_json::json!({ "dsl_source": SESSION_DSL_OK, "note": "fixed" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let rev = body_json(response).await;
+        assert_eq!(rev["compiles"], true);
+        assert!(rev["seq"].as_u64().unwrap() > broken_seq);
+
+        // Utterance goes through the intent gate and is appended
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "add a task after start" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let utter = body_json(response).await;
+        assert!(utter["seq"].as_u64().is_some());
+        assert!(utter["message"].is_string());
+
+        // Save-as-template: pins ref, persists template v1
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "session-template" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = body_json(response).await;
+        assert_eq!(saved["template_name"], "session-template");
+        assert_eq!(saved["version"], 1);
+        let plan_hash = saved["plan_hash"].as_str().unwrap().to_owned();
+        assert_eq!(plan_hash.len(), 64);
+
+        // Get: full record shows Saved status, template pin, and the event log
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/dsl/sessions/{session_id}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let record = body_json(response).await;
+        assert_eq!(record["status"], "Saved");
+        assert!(record["template_ref"].is_array());
+        let events = record["events"].as_array().unwrap();
+        assert!(events.len() >= 4); // seed + broken rev + good rev + utterance
+    }
+
+    #[tokio::test]
+    async fn test_design_session_save_rejects_uncompilable_draft() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "broken", "dsl_source": "(workflow nope" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "never-lands" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let err = body_json(response).await;
+        assert!(!err["diagnostics"].as_array().unwrap().is_empty());
+
+        // Nothing leaked into the template catalog
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let templates = body_json(response).await;
+        assert!(!templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "never-lands"));
+    }
+
+    #[tokio::test]
+    async fn test_design_session_unknown_id_is_404() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+        let ghost = Uuid::now_v7();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/dsl/sessions/{ghost}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{ghost}/revision"),
+                serde_json::json!({ "dsl_source": "x", "note": "" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{ghost}/save"),
+                serde_json::json!({ "template_name": "t" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
