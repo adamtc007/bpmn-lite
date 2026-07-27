@@ -67,6 +67,32 @@ concurrency is a requirement (N designers, isolated).
 - Postgres impl is compile-verified only (no live PG in this loop);
   its behavioural parity rides the T5 standalone-boot receipt.
 
+## Programme reconciliation with EOP-PLAN-BPMN-DESIGN-003 v0.2 (ruled by Adam, 2026-07-27)
+
+The two programmes claimed the same surface; the ruling merges them:
+
+- **T1's sessions are WS-B's persistence substrate.** The session
+  aggregate/store/endpoints (closed above) are what `designer-ui`
+  builds on — not a parallel mechanism.
+- **T4 (graph endpoint + designer UI) MERGES into WS-B** of
+  EOP-PLAN-BPMN-DESIGN-003; it is no longer independently sequenced
+  here. The WS-B day-one rule applies: its disposition path calls
+  WS-C's deterministic disposition policy function from the first
+  commit.
+- **The keyword gate is DEMOTED**: T0's "keyword-gate is the v1 REPL
+  intent contract" ratification is superseded by DESIGN-003 v0.6's
+  canonical chain (board → tier-0 → disposition policy). The gate
+  (`utterance_intent`, rest.rs) survives only as an *interim evidence
+  producer* behind WS-C's disposition function, retired when tier-0
+  matcher wiring lands. WS-C item 3/4 implies widening
+  `DesignSessionEventKind::Utterance` toward the I28 record shape
+  (board hash, scores, disposition closure).
+- **T2 (macro hardening), T3 (pack seal), T5 (crate-split review),
+  T6 (Chrome-MCP harness) stand unchanged** — they don't overlap
+  WS-A/B/C content. T5's split review now also covers the three
+  designer crates (GOV.2: bpmn-lite workspace, exact rev-pin
+  consumption — pending Adam's confirm).
+
 ## T2 — Design-loop hardening (the never-reviewed layer)
 
 - Authorship-blind review of `dsl/macros.rs`, `dsl/refactor.rs`
