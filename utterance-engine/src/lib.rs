@@ -16,4 +16,5 @@
 //!   E3 (in-process embed+score tier-0), E5 (thresholds in a versioned
 //!   config hashed into `disposition_policy_hash` — never inline).
 
+pub mod board;
 pub mod contract;

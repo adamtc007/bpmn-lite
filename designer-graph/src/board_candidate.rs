@@ -66,6 +66,11 @@ pub enum ProductionId {
 pub enum CandidateId {
     Operation(OperationKind),
     Production(ProductionId),
+    /// The explicit abstention candidate (R2-r1) present on every board.
+    /// Owned by the board constructor (utterance-engine), not by any
+    /// legality oracle — listed here so no consumer ever has to fake it
+    /// with a real operation/production discriminant.
+    Abstain,
 }
 
 impl OperationKind {
@@ -189,6 +194,7 @@ impl CandidateId {
         match self {
             CandidateId::Operation(op) => op.canonical_id(),
             CandidateId::Production(p) => p.canonical_id(),
+            CandidateId::Abstain => "abstain.none_of_the_above",
         }
     }
 }
@@ -216,6 +222,7 @@ impl BoardCandidate {
         let description = match id {
             CandidateId::Operation(op) => op.description(),
             CandidateId::Production(p) => p.description(),
+            CandidateId::Abstain => "None of the available options matches this request",
         };
         BoardCandidate {
             id,

@@ -11,6 +11,18 @@ use serde::{Deserialize, Serialize};
 /// `op.*`/`prod.*` ids.
 pub const NONE_OF_THE_ABOVE: &str = "abstain.none_of_the_above";
 
+#[cfg(test)]
+mod alignment {
+    /// Cement: this constant IS designer-graph's Abstain canonical id.
+    #[test]
+    fn abstention_id_aligned_with_designer_graph() {
+        assert_eq!(
+            super::NONE_OF_THE_ABOVE,
+            designer_graph::board_candidate::CandidateId::Abstain.canonical_id()
+        );
+    }
+}
+
 /// A finite score. NaN/Infinity are TYPED REJECTS — the model layer
 /// inherits the canonical encoder's rule (R2-3). Construction is the
 /// only entry; the inner value is private.
