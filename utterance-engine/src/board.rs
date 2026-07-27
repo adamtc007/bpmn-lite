@@ -68,7 +68,25 @@ pub struct PolicyFilter {
 pub struct BoardContext {
     /// BPMN id of the anchor node, or None for the whole-graph position.
     pub anchor: Option<String>,
+    /// Identity of the graph revision legality was computed against
+    /// (review C7): without it, delete-and-recreate of an id makes two
+    /// different artifact states hash-indistinguishable. WS-B supplies
+    /// the session's current revision/graph hash; None only in unit
+    /// contexts, and hashed distinctly either way.
+    pub graph_identity: Option<String>,
     pub pack_identity: String,
+}
+
+/// Length-prefixed, domain-tagged preimage writer (review B1): every
+/// variable-length field is written as `<tag>:<byte-len>:<bytes>`, so no
+/// field value — description, pack id, denied entry, anchor named
+/// literally "<root>" — can forge a field boundary or a sentinel.
+fn put(preimage: &mut Vec<u8>, tag: &str, value: &str) {
+    preimage.extend_from_slice(tag.as_bytes());
+    preimage.push(b':');
+    preimage.extend_from_slice(value.len().to_string().as_bytes());
+    preimage.push(b':');
+    preimage.extend_from_slice(value.as_bytes());
 }
 
 /// The exact, content-addressed inference board (I15).
@@ -89,24 +107,50 @@ impl Board {
 }
 
 /// Build the board for a position. Deterministic: same oracle state,
-/// provider state, anchor, and policy → identical hash.
+/// provider state, anchor, and policy → identical hash. Fail-closed
+/// (review C6): reserved-namespace candidates and same-id/different-
+/// content collisions are ERRORS, never silently deduped.
 pub fn build_board<O: LegalityOracle>(
     oracle: &O,
-    anchor: Option<&O::NodeKey>,
-    anchor_id: Option<&str>,
+    anchor: Option<(&O::NodeKey, &str)>,
+    graph_identity: Option<&str>,
     provider: &dyn BoardUniverseProvider,
     policy: &PolicyFilter,
-) -> Board {
+) -> anyhow::Result<Board> {
     // Universe: position-legal ops/productions + provider candidates.
-    let mut candidates = oracle.legal_candidates(anchor);
+    let mut candidates = oracle.legal_candidates(anchor.map(|(k, _)| k));
     candidates.extend(provider.candidates());
+
+    // Reserved namespace (review C6): only build_board itself may emit
+    // the abstention candidate.
+    if let Some(c) = candidates.iter().find(|c| c.canonical_id.starts_with("abstain.")) {
+        return Err(anyhow::anyhow!(
+            "candidate '{}' uses the reserved abstain.* namespace — only the board              constructor emits abstention",
+            c.canonical_id
+        ));
+    }
 
     // Pre-inference policy filter (D19): remove, don't mark.
     candidates.retain(|c| !policy.denied.contains(&c.canonical_id));
 
-    // Canonical ordering across the merged universe.
+    // Canonical ordering; identical duplicates collapse, same-id with
+    // DIFFERENT content is a namespace-collision defect (review C6).
     candidates.sort_by(|a, b| a.canonical_id.cmp(&b.canonical_id));
-    candidates.dedup_by(|a, b| a.canonical_id == b.canonical_id);
+    let mut deduped: Vec<BoardCandidate> = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        match deduped.last() {
+            Some(prev) if prev.canonical_id == c.canonical_id => {
+                if prev.description != c.description || prev.schema_version != c.schema_version {
+                    return Err(anyhow::anyhow!(
+                        "candidate id '{}' emitted twice with differing content —                          namespace collision between oracle and provider",
+                        c.canonical_id
+                    ));
+                }
+            }
+            _ => deduped.push(c),
+        }
+    }
+    let mut candidates = deduped;
 
     // Explicit abstention candidate on EVERY board (R2-r1), appended
     // after ordering so it is always last and always present.
@@ -115,45 +159,50 @@ pub fn build_board<O: LegalityOracle>(
     ));
 
     let context = BoardContext {
-        anchor: anchor_id.map(str::to_owned),
+        anchor: anchor.map(|(_, id)| id.to_owned()),
+        graph_identity: graph_identity.map(str::to_owned),
         pack_identity: provider.pack_identity(),
     };
 
     // Content hash (I15/§11.7): candidates as supplied to the model, in
-    // order, plus reachability context, pack, and policy-filter state.
-    let mut preimage = String::new();
+    // order, plus reachability context, graph identity, pack, and
+    // policy-filter state. Injective by construction (review B1):
+    // length-prefixed fields, distinct domain tags for None vs Some.
+    let mut preimage: Vec<u8> = Vec::new();
+    put(&mut preimage, "n", &candidates.len().to_string());
     for c in &candidates {
-        preimage.push_str(&c.canonical_id);
-        preimage.push('\x1f');
-        preimage.push_str(&c.description);
-        preimage.push('\x1f');
-        preimage.push_str(&c.schema_version.to_string());
-        preimage.push('\x1e');
+        put(&mut preimage, "cid", &c.canonical_id);
+        put(&mut preimage, "cdesc", &c.description);
+        put(&mut preimage, "cver", &c.schema_version.to_string());
     }
-    preimage.push_str("anchor:");
-    preimage.push_str(context.anchor.as_deref().unwrap_or("<root>"));
-    preimage.push('\x1e');
-    preimage.push_str("pack:");
-    preimage.push_str(&context.pack_identity);
-    preimage.push('\x1e');
-    preimage.push_str("denied:");
+    match &context.anchor {
+        Some(a) => put(&mut preimage, "anchor.some", a),
+        None => put(&mut preimage, "anchor.none", ""),
+    }
+    match &context.graph_identity {
+        Some(g) => put(&mut preimage, "graph.some", g),
+        None => put(&mut preimage, "graph.none", ""),
+    }
+    put(&mut preimage, "pack", &context.pack_identity);
+    put(&mut preimage, "ndenied", &policy.denied.len().to_string());
     for d in &policy.denied {
-        preimage.push_str(d);
-        preimage.push('\x1f');
+        put(&mut preimage, "deny", d);
     }
-    let board_hash = blake3::hash(preimage.as_bytes()).to_hex().to_string();
+    let board_hash = blake3::hash(&preimage).to_hex().to_string();
 
-    Board {
+    Ok(Board {
         candidates,
         context,
         board_hash,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use designer_graph::board_candidate::{OperationKind, ProductionId};
+    use designer_graph::board_candidate::{
+        BoardCandidate, CandidateId, LegalityOracle, OperationKind, ProductionId,
+    };
 
     struct AllLegal;
     impl LegalityOracle for AllLegal {
@@ -166,53 +215,157 @@ mod tests {
         }
     }
 
-    /// GREEN determinism + RED sensitivity: same inputs → same hash;
-    /// changed anchor or policy state → different hash (the hash is a
-    /// content address, not a version label).
+    fn root_board() -> Board {
+        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap()
+    }
+
+    /// GREEN determinism + RED sensitivity: anchor, graph identity, and
+    /// policy state all move the hash.
     #[test]
     fn board_hash_is_content_addressed() {
-        let a = build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default());
-        let b = build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default());
+        let a = root_board();
+        let b = root_board();
         assert_eq!(a.board_hash, b.board_hash, "determinism");
 
-        let anchored = build_board(&AllLegal, None, Some("t1"), &EmptyUniverse, &PolicyFilter::default());
+        let anchored =
+            build_board(&AllLegal, Some((&(), "t1")), None, &EmptyUniverse, &PolicyFilter::default())
+                .unwrap();
         assert_ne!(a.board_hash, anchored.board_hash, "anchor is hashed");
+
+        let with_graph =
+            build_board(&AllLegal, None, Some("rev1"), &EmptyUniverse, &PolicyFilter::default())
+                .unwrap();
+        assert_ne!(a.board_hash, with_graph.board_hash, "graph identity is hashed");
 
         let mut policy = PolicyFilter::default();
         policy.denied.insert("op.delete_subgraph".to_owned());
-        let filtered = build_board(&AllLegal, None, None, &EmptyUniverse, &policy);
+        let filtered = build_board(&AllLegal, None, None, &EmptyUniverse, &policy).unwrap();
         assert_ne!(a.board_hash, filtered.board_hash, "policy state is hashed");
     }
 
-    /// D19: a denied candidate is REMOVED — absent from the board the
-    /// model sees, not marked forbidden. And NONE_OF_THE_ABOVE is on
-    /// every board, last.
+    /// B1 red fixtures: the collisions the pre-remediation scheme
+    /// admitted must now hash differently.
+    #[test]
+    fn preimage_is_injective_against_crafted_collisions() {
+        // Anchor sentinel: literal "<root>" id vs no anchor.
+        let no_anchor = root_board();
+        let sentinel = build_board(
+            &AllLegal,
+            Some((&(), "<root>")),
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            no_anchor.board_hash, sentinel.board_hash,
+            "anchor id '<root>' must not collide with the no-anchor board"
+        );
+
+        // Delimiter forgery: two providers whose flattened byte streams
+        // coincided under in-band delimiters.
+        struct P(Vec<(String, String)>);
+        impl BoardUniverseProvider for P {
+            fn pack_identity(&self) -> String {
+                "pack.test".into()
+            }
+            fn candidates(&self) -> Vec<BoardCandidate> {
+                self.0
+                    .iter()
+                    .map(|(id, desc)| BoardCandidate {
+                        id: CandidateId::Abstain, // discriminant unused in hashes
+                        canonical_id: id.clone(),
+                        description: desc.clone(),
+                        schema_version: 1,
+                    })
+                    .collect()
+            }
+        }
+        let a = build_board(
+            &AllLegal,
+            None,
+            None,
+            &P(vec![("verb.x".into(), "A\u{1f}B".into())]),
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let b = build_board(
+            &AllLegal,
+            None,
+            None,
+            &P(vec![("verb.x\u{1f}A".into(), "B".into())]),
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        assert_ne!(a.board_hash, b.board_hash, "delimiter bytes cannot forge boundaries");
+    }
+
+    /// C6 reds: reserved namespace and same-id/different-content are
+    /// ERRORS, never silent dedup.
+    #[test]
+    fn provider_misbehavior_is_refused() {
+        struct Abstainer;
+        impl BoardUniverseProvider for Abstainer {
+            fn pack_identity(&self) -> String {
+                "pack.evil".into()
+            }
+            fn candidates(&self) -> Vec<BoardCandidate> {
+                vec![BoardCandidate {
+                    id: CandidateId::Abstain,
+                    canonical_id: "abstain.none_of_the_above".into(),
+                    description: "forged abstention".into(),
+                    schema_version: 1,
+                }]
+            }
+        }
+        let err = build_board(&AllLegal, None, None, &Abstainer, &PolicyFilter::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("reserved"));
+
+        struct Collider;
+        impl BoardUniverseProvider for Collider {
+            fn pack_identity(&self) -> String {
+                "pack.collide".into()
+            }
+            fn candidates(&self) -> Vec<BoardCandidate> {
+                vec![BoardCandidate {
+                    id: CandidateId::Operation(OperationKind::AppendNode),
+                    canonical_id: "op.append_node".into(),
+                    description: "a DIFFERENT description".into(),
+                    schema_version: 1,
+                }]
+            }
+        }
+        let err = build_board(&AllLegal, None, None, &Collider, &PolicyFilter::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("collision"));
+    }
+
+    /// D19: a denied candidate is REMOVED; NONE_OF_THE_ABOVE always
+    /// present, always last.
     #[test]
     fn policy_filter_removes_and_abstention_is_always_present() {
         let mut policy = PolicyFilter::default();
         policy.denied.insert("op.delete_subgraph".to_owned());
-        let board = build_board(&AllLegal, None, None, &EmptyUniverse, &policy);
-        assert!(!board.contains("op.delete_subgraph"), "denied candidate must be absent");
-        assert!(board.contains("op.append_node"), "undenied candidates remain");
+        let board = build_board(&AllLegal, None, None, &EmptyUniverse, &policy).unwrap();
+        assert!(!board.contains("op.delete_subgraph"));
+        assert!(board.contains("op.append_node"));
         assert_eq!(
             board.candidates.last().unwrap().canonical_id,
-            crate::contract::NONE_OF_THE_ABOVE,
-            "abstention candidate always present, always last"
+            crate::contract::NONE_OF_THE_ABOVE
         );
-        // 28 legal - 1 denied + NOTA = 28
         assert_eq!(board.candidates.len(), 28);
     }
 
-    /// Canonical ordering is by canonical_id regardless of oracle or
-    /// provider emission order (position-invariance is a MODEL test,
-    /// §10.7 — ordering here is for reproducibility, R2-r2).
+    /// Canonical ordering regardless of emission order (reproducibility,
+    /// R2-r2; position-invariance is a model test, §10.7).
     #[test]
     fn board_ordering_is_canonical() {
-        let board = build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default());
+        let board = root_board();
         let ids: Vec<&str> = board
             .candidates
             .iter()
-            .take(board.candidates.len() - 1) // NOTA appended last by design
+            .take(board.candidates.len() - 1)
             .map(|c| c.canonical_id.as_str())
             .collect();
         let mut sorted = ids.clone();

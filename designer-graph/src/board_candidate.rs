@@ -339,6 +339,12 @@ mod tests {
             preimage.push_str(p.description());
             preimage.push('\x1e');
         }
+        // Review C3: the Abstain candidate's id+description are
+        // board-hash inputs too — cemented here with the rest.
+        preimage.push_str(CandidateId::Abstain.canonical_id());
+        preimage.push('\x1f');
+        preimage.push_str("None of the available options matches this request");
+        preimage.push('\x1e');
         preimage.push_str(&CANDIDATE_SCHEMA_VERSION.to_string());
         let hash = blake3::hash(preimage.as_bytes()).to_hex().to_string();
         assert_eq!(
@@ -347,7 +353,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_DESCRIPTION_HASH: &str = "68b7e3f602ef3243d5ea8b61a4998c2208a1a4fdbe06f61099cdfeef5a5cd06d";
+    const GOLDEN_DESCRIPTION_HASH: &str = "0df0986177658657053f56129bc8db1468e99f8aa5cf6bee16d8d7971b5ffb90";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]

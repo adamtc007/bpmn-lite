@@ -42,26 +42,49 @@ impl DispositionConfig {
         }
     }
 
+    /// Content address over a HAND-BUILT preimage (blind-review C4):
+    /// f64 thresholds enter as IEEE-754 bit patterns, never as decimal
+    /// text, so the hash cannot drift with a serializer's float
+    /// formatting or a struct-field reorder.
     pub fn policy_hash(&self) -> String {
-        let json = serde_json::to_string(self).expect("config serializes");
-        blake3::hash(json.as_bytes()).to_hex().to_string()
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"dispcfg.v1:");
+        preimage.extend_from_slice(&self.policy_version.to_le_bytes());
+        preimage.extend_from_slice(&self.acceptance_floor.to_bits().to_le_bytes());
+        preimage.extend_from_slice(&self.separation_margin.to_bits().to_le_bytes());
+        blake3::hash(&preimage).to_hex().to_string()
     }
 }
 
-/// V&S §9.2 shape, designer-surface v1. Issued ONLY by `decide`.
+/// V&S §9.2's ratified shape (I21: ambiguous, missing-argument,
+/// compound, and out-of-scope are all expressible). Issued ONLY by
+/// `decide`. v1 REACHABILITY (blind-review B2 disposition, recorded in
+/// the plan): `MissingArguments` and `Compound` are UNREACHABLE until
+/// the option-(a) slot resolvers and a certified action-span producer
+/// exist respectively — §10.3 rules that score topology cannot
+/// distinguish ambiguity from compound intent, so v1 maps EVERY
+/// insufficient-separation case to `EscalateToSage`, never to a
+/// rendered "did you mean A or B?" that may mask a compound request.
+/// `Ambiguous` becomes reachable only when a certified producer can
+/// distinguish the cases; making it reachable earlier is a policy
+/// version bump plus a plan amendment, not a threshold tweak.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProposalDisposition {
     /// Sufficiently separated top candidate → deterministic binding
     /// proceeds (Repl still re-establishes everything).
     Candidate { candidate_id: String },
-    /// Top scores insufficiently separated → clarification, rendered by
-    /// Sage (D7: Sage renders, policy decides).
+    /// UNREACHABLE in v1 (see enum docs).
     Ambiguous { top_candidates: Vec<String> },
+    /// UNREACHABLE in v1: requires the option-(a) slot resolvers.
+    MissingArguments { candidate_id: String, missing: Vec<String> },
+    /// UNREACHABLE in v1: requires certified action-span evidence.
+    Compound,
     /// The abstention hypothesis won: the board does not contain the
     /// answer. D19-rider denial rendering applies downstream.
     OutOfScope,
-    /// Weak/novel/compound-suspected → Sage analysis against the SAME
-    /// board (D20 governs any board change).
+    /// Weak evidence OR insufficient separation (ambiguity/compound
+    /// indistinguishable without span evidence, §10.3) → Sage analysis
+    /// against the SAME board (D20 governs any board change).
     EscalateToSage { reason: String },
 }
 
@@ -74,11 +97,15 @@ pub struct DecisionRecord {
     pub retrieved_subset_hash: String,
     pub model_bundle_hash: String,
     pub disposition_policy_hash: String,
-    /// Session/context features as projected (v1: the raw utterance
-    /// hash — widened when the projection grows features).
+    /// Session/context features as projected. Preimage carries a
+    /// projection-schema version tag (review N3) so a widened
+    /// projection is distinguishable in kind from v1's
+    /// raw-utterance-only form.
     pub context_projection_hash: String,
-    /// The ranking verbatim, as evidence entered policy.
-    pub ranking: Vec<(String, f64)>,
+    /// The ranking as evidence entered policy (canonically re-sorted),
+    /// scores kept as FiniteScore so a stored record cannot
+    /// reintroduce non-finite values on round-trip (review N5).
+    pub ranking: Vec<(String, crate::contract::FiniteScore)>,
     pub disposition: ProposalDisposition,
 }
 
@@ -110,10 +137,27 @@ pub fn decide(
         }
     }
 
-    let disposition = match result.ranking.as_slice() {
-        [] => ProposalDisposition::EscalateToSage {
-            reason: "empty ranking — no evidence to select on".to_owned(),
-        },
+    // Blind-review C5: policy owns the canonical order (I28 tie-break) —
+    // re-sort rather than trusting the producer; duplicate candidate ids
+    // are producer malfunction, refused.
+    let mut ranking = result.ranking.clone();
+    crate::contract::rank_canonically(&mut ranking);
+    for pair in ranking.windows(2) {
+        if pair[0].candidate_id == pair[1].candidate_id {
+            return Err(anyhow!(
+                "ranking names '{}' more than once — duplicate evidence is refused",
+                pair[0].candidate_id
+            ));
+        }
+    }
+
+    let disposition = match ranking.as_slice() {
+        [] => {
+            // A conforming producer can never emit an empty ranking
+            // (NOTA is on every board): producer malfunction, fail
+            // closed (review N1 strict reading).
+            return Err(anyhow!("empty ranking — producer malfunction, no evidence"));
+        }
         [top, rest @ ..] => {
             if top.candidate_id == NONE_OF_THE_ABOVE {
                 ProposalDisposition::OutOfScope
@@ -127,11 +171,15 @@ pub fn decide(
                 }
             } else if let Some(second) = rest.first() {
                 if top.score.get() - second.score.get() < config.separation_margin {
-                    ProposalDisposition::Ambiguous {
-                        top_candidates: vec![
-                            top.candidate_id.clone(),
-                            second.candidate_id.clone(),
-                        ],
+                    // §10.3 ruling: multi-peak does NOT distinguish
+                    // ambiguity from compound — escalate, never render
+                    // a masking A-or-B clarification (review B2).
+                    ProposalDisposition::EscalateToSage {
+                        reason: format!(
+                            "insufficient separation ({:.3} < {:.3}): ambiguity vs                              compound intent indistinguishable without span evidence",
+                            top.score.get() - second.score.get(),
+                            config.separation_margin
+                        ),
                     }
                 } else {
                     ProposalDisposition::Candidate {
@@ -151,11 +199,15 @@ pub fn decide(
         retrieved_subset_hash: result.retrieved_subset_hash.clone(),
         model_bundle_hash: result.model_bundle_hash.clone(),
         disposition_policy_hash: config.policy_hash(),
-        context_projection_hash: blake3::hash(raw_utterance.as_bytes()).to_hex().to_string(),
-        ranking: result
-            .ranking
+        context_projection_hash: {
+            let mut pre = Vec::new();
+            pre.extend_from_slice(b"ctxproj.v1:");
+            pre.extend_from_slice(raw_utterance.as_bytes());
+            blake3::hash(&pre).to_hex().to_string()
+        },
+        ranking: ranking
             .iter()
-            .map(|rc| (rc.candidate_id.clone(), rc.score.get()))
+            .map(|rc| (rc.candidate_id.clone(), rc.score))
             .collect(),
         disposition: disposition.clone(),
     };
@@ -181,7 +233,7 @@ mod tests {
     }
 
     fn board() -> Board {
-        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default())
+        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap()
     }
 
     fn result(board: &Board, ranking: Vec<(&str, f64)>) -> SlmResult {
@@ -217,18 +269,76 @@ mod tests {
         assert_eq!(rec.ranking.len(), 2);
     }
 
+    /// §10.3 ruling (review B2): insufficient separation ESCALATES —
+    /// ambiguity vs compound is indistinguishable without span
+    /// evidence, so no masking A-or-B clarification is rendered.
     #[test]
-    fn close_scores_are_ambiguous_and_weak_escalates() {
+    fn close_scores_and_weak_evidence_both_escalate() {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.80), ("op.insert_after", 0.75)]);
         let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
-        assert!(matches!(d, ProposalDisposition::Ambiguous { .. }));
+        assert!(
+            matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("separation")),
+            "close scores must escalate, not render Ambiguous: {d:?}"
+        );
 
         let r = result(&b, vec![("op.append_node", 0.30)]);
         let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
-        assert!(matches!(d, ProposalDisposition::EscalateToSage { .. }));
+        assert!(matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor")));
     }
+
+    /// Review C5 reds: duplicate ids refused; misordered producer input
+    /// is re-sorted canonically (policy owns the order), so the true
+    /// top wins regardless of emission order. Review N1: empty ranking
+    /// is producer malfunction, an error.
+    #[test]
+    fn ranking_hygiene_is_policy_owned() {
+        let b = board();
+        let cfg = DispositionConfig::shadow_v1();
+        let r = result(&b, vec![("op.append_node", 0.9), ("op.append_node", 0.9)]);
+        assert!(decide(&cfg, &b, &r, "x").unwrap_err().to_string().contains("more than once"));
+
+        // Misordered: low score listed first; re-sort selects the real top.
+        let r = result(&b, vec![("op.connect", 0.55), ("op.append_node", 0.95)]);
+        let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+        assert_eq!(d, ProposalDisposition::Candidate { candidate_id: "op.append_node".into() });
+
+        let r = result(&b, vec![]);
+        assert!(decide(&cfg, &b, &r, "x").unwrap_err().to_string().contains("malfunction"));
+    }
+
+    /// Review N4: golden decision table cementing policy_version 1
+    /// semantics — a semantic edit to decide() without a version bump
+    /// breaks this, not just a comment. Review C4: golden policy hash.
+    #[test]
+    fn policy_v1_decision_table_and_hash_are_golden() {
+        let cfg = DispositionConfig::shadow_v1();
+        assert_eq!(cfg.policy_version, 1);
+        assert_eq!(
+            cfg.policy_hash(),
+            GOLDEN_SHADOW_V1_POLICY_HASH,
+            "shadow_v1 policy hash drifted — semantic or encoding change without a bump"
+        );
+        let b = board();
+        let table: Vec<(Vec<(&str, f64)>, fn(&ProposalDisposition) -> bool)> = vec![
+            (vec![("op.append_node", 0.90), ("op.connect", 0.40)],
+             |d| matches!(d, ProposalDisposition::Candidate { .. })),
+            (vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],
+             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
+            (vec![("op.append_node", 0.49)],
+             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
+            (vec![(NONE_OF_THE_ABOVE, 0.99), ("op.append_node", 0.10)],
+             |d| matches!(d, ProposalDisposition::OutOfScope)),
+        ];
+        for (ranking, check) in table {
+            let r = result(&b, ranking.clone());
+            let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+            assert!(check(&d), "decision table drift for {ranking:?}: {d:?}");
+        }
+    }
+
+    const GOLDEN_SHADOW_V1_POLICY_HASH: &str = "b93371789f5202158f286d44555087dba5da4b059b01b929a279479bc60815b2";
 
     #[test]
     fn abstention_top_is_out_of_scope() {

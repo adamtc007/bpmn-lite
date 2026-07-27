@@ -301,6 +301,34 @@ a gate that never ran. **RULED wire-in (Adam) + IMPLEMENTED 2026-07-27**:
 `verify_runs_data_object_checks` (unresolved FFI var-ref refused — red
 that previously verified clean); full workspace sweep green.
 
+### WS-C C-now items 1–3 — CLOSED 2026-07-27 (CAREFUL; blind-reviewed NOT-CLEAN → remediated)
+
+Deliverables: `utterance-engine` crate — stable contract (`FiniteScore`
+typed rejects, `SlmResult`, canonical tie-break, `NONE_OF_THE_ABOVE`),
+§11.7 board construction, deterministic disposition policy + I28 record.
+Blind review returned 2 BLOCKERS + 7 CONCERNS + 5 NOTES; disposition:
+
+| # | Finding | Disposition |
+|---|---|---|
+| B1 | Board-hash preimage non-injective (anchor `"<root>"` sentinel collision; delimiter forgery via provider strings) | **FIXED**: length-prefixed domain-tagged preimage (`tag:len:bytes`), distinct tags for None/Some; red fixtures — sentinel collision + crafted delimiter pair now hash differently |
+| B2 | Close-scope deviation: close-gap → `Ambiguous` CONTRADICTED §10.3's ruling (score topology cannot distinguish ambiguity from compound); `MissingArguments`/`Compound` absent vs I21 | **FIXED to the ruled reading**: insufficient separation → `EscalateToSage` (never a masking A-or-B render); enum carries the full I21 shape with `Ambiguous`/`MissingArguments`/`Compound` declared UNREACHABLE-in-v1 (reachable only with certified producers — policy version bump + plan amendment, not a threshold tweak). D20 escalation SHAPE (board ref, context-change channel) lands with WS-B.3's flow — recorded here as WS-B scope |
+| C3 | Abstain description uncemented board-hash input | **FIXED**: folded into the designer-graph golden (hex bumped deliberately) |
+| C4 | policy_hash rested on serde_json float text | **FIXED**: hand-built preimage (`f64::to_bits`), golden hex cement for shadow_v1 |
+| C5 | decide trusted producer order; duplicates admitted | **FIXED**: policy re-sorts via `rank_canonically` (I28 tie-break policy-owned); duplicate ids refused; misorder receipt green |
+| C6 | build_board fail-open on provider misbehavior | **FIXED**: `-> Result`; reserved `abstain.*` namespace refused; same-id/different-content collision refused; identical dupes still collapse |
+| C7 | Reachability context lacked artifact identity | **PARTIALLY FIXED + WS-B obligation**: `BoardContext.graph_identity` added and hashed (None hashed distinctly); WS-B MUST supply the session revision/graph hash when building boards — brief item |
+| C8 | I27 documentation-not-mechanism (pub fields allow forging records/boards) | **DEFERRED with note**: Repl recheck is the ratified gate (§11.7 "the pre-filter is hygiene, never the gate"); Board private-fields hardening rides WS-C item 4 wiring |
+| C9 | anchor/anchor_id decoupled | **FIXED**: single `Option<(&NodeKey, &str)>` parameter |
+| N1 | Empty ranking laundered as escalation | **FIXED strict**: producer malfunction, typed error |
+| N2 | Ambiguous top-2 truncation | Moot in v1 (unreachable); revisit at producer certification |
+| N3 | Projection hash unversioned | **FIXED**: `ctxproj.v1:` domain tag |
+| N4 | policy_version honor-system | **FIXED**: golden decision table + golden policy hash tied to version 1 |
+| N5 | Record ranking as raw f64 | **FIXED**: `FiniteScore` in `DecisionRecord` |
+
+Config-by-hash registry (N3 rider) is a named WS-C item-6 (capture
+pipeline) obligation: records are reproducible only if configs are
+retrievable by `disposition_policy_hash`.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
