@@ -24,10 +24,29 @@
 //!   No `Uuid::new_v4()` anywhere in this file.
 //! - **Fail closed**: every refusal is an `Err` naming the offending
 //!   node/edge id. No skips, no defaults, no `#[allow]`.
+//!
+//! ## WS-A.2 slice 3 — region operations
+//!
+//! **Regions are constructed CLOSED (SESE by construction, P1/I23):** one
+//! operation inserts the complete fork…join block. There is NO open-region
+//! state and NO separate `CloseParallelRegion` operation — the §12.1 Close
+//! operation (`board_candidate::OperationKind::CloseParallelRegion`) is
+//! subsumed: it is an artifact of editors with open-region states, which
+//! this schema makes unrepresentable.
+//!
+//! **EXCLUDED BY DESIGN — do not add:** `CreateRace` (no race/event-gateway
+//! `IRNode` exists — substrate trace pending) and `CallSubprocess` (no
+//! call-activity `IRNode` exists — trace pending). Do not fake either with
+//! `ServiceTask`.
+//!
+//! **Topology rule (slice 2's finding, binding here too):** never wire a
+//! region's internal nodes directly into a shared downstream `End`
+//! alongside other paths — merges go through the join. The production
+//! verifier enforces this ("inconsistent stack height at CFG merge").
 
 use crate::schema::{DesignerDag, DesignerEdge, NodeKey, Provenance};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::ir::{ConditionExpr, IRNode, TimerSpec};
+use bpmn_lite_compiler::ir::{ConditionExpr, GatewayDirection, IRNode, TimerSpec};
 use petgraph::algo::has_path_connecting;
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +128,64 @@ pub enum Operation {
         node: NodeKey,
         corr_key_source: String,
     },
+    /// Insert a complete parallel fork…join region after `anchor`
+    /// (InsertAfter semantics: anchor's former outgoing edges re-point,
+    /// ids preserved, to leave from `join`). >= 2 branches required; a
+    /// `Some` condition on any branch is REFUSED (a parallel branch
+    /// pretending to be conditional).
+    CreateParallelRegion {
+        anchor: NodeKey,
+        fork_key: NodeKey,
+        fork_node_id: String,
+        join_key: NodeKey,
+        join_node_id: String,
+        entry_edge_id: String, // anchor -> fork
+        branches: Vec<RegionBranch>,
+    },
+    /// Same shape, `GatewayInclusive` pair; every branch MUST carry a
+    /// condition (`None` on any branch is REFUSED — inclusive without a
+    /// condition is a parallel branch pretending).
+    CreateInclusiveRegion {
+        anchor: NodeKey,
+        fork_key: NodeKey,
+        fork_node_id: String,
+        join_key: NodeKey,
+        join_node_id: String,
+        entry_edge_id: String, // anchor -> fork
+        branches: Vec<RegionBranch>,
+    },
+    /// Insert a `MultiInstance` activity after `anchor` (single-node
+    /// region: the MI node IS the region, ruling K). `declared_max` is in
+    /// the `IRNode` (u32, mandatory by construction — I24). `node` must be
+    /// `IRNode::MultiInstance`, else refused.
+    CreateMultiInstanceRegion {
+        anchor: NodeKey,
+        key: NodeKey,
+        node: IRNode,
+        edge_id: String,
+    },
+    /// Add an outgoing conditional branch to an existing XOR gateway:
+    /// `gateway` must be `IRNode::GatewayXor` (else refused); `target`
+    /// must exist; forward-only pre-gate applies (slice-1 Connect rule).
+    CreateBranch {
+        gateway: NodeKey,
+        target: NodeKey,
+        edge_id: String,
+        condition: Option<ConditionExpr>,
+    },
+}
+
+/// One branch of a to-be-inserted region: the interior node (with its
+/// caller-supplied key) and the two flow ids wiring it fork→node→join.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegionBranch {
+    pub key: NodeKey,
+    pub node: IRNode,
+    pub in_edge_id: String,
+    pub out_edge_id: String,
+    /// Condition on the fork→node edge (inclusive regions; `None` for
+    /// parallel branches — a `Some` here on a parallel region is REFUSED).
+    pub condition: Option<ConditionExpr>,
 }
 
 /// Applying an operation to a staged candidate.
@@ -117,6 +194,79 @@ pub struct StagedCandidate {
     pub candidate: DesignerDag,
     pub applied: Operation,
     pub provenance: Provenance,
+}
+
+/// Shared construction for `CreateParallelRegion`/`CreateInclusiveRegion`
+/// (slice 3): branch-count/condition validation happens in the caller
+/// (the refusal messages differ by kind); this performs the identical
+/// graph surgery — detach anchor's outgoing edges, insert fork, wire each
+/// branch fork->node->join (condition on the fork->node leg only), insert
+/// join, re-attach the preserved edges from join. Regions are constructed
+/// CLOSED (module docs) — there is no intermediate state a caller could
+/// observe as "open."
+fn construct_region(
+    candidate: &mut DesignerDag,
+    anchor: NodeKey,
+    fork_key: NodeKey,
+    fork_node: IRNode,
+    join_key: NodeKey,
+    join_node: IRNode,
+    entry_edge_id: String,
+    branches: Vec<RegionBranch>,
+    provenance: &Provenance,
+) -> Result<()> {
+    let targets = candidate.successors(anchor);
+    let mut reattach = Vec::with_capacity(targets.len());
+    for target in targets {
+        let edge = candidate.remove_edge_between(anchor, target)?;
+        reattach.push((target, edge));
+    }
+
+    candidate.insert_node(fork_key, fork_node, None, provenance.clone())?;
+    candidate.insert_edge(
+        anchor,
+        fork_key,
+        DesignerEdge {
+            id: entry_edge_id,
+            condition: None,
+            provenance: provenance.clone(),
+        },
+    )?;
+    candidate.insert_node(join_key, join_node, None, provenance.clone())?;
+
+    for branch in branches {
+        let RegionBranch {
+            key,
+            node,
+            in_edge_id,
+            out_edge_id,
+            condition,
+        } = branch;
+        candidate.insert_node(key, node, None, provenance.clone())?;
+        candidate.insert_edge(
+            fork_key,
+            key,
+            DesignerEdge {
+                id: in_edge_id,
+                condition,
+                provenance: provenance.clone(),
+            },
+        )?;
+        candidate.insert_edge(
+            key,
+            join_key,
+            DesignerEdge {
+                id: out_edge_id,
+                condition: None,
+                provenance: provenance.clone(),
+            },
+        )?;
+    }
+
+    for (target, edge) in reattach {
+        candidate.insert_edge(join_key, target, edge)?;
+    }
+    Ok(())
 }
 
 /// THE entry point: clone `base`, apply `op` deterministically, return
@@ -478,6 +628,181 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                 | IRNode::SendTask { corr_key_source, .. } => *corr_key_source = new_source,
                 _ => unreachable!("kind checked above"),
             }
+        }
+
+        Operation::CreateParallelRegion {
+            anchor,
+            fork_key,
+            fork_node_id,
+            join_key,
+            join_node_id,
+            entry_edge_id,
+            branches,
+        } => {
+            if branches.len() < 2 {
+                return Err(anyhow!(
+                    "CreateParallelRegion refused: anchor {anchor:?} needs >= 2 branches, got {}",
+                    branches.len()
+                ));
+            }
+            for branch in &branches {
+                if branch.condition.is_some() {
+                    return Err(anyhow!(
+                        "CreateParallelRegion refused: branch '{}' carries a condition — a \
+                         parallel branch must be unconditional (Some(_) here is a parallel \
+                         branch pretending to be inclusive)",
+                        branch.node.id()
+                    ));
+                }
+            }
+            construct_region(
+                &mut candidate,
+                anchor,
+                fork_key,
+                IRNode::GatewayAnd {
+                    id: fork_node_id.clone(),
+                    name: fork_node_id,
+                    direction: GatewayDirection::Diverging,
+                },
+                join_key,
+                IRNode::GatewayAnd {
+                    id: join_node_id.clone(),
+                    name: join_node_id,
+                    direction: GatewayDirection::Converging,
+                },
+                entry_edge_id,
+                branches,
+                &provenance,
+            )?;
+        }
+
+        Operation::CreateInclusiveRegion {
+            anchor,
+            fork_key,
+            fork_node_id,
+            join_key,
+            join_node_id,
+            entry_edge_id,
+            branches,
+        } => {
+            if branches.len() < 2 {
+                return Err(anyhow!(
+                    "CreateInclusiveRegion refused: anchor {anchor:?} needs >= 2 branches, got {}",
+                    branches.len()
+                ));
+            }
+            for branch in &branches {
+                if branch.condition.is_none() {
+                    return Err(anyhow!(
+                        "CreateInclusiveRegion refused: branch '{}' carries no condition — \
+                         every inclusive-region branch must be conditioned (None here is a \
+                         parallel branch pretending to be inclusive)",
+                        branch.node.id()
+                    ));
+                }
+            }
+            construct_region(
+                &mut candidate,
+                anchor,
+                fork_key,
+                IRNode::GatewayInclusive {
+                    id: fork_node_id.clone(),
+                    name: fork_node_id,
+                    direction: GatewayDirection::Diverging,
+                },
+                join_key,
+                IRNode::GatewayInclusive {
+                    id: join_node_id.clone(),
+                    name: join_node_id,
+                    direction: GatewayDirection::Converging,
+                },
+                entry_edge_id,
+                branches,
+                &provenance,
+            )?;
+        }
+
+        Operation::CreateMultiInstanceRegion {
+            anchor,
+            key,
+            node,
+            edge_id,
+        } => {
+            if !matches!(node, IRNode::MultiInstance { .. }) {
+                return Err(anyhow!(
+                    "CreateMultiInstanceRegion refused: node '{}' is not IRNode::MultiInstance \
+                     (the MI node IS the region, ruling K — no other kind is legal here)",
+                    node.id()
+                ));
+            }
+            // Single-node region: InsertAfter semantics — detach anchor's
+            // successors, insert the MI node, wire anchor->node, re-attach
+            // the preserved edges from the MI node.
+            let targets = candidate.successors(anchor);
+            let mut reattach = Vec::with_capacity(targets.len());
+            for target in targets {
+                let edge = candidate.remove_edge_between(anchor, target)?;
+                reattach.push((target, edge));
+            }
+            candidate.insert_node(key, node, None, provenance.clone())?;
+            candidate.insert_edge(
+                anchor,
+                key,
+                DesignerEdge {
+                    id: edge_id,
+                    condition: None,
+                    provenance: provenance.clone(),
+                },
+            )?;
+            for (target, edge) in reattach {
+                candidate.insert_edge(key, target, edge)?;
+            }
+        }
+
+        Operation::CreateBranch {
+            gateway,
+            target,
+            edge_id,
+            condition,
+        } => {
+            let gateway_id = candidate
+                .node(gateway)
+                .ok_or_else(|| anyhow!("CreateBranch refused: unknown gateway {gateway:?}"))
+                .and_then(|n| {
+                    if matches!(n.ir, IRNode::GatewayXor { .. }) {
+                        Ok(n.ir.id().to_owned())
+                    } else {
+                        Err(anyhow!(
+                            "CreateBranch refused: '{}' ({gateway:?}) is not a GatewayXor",
+                            n.ir.id()
+                        ))
+                    }
+                })?;
+            let target_id = candidate
+                .node(target)
+                .map(|n| n.ir.id().to_owned())
+                .ok_or_else(|| anyhow!("CreateBranch refused: unknown target {target:?}"))?;
+
+            // I23 + review-F8: forward-only pre-gate, same mechanism as
+            // Connect.
+            let from_idx = candidate.index_of(gateway).expect("resolved above");
+            let to_idx = candidate.index_of(target).expect("resolved above");
+            if has_path_connecting(candidate.graph(), to_idx, from_idx, None) {
+                return Err(anyhow!(
+                    "CreateBranch {gateway:?} ('{gateway_id}') -> {target:?} ('{target_id}') \
+                     refused: a path already exists {target:?} ('{target_id}') -> {gateway:?} \
+                     ('{gateway_id}'); adding this edge would close a cycle (I23)"
+                ));
+            }
+            candidate.insert_edge(
+                gateway,
+                target,
+                DesignerEdge {
+                    id: edge_id,
+                    condition,
+                    provenance: provenance.clone(),
+                },
+            )?;
         }
     }
 
@@ -1308,5 +1633,446 @@ mod tests {
         assert!(msg.contains(&format!("{a:?}")), "must still name to-key: {msg}");
         assert!(msg.contains("'a'"), "must name the from-node's BPMN id: {msg}");
         assert!(msg.contains("'b'"), "must name the to-node's BPMN id: {msg}");
+    }
+
+    // ── WS-A.2 slice 3 — region operations ────────────────────────────
+
+    use bpmn_lite_compiler::ir::{ConditionLiteral, ConditionOp};
+    use petgraph::Direction;
+
+    fn cond(flag: &str, lit: bool) -> ConditionExpr {
+        ConditionExpr {
+            flag_name: flag.into(),
+            op: ConditionOp::Eq,
+            literal: ConditionLiteral::Bool(lit),
+        }
+    }
+
+    fn mi_node(id: &str) -> IRNode {
+        IRNode::MultiInstance {
+            id: id.into(),
+            name: id.into(),
+            task_type: "noop".into(),
+            collection_flag_name: "items".into(),
+            declared_max: 5,
+        }
+    }
+
+    /// Receipt 1 (GREEN): start->t1->end; CreateParallelRegion after t1
+    /// with 2 ServiceTask branches -> full-chain admit() green; base
+    /// unchanged; the re-pointed t1->end edge id ("e2") survives on
+    /// join->end.
+    #[test]
+    fn parallel_region_inserts_closed_and_admits() {
+        let (base, _s, t1, _e) = linear("region1");
+        let base_count_before = base.node_count();
+        let (fork_key, join_key, b1_key, b2_key) = (key(), key(), key(), key());
+
+        let staged = apply(
+            &base,
+            Operation::CreateParallelRegion {
+                anchor: t1,
+                fork_key,
+                fork_node_id: "fork1".into(),
+                join_key,
+                join_node_id: "join1".into(),
+                entry_edge_id: "entry1".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: b1_key,
+                        node: task("p1"),
+                        in_edge_id: "in1".into(),
+                        out_edge_id: "out1".into(),
+                        condition: None,
+                    },
+                    RegionBranch {
+                        key: b2_key,
+                        node: task("p2"),
+                        in_edge_id: "in2".into(),
+                        out_edge_id: "out2".into(),
+                        condition: None,
+                    },
+                ],
+            },
+            Provenance::default(),
+        )
+        .expect("parallel region construction must succeed");
+
+        let ir = staged.candidate.to_ir().unwrap();
+        let end_idx = ir.node_indices().find(|&i| ir[i].id() == "end").unwrap();
+        let incoming: Vec<_> = ir.edges_directed(end_idx, Direction::Incoming).collect();
+        assert_eq!(incoming.len(), 1, "join must be the sole path into end");
+        assert_eq!(
+            incoming[0].weight().id,
+            "e2",
+            "the re-pointed t1->end edge id must survive on join->end"
+        );
+
+        staged.candidate.admit().expect("closed parallel region must admit");
+        assert_eq!(base.node_count(), base_count_before, "I18: base DAG unchanged");
+    }
+
+    /// Receipt 2 (GREEN): 2 conditioned branches on a
+    /// CreateInclusiveRegion -> admit green.
+    #[test]
+    fn inclusive_region_with_conditions_admits() {
+        let (base, _s, t1, _e) = linear("region2");
+        let (fork_key, join_key, b1_key, b2_key) = (key(), key(), key(), key());
+
+        let staged = apply(
+            &base,
+            Operation::CreateInclusiveRegion {
+                anchor: t1,
+                fork_key,
+                fork_node_id: "ifork1".into(),
+                join_key,
+                join_node_id: "ijoin1".into(),
+                entry_edge_id: "ientry1".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: b1_key,
+                        node: task("q1"),
+                        in_edge_id: "iin1".into(),
+                        out_edge_id: "iout1".into(),
+                        condition: Some(cond("flag_a", true)),
+                    },
+                    RegionBranch {
+                        key: b2_key,
+                        node: task("q2"),
+                        in_edge_id: "iin2".into(),
+                        out_edge_id: "iout2".into(),
+                        condition: Some(cond("flag_b", true)),
+                    },
+                ],
+            },
+            Provenance::default(),
+        )
+        .expect("inclusive region construction must succeed");
+
+        staged.candidate.admit().expect("closed inclusive region must admit");
+    }
+
+    /// Receipt 3a (RED): an inclusive-region branch with no condition is
+    /// refused, naming the branch node id.
+    #[test]
+    fn inclusive_branch_without_condition_refused() {
+        let (base, _s, t1, _e) = linear("region3a");
+        let err = apply(
+            &base,
+            Operation::CreateInclusiveRegion {
+                anchor: t1,
+                fork_key: key(),
+                fork_node_id: "ifork3a".into(),
+                join_key: key(),
+                join_node_id: "ijoin3a".into(),
+                entry_edge_id: "ientry3a".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: key(),
+                        node: task("q1"),
+                        in_edge_id: "iin1".into(),
+                        out_edge_id: "iout1".into(),
+                        condition: Some(cond("flag_a", true)),
+                    },
+                    RegionBranch {
+                        key: key(),
+                        node: task("q2"),
+                        in_edge_id: "iin2".into(),
+                        out_edge_id: "iout2".into(),
+                        condition: None,
+                    },
+                ],
+            },
+            Provenance::default(),
+        )
+        .expect_err("unconditioned inclusive branch must be refused");
+        assert!(err.to_string().contains("q2"), "refusal must name the branch id: {err}");
+    }
+
+    /// Receipt 3b (RED): a parallel-region branch WITH a condition is
+    /// refused, naming the branch node id.
+    #[test]
+    fn parallel_branch_with_condition_refused() {
+        let (base, _s, t1, _e) = linear("region3b");
+        let err = apply(
+            &base,
+            Operation::CreateParallelRegion {
+                anchor: t1,
+                fork_key: key(),
+                fork_node_id: "fork3b".into(),
+                join_key: key(),
+                join_node_id: "join3b".into(),
+                entry_edge_id: "entry3b".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: key(),
+                        node: task("p1"),
+                        in_edge_id: "in1".into(),
+                        out_edge_id: "out1".into(),
+                        condition: None,
+                    },
+                    RegionBranch {
+                        key: key(),
+                        node: task("p2"),
+                        in_edge_id: "in2".into(),
+                        out_edge_id: "out2".into(),
+                        condition: Some(cond("flag_a", true)),
+                    },
+                ],
+            },
+            Provenance::default(),
+        )
+        .expect_err("conditioned parallel branch must be refused");
+        assert!(err.to_string().contains("p2"), "refusal must name the branch id: {err}");
+    }
+
+    /// Receipt 4 (RED): a single-branch region is refused (>= 2 required).
+    #[test]
+    fn region_with_one_branch_refused() {
+        let (base, _s, t1, _e) = linear("region4");
+        let err = apply(
+            &base,
+            Operation::CreateParallelRegion {
+                anchor: t1,
+                fork_key: key(),
+                fork_node_id: "fork4".into(),
+                join_key: key(),
+                join_node_id: "join4".into(),
+                entry_edge_id: "entry4".into(),
+                branches: vec![RegionBranch {
+                    key: key(),
+                    node: task("p1"),
+                    in_edge_id: "in1".into(),
+                    out_edge_id: "out1".into(),
+                    condition: None,
+                }],
+            },
+            Provenance::default(),
+        )
+        .expect_err("a single-branch region must be refused");
+        assert!(
+            err.to_string().contains(&format!("{t1:?}")),
+            "refusal must name the anchor: {err}"
+        );
+    }
+
+    /// Receipt 5a (GREEN): CreateMultiInstanceRegion with a real
+    /// `IRNode::MultiInstance` (declared_max carried in the node) admits.
+    /// Receipt 5b (RED): the same op with a non-MultiInstance node is
+    /// refused, naming the offending node id.
+    #[test]
+    fn multi_instance_region_admits_and_non_mi_node_refused() {
+        let (base, _s, t1, _e) = linear("region5");
+        let mi_key = key();
+        let staged = apply(
+            &base,
+            Operation::CreateMultiInstanceRegion {
+                anchor: t1,
+                key: mi_key,
+                node: mi_node("mi1"),
+                edge_id: "e_mi".into(),
+            },
+            Provenance::default(),
+        )
+        .expect("MultiInstance region construction must succeed");
+        staged.candidate.admit().expect("MultiInstance region must admit");
+
+        let err = apply(
+            &base,
+            Operation::CreateMultiInstanceRegion {
+                anchor: t1,
+                key: key(),
+                node: task("not_mi"),
+                edge_id: "e_bad".into(),
+            },
+            Provenance::default(),
+        )
+        .expect_err("a non-MultiInstance node must be refused");
+        assert!(
+            err.to_string().contains("not_mi"),
+            "refusal must name the offending node id: {err}"
+        );
+    }
+
+    /// Receipt 6 (GREEN): build an XOR split via ops (InsertAfter a
+    /// GatewayXor, then CreateBranch twice to two pre-existing targets)
+    /// and confirm the full chain admits. XOR zero-match is legal — the
+    /// incident-edge concern is the compiler's job, not this op's.
+    #[test]
+    fn xor_branch_with_condition_admits() {
+        let (base, _s, t1, e) = linear("region6");
+        let xor_key = key();
+        let staged = apply(
+            &base,
+            Operation::InsertAfter {
+                anchor: t1,
+                key: xor_key,
+                node: IRNode::GatewayXor {
+                    id: "xor6".into(),
+                    name: "xor6".into(),
+                },
+                edge_id: "e1b".into(),
+            },
+            Provenance::default(),
+        )
+        .expect("InsertAfter GatewayXor must succeed");
+
+        // Two pre-existing targets, wired directly (test fixture, not a
+        // production op) with their own path to the shared end.
+        let mut candidate = staged.candidate;
+        let branch_a = key();
+        let branch_b = key();
+        candidate
+            .insert_node(branch_a, task("branchA"), None, Provenance::default())
+            .unwrap();
+        candidate
+            .insert_edge(
+                branch_a,
+                e,
+                DesignerEdge { id: "a_out".into(), condition: None, provenance: Provenance::default() },
+            )
+            .unwrap();
+        candidate
+            .insert_node(branch_b, task("branchB"), None, Provenance::default())
+            .unwrap();
+        candidate
+            .insert_edge(
+                branch_b,
+                e,
+                DesignerEdge { id: "b_out".into(), condition: None, provenance: Provenance::default() },
+            )
+            .unwrap();
+
+        let staged = apply(
+            &candidate,
+            Operation::CreateBranch {
+                gateway: xor_key,
+                target: branch_a,
+                edge_id: "xa".into(),
+                condition: Some(cond("choice", true)),
+            },
+            Provenance::default(),
+        )
+        .expect("CreateBranch to branchA must succeed");
+        let staged = apply(
+            &staged.candidate,
+            Operation::CreateBranch {
+                gateway: xor_key,
+                target: branch_b,
+                edge_id: "xb".into(),
+                condition: Some(cond("choice", false)),
+            },
+            Provenance::default(),
+        )
+        .expect("CreateBranch to branchB must succeed");
+
+        staged.candidate.admit().expect("XOR split with 2 conditioned branches + 1 default must admit");
+    }
+
+    /// Receipt 7 (RED): CreateBranch that would close a cycle (forward-only
+    /// pre-gate) is refused, naming both BPMN ids.
+    #[test]
+    fn create_branch_backward_refused() {
+        let mut dag = DesignerDag::new("region7");
+        let s = dag
+            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .unwrap();
+        let xor = dag
+            .insert_node(
+                key(),
+                IRNode::GatewayXor { id: "xor7".into(), name: "xor7".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let b = dag.insert_node(key(), task("b"), None, Provenance::default()).unwrap();
+        let e = dag
+            .insert_node(key(), end_node("end"), None, Provenance::default())
+            .unwrap();
+        dag.insert_edge(
+            s,
+            xor,
+            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+        )
+        .unwrap();
+        dag.insert_edge(
+            xor,
+            b,
+            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+        )
+        .unwrap();
+        dag.insert_edge(
+            b,
+            e,
+            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+        )
+        .unwrap();
+
+        // start -> xor already holds; xor -> start would close a cycle.
+        let err = apply(
+            &dag,
+            Operation::CreateBranch {
+                gateway: xor,
+                target: s,
+                edge_id: "back".into(),
+                condition: Some(cond("never", true)),
+            },
+            Provenance::default(),
+        )
+        .expect_err("backward CreateBranch must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains(&format!("{xor:?}")), "must name gateway key: {msg}");
+        assert!(msg.contains(&format!("{s:?}")), "must name target key: {msg}");
+        assert!(msg.contains("'xor7'"), "must name gateway's BPMN id: {msg}");
+        assert!(msg.contains("'start'"), "must name target's BPMN id: {msg}");
+    }
+
+    /// Receipt 8: applying the same region op to clones of the same base
+    /// yields candidates with identical to_ir() node/edge id sets.
+    #[test]
+    fn region_op_is_deterministic_across_clones() {
+        let (base, _s, t1, _e) = linear("region8");
+        let op = Operation::CreateParallelRegion {
+            anchor: t1,
+            fork_key: key(),
+            fork_node_id: "fork8".into(),
+            join_key: key(),
+            join_node_id: "join8".into(),
+            entry_edge_id: "entry8".into(),
+            branches: vec![
+                RegionBranch {
+                    key: key(),
+                    node: task("p1"),
+                    in_edge_id: "in1".into(),
+                    out_edge_id: "out1".into(),
+                    condition: None,
+                },
+                RegionBranch {
+                    key: key(),
+                    node: task("p2"),
+                    in_edge_id: "in2".into(),
+                    out_edge_id: "out2".into(),
+                    condition: None,
+                },
+            ],
+        };
+
+        let staged_a = apply(&base, op.clone(), Provenance::default()).expect("first apply");
+        let staged_b = apply(&base, op, Provenance::default()).expect("second apply");
+
+        let ir_a = staged_a.candidate.to_ir().unwrap();
+        let ir_b = staged_b.candidate.to_ir().unwrap();
+
+        let mut node_ids_a: Vec<&str> = ir_a.node_indices().map(|i| ir_a[i].id()).collect();
+        let mut node_ids_b: Vec<&str> = ir_b.node_indices().map(|i| ir_b[i].id()).collect();
+        node_ids_a.sort();
+        node_ids_b.sort();
+        assert_eq!(node_ids_a, node_ids_b);
+
+        let mut edge_ids_a: Vec<&str> = ir_a.edge_indices().map(|i| ir_a[i].id.as_str()).collect();
+        let mut edge_ids_b: Vec<&str> = ir_b.edge_indices().map(|i| ir_b[i].id.as_str()).collect();
+        edge_ids_a.sort();
+        edge_ids_b.sort();
+        assert_eq!(edge_ids_a, edge_ids_b);
     }
 }
