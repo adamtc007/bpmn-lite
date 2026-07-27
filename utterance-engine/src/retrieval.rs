@@ -13,6 +13,25 @@
 
 use crate::board::Board;
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
+
+/// THE tier-1 list constructor — Adam's ruling 2026-07-27 (spec
+/// EOP-SPEC-SLM-TRAIN-001 finding 5): the list tier-1 scores is the
+/// tier-0 K-prefix with `NONE_OF_THE_ABOVE` ALWAYS present (appended if
+/// the prefix cut it). One function for the corpus generator today and
+/// the serving path in Phase C — training-list shape = serving-list
+/// shape by construction, not by discipline.
+pub fn tier1_list(result: &SlmResult, k: usize) -> Vec<String> {
+    let mut ids: Vec<String> = result
+        .ranking
+        .iter()
+        .take(k)
+        .map(|rc| rc.candidate_id.clone())
+        .collect();
+    if !ids.iter().any(|i| i == crate::contract::NONE_OF_THE_ABOVE) {
+        ids.push(crate::contract::NONE_OF_THE_ABOVE.to_owned());
+    }
+    ids
+}
 use anyhow::Result;
 
 /// A tier-0 retrieval producer: raw utterance + exact board in,

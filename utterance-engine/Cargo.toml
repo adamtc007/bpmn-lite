@@ -16,6 +16,7 @@ embed = ["dep:ob-semantic-matcher"]
 ob-semantic-matcher = { git = "https://github.com/adamtc007/ob-poc-rust", rev = "ff3f12c7c0dfa4ac9c8a7bc086162fc2bcecb67e", default-features = false, optional = true }
 designer-graph = { path = "../designer-graph" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+bpmn-lite-types = { path = "../bpmn-lite-types" }
 petgraph = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
