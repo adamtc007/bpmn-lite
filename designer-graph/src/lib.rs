@@ -16,5 +16,6 @@
 pub mod board_candidate;
 mod g2_receipts;
 pub mod ops;
+pub mod positional;
 pub mod productions;
 pub mod schema;
