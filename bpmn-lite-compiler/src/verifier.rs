@@ -28,6 +28,37 @@ impl std::fmt::Display for VerifyError {
 pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
     let mut errors = Vec::new();
 
+    // 0. Id uniqueness (WS-A.1 blind-review F3, 2026-07-27). Duplicate
+    // node ids make every string-id resolution downstream ambiguous —
+    // boundary `attached_to` host matching, `v2_guard_budgets` keying,
+    // correlation-source attribution all silently bind to an arbitrary
+    // instance (`boundary_lookup` is a last-write-wins HashMap insert).
+    // XML enforces id uniqueness at the document level, so this gate was
+    // unreachable from that frontend — a fed-in IRGraph (authoring DTO,
+    // Designer) had no gate at all. Fail closed, name the id.
+    {
+        let mut seen_nodes = std::collections::HashSet::new();
+        for idx in graph.node_indices() {
+            let id = graph[idx].id();
+            if !seen_nodes.insert(id) {
+                errors.push(VerifyError {
+                    message: format!("Duplicate node id '{id}'"),
+                    element_id: Some(id.to_string()),
+                });
+            }
+        }
+        let mut seen_edges = std::collections::HashSet::new();
+        for eidx in graph.edge_indices() {
+            let id = graph[eidx].id.as_str();
+            if !seen_edges.insert(id) {
+                errors.push(VerifyError {
+                    message: format!("Duplicate sequence-flow id '{id}'"),
+                    element_id: Some(id.to_string()),
+                });
+            }
+        }
+    }
+
     // 1. Exactly one StartEvent
     let starts: Vec<_> = graph
         .node_indices()
@@ -961,6 +992,32 @@ pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
 ///   in `bpmn_lite_types::Value` (non-Bool, non-I64)
 #[cfg(test)]
 mod tests {
+    /// WS-A.1 F3 cement: duplicate node/edge ids are a verify() refusal
+    /// naming the id — red (dup) + green (unique) pair.
+    #[test]
+    fn duplicate_ids_are_refused_by_verify() {
+        use super::*;
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let a = g.add_node(IRNode::ServiceTask { id: "t1".into(), name: "a".into(), task_type: "x".into() });
+        let b = g.add_node(IRNode::ServiceTask { id: "t1".into(), name: "b".into(), task_type: "x".into() });
+        let e = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, a, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(a, b, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(b, e, IREdge { id: "e3".into(), condition: None });
+        let errs = verify(&g);
+        assert!(errs.iter().any(|x| x.message.contains("Duplicate node id 't1'")), "{errs:?}");
+        assert!(errs.iter().any(|x| x.message.contains("Duplicate sequence-flow id 'e1'")), "{errs:?}");
+
+        let mut ok: IRGraph = IRGraph::new();
+        let s = ok.add_node(IRNode::Start { id: "start".into() });
+        let a = ok.add_node(IRNode::ServiceTask { id: "t1".into(), name: "a".into(), task_type: "x".into() });
+        let e = ok.add_node(IRNode::End { id: "end".into(), terminate: false });
+        ok.add_edge(s, a, IREdge { id: "e1".into(), condition: None });
+        ok.add_edge(a, e, IREdge { id: "e2".into(), condition: None });
+        assert!(!verify(&ok).iter().any(|x| x.message.contains("Duplicate")));
+    }
+
     use super::*;
 
     /// A4.T5: Verifier rejects graph with no StartEvent

@@ -269,6 +269,36 @@ stronger; completion-path limit cement unchanged); green = all existing
 empty-flag lifecycle tests. Option (a) wire-through remains unscheduled
 until a consumer needs spawn-time flags.
 
+### WS-A.1 — CLOSED 2026-07-27 (CAREFUL; blind-reviewed, findings dispositioned)
+
+Deliverables: `designer-graph` crate — frozen board-candidate interface
+(19 §12.1 ops + 9 §12.2 productions, canonical ids + descriptions as
+board-hash inputs, `CANDIDATE_SCHEMA_VERSION=1`, `LegalityOracle`) and
+the canonical DAG schema (Q2) with the Q27 ruling: **node payload IS the
+compiler's `IRNode`** — per-node declarations reach the sealed envelope
+by construction; process-level declarations ride the DAG root and are
+carried by `admit()` explicitly. Blind review verdict: decision SURVIVES
+with three riders (per-node-scope claim narrowing; never the persistence
+wire format — the edit log is, per §6.2/§12.5; NodeKey-level referential
+integrity). Disposition:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| F1 | BLOCKER | `admit()` dropped `default_guard_budget` (lowered with `None`); test camouflaged it | **FIXED**: `admit()` = `Compiler::lower_with_default(&ir, self.default_guard_budget)`; red→green `process_default_guard_budget_reaches_the_sealed_envelope` (Some(3) → envelope max_failures 3; None → conservative default); module-doc claim narrowed to per-node scope |
+| F2 | CONCERN | `attached_to` string id lets renames dangle or silently re-point guards | **FIXED**: `DesignerNode.attached_to_key: Option<NodeKey>`; `to_ir()` projects the host's CURRENT id; non-boundary attachment refused at insert; stale-string test green |
+| F3 | CONCERN | Id uniqueness promised, enforced nowhere; compiler admits duplicate ids (ambiguous budget/attachment binding) | **FIXED both halves**: insert-time duplicate node/flow-id rejection (designer) AND a new duplicate-id theorem in the production `verify()` (P8 — the oracle is the gate), cemented `duplicate_ids_are_refused_by_verify`; full workspace sweep green |
+| F4 | CONCERN | `pub` mutators contradict bypass claim; `Uuid::new_v4` in `insert_node` breaks edit-log replay determinism | **FIXED**: mutators `pub(crate)` (WS-A.2 ops are the public surface, I18 structural); `NodeKey` caller-supplied — key generation belongs to the operation record (Q5), pinned in the WS-A.2 brief |
+| F5 | CONCERN | `admit()` omitted `verify_bytecode` + types-crate V-1..V-11 — G1 which-theorem parity unsatisfiable | **FIXED**: `admit()` runs the exact direct-compilation chain via `Compiler::lower_with_default` (verify_or_err → lower → verify_bytecode → envelope → `from_verified_envelope`), returns the `VerifiedWorkflow` for G1 comparison |
+| F6 | CONCERN/NOTEs | Description edits uncemented; `CandidateId` serde leaks variant names; no dedup | **FIXED**: blake3 golden content cement over (id, description, version) triples; hash-preimage contract documented as `(canonical_id, description, schema_version)` ONLY; `legal_candidates` dedups (test) |
+| F7 | CONCERN | Raw-IRNode serde as durable format = C7's lesson repeated (landed IR field rename precedent) | **ACCEPTED as a rule**: module doc reworded to §6.2/§12.5 — the EDIT LOG is the persistence surface, the DAG a replay product; any snapshot goes through a versioned envelope. Written into the WS-A.2 brief |
+| F8 | NOTE | I23 mechanism/backstop inverted (no per-op forward-only pre-gate yet) | **PINNED to WS-A.2 brief**: every edge-introducing operation pre-gates `has_path_connecting(to, from)`; verifier stays the backstop. Plus reviewer's `declared_max = 0` convention test |
+
+**Substrate finding F-DSGN-2 (surfaced, unfixed — awaiting Adam):**
+`verify_data_objects` (compiler verifier.rs:889) has ZERO non-test
+callers anywhere in the repo — a duplicate-data-object-id gate that never
+runs. Options: wire it into `verify()` (behavior change for the XML/DTO
+paths — needs its own red/green) or delete it. Recommendation: wire in.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.

@@ -198,6 +198,10 @@ impl CandidateId {
 /// `NONE_OF_THE_ABOVE`, and the content hash).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoardCandidate {
+    /// NOT part of any hash preimage: `CandidateId`'s serde form leaks
+    /// Rust variant names. WS-C's board-hash preimage is
+    /// `(canonical_id, description, schema_version)` ONLY — contract
+    /// fact, cemented by `descriptions_are_content_cemented` below.
     pub id: CandidateId,
     /// `canonical_id()` duplicated in serialized form so recorded boards
     /// are self-describing without this crate's enum layout.
@@ -248,6 +252,7 @@ pub trait LegalityOracle {
             )
             .collect();
         out.sort_by(|a, b| a.canonical_id.cmp(&b.canonical_id));
+        out.dedup_by(|a, b| a.canonical_id == b.canonical_id);
         out
     }
 }
@@ -308,6 +313,35 @@ mod tests {
         assert_eq!(CANDIDATE_SCHEMA_VERSION, 1);
     }
 
+    /// CEMENT (review F6): descriptions are board-hash inputs — a
+    /// description edit without a CANDIDATE_SCHEMA_VERSION bump breaks
+    /// this hash, not just a comment. To change: bump the version AND
+    /// update the golden hex deliberately.
+    #[test]
+    fn descriptions_are_content_cemented() {
+        let mut preimage = String::new();
+        for op in OperationKind::ALL {
+            preimage.push_str(op.canonical_id());
+            preimage.push('\x1f');
+            preimage.push_str(op.description());
+            preimage.push('\x1e');
+        }
+        for p in ProductionId::ALL {
+            preimage.push_str(p.canonical_id());
+            preimage.push('\x1f');
+            preimage.push_str(p.description());
+            preimage.push('\x1e');
+        }
+        preimage.push_str(&CANDIDATE_SCHEMA_VERSION.to_string());
+        let hash = blake3::hash(preimage.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            hash, GOLDEN_DESCRIPTION_HASH,
+            "candidate id/description content drifted without a schema-version bump"
+        );
+    }
+
+    const GOLDEN_DESCRIPTION_HASH: &str = "68b7e3f602ef3243d5ea8b61a4998c2208a1a4fdbe06f61099cdfeef5a5cd06d";
+
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]
     fn legal_candidates_assembly_is_deterministic_and_sorted() {
@@ -330,5 +364,20 @@ mod tests {
         let mut sorted = ids_a.clone();
         sorted.sort();
         assert_eq!(ids_a, sorted, "default assembly must be canonical-id sorted");
+
+        // Dedup (review F6): a repeating oracle yields no duplicate entries.
+        struct Doubled;
+        impl LegalityOracle for Doubled {
+            type NodeKey = ();
+            fn legal_operations(&self, _: Option<&()>) -> Vec<OperationKind> {
+                let mut v = OperationKind::ALL.to_vec();
+                v.extend(OperationKind::ALL);
+                v
+            }
+            fn legal_productions(&self, _: Option<&()>) -> Vec<ProductionId> {
+                vec![]
+            }
+        }
+        assert_eq!(Doubled.legal_candidates(None).len(), 19);
     }
 }
