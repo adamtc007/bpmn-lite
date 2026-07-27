@@ -99,6 +99,44 @@ The §12.1 operation set and §12.2 production set as `fn apply(dag, anchor, bin
 5. **Metrics harness:** the §10.7 decomposition (board completeness; tier-0 recall@K; ranking-given-inclusion; end-to-end; abstention on oracle-absent; latency vs K), boundary FP tracking (shown/accepted/published — executed is structurally zero at this surface), hard-case suites (cross-pack collisions, rare verbs, short utterances, paraphrase families, near-identical descriptions), and the **position-invariance test**.
 6. **Capture pipeline built with the switch OFF.** The full I28 closure per interaction is writable; eval/train/audit dataset separation physically enforced per the charter's shape; nothing persists beyond the session until GOV.1 ratifies.
 
+#### C-seed (UNGATED — added by Adam's ruling 2026-07-27: LLM-as-trainer seed corpus)
+
+The plan as drafted left tier-1 untrainable until the charter (all
+training rode the 30k corpus) — meaning shadow mode had nothing
+meaningful to test. Ruling: follow the Candle-phrase-population model —
+**the LLM's domain knowledge is the trainer**. Synthetic seed data is
+charter-independent BY CONSTRUCTION: no live capture, no 30k-corpus
+use, no user/bank data — utterance→candidate pairs authored by the LLM
+over the board vocabulary's own descriptions. Recorded posture (flagged
+for Adam's confirm, not assumed): the charter's lineage/contamination
+items apply to the seed corpus when the charter lands (it is versioned,
+hashed, and provenance-marked `synthetic.llm` from day one so
+retrospective application is mechanical).
+
+- **C-seed.1**: seed corpus v1 in-repo (versioned fixture, content-
+  hashed): per-candidate paraphrase families across all 28 board
+  candidates + hard cases (cross-candidate collisions, short
+  utterances) + off-board/NOTA examples. Format = the metrics
+  harness's `LabeledCase`.
+- **C-seed.2**: tier-0 baseline numbers over the seed corpus recorded
+  in receipts (the recall@K baseline every gate references, seed
+  edition). **RECORDED 2026-07-27** (tier0.lexical.v1 over
+  synthetic.seed.v1, 92 cases): board completeness 1.00 · recall@5
+  0.61 · ranking-given-inclusion 0.14 · end-to-end 0.075 · abstention
+  coverage 1.00. The decomposition says precisely what §10.2 predicts:
+  retrieval and abstention are serviceable, RANKING is the missing
+  capability — the seed-trained cross-encoder's job, with 0.14/0.075
+  as the floor it must beat.
+- **C-seed.3**: seed fine-tune of the T3.4a shortlist on the synthetic
+  corpus (Python train → safetensors → Candle serve behind
+  `Tier0Retriever`/tier-1 contract); sealed bundle carries
+  `corpus: synthetic.seed.v1` in its identity. Bake-off methodology
+  unchanged — only the training data source is the seed.
+- **BOUNDARY (restated, binding):** seed-trained tier-1 runs in SHADOW
+  and supports engineering/testing only. G3's absolute criteria are
+  measured on charter-governed REAL data — promotion evidence never
+  rests on synthetic-only metrics. D17/D18 untouched.
+
 #### C-gated (blocked on the Q9 charter — GOV.1)
 
 - Switching live capture ON.

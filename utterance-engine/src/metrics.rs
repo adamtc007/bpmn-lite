@@ -232,3 +232,73 @@ mod tests {
         assert_position_invariant(&LexicalTier0, "connect the nodes", &board).unwrap();
     }
 }
+
+#[cfg(test)]
+mod seed_corpus_baseline {
+    use super::*;
+    use crate::board::{build_board, EmptyUniverse, PolicyFilter};
+    use crate::policy::DispositionConfig;
+    use crate::retrieval::LexicalTier0;
+    use designer_graph::board_candidate::{LegalityOracle, OperationKind, ProductionId};
+
+    struct AllLegal;
+    impl LegalityOracle for AllLegal {
+        type NodeKey = ();
+        fn legal_operations(&self, _: Option<&()>) -> Vec<OperationKind> {
+            OperationKind::ALL.to_vec()
+        }
+        fn legal_productions(&self, _: Option<&()>) -> Vec<ProductionId> {
+            ProductionId::ALL.to_vec()
+        }
+    }
+
+    /// C-seed.2: the tier-0 baseline over the synthetic seed corpus
+    /// (charter-independent by construction — see the corpus file's
+    /// provenance field). Rates are RECORDED via stderr for the plan
+    /// receipts; only sanity floors are cemented so corpus growth
+    /// doesn't churn this test. G3 thresholds are Adam's, on REAL data.
+    #[test]
+    fn seed_corpus_v1_lexical_baseline() {
+        let raw = include_str!("../seed/seed_corpus_v1.json");
+        let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed["version"], "synthetic.seed.v1");
+        assert!(parsed["provenance"].as_str().unwrap().contains("synthetic.llm"));
+        let cases: Vec<LabeledCase> = parsed["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| LabeledCase {
+                utterance: c["utterance"].as_str().unwrap().to_owned(),
+                oracle: c["oracle"].as_str().map(str::to_owned),
+            })
+            .collect();
+        assert!(cases.len() >= 90, "corpus shrank unexpectedly");
+
+        let board =
+            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let report = evaluate(
+            &LexicalTier0,
+            &board,
+            &DispositionConfig::shadow_v1(),
+            &cases,
+            5,
+        )
+        .unwrap();
+
+        eprintln!(
+            "SEED-BASELINE tier0.lexical.v1 over {}: completeness={:?} recall@5={:?} \
+             ranking|inclusion={:?} end_to_end={:?} abstention={:?}",
+            parsed["version"],
+            report.board_completeness(),
+            report.recall_at_k(),
+            report.ranking_given_inclusion(),
+            report.end_to_end(),
+            report.abstention_coverage()
+        );
+
+        // Sanity floors only (recorded rates live in the plan receipts):
+        assert_eq!(report.board_completeness(), Some(1.0), "every oracle is on the board");
+        assert!(report.recall_at_k().unwrap() > 0.5, "lexical recall@5 collapsed");
+        assert!(report.abstention_coverage().unwrap() > 0.8, "off-board handling collapsed");
+    }
+}
