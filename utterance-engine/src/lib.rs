@@ -19,5 +19,6 @@
 pub mod board;
 pub mod capture;
 pub mod contract;
+pub mod metrics;
 pub mod policy;
 pub mod retrieval;
