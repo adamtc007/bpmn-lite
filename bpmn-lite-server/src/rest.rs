@@ -197,6 +197,7 @@ pub fn demo_router(state: Arc<DemoState>) -> Router {
             post(session_utterance_endpoint),
         )
         .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
+        .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route(
             "/bpmn/templates",
             get(list_templates_endpoint).post(define_template_endpoint),
@@ -2703,6 +2704,120 @@ async fn save_design_session_endpoint(
     .into_response()
 }
 
+
+/// Server-built DAG for the designer window (merged T4 / WS-B.2): the
+/// session's CURRENT revision recompiled server-side; compile errors
+/// surface as diagnostics, never a blank canvas. Layout is computed
+/// here (layered by BFS depth from the start node) — the UI is a
+/// window, not an editor.
+async fn session_graph_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let source = session.current_source().unwrap_or_default().to_owned();
+    let source_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
+    let registry = get_preview_registry();
+    match bpmn_lite_compiler::dsl::compile(&source, &registry) {
+        Ok(plan) => {
+            let graph = plan_to_visual_graph(&plan);
+            let layout = layered_layout(&graph);
+            Json(serde_json::json!({
+                "compiles": true,
+                "diagnostics": [],
+                "graph": graph,
+                "layout": layout,
+                "source_hash": source_hash,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            let diagnostics: Vec<String> = match e {
+                bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                    errs.iter().map(|x| format!("{x}")).collect()
+                }
+                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                    errs.iter().map(|x| format!("{x}")).collect()
+                }
+            };
+            Json(serde_json::json!({
+                "compiles": false,
+                "diagnostics": diagnostics,
+                "graph": serde_json::Value::Null,
+                "layout": serde_json::Value::Null,
+                "source_hash": source_hash,
+            }))
+            .into_response()
+        }
+    }
+}
+
+/// Deterministic layered layout: x = BFS depth from the start node,
+/// y = order within the layer. Display-only — never a structural
+/// derivation (I16: pairing/regions stay the compiler's).
+fn layered_layout(
+    graph: &VisualGraphDto,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    use std::collections::{BTreeMap, HashMap, VecDeque};
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &graph.edges {
+        adj.entry(e.from.as_str()).or_default().push(e.to.as_str());
+    }
+    let mut depth: HashMap<&str, usize> = HashMap::new();
+    let mut queue: VecDeque<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "start")
+        .map(|n| n.id.as_str())
+        .collect();
+    for start in &queue {
+        depth.insert(start, 0);
+    }
+    while let Some(node) = queue.pop_front() {
+        let d = depth[node];
+        for next in adj.get(node).into_iter().flatten() {
+            let entry = depth.entry(next).or_insert(usize::MAX);
+            if *entry == usize::MAX || *entry < d + 1 {
+                // deepest-position layering keeps joins right of all
+                // their branches; acyclic by admission so this halts.
+                if *entry == usize::MAX || *entry < d + 1 {
+                    *entry = d + 1;
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    let mut lanes: HashMap<usize, usize> = HashMap::new();
+    let mut layout = BTreeMap::new();
+    for n in &graph.nodes {
+        let d = depth.get(n.id.as_str()).copied().unwrap_or(0);
+        let lane = lanes.entry(d).or_insert(0);
+        layout.insert(
+            n.id.clone(),
+            serde_json::json!({ "x": (d as f64) * 220.0, "y": (*lane as f64) * 120.0 }),
+        );
+        *lane += 1;
+    }
+    layout
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3361,6 +3476,58 @@ mod tests {
         assert!(record["template_ref"].is_array());
         let events = record["events"].as_array().unwrap();
         assert!(events.len() >= 4); // seed + broken rev + good rev + utterance
+    }
+
+    /// Graph-window receipt (merged T4 / WS-B.2): compiling session →
+    /// graph + deterministic layout; broken draft → diagnostics, never
+    /// a blank-canvas error.
+    #[tokio::test]
+    async fn test_session_graph_endpoint() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+        let ok_src = SESSION_DSL_OK;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "g1", "dsl_source": ok_src }),
+            ))
+            .await
+            .unwrap();
+        let sid = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+
+        let get_graph = |sid: &str| {
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/dsl/sessions/{sid}/graph"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let response = app.clone().oneshot(get_graph(&sid)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let g = body_json(response).await;
+        assert_eq!(g["compiles"], true);
+        let nodes = g["graph"]["nodes"].as_array().unwrap();
+        assert!(!nodes.is_empty());
+        let first_id = nodes[0]["id"].as_str().unwrap();
+        assert!(g["layout"][first_id]["x"].is_number(), "layout coords served");
+
+        // Broken revision → diagnostics, not a blank-canvas error.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{sid}/revision"),
+                serde_json::json!({ "dsl_source": "(workflow broken", "note": "wip" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app.clone().oneshot(get_graph(&sid)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let g = body_json(response).await;
+        assert_eq!(g["compiles"], false);
+        assert!(!g["diagnostics"].as_array().unwrap().is_empty());
+        assert!(g["graph"].is_null());
     }
 
     /// SHADOW-START receipt (WS-B day-one wiring): the session
