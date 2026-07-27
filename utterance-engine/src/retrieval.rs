@@ -305,7 +305,7 @@ pub mod embed {
                 &DispositionConfig::shadow_v1(),
                 &board,
                 &ev1,
-                "connect the review task to the end",
+                &crate::context::minimal("pack.none", "g-test"),
             )
             .unwrap();
             assert!(!rec.model_bundle_hash.is_empty());

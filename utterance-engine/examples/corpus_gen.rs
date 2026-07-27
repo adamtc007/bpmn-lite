@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use utterance_engine::board::{build_board, Board, EmptyUniverse, PolicyFilter};
 use utterance_engine::context::{project_ir, ContextProjection};
 use utterance_engine::contract::NONE_OF_THE_ABOVE;
-use utterance_engine::retrieval::{tier1_list, LexicalTier0, Tier0Retriever};
+#[cfg(not(feature = "embed"))]
+use utterance_engine::retrieval::LexicalTier0;
+use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 
 const K: usize = 8; // spec S5 ruling-implementation; recorded in the card
 const OVERLAP_CAP: f64 = 0.5; // spec S4 A3.1
@@ -316,6 +318,13 @@ fn main() -> Result<()> {
         bail!("no bank entries — author seed/banks/*.json first");
     }
 
+    // The retriever is the card-recorded generation parameter: embed
+    // tier-0 (E3) when built with --features embed — required for full
+    // synthetic-v2 (context pairs are lexically invisible by design) —
+    // else the lexical baseline.
+    #[cfg(feature = "embed")]
+    let retriever = utterance_engine::retrieval::embed::EmbedTier0::new()?;
+    #[cfg(not(feature = "embed"))]
     let retriever = LexicalTier0;
     let mut examples: Vec<Example> = Vec::new();
     let mut dropped_overlap = 0u32;
@@ -450,8 +459,8 @@ fn main() -> Result<()> {
     remove.sort_unstable();
     for i in remove.into_iter().rev() {
         let ex = examples.remove(i);
-        *regime_counts.get_mut(&ex.style_regime).map(|c| { *c -= 1; c }).unwrap();
-        *label_counts.get_mut(&ex.label).map(|c| { *c -= 1; c }).unwrap();
+        *regime_counts.get_mut(&ex.style_regime).expect("counted at insert") -= 1;
+        *label_counts.get_mut(&ex.label).expect("counted at insert") -= 1;
     }
 
     let nota = examples.iter().filter(|e| e.label == NONE_OF_THE_ABOVE).count();

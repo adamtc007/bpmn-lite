@@ -4,8 +4,8 @@
   "dropped": {
     "duplicate": 0,
     "overlap_cap": 2,
-    "pair_break": 1,
-    "retrieval_miss": 1
+    "pair_break": 0,
+    "retrieval_miss": 0
   },
   "floors": {
     "note": "v2-alpha is the pipeline receipt; S3 floors (>=5000 etc.) are release criteria for synthetic-v2, not alpha",
@@ -26,26 +26,26 @@
     "op.replace_node": 2,
     "op.set_correlation_source": 3,
     "op.set_guard_budget": 2,
-    "op.set_guard_trigger": 2,
+    "op.set_guard_trigger": 3,
     "prod.interrupting_timeout": 1,
     "prod.non_interrupting_notification": 1,
-    "prod.reminder_then_escalate": 1,
+    "prod.reminder_then_escalate": 2,
     "prod.request_and_wait": 2
   },
   "per_regime": {
     "dsl_shorthand": 3,
     "full_sentence": 14,
     "spoken": 8,
-    "telegraphic": 0,
+    "telegraphic": 2,
     "terse": 13
   },
-  "retriever": "tier0.lexical.v1",
+  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
   "spec": "EOP-SPEC-SLM-TRAIN-001 v0.3",
   "totals": {
-    "context_pairs": 0,
-    "examples": 38,
+    "context_pairs": 2,
+    "examples": 40,
     "nota": 10,
-    "nota_pct": 0.2631578947368421,
-    "pair_pct": 0.0
+    "nota_pct": 0.25,
+    "pair_pct": 0.05
   }
 }

@@ -465,6 +465,10 @@ Finding-5 ruling (Adam): lists = real tier-0 K-subset + NOTA → `retrieval::tie
 
 **Empirical finding (headline): the context pair "chase them again" (guard-anchor → set_guard_trigger vs task-anchor → reminder_then_escalate) was retrieval-missed under LexicalTier0 — zero token overlap with the gold description is the DEFINING property of high-value context pairs, so the lexical retriever structurally excludes exactly the examples tier-1 exists to learn.** Consequence: synthetic-v2 full generation runs on the embed tier-0 (E3, `--features embed`) as the retriever; lexical stays as the regression baseline. Recorded in spec §S5.
 
+#### Receipt — embed tier-0 closes the retrieval gap (2026-07-27, corpus_v2-alpha regenerated)
+
+Generator wired to `EmbedTier0` under `--features embed` (BGE-small-en-v1.5, SHA-pinned, integration test green). Same 43-entry bank, embed retriever: **40 examples, 2 paired (the "chase them again" context pair SURVIVES on both boards), 0 retrieval-miss** — vs lexical: 38 examples, 0 paired, pair lost to retrieval-miss. The red→green pair of corpus cards is the receipt that full synthetic-v2 generation runs on the embed retriever; retriever identity is recorded in each card, and `tier1_list` keeps training-list = serving-list on whichever retriever serves.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
