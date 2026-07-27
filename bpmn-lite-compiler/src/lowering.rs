@@ -360,7 +360,7 @@ pub fn lower_with_default(
                     graph,
                     node_idx,
                     id,
-                    task_type,
+                    GuardedBody::Native { task_type },
                     base,
                     &node_addr,
                     &boundary_lookup,
@@ -596,23 +596,31 @@ pub fn lower_with_default(
                 // dropped `join_id`/`JoinPlanEntry`).
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_addr = Addr::new(instructions.len() as u32);
-                v2_corr_sources
-                    .insert(corr_addr, resolve_correlation_source(corr_key_source, &data_objects)?);
-
-                instructions.push(Instr::V2WaitMsg { name: name_id });
-
-                let successors = get_successors(graph, node_idx);
-                if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().ok_or_else(|| {
-                        anyhow!(
-                            "lowering: node '{}' routes to '{}', which has no lowered address (fail-closed reject)",
-                            graph[node_idx].id(),
-                            graph[*next].id()
-                        )
-                    })?;
-                    instructions.push(Instr::Jump { target });
-                }
+                let corr_source = resolve_correlation_source(corr_key_source, &data_objects)?;
+                let wait_id = graph[node_idx].id().to_owned();
+                // Guarded-wait extension (2026-07-27 ruling): a boundary
+                // timer on a wait host wraps the SAME guard scope shape as
+                // a task host — kernel-verified (fire-while-parked,
+                // interrupt-cancels, staleness on late fire). The helper
+                // returns the V2WaitMsg body address; the correlation
+                // source registers THERE (R3's admission check proves it
+                // resolves to the wait instruction).
+                let body_addr = lower_boundary_guarded_task_v2(
+                    graph,
+                    node_idx,
+                    &wait_id,
+                    GuardedBody::WaitMsg { name_id },
+                    base,
+                    &node_addr,
+                    &boundary_lookup,
+                    &boundary_error_lookup,
+                    &mut task_intern,
+                    &mut task_manifest,
+                    &mut instructions,
+                    &mut v2_guard_budgets,
+                )?
+                .expect("wait lowering always emits a body");
+                v2_corr_sources.insert(body_addr, corr_source);
             }
 
             IRNode::SendTask {
@@ -656,23 +664,27 @@ pub fn lower_with_default(
                 // metadata, not behavior-affecting.
                 let name_id = intern_flag(&mut flag_intern, msg_name);
                 message_name_map.insert(name_id, msg_name.clone());
-                let corr_addr = Addr::new(instructions.len() as u32);
-                v2_corr_sources
-                    .insert(corr_addr, resolve_correlation_source(corr_key_source, &data_objects)?);
-
-                instructions.push(Instr::V2WaitMsg { name: name_id });
-
-                let successors = get_successors(graph, node_idx);
-                if let Some(next) = successors.first() {
-                    let target = node_addr.get(next).copied().ok_or_else(|| {
-                        anyhow!(
-                            "lowering: node '{}' routes to '{}', which has no lowered address (fail-closed reject)",
-                            graph[node_idx].id(),
-                            graph[*next].id()
-                        )
-                    })?;
-                    instructions.push(Instr::Jump { target });
-                }
+                let corr_source = resolve_correlation_source(corr_key_source, &data_objects)?;
+                let wait_id = graph[node_idx].id().to_owned();
+                // Guarded-wait extension — same shape as the MessageWait
+                // arm above (HumanWait was verifier-legal as a host before
+                // F-DSGN-3 but never lowered; now it genuinely is).
+                let body_addr = lower_boundary_guarded_task_v2(
+                    graph,
+                    node_idx,
+                    &wait_id,
+                    GuardedBody::WaitMsg { name_id },
+                    base,
+                    &node_addr,
+                    &boundary_lookup,
+                    &boundary_error_lookup,
+                    &mut task_intern,
+                    &mut task_manifest,
+                    &mut instructions,
+                    &mut v2_guard_budgets,
+                )?
+                .expect("wait lowering always emits a body");
+                v2_corr_sources.insert(body_addr, corr_source);
             }
 
             IRNode::BoundaryTimer { .. } => {
@@ -1556,8 +1568,14 @@ fn instr_count_for(
     guardn_close_before_end: &HashSet<NodeIndex>,
 ) -> u32 {
     match &graph[node_idx] {
-        IRNode::ServiceTask { id, .. } | IRNode::FfiServiceTask { id, .. } => {
-            let base = estimate_instr_count(graph, node_idx); // ExecNative/ExecFfi + Jump
+        // Guarded-wait extension (2026-07-27): MessageWait/HumanWait size
+        // under the SAME +extra formula as task hosts — their base is
+        // V2WaitMsg + Jump (2), the guard prologue/epilogue is identical.
+        IRNode::ServiceTask { id, .. }
+        | IRNode::FfiServiceTask { id, .. }
+        | IRNode::MessageWait { id, .. }
+        | IRNode::HumanWait { id, .. } => {
+            let base = estimate_instr_count(graph, node_idx); // body + Jump
             let has_timer = boundary_lookup.contains_key(id);
             let error_count = boundary_error_lookup.get(id).map(Vec::len).unwrap_or(0);
             if !has_timer && error_count == 0 {
@@ -1723,11 +1741,24 @@ fn push_error_guard_arms(
 /// inert placeholder, never consulted by `V2TriggerGuard`/timer-fire
 /// because nothing issues either against an error-only guard.
 #[allow(clippy::too_many_arguments)]
+/// The guarded host's own body instruction (guarded-wait extension,
+/// Adam's ruling 2026-07-27: §6.3 "guard the wait" — kernel trace
+/// confirmed items 1-4 work today; this is the compiler-side item 5).
+enum GuardedBody<'a> {
+    /// ServiceTask host — `ExecNative`.
+    Native { task_type: &'a str },
+    /// MessageWait/HumanWait host — `V2WaitMsg`. Caller interns the
+    /// message name and registers the correlation source at the body
+    /// address this function returns (R3's admission check then proves
+    /// the registration lands on the wait instruction).
+    WaitMsg { name_id: u32 },
+}
+
 fn lower_boundary_guarded_task_v2(
     graph: &IRGraph,
     node_idx: NodeIndex,
     id: &str,
-    task_type: &str,
+    body: GuardedBody<'_>,
     base: Addr,
     node_addr: &HashMap<NodeIndex, Addr>,
     boundary_lookup: &HashMap<String, (NodeIndex, TimerSpec)>,
@@ -1736,8 +1767,23 @@ fn lower_boundary_guarded_task_v2(
     task_manifest: &mut Vec<String>,
     instructions: &mut Vec<Instr>,
     v2_guard_budgets: &mut BTreeMap<Addr, ScopeFailureBudget>,
-) -> Result<()> {
-    let task_id = intern_task(task_intern, task_manifest, task_type);
+) -> Result<Option<Addr>> {
+    let push_body = |instructions: &mut Vec<Instr>,
+                     task_intern: &mut HashMap<String, u32>,
+                     task_manifest: &mut Vec<String>|
+     -> Addr {
+        let addr = Addr::new(instructions.len() as u32);
+        match &body {
+            GuardedBody::Native { task_type } => {
+                let task_id = intern_task(task_intern, task_manifest, task_type);
+                instructions.push(Instr::ExecNative { task_type: task_id, argc: 0, retc: 0 });
+            }
+            GuardedBody::WaitMsg { name_id } => {
+                instructions.push(Instr::V2WaitMsg { name: *name_id });
+            }
+        }
+        addr
+    };
     let successors = get_successors(graph, node_idx);
     let timer_boundary = boundary_lookup.get(id);
     let error_boundaries = boundary_error_lookup.get(id);
@@ -1745,17 +1791,13 @@ fn lower_boundary_guarded_task_v2(
 
     if timer_boundary.is_none() && !has_errors {
         // No boundary timer or error: identical shape to v1's unguarded case.
-        instructions.push(Instr::ExecNative {
-            task_type: task_id,
-            argc: 0,
-            retc: 0,
-        });
+        let body_addr = push_body(instructions, task_intern, task_manifest);
         let target = successors
             .first()
             .and_then(|s| node_addr.get(s).copied())
             .unwrap_or(base + 2u32);
         instructions.push(Instr::Jump { target });
-        return Ok(());
+        return Ok(Some(body_addr));
     }
 
     let timer_interrupting = timer_boundary.map(|(bt_node_idx, _)| {
@@ -1858,11 +1900,7 @@ fn lower_boundary_guarded_task_v2(
         }
     }
     push_error_guard_arms(graph, id, boundary_error_lookup, node_addr, instructions)?;
-    instructions.push(Instr::ExecNative {
-        task_type: task_id,
-        argc: 0,
-        retc: 0,
-    });
+    let body_addr = push_body(instructions, task_intern, task_manifest);
     instructions.push(if interrupting {
         Instr::V2GuardEnd
     } else {
@@ -1873,7 +1911,7 @@ fn lower_boundary_guarded_task_v2(
         .and_then(|s| node_addr.get(s).copied())
         .unwrap_or(Addr::new(instructions.len() as u32 + 1));
     instructions.push(Instr::Jump { target });
-    Ok(())
+    Ok(Some(body_addr))
 }
 
 /// V5 (§18 ruling H, `LoweringTarget::V2` only): lower a diverging

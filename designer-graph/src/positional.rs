@@ -46,6 +46,13 @@ fn is_task_host(ir: &IRNode) -> bool {
     matches!(ir, IRNode::ServiceTask { .. } | IRNode::FfiServiceTask { .. })
 }
 
+/// Legal guard hosts = verifier §7a's set: task hosts PLUS MessageWait/
+/// HumanWait since the guarded-wait ruling (Adam, 2026-07-27) — lowering
+/// wraps wait bodies in the guard scope. SendTask is NOT a host.
+fn is_guard_host(ir: &IRNode) -> bool {
+    is_task_host(ir) || matches!(ir, IRNode::MessageWait { .. } | IRNode::HumanWait { .. })
+}
+
 fn is_guard(ir: &IRNode) -> bool {
     matches!(ir, IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. })
 }
@@ -115,8 +122,9 @@ impl<'a> PositionalLegality<'a> {
                 out.push(OperationKind::ReplaceNode);
             }
         }
-        if is_task_host(ir) {
-            // F-DSGN-3: task hosts are the ONLY lowerable guard hosts.
+        if is_guard_host(ir) {
+            // Verifier §7a alignment (guarded-wait ruling): guards attach
+            // to task hosts AND MessageWait/HumanWait — all four lowered.
             out.push(OperationKind::AttachGuard);
             out.push(OperationKind::AttachRearmingGuard);
         }
@@ -144,7 +152,7 @@ impl<'a> PositionalLegality<'a> {
             out.push(ProductionId::ParallelChecksAndJoin);
             out.push(ProductionId::ForEachWithCeiling);
         }
-        if is_task_host(ir) {
+        if is_guard_host(ir) {
             out.push(ProductionId::ReminderThenEscalate);
             out.push(ProductionId::InterruptingTimeout);
             out.push(ProductionId::NonInterruptingNotification);
@@ -284,16 +292,23 @@ mod tests {
         PositionalLegality { dag: &fx.dag }.legal_operations(Some(&k))
     }
 
-    /// F-DSGN-3 alignment cement: guard attachment is proposed at a task
-    /// host and NOT at a MessageWait — the board never proposes what the
-    /// verifier is guaranteed to reject (G2 fork receipt is the
-    /// admission-side proof).
+    /// Verifier-§7a alignment cement (guarded-wait ruling): guard
+    /// attachment is proposed at task hosts AND waits — matching exactly
+    /// the hosts lowering wraps (G2 guarded-wait receipts are the
+    /// admission-side proof). The board never proposes what the verifier
+    /// rejects, and never withholds what it admits.
     #[test]
-    fn guard_attachment_offered_on_task_host_only() {
+    fn guard_attachment_offered_on_all_lowerable_hosts() {
         let fx = fixture();
         assert!(ops(&fx, fx.t1).contains(&OperationKind::AttachRearmingGuard));
-        assert!(!ops(&fx, fx.wait).contains(&OperationKind::AttachRearmingGuard));
-        assert!(!ops(&fx, fx.wait).contains(&OperationKind::AttachGuard));
+        assert!(ops(&fx, fx.wait).contains(&OperationKind::AttachRearmingGuard));
+        assert!(ops(&fx, fx.wait).contains(&OperationKind::AttachGuard));
+        assert!(
+            PositionalLegality { dag: &fx.dag }
+                .legal_productions(Some(&fx.wait))
+                .contains(&ProductionId::ReminderThenEscalate),
+            "reminder production follows guard-host legality"
+        );
     }
 
     /// Correlation sources are wait/send business; guard knobs are guard
@@ -422,7 +437,7 @@ mod tests {
             .legal_productions(Some(&fx.t1))
             .contains(&ProductionId::ReminderThenEscalate));
         assert!(!oracle
-            .legal_productions(Some(&fx.wait))
+            .legal_productions(Some(&fx.data))
             .contains(&ProductionId::ReminderThenEscalate));
     }
 }

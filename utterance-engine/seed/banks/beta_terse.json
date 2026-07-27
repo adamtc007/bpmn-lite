@@ -1,0 +1,1122 @@
+[
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "approve ACME Fund's case now",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "call KYC subworkflow, then release the payment leg",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "ignore the palette and just onboard the client",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "add a solicitation step right after document review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "telegraphic",
+  "text": "post-review: archive evidence task, same path",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "drop a completeness check in front of this review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "upstream of review_documents: fetch custodian file first",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "terse",
+  "text": "swap this review out for an automated screen, keep its wiring",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "review_documents obsolete; substitute evidence-collation task",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "remove this review step entirely",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "cut review_documents from the flow",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "wire this straight into the escalation task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "telegraphic",
+  "text": "link review step to notify_client, skip the middle",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "fork here and run screening alongside the review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "split: sanctions + PEP checks concurrently, meet after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "branch out on whichever conditions apply, one or more",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "telegraphic",
+  "text": "conditional fan-out here; any matching routes run",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "loop this over every submitted document, ten max",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "per-doc iteration block, hard cap 10",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "put a five-day abort timer on this review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "terse",
+  "text": "add a nudge that keeps firing while the review continues",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "ask the custodian for statements and hold until they reply",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "kick off screenings together; proceed once every one lands",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "run this once per exhibit, never more than ten",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "telegraphic",
+  "text": "chase weekly x3; unanswered, route to J. Smith",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "terse",
+  "text": "kill the review if nothing lands within a week",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "telegraphic",
+  "text": "status ping to ops daily; review keeps running",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "roll the case back to intake",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "whichever reply arrives first wins; drop the other",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "after the chase, add a log-outcome step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "pre-chase: verify contact details task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "join this chaser directly to the escalation node",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "fork: chase client + alert custodian simultaneously, sync after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "add a conditional spread here, run every arm that qualifies",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "iterate chase per outstanding item, ceiling 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "bolt an abort-on-deadline onto this chaser",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "telegraphic",
+  "text": "second nudge cycle on same task, keeps re-arming, no interrupt",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "message J. Smith and pause here till the answer comes back",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "launch remaining screenings side by side; gate on completion of each",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "repeat the chase for every missing document, capped at three",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "telegraphic",
+  "text": "3 chases, 48h apart, then bump to compliance lead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "terse",
+  "text": "abandon the chase after ten days and move on",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "telegraphic",
+  "text": "weekly heads-up to ops while chasing continues",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "restart the whole case from the beginning",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "keep chasing forever until they answer",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "terse",
+  "text": "make this reminder fire every other day instead of daily",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "telegraphic",
+  "text": "reminder cadence: 48h, not 24h",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "let it miss five times before we call it failed",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "telegraphic",
+  "text": "tolerance up: 5 misfires allowed on g_reminder",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "terse",
+  "text": "extend this guard's path with a hand-off to the manager",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "telegraphic",
+  "text": "escalation leg: add notify-compliance at tail of guard route",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "take g_reminder off entirely",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "scrap this reminder and its whole leg",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "copy this onto every task in the flow",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "on 3rd miss, roll the case back to intake",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "once the docs land, add a validation step next",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "ahead of the hold: send solicitation task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "drop this hold from the flow altogether",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "swap await_documents for a portal-upload receiver, wiring intact",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "link the hold straight to review, bypass the middle step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "while holding: run registry lookup in a side branch, converge later",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "add a pick-any-that-apply split here",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "expect docs per entity; iterate every one, max 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "match incoming files on case_ref, not client id",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.request_and_wait",
+  "regime": "telegraphic",
+  "text": "outbound doc ask first, then this hold, tied by case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "start every screening at once and continue when they finish",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "telegraphic",
+  "text": "process every arriving file separately, cap ten",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "upload or callback, whichever first, take that path",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "when the reviewer finishes, add a filing task next",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "prior to human review: auto-triage step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "cut the manual review out of this flow",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "swap reviewer step for four-eyes approval, links kept",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "route this review directly into notify_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "reviewer works; meanwhile run background screen; rejoin at close",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "split into whichever follow-ups apply, could be several",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "one review pass per evidence item, cap 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "key the reply matching off case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "telegraphic",
+  "text": "ping reviewer, hold flow till their verdict returns",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "fire the outstanding checks together, meet when they clear",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "telegraphic",
+  "text": "per-exhibit review pass, ceiling of 8",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "escalate this straight to the regulator now",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "log delivery right after the notice goes out",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "gate notify_client behind a consent check first",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "kill the client notification step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "sub in secure-mail dispatch for this notice, links stay",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "hook the notice straight up to the finish",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "notice + custodian alert in tandem branches, merge after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "branch to every notice path that applies",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "one notice per beneficiary, hard limit 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "tie outgoing notices to case_ref for reply matching",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "telegraphic",
+  "text": "turn this into ask-then-hold: notice out, answer awaited on case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "run the compliance screens concurrently and sync on completion",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "telegraphic",
+  "text": "repeat per outstanding recipient, max 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "actually transmit the payment instruction to the custodian",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "give this decision a rejected route too",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "telegraphic",
+  "text": "outcome gw: new arm for needs-more-info",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "slot a final QA task in front of the decision",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "telegraphic",
+  "text": "downstream of the split: record-verdict step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "tie the open arm of this decision to notify_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "remove outcome and its arms entirely",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "terse",
+  "text": "swap this decision for a pinned dmn verb, keep the wiring",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "pre-decision fork: both checks at once, then decide",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "add an any-that-qualify spread here instead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "per-fund pass over the list, bounded 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "query the custodian and pause until the reply shows up",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "screenings side by side; converge before verdict",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "apply this once per holding, ten at most",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "loop back to document review when rejected",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "forget the options, just approve ACME Fund's case",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "add a hit-triage step after sanctions screening",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "before screen_sanctions: normalize-names task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "terse",
+  "text": "trade this screen for the vendor's adverse-media check, same links",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "drop the sanctions leg from this branch",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "wire this screen's output to the shared review task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "nested fork: sanctions + PEP inside this branch, sync locally",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "spread into any follow-up routes that qualify",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "screen per counterparty in list, upper bound 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "if the vendor stalls past an hour, cut this screen off",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "telegraphic",
+  "text": "recurring poke on this screen, work undisturbed",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "call the screening bureau and hold for their answer",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "vendor checks simultaneously; barrier till done",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "screen every listed entity one by one, never past ten",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.reminder_then_escalate",
+  "regime": "telegraphic",
+  "text": "nudge vendor 2x daily; still silent, hand to compliance lead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.interrupting_timeout",
+  "regime": "terse",
+  "text": "hard stop this screen after 24 hours and take the failure path",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.non_interrupting_notification",
+  "regime": "telegraphic",
+  "text": "hourly progress note to ops; screening unaffected",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "compensate the earlier steps if this branch fails",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "once every copy finishes, add a consolidation step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "prior to per-doc verification: dedupe pass",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "tear out the whole per-document block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "swap verify step for OCR-plus-check, keep in/out links",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "link this block to review_evidence directly",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "alongside the doc loop: independent registry branch, converge after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "afterwards branch to any remediation paths that fit",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "nested per-page pass within every doc, limit 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "for gaps, ask the client and hold on their upload",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "per-doc screens concurrent; proceed when every one lands",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "redo this per attachment too, ceiling stays ten",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "keep verifying until nothing is left, no limit",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "spin up the doc-verification workflow from the KYC pack",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "add a final archive step just ahead of completion",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "telegraphic",
+  "text": "pre-terminal: closure notification task",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "terse",
+  "text": "swap the terminator for an error finish, wiring untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "telegraphic",
+  "text": "different finish: escalation terminus instead, links kept",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "remove this finishing point",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "drop terminal; will rewire later",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "after finishing, jump back to the start",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "on completion trigger the settlement payment",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "first thing after kickoff, add an intake validation task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "telegraphic",
+  "text": "wire kickoff directly to screening, no intermediate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "kick off two branches immediately, rejoin before review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "telegraphic",
+  "text": "at entry: conditional spread, any qualifying paths",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "begin by looping over every submitted document, ten tops",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "telegraphic",
+  "text": "opening move: solicit docs, hold for the reply on case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "begin with the screenings at once, gate on the full set",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "telegraphic",
+  "text": "immediately per-entity onboarding pass, cap 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "let a message from the custodian kick this workflow off",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "remove the case_ref declaration",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "telegraphic",
+  "text": "case_ref decl unused; strip it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "rename this reference to deal_id",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "point every hold at this reference automatically",
+  "paraphrase_seq": 2
+ }
+]

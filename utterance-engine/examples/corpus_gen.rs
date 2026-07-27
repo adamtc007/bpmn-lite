@@ -32,7 +32,7 @@ use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 
 const K: usize = 8; // spec S5 ruling-implementation; recorded in the card
 const OVERLAP_CAP: f64 = 0.5; // spec S4 A3.1
-const CORPUS_VERSION: &str = "synthetic-v2-alpha";
+const CORPUS_VERSION: &str = "synthetic-v2-beta";
 
 fn key() -> NodeKey {
     NodeKey(uuid::Uuid::new_v4())
@@ -501,7 +501,7 @@ fn enumeration_classes() -> Result<Vec<ClassState>> {
     Ok(out)
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct BankEntry {
     class_id: String,
     /// Canonical candidate id, or "abstain.none_of_the_above".
@@ -594,15 +594,27 @@ fn main() -> Result<()> {
         boards.insert(c.class_id, (board, proj, c));
     }
 
-    // Load banks.
+    // Load banks. Files named `eval_*.json` are the HELD-OUT slice
+    // (A3.3 disjoint-regime eval) — routed to a separate eval corpus,
+    // NEVER into training (split leakage would be silent and fatal).
     let mut entries: Vec<BankEntry> = Vec::new();
+    let mut eval_entries: Vec<BankEntry> = Vec::new();
     for f in std::fs::read_dir(&bank_dir).context("seed/banks missing")? {
         let path = f?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
             let bank: Vec<BankEntry> =
                 serde_json::from_str(&std::fs::read_to_string(&path)?)
                     .with_context(|| format!("{path:?}"))?;
-            entries.extend(bank);
+            let is_eval = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("eval_"))
+                .unwrap_or(false);
+            if is_eval {
+                eval_entries.extend(bank);
+            } else {
+                entries.extend(bank);
+            }
         }
     }
     if entries.is_empty() {
@@ -783,7 +795,7 @@ fn main() -> Result<()> {
         "per_regime": regime_counts,
         "per_label": label_counts,
         "floors": {
-            "note": "v2-alpha is the pipeline receipt; S3 floors (>=5000 etc.) are release criteria for synthetic-v2, not alpha",
+            "note": format!("{CORPUS_VERSION} is a pipeline/authoring-progress receipt; S3 floors (>=5000 etc.) are the release criterion for the eventual GA synthetic-v2 corpus, not any intermediate build"),
             "total_floor_met": examples.len() >= 5000,
         },
     });
@@ -798,6 +810,35 @@ fn main() -> Result<()> {
         out_dir.join(format!("{CORPUS_VERSION}.card.json")),
         serde_json::to_string_pretty(&card)? + "\n",
     )?;
+    if !eval_entries.is_empty() {
+        // Held-out slice: same board/label validation discipline applies,
+        // but no hygiene drops (eval keeps the ugly cases — that is its
+        // job); emitted as raw labelled entries for the Phase-D harness.
+        let mut eval_bad: Vec<String> = Vec::new();
+        for e in &eval_entries {
+            match boards.get(e.class_id.as_str()) {
+                None => eval_bad.push(format!("eval entry names unknown class '{}'", e.class_id)),
+                Some((board, _, _)) => {
+                    if e.label != NONE_OF_THE_ABOVE && !board.contains(&e.label) {
+                        eval_bad.push(format!(
+                            "eval '{}' not proposed by board '{}' ({:?})",
+                            e.label, e.class_id, e.text
+                        ));
+                    }
+                }
+            }
+        }
+        if !eval_bad.is_empty() {
+            bail!("HALT: eval slice defects:\n{}", eval_bad.join("\n"));
+        }
+        let eval_jsonl: String = eval_entries
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(out_dir.join(format!("{CORPUS_VERSION}.eval.jsonl")), eval_jsonl + "\n")?;
+        println!("CORPUS-GEN eval slice: {} held-out entries (never trained)", eval_entries.len());
+    }
     println!(
         "CORPUS-GEN {CORPUS_VERSION}: {} examples ({nota} NOTA, {paired} paired), dropped: {dropped_overlap} overlap / {dropped_retrieval_miss} retrieval-miss / {dropped_duplicate} dup",
         examples.len()

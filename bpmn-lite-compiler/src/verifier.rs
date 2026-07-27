@@ -342,28 +342,25 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 failure_budget: _,
             } = &graph[idx]
             {
-                // 7a. attached_to must reference an existing ServiceTask or
-                // FfiServiceTask — the two hosts lowering actually
-                // guard-wraps (`lower_boundary_guarded_task_v2` and the
-                // `FfiServiceTask` arm). `HumanWait` was listed as a legal
-                // host here without any lowering support: the `HumanWait`
-                // arm never consults `boundary_lookup`, so a verified
-                // graph with a timer guard on a human wait compiled with
-                // the guard SILENTLY DROPPED (never armed, escalation
-                // chain orphaned) — a fail-open defect, removed
-                // 2026-07-27 (G2 receipt
-                // `g2_boundary_timer_on_human_wait_rejected_not_dropped`).
-                // Re-admitting wait hosts (HumanWait/MessageWait — the
-                // V&S §6.3 "guard the wait" shape) requires lowering to
-                // emit the guard scope around the wait first; that fork is
-                // surfaced in EOP-PLAN-BPMN-DESIGN-003 §F, awaiting
-                // Adam's ruling. `FfiServiceTask` was itself missing from
-                // this check pre-GUARD-TIMER-CYCLE> wiring — not a design
-                // fork, its lowering support already existed.
+                // 7a. attached_to must reference a host lowering actually
+                // guard-wraps: ServiceTask, FfiServiceTask, MessageWait,
+                // or HumanWait. Wait hosts were re-admitted 2026-07-27
+                // (Adam's guarded-wait ruling — the V&S §6.3 "guard the
+                // wait" shape): lowering now routes MessageWait/HumanWait
+                // through `lower_boundary_guarded_task_v2` with a
+                // `V2WaitMsg` body, and the kernel trace confirmed
+                // fire-while-parked, interrupt-cancellation, and
+                // post-close staleness all behave with no kernel change.
+                // (History: HumanWait was ONCE listed here without any
+                // lowering support — F-DSGN-3's fail-open, closed by
+                // removing it; this re-admission ships WITH the lowering,
+                // cemented by the guarded-wait G2 receipts.)
                 let host_exists = graph.node_indices().any(|other| {
                     matches!(&graph[other],
                         IRNode::ServiceTask { id: host_id, .. }
                         | IRNode::FfiServiceTask { id: host_id, .. }
+                        | IRNode::MessageWait { id: host_id, .. }
+                        | IRNode::HumanWait { id: host_id, .. }
                         if host_id == attached_to
                     )
                 });

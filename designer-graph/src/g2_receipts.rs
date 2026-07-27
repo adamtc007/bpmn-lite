@@ -11,16 +11,13 @@
 //! durable VERB's typed return (§6.3 "Durable contract"), not four End
 //! nodes: no gateway is authored here.
 //!
-//! **SUBSTRATE FORK (surfaced 2026-07-27, G2 blocked-in-part on Adam's
-//! ruling):** §6.3 says "guard the WAIT". The substrate cannot: the
-//! verifier's legal BoundaryTimer hosts are ServiceTask | FfiServiceTask |
-//! HumanWait (verifier.rs §7a), so a reminder guard on the document
-//! MessageWait is REJECTED at admission (fail-closed — receipt below), and
-//! a guard on a HumanWait host is ADMITTED but silently DROPPED by
-//! lowering (the HumanWait arm never consults `boundary_lookup` —
-//! fail-OPEN defect, receipt below; flip that test when fixed). Guards
-//! lower correctly on task hosts only. Until the ruling, this file proves
-//! everything else end-to-end and cements both gap behaviours.
+//! **Guarded waits: RULED AND LANDED (Adam, 2026-07-27).** §6.3's "guard
+//! the wait" is now representable: lowering wraps MessageWait/HumanWait
+//! hosts in the same guard scope as task hosts (kernel-verified: fire
+//! while parked, interrupting cancellation clears the wait registration,
+//! post-close fires are staleness no-ops). The receipts below cement the
+//! full literal §6.3 shape admitting with the guard opcodes IN the
+//! envelope — the F-DSGN-3 fail-open (silent drop) is unrepresentable.
 
 #![cfg(test)]
 
@@ -269,45 +266,72 @@ fn g2_guard_declarations_survive_on_task_host() {
     );
 }
 
-/// FORK RECEIPT (fail-closed half): §6.3's literal shape — the reminder
-/// guard on the document MessageWait — stages in the Designer but is
-/// REJECTED at admission with the verifier naming guard and host. This is
-/// the substrate/spec mismatch surfaced to Adam; the test cements that
-/// the refusal is loud, not silent.
+/// §6.3's LITERAL shape — the reminder guard on the document MessageWait
+/// — now admits end-to-end (Adam's guarded-wait ruling, 2026-07-27).
+/// Red→green history: before the ruling this exact edit REJECTED at
+/// admission (the surfaced fork receipt); now the envelope must carry
+/// GUARD-N> + GUARD-TIMER-CYCLE> with the V2WaitMsg INSIDE the guard
+/// scope, and the correlation registration must survive (R3's admission
+/// check enforces it lands on the wait instruction).
 #[test]
-fn g2_fork_receipt_reminder_guard_on_message_wait_rejected_at_admission() {
+fn g2_solicit_guarded_wait_admits_and_arms() {
     let (base, keys, ops) = build_solicit();
     let staged = apply_production(&base, ops, Provenance::default()).unwrap();
-    let broken = apply(
-        &staged.candidate,
+    let guard_key = key();
+    let reminder_key = key();
+    let mut graph = staged.candidate;
+    for op in [
         Operation::AttachRearmingGuard {
             host: keys.wait,
-            key: key(),
+            key: guard_key,
             guard_id: "g_reminder".into(),
             trigger: reminder_trigger(),
         },
-        Provenance::default(),
-    )
-    .expect("staging accepts the edit — the theorem lives in the verifier");
-    let errs = broken.candidate.admit().expect_err("guard on MessageWait must reject");
+        Operation::AppendNode {
+            anchor: guard_key,
+            key: reminder_key,
+            node: task("send_reminder"),
+            edge_id: "f_reminder".into(),
+        },
+        Operation::AppendNode {
+            anchor: reminder_key,
+            key: key(),
+            node: IRNode::End { id: "end_reminder".into(), terminate: false },
+            edge_id: "f_reminder_end".into(),
+        },
+    ] {
+        graph = apply(&graph, op, Provenance::default()).expect("stages").candidate;
+    }
+    let wf = graph.admit().expect("§6.3 guarded wait must now admit");
+    let instrs = wf.envelope().instructions();
+    let open = instrs
+        .iter()
+        .position(|i| matches!(i, Instr::V2GuardN { .. }))
+        .expect("GUARD-N> emitted");
+    let close = instrs
+        .iter()
+        .position(|i| matches!(i, Instr::V2GuardNEnd))
+        .expect("<GUARD-N emitted");
+    let wait = instrs
+        .iter()
+        .position(|i| matches!(i, Instr::V2WaitMsg { .. }))
+        .expect("wait body emitted");
+    assert!(open < wait && wait < close, "V2WaitMsg must sit INSIDE the guard scope");
     assert!(
-        errs.iter()
-            .any(|e| e.message.contains("g_reminder") && e.message.contains("wait_document")),
-        "refusal must name guard and host: {errs:?}"
+        instrs.iter().any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
+        "GUARD-TIMER-CYCLE> bound must survive"
     );
 }
 
-/// FAIL-OPEN DEFECT — CLOSED (red→green, 2026-07-27). RED (proven before
-/// the fix): the verifier listed HumanWait as a legal BoundaryTimer host,
-/// but lowering's HumanWait arm never consults `boundary_lookup`, so a
-/// reminder guard on the review step ADMITTED with ZERO guard opcodes in
-/// the envelope — never armed, escalation chain orphaned. GREEN (cemented
-/// here): the verifier now rejects the un-lowerable host loudly, naming
-/// guard and host. If Adam rules to support guard-on-wait (§6.3's literal
-/// shape), lowering learns to wrap wait hosts FIRST, then this cement is
-/// rewritten to prove the emitted guard scope.
+/// F-DSGN-3 lineage, final state (three states, all receipted): (1)
+/// fail-OPEN — HumanWait verifier-legal but lowering silently dropped the
+/// guard; (2) fail-CLOSED — host removed from §7a, rejection cemented;
+/// (3) NOW — Adam's guarded-wait ruling: lowering genuinely wraps wait
+/// hosts, so admission is GREEN and the guard opcodes are IN the
+/// envelope. This cement proves state 3 (the silent drop of state 1 is
+/// unrepresentable: opcodes asserted present, not absent).
 #[test]
-fn g2_boundary_timer_on_human_wait_rejected_not_dropped() {
+fn g2_guard_on_human_wait_admits_and_arms() {
     let (base, keys, ops) = build_solicit();
     let staged = apply_production(&base, ops, Provenance::default()).unwrap();
     let guard_key = key();
@@ -335,14 +359,15 @@ fn g2_boundary_timer_on_human_wait_rejected_not_dropped() {
     ] {
         graph = apply(&graph, op, Provenance::default()).expect("staging accepts the edit").candidate;
     }
-    let errs = graph
+    let wf = graph
         .admit()
-        .expect_err("guard on a HumanWait host must reject, not silently drop");
+        .expect("guard on a HumanWait host must admit AND arm");
     assert!(
-        errs.iter()
-            .any(|e| e.message.contains("g_review_reminder")
-                && e.message.contains("review_evidence")),
-        "refusal must name guard and host: {errs:?}"
+        wf.envelope()
+            .instructions()
+            .iter()
+            .any(|i| matches!(i, Instr::V2GuardN { .. })),
+        "guard scope must be emitted for the HumanWait host — absence is the old fail-open"
     );
 }
 

@@ -1,0 +1,871 @@
+[
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -> +pep_screen",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "+notify_custodian downstream of this",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+doc_intake upstream of review_documents",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "review_documents := auto_doc_check, keep edges",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "rm review_documents",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -> outcome, direct edge",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "AND-split: sanctions | pep | media, join all",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-split on risk flags, min1",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI wrap over documents, max:=10",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "guard: t+48h, interrupt",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "guard non-int, rearm daily",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "req docs -> await ack on case_ref",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "screens: sanctions+pep, fanout/fanin",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "foreach doc: verify, cap 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "remind P1D x3 -> esc J. Smith",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "SLA 2d hard-stop",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "notify sched: daily, no-block",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "goto review step 2 on fail",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "chase_client -> +log_outcome",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+precheck ahead of chase_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "add hard t/o 72h, kills the task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "send chase -> hold til client resp lands",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "par block: chase_client || id_check",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "per fund: chase, max 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "status ping wkly, non-blocking",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "cycle := P1D -> P2D",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "fire @ 12h intervals",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "budget := 5, override wf default",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "max fails -> 2",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "esc path: +notify_compliance",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "rm g_reminder",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "trigger := on_msg(doc_upload)",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "corr := deal_id, not case_ref",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "await_documents -> +completeness_check",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+solicit_docs ahead of await_documents",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "await_documents := human_review_wait, keep links",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "on receipt: foreach doc verify, <=10",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -> +record_decision",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence := four_eyes_review (edges kept)",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "key replies on client_id",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "fan out: registry + sanctions, then join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "esc if reviewer idle 2d",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -> +await_ack",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+final_check pre notify_client",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "upgrade: send + hold for corr resp",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "drop notify_client from the flow",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "retry send w/ backoff til ack",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "outcome += rejected arm",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "new arm: refer -> compliance",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+risk_score ahead of outcome",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "rejected arm -> notify_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "rm outcome + its arms",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "policy := skip_checks; approve ACME Fund",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions -> +log_hits",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "rm screen_sanctions from this leg",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "foreach entity: screen, cap 25",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI: 1x per counterparty, max 8",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document -> +aggregate_results",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+fetch_bundle pre verify_each_document",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document := ocr_verify, links kept",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "bump cap 10 -> 25",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+final_attestation pre End",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End := notify_then_end, same wiring",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "Start -> +intake_form",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "from Start: fanout screens, sync all",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "rm case_ref decl",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "wf := import(visio_v2)",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "spoken",
+  "text": "chase them again",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_chase_again"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "spoken",
+  "text": "chase them again",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_chase_again"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "terse",
+  "text": "add a deadline here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_deadline_here"
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "add a deadline here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_deadline_here"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "run one screening pass per document",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_per_document"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "run one screening pass per document",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_per_document"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "split here and run the screens at the same time",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_split_screens"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "spoken",
+  "text": "split here and run the screens at the same time",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_split_screens"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "branch this out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_branch_out"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "branch this out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_branch_out"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "spoken",
+  "text": "ping them daily but don't stop the work",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_daily_ping"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "ping them daily but don't stop the work",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_daily_ping"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "Tie the reply back to the case reference, please.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_tie_reply"
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Tie the reply back to the case reference, please.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_tie_reply"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "once the reminders run out, route it to J. Smith",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_reminders_runout"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "spoken",
+  "text": "once the reminders run out, route it to J. Smith",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_reminders_runout"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "spoken",
+  "text": "pull the plug if this sits for two days",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_pull_plug"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "pull the plug if this sits for two days",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_pull_plug"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "hang a nudge timer off this one",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_nudge_timer"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "hang a nudge timer off this one",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_nudge_timer"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "wait here for the custodian's confirmation",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_wait_confirmation"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "wait here for the custodian's confirmation",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_wait_confirmation"
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Get J. Smith's sign-off before we close this out.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_signoff_close"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Get J. Smith's sign-off before we close this out.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_signoff_close"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "give this three goes before it gives up",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_three_goes"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "give this three goes before it gives up",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_three_goes"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "run sanctions and PEP side by side then regroup",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_side_by_side"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "run sanctions and PEP side by side then regroup",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_side_by_side"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "telegraphic",
+  "text": "verify each holder on the register, twenty max",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_each_holder"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "telegraphic",
+  "text": "verify each holder on the register, twenty max",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_each_holder"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Kick off with a document request and hold for the client's reply.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_start_with_docs"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Kick off with a document request and hold for the client's reply.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_start_with_docs"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "stop keying this off case_ref",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_stop_keying"
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "stop keying this off case_ref",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_stop_keying"
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "swap this out for a client notification",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_swap_notice"
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "swap this out for a client notification",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_swap_notice"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "spoken",
+  "text": "run whichever screens apply, skip the rest",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_applicable_screens"
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "run whichever screens apply, skip the rest",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_applicable_screens"
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "put a second pair of eyes on this before it goes out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_second_look"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "spoken",
+  "text": "put a second pair of eyes on this before it goes out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_second_look"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "docs in -> verify each, max 10",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_docs_then_each"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "docs in -> verify each, max 10",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_docs_then_each"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "first, collect the client's ID pack",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_first_collect"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "first, collect the client's ID pack",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_first_collect"
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Once the notice goes out, hold for an acknowledgement.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_notify_then_wait"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Once the notice goes out, hold for an acknowledgement.",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_notify_then_wait"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "telegraphic",
+  "text": "sanctions, PEP, adverse media — all at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_all_at_once"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "telegraphic",
+  "text": "sanctions, PEP, adverse media — all at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_all_at_once"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "they've gone quiet, poke them once a week",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_gone_quiet"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.non_interrupting_notification",
+  "regime": "spoken",
+  "text": "they've gone quiet, poke them once a week",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_gone_quiet"
+ }
+]
