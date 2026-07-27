@@ -3202,6 +3202,7 @@ mod design_session_tests {
                 &DesignSessionEventKind::Utterance {
                     text: "add a retry loop".into(),
                     response: "applied bounded-retry macro".into(),
+                    decision_record_json: None,
                 },
             )
             .await

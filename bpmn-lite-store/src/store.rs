@@ -20,7 +20,16 @@ pub struct TemplateSummary {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DesignSessionEventKind {
     Revision { dsl_source: String, note: String },
-    Utterance { text: String, response: String },
+    Utterance {
+        text: String,
+        response: String,
+        /// WS-B day-one wiring (DESIGN-003): the I28 decision record
+        /// for this utterance, serialized JSON. Additive + defaulted so
+        /// pre-shadow events decode unchanged; None only for events
+        /// recorded before the disposition pipeline ran.
+        #[serde(default)]
+        decision_record_json: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

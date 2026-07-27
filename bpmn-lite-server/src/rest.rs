@@ -2298,13 +2298,6 @@ pub(crate) struct SessionUtteranceBody {
     text: String,
 }
 
-#[derive(Serialize)]
-pub(crate) struct SessionUtteranceResponse {
-    seq: u64,
-    #[serde(flatten)]
-    intent: UtteranceResponse,
-}
-
 #[derive(Deserialize)]
 pub(crate) struct SaveSessionBody {
     template_name: String,
@@ -2418,12 +2411,152 @@ async fn session_revision_endpoint(
     .into_response()
 }
 
+/// v1 whole-graph legality: every operation/production legal (no
+/// anchor selection exists in the UI yet; position-dependent legality
+/// arrives with WS-A.2's LegalityOracle impl over the session DAG).
+struct WholeGraphLegality;
+impl designer_graph::board_candidate::LegalityOracle for WholeGraphLegality {
+    type NodeKey = ();
+    fn legal_operations(
+        &self,
+        _: Option<&()>,
+    ) -> Vec<designer_graph::board_candidate::OperationKind> {
+        designer_graph::board_candidate::OperationKind::ALL.to_vec()
+    }
+    fn legal_productions(
+        &self,
+        _: Option<&()>,
+    ) -> Vec<designer_graph::board_candidate::ProductionId> {
+        designer_graph::board_candidate::ProductionId::ALL.to_vec()
+    }
+}
+
+/// D19-rider rendering: helpful about the path forward, generic about
+/// the request — never confirms the requested operation exists, never
+/// enumerates what the user cannot do.
+fn render_disposition(
+    disposition: &utterance_engine::policy::ProposalDisposition,
+    board: &utterance_engine::board::Board,
+) -> String {
+    use utterance_engine::policy::ProposalDisposition as D;
+    match disposition {
+        D::Candidate { candidate_id } => {
+            let desc = board
+                .candidates
+                .iter()
+                .find(|c| &c.canonical_id == candidate_id)
+                .map(|c| c.description.as_str())
+                .unwrap_or(candidate_id.as_str());
+            format!("Proposed: {desc}. Stage and ratify to apply.")
+        }
+        D::OutOfScope => {
+            "This cannot be executed because it is not part of your current working context. You can change context through the governed route, or pick from the available design operations."
+                .to_owned()
+        }
+        D::EscalateToSage { .. } => {
+            "I need more detail to map this onto one design operation — can you say which step of the process this applies to, and whether it is one change or several?"
+                .to_owned()
+        }
+        // Unreachable in v1 (policy enum docs) — rendered defensively.
+        D::Ambiguous { top_candidates } => {
+            format!("Did you mean one of: {}?", top_candidates.join(", "))
+        }
+        D::MissingArguments { candidate_id, missing } => {
+            format!("'{candidate_id}' needs: {}", missing.join(", "))
+        }
+        D::Compound => "That looks like several changes — one at a time, please.".to_owned(),
+    }
+}
+
+/// WS-B day-one wiring (SHADOW START, plan §C constraint 2): every
+/// session utterance flows board → tier-0 → deterministic disposition
+/// policy → I28 record. The record is written to the session event log
+/// (operational data); CORPUS capture stays suppressed until the Q9
+/// charter (D17) — the response reports that state honestly.
 async fn session_utterance_endpoint(
     State(demo): State<Arc<DemoState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<SessionUtteranceBody>,
 ) -> impl IntoResponse {
-    let intent = utterance_intent(&body.text);
+    use utterance_engine::board::{build_board, EmptyUniverse, PolicyFilter};
+    use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
+    use utterance_engine::policy::{decide, DispositionConfig};
+    use utterance_engine::retrieval::{LexicalTier0, Tier0Retriever};
+
+    // Session must exist; its current source is the graph identity the
+    // board hashes (C7 obligation: WS-B supplies the revision identity).
+    let record_session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let graph_identity = blake3::hash(
+        record_session.current_source().unwrap_or_default().as_bytes(),
+    )
+    .to_hex()
+    .to_string();
+
+    let pipeline_result = build_board(
+        &WholeGraphLegality,
+        None,
+        Some(&graph_identity),
+        &EmptyUniverse,
+        &PolicyFilter::default(),
+    )
+    .and_then(|board| {
+        let evidence = LexicalTier0.retrieve(&body.text, &board)?;
+        let (disposition, record) =
+            decide(&DispositionConfig::shadow_v1(), &board, &evidence, &body.text)?;
+        Ok((board, disposition, record))
+    });
+    let (board, disposition, record) = match pipeline_result {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("utterance pipeline: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let message = render_disposition(&disposition, &board);
+    let record_json = match serde_json::to_string(&record) {
+        Ok(j) => j,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("record serialize: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Corpus capture: switch OFF until GOV.1 ratifies (D17) — evaluated
+    // per interaction so the suppression is a recorded fact, not an
+    // assumed one.
+    let capture_state = match CapturePipeline::off().capture(
+        utterance_engine::capture::CaptureEvent {
+            raw_utterance: body.text.clone(),
+            record: record.clone(),
+            dataset: utterance_engine::capture::DatasetClass::Evaluation,
+        },
+    ) {
+        CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
+        CaptureOutcome::Stored(_) => "stored",
+    };
+
     match demo
         .store
         .append_design_session_event(
@@ -2431,12 +2564,20 @@ async fn session_utterance_endpoint(
             id,
             &DesignSessionEventKind::Utterance {
                 text: body.text.clone(),
-                response: intent.message.clone(),
+                response: message.clone(),
+                decision_record_json: Some(record_json),
             },
         )
         .await
     {
-        Ok(seq) => Json(SessionUtteranceResponse { seq, intent }).into_response(),
+        Ok(seq) => Json(serde_json::json!({
+            "seq": seq,
+            "message": message,
+            "disposition": disposition,
+            "board_hash": board.board_hash,
+            "capture": capture_state,
+        }))
+        .into_response(),
         Err(bpmn_lite_store::StoreError::NotFound(_)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "session not found" })),
@@ -3220,6 +3361,79 @@ mod tests {
         assert!(record["template_ref"].is_array());
         let events = record["events"].as_array().unwrap();
         assert!(events.len() >= 4); // seed + broken rev + good rev + utterance
+    }
+
+    /// SHADOW-START receipt (WS-B day-one wiring): the session
+    /// utterance flows board → tier-0 → policy → I28 record; the record
+    /// lands in the event log; corpus capture is visibly suppressed
+    /// (D17, no charter); the board hash tracks the session's source
+    /// (C7 obligation); gibberish abstains with the D19-rider denial.
+    #[tokio::test]
+    async fn test_session_utterance_runs_shadow_pipeline() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+        let mk = |name: &str, src: &str| {
+            post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": name, "dsl_source": src }),
+            )
+        };
+        let response = app.clone().oneshot(mk("s1", "(workflow a)")).await.unwrap();
+        let s1 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let response = app.clone().oneshot(mk("s2", "(workflow b)")).await.unwrap();
+        let s2 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+
+        let utter = |sid: &str, text: &str| {
+            post_json(
+                &format!("/api/dsl/sessions/{sid}/utterance"),
+                serde_json::json!({ "text": text }),
+            )
+        };
+        // Gibberish → abstention with the generic, path-forward denial.
+        let response = app.clone().oneshot(utter(&s1, "zzz qqq xyzzy")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let r1 = body_json(response).await;
+        assert_eq!(r1["disposition"], "OutOfScope");
+        assert!(
+            r1["message"].as_str().unwrap().contains("current working context"),
+            "actual message: {}",
+            r1["message"]
+        );
+        assert_eq!(r1["capture"], "suppressed_no_charter");
+        let h1 = r1["board_hash"].as_str().unwrap().to_owned();
+        assert_eq!(h1.len(), 64);
+
+        // Different session source → different board hash (graph
+        // identity is hashed — C7).
+        let response = app.clone().oneshot(utter(&s2, "zzz qqq xyzzy")).await.unwrap();
+        let r2 = body_json(response).await;
+        assert_ne!(h1, r2["board_hash"].as_str().unwrap());
+
+        // The I28 record is IN the event log.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/dsl/sessions/{s1}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let record = body_json(response).await;
+        let events = record["events"].as_array().unwrap();
+        let utterance_event = events
+            .iter()
+            .find_map(|e| e["kind"].get("Utterance"))
+            .expect("utterance event present");
+        let rec_json = utterance_event["decision_record_json"]
+            .as_str()
+            .expect("I28 record stored");
+        let rec: Value = serde_json::from_str(rec_json).unwrap();
+        assert_eq!(rec["board_hash"], h1.as_str());
+        assert!(rec["disposition_policy_hash"].as_str().unwrap().len() == 64);
+        assert!(!rec["ranking"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -486,6 +486,7 @@ dependencies = [
  "bpmn-lite-types",
  "bpmn-lite-vm",
  "chrono",
+ "designer-graph",
  "dmn-lite-bridge",
  "dmn-lite-compiler",
  "dmn-lite-parser",
@@ -512,6 +513,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "utterance-engine",
  "uuid",
 ]
 
