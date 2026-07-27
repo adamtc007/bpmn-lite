@@ -17,6 +17,7 @@
 //!   config hashed into `disposition_policy_hash` — never inline).
 
 pub mod board;
+pub mod capture;
 pub mod contract;
 pub mod policy;
 pub mod retrieval;
