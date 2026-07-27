@@ -459,6 +459,25 @@ F8-COMPILER-001, found and FIXED.**
   IR admitted the shape, and only the raw-bytes tier could reach it
   (the graph grammar never emits flow-less nodes).
 
+- **F9.1 MsgWait grammar letter (2026-07-27, Adam: "ok - add it")** —
+  the sleeping-token/external-event gap closed at the engine-graph tier:
+  `Block::MsgWait` emits an intermediateCatchEvent + messageEventDefinition
+  with a content-correlation subscription (`={key}` resolved from the
+  domain payload, §28); the drive loop gains a PUBLISH action
+  (`signal_with_value` with tape-chosen matching or junk keys + tick) and
+  completion payloads preserve the correlation fields so waits parking
+  after a completion still resolve. Covering alphabet now 18 letters /
+  896 seeds; encode mirror updated (byte-7 sub-selector: Mi vs MsgWait).
+  Cement `message_wait_unblocks_only_on_matching_signal`: parked on the
+  wait, a NON-matching content key leaves it parked, the matching key
+  wakes the downstream task through to completion — the
+  external-input-unblocks-sleeping-token contract end-to-end through the
+  compiler. Time recap (recorded here because Adam asked): the fuzzed
+  clock is LOGICAL and tape-driven (`FuzzClock.advance(byte x 100ms)` as
+  an interleaving-alphabet action straddling the PT1S due edge), so
+  timer/event orderings are fuzzed deterministically and replays are
+  exact.
+
 **SURFACED FINDINGS from the F8 reconnaissance (design forks — Adam to
 rule; none fixed unilaterally):**
 1. **REST DSL path stops halfway across the admission seam.** Every

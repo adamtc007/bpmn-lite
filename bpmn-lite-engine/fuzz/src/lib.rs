@@ -195,6 +195,14 @@ pub enum Block {
     /// Parallel multi-instance task over a payload collection
     /// (`maxInstances="4"`); length 0 probes the V-11 zero-match rule. Leaf.
     Mi { collection_len: u8 },
+    /// Message wait (intermediateCatchEvent + content correlation, §28):
+    /// the token parks until an external `signal_with_value` delivers the
+    /// matching message name AND content key (`k{u}` resolved from the
+    /// domain payload → "corr{u}"). The drive loop's publish action sends
+    /// matching and non-matching keys — the sleeping-token-unblocked-by-
+    /// external-event path, end-to-end through the compiler. Leaf; legal
+    /// anywhere (no barrier escape — the token stays in its region).
+    MsgWait,
 }
 
 #[derive(Debug, Clone)]
@@ -266,9 +274,15 @@ fn gen_block(tape: &mut Tape, depth: u8, under_barrier: bool, budget: &mut u32) 
                 }
             }
         }
-        7 => Block::Mi {
-            collection_len: tape.u8() % 5,
-        },
+        7 => {
+            if tape.bool() {
+                Block::MsgWait
+            } else {
+                Block::Mi {
+                    collection_len: tape.u8() % 5,
+                }
+            }
+        }
         8 | 9 if depth > 0 => Block::Or {
             branches: (0..(2 + tape.u8() % 2))
                 .map(|_| {
@@ -300,6 +314,19 @@ pub struct GeneratedProcess {
     /// the emitted `init` task guarantees at least one completion lands
     /// before any split can evaluate a condition.
     pub flag_intents: BTreeMap<String, bool>,
+    /// Message waits. The driver's publish action draws from this list —
+    /// matching keys unblock the parked token, non-matching keys must NOT.
+    pub msg_waits: Vec<MsgWaitDecl>,
+}
+
+/// One emitted message wait: `signal_with_value(msg_name, corr_value)`
+/// unblocks it; `key_field` is the domain-payload field its subscription
+/// resolves the expected key from.
+#[derive(Debug, Clone)]
+pub struct MsgWaitDecl {
+    pub msg_name: String,
+    pub key_field: String,
+    pub corr_value: String,
 }
 
 /// Emission scratch state. A single monotonic `uid` gives every node a
@@ -317,6 +344,7 @@ struct EmitCtx {
     bounds: BTreeMap<String, u32>,
     payload_fields: Vec<String>,
     flag_intents: BTreeMap<String, bool>,
+    msg_waits: Vec<MsgWaitDecl>,
     flow_n: usize,
     uid: usize,
 }
@@ -529,6 +557,35 @@ fn emit_block(block: &Block, mult: u32, ctx: &mut EmitCtx) -> (String, String) {
                 .push(format!(r#""{flag}":[{}]"#, items.join(",")));
             (id.clone(), id)
         }
+        Block::MsgWait => {
+            let u = ctx.uid();
+            let wait = format!("w{u}");
+            let key_field = format!("k{u}");
+            let msg_name = format!("msg{u}");
+            let corr = format!("corr{u}");
+            let _ = write!(
+                ctx.elements,
+                r#"    <bpmn:dataObject id="{key_field}" name="{key_field}"></bpmn:dataObject>
+    <bpmn:intermediateCatchEvent id="{wait}" name="{msg_name}">
+      <bpmn:messageEventDefinition messageRef="m{u}"/>
+      <bpmn:extensionElements>
+        <zeebe:subscription correlationKey="={key_field}"/>
+      </bpmn:extensionElements>
+    </bpmn:intermediateCatchEvent>
+"#
+            );
+            // Content correlation (§28): the key resolves from the domain
+            // payload at park time, so the field rides the start payload
+            // AND every completion payload the driver sends.
+            ctx.payload_fields
+                .push(format!(r#""{key_field}":"{corr}""#));
+            ctx.msg_waits.push(MsgWaitDecl {
+                msg_name,
+                key_field,
+                corr_value: corr,
+            });
+            (wait.clone(), wait)
+        }
     }
 }
 
@@ -587,6 +644,7 @@ pub fn emit_process(shape: &Shape) -> GeneratedProcess {
         bounds: ctx.bounds,
         payload,
         flag_intents: ctx.flag_intents,
+        msg_waits: ctx.msg_waits,
     }
 }
 
@@ -681,11 +739,21 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
         return;
     };
 
+    // Completion payloads carry the correlation content fields so message
+    // waits that park AFTER a completion still resolve their keys (§28
+    // content correlation reads the CURRENT domain payload at park time).
+    let corr_fields: String = generated
+        .msg_waits
+        .iter()
+        .map(|wait| format!(r#","{}":"{}""#, wait.key_field, wait.corr_value))
+        .collect();
+
     let mut tracker = ConservationTracker::default();
     let mut job_keys: Vec<String> = Vec::new();
+    let mut msg_seq = 0u32;
     let steps = 8 + usize::from(tape.u8() % 17);
     for _ in 0..steps {
-        match tape.u8() % 11 {
+        match tape.u8() % 12 {
             0..=3 => {
                 if let Ok(activations) = engine.run_instance(instance_id).await {
                     for job in &activations {
@@ -706,7 +774,7 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
                     continue;
                 }
                 let key = job_keys[usize::from(tape.u8()) % job_keys.len()].clone();
-                let result_payload = format!(r#"{{"result":{}}}"#, tape.u8());
+                let result_payload = format!(r#"{{"result":{}{corr_fields}}}"#, tape.u8());
                 let hash = if tape.bool() { current_hash } else { [tape.u8(); 32] };
                 if engine
                     .complete_job(&key, &result_payload, hash, orch_flags.clone())
@@ -749,6 +817,35 @@ pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
             }
             9 => {
                 let _ = engine.inspect(instance_id).await;
+            }
+            10 => {
+                // External-event delivery: publish a message with a
+                // matching OR non-matching content key. Matching keys
+                // unblock the parked wait; non-matching keys must not
+                // (content-correlation discrimination under fuzz).
+                if generated.msg_waits.is_empty() {
+                    continue;
+                }
+                let wait =
+                    &generated.msg_waits[usize::from(tape.u8()) % generated.msg_waits.len()];
+                let key = if tape.bool() {
+                    wait.corr_value.clone()
+                } else {
+                    format!("junk{}", tape.u8())
+                };
+                msg_seq += 1;
+                let msg_id = format!("m{msg_seq}");
+                let _ = engine
+                    .signal_with_value(
+                        instance_id,
+                        &wait.msg_name,
+                        key,
+                        None,
+                        None,
+                        Some(&msg_id),
+                    )
+                    .await;
+                let _ = engine.tick_instance(instance_id).await;
             }
             _ => {
                 let _ = engine.cancel(instance_id, "fuzz mid-run cancel").await;
@@ -1473,6 +1570,94 @@ mod tests {
             assert_eq!(counts.get("t2"), None, "OR none: no branch runs");
             assert_eq!(counts.get("t3"), None, "OR none: no branch runs");
             assert_eq!(incidents, 1, "OR zero-match must raise exactly one incident");
+        });
+    }
+
+    /// MsgWait widening cement: the sleeping-token contract end-to-end
+    /// through the compiler — a token parked on a message wait stays
+    /// parked on a NON-matching content key and unblocks (running its
+    /// downstream task to completion) only on the matching key.
+    #[test]
+    fn message_wait_unblocks_only_on_matching_signal() {
+        // uid 1 = wait (w1/k1/msg1/corr1), uid 2 = t2 downstream.
+        let shape = Shape {
+            blocks: vec![Block::MsgWait, Block::Task],
+        };
+        runtime().block_on(async {
+            let generated = emit_process(&shape);
+            let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+            let engine = BpmnLiteEngine::new_with_runtime_context(
+                store,
+                TenantId::default(),
+                Arc::new(FuzzClock::new()),
+            );
+            let compiled = engine.compile(&generated.xml).await.expect("compile");
+            let mut hash = EffectId::content_hash(generated.payload.as_bytes());
+            let instance_id = engine
+                .start("fuzz_graph", compiled.bytecode_version, &generated.payload, hash, "c")
+                .await
+                .expect("start");
+
+            // init completes WITH the correlation field preserved, so the
+            // wait resolves its key from the post-completion payload.
+            let jobs = engine.run_instance(instance_id).await.expect("run");
+            assert_eq!(jobs.len(), 1, "init first");
+            let init_payload = format!(r#"{{"done":1,"k1":"corr1"}}"#);
+            engine
+                .complete_job(&jobs[0].job_key, &init_payload, hash, BTreeMap::new())
+                .await
+                .expect("complete init");
+            hash = EffectId::content_hash(init_payload.as_bytes());
+
+            // Parked: no activations, non-terminal.
+            let jobs = engine.run_instance(instance_id).await.expect("run parked");
+            assert!(jobs.is_empty(), "token must be parked on the message wait");
+
+            // Wrong content key: must stay parked.
+            engine
+                .signal_with_value(instance_id, "msg1", "junk".to_string(), None, None, Some("m-w"))
+                .await
+                .expect("wrong-key signal delivers (buffered), it just must not correlate");
+            let _ = engine.tick_instance(instance_id).await;
+            let jobs = engine.run_instance(instance_id).await.expect("run still parked");
+            assert!(
+                jobs.is_empty(),
+                "non-matching content key must NOT wake the token"
+            );
+
+            // Matching key: unblocks, downstream task runs, completes.
+            engine
+                .signal_with_value(
+                    instance_id,
+                    "msg1",
+                    "corr1".to_string(),
+                    None,
+                    None,
+                    Some("m-r"),
+                )
+                .await
+                .expect("matching signal");
+            let _ = engine.tick_instance(instance_id).await;
+            let jobs = engine.run_instance(instance_id).await.expect("run woken");
+            assert_eq!(jobs.len(), 1, "downstream task must activate after the match");
+            assert_eq!(jobs[0].task_type, "t2");
+            engine
+                .complete_job(&jobs[0].job_key, r#"{"ok":1}"#, hash, BTreeMap::new())
+                .await
+                .expect("complete t2");
+            // Drain: the end-event advance happens on the next run pass.
+            for _ in 0..4 {
+                let jobs = engine.run_instance(instance_id).await.expect("drain");
+                if jobs.is_empty() {
+                    break;
+                }
+            }
+            let inspection = engine.inspect(instance_id).await.expect("inspect");
+            assert!(
+                inspection.state.is_terminal(),
+                "instance must complete after the unblocked path, got {:?}",
+                inspection.state
+            );
         });
     }
 

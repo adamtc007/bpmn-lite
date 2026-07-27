@@ -72,9 +72,12 @@ pub enum Archetype {
     Mi0,
     Mi1,
     Mi4,
+    /// Message wait (content correlation) — parks until a matching
+    /// external signal.
+    MsgWait,
 }
 
-pub const ALL_ARCHETYPES: [Archetype; 17] = [
+pub const ALL_ARCHETYPES: [Archetype; 18] = [
     Archetype::Task,
     Archetype::And2,
     Archetype::And3,
@@ -92,6 +95,7 @@ pub const ALL_ARCHETYPES: [Archetype; 17] = [
     Archetype::Mi0,
     Archetype::Mi1,
     Archetype::Mi4,
+    Archetype::MsgWait,
 ];
 
 /// The boundary-family archetypes (timer + error) — the XOR-only nesting
@@ -130,7 +134,7 @@ pub const XOR_GATEWAYS: [Gateway; 2] = [Gateway::XorTaken, Gateway::XorUntaken];
 
 /// Archetypes legal INSIDE any gateway branch (Boundary excluded here; it
 /// gets its own XOR-only nesting family).
-pub const NESTABLE: [Archetype; 13] = [
+pub const NESTABLE: [Archetype; 14] = [
     Archetype::Task,
     Archetype::And2,
     Archetype::And3,
@@ -144,6 +148,7 @@ pub const NESTABLE: [Archetype; 13] = [
     Archetype::Mi0,
     Archetype::Mi1,
     Archetype::Mi4,
+    Archetype::MsgWait,
 ];
 
 fn xor(take_guarded: bool, default: Vec<Block>) -> Block {
@@ -186,6 +191,7 @@ impl Archetype {
             Archetype::Mi0 => Block::Mi { collection_len: 0 },
             Archetype::Mi1 => Block::Mi { collection_len: 1 },
             Archetype::Mi4 => Block::Mi { collection_len: 4 },
+            Archetype::MsgWait => Block::MsgWait,
         }
     }
 
@@ -238,6 +244,7 @@ impl Archetype {
             Block::Mi { collection_len: 0 } => Some(Archetype::Mi0),
             Block::Mi { collection_len: 1 } => Some(Archetype::Mi1),
             Block::Mi { collection_len: 4 } => Some(Archetype::Mi4),
+            Block::MsgWait => Some(Archetype::MsgWait),
             _ => None,
         }
     }
@@ -446,7 +453,12 @@ fn encode_block(
         Block::Mi { collection_len } => {
             assert!(*collection_len <= 4, "MI length 0-4");
             bytes.push(7);
+            bytes.push(0); // bool: not a message wait
             bytes.push(*collection_len); // len = b%5
+        }
+        Block::MsgWait => {
+            bytes.push(7);
+            bytes.push(1); // bool: message wait
         }
     }
 }
