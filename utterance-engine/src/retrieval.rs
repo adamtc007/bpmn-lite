@@ -192,6 +192,18 @@ pub mod embed {
 
     pub struct EmbedTier0 {
         embedder: Embedder,
+        // Performance finding (plan §F, 2026-07-27 corpus-gen receipt):
+        // every board's candidate set was re-embedded on EVERY retrieve()
+        // call — a corpus run reuses the same small set of enumeration-
+        // class boards across hundreds of utterances, so this was
+        // O(entries * board_size) forward passes for what is really
+        // O(distinct_descriptions). `embed_target` is a pure function of
+        // its text (matcher contract), so caching by the description
+        // string is exact, not approximate — never a staleness risk.
+        // Keyed by description text, not candidate_id: correctness
+        // follows the actual embedder input, robust to any future world
+        // where two ids might (implausibly) share a description.
+        target_cache: std::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>,
     }
 
     impl EmbedTier0 {
@@ -200,7 +212,25 @@ pub mod embed {
         pub fn new() -> Result<Self> {
             Ok(EmbedTier0 {
                 embedder: Embedder::new()?,
+                target_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             })
+        }
+
+        /// Cached target embedding: locks only around the map, never
+        /// across the (slow) forward pass on a cache miss — two threads
+        /// racing on the same miss both compute once and the second
+        /// write is a harmless overwrite with an identical value
+        /// (`embed_target` is pure), not a correctness hazard.
+        fn embed_target_cached(&self, description: &str) -> Result<Vec<f32>> {
+            if let Some(v) = self.target_cache.lock().unwrap().get(description) {
+                return Ok(v.clone());
+            }
+            let v = self.embedder.embed_target(description)?;
+            self.target_cache
+                .lock()
+                .unwrap()
+                .insert(description.to_owned(), v.clone());
+            Ok(v)
         }
     }
 
@@ -228,7 +258,7 @@ pub mod embed {
                 if c.canonical_id == crate::contract::NONE_OF_THE_ABOVE {
                     continue;
                 }
-                let target = self.embedder.embed_target(&c.description)?;
+                let target = self.embed_target_cached(&c.description)?;
                 // L2-normalised vectors: cosine == dot; clamp FP noise.
                 let mut score = dot(&query, &target).clamp(-1.0, 1.0).max(0.0);
                 if !utter_lower.is_empty() && utter_lower == c.description.trim().to_lowercase() {
@@ -313,6 +343,60 @@ pub mod embed {
             // pipeline completes and records — thresholds are shadow
             // placeholders, not semantics to cement here.
             let _ = d;
+        }
+
+        /// Cache correctness + performance receipt (plan §F, corpus-gen
+        /// finding, 2026-07-27). Exactness: two retrieves over the SAME
+        /// board (identical descriptions) must yield bit-identical
+        /// rankings whether the second call hits a warm cache or not —
+        /// caching must never perturb scores. Performance: with the
+        /// cache warm, a repeat retrieve over the same board must be
+        /// markedly faster than the first (cold) one — proves the cache
+        /// is actually short-circuiting forward passes, not merely
+        /// present in the type.
+        #[test]
+        #[ignore = "downloads pinned BGE weights on cold cache"]
+        fn embed_target_cache_is_exact_and_faster_on_repeat() {
+            let board = build_board(
+                &AllLegal,
+                None,
+                Some("rev0"),
+                &EmptyUniverse,
+                &PolicyFilter::default(),
+            )
+            .unwrap();
+            let t0 = EmbedTier0::new().expect("model load");
+
+            let t_cold = std::time::Instant::now();
+            let ev1 = t0.retrieve("connect the review task to the end", &board).unwrap();
+            let cold_elapsed = t_cold.elapsed();
+
+            // Cache now warm for every description on this board; a
+            // DIFFERENT utterance still exercises embed_target_cached
+            // (only embed_query differs — the expensive per-candidate
+            // target passes are all cache hits).
+            let t_warm = std::time::Instant::now();
+            let ev2 = t0.retrieve("insert a step before this node", &board).unwrap();
+            let warm_elapsed = t_warm.elapsed();
+
+            assert!(
+                warm_elapsed < cold_elapsed,
+                "warm-cache retrieve ({warm_elapsed:?}) must beat cold ({cold_elapsed:?}) — \
+                 cache is not short-circuiting target embedding"
+            );
+
+            // Exactness: re-run the FIRST utterance now that the cache is
+            // warm; scores must match the cold run bit-for-bit.
+            let ev1_warm = t0.retrieve("connect the review task to the end", &board).unwrap();
+            assert_eq!(
+                ev1.retrieved_subset_hash, ev1_warm.retrieved_subset_hash,
+                "cached and uncached target embeddings must rank identically"
+            );
+            for (a, b) in ev1.ranking.iter().zip(ev1_warm.ranking.iter()) {
+                assert_eq!(a.candidate_id, b.candidate_id);
+                assert_eq!(a.score.get().to_bits(), b.score.get().to_bits(), "bit-exact score");
+            }
+            let _ = ev2;
         }
     }
 }

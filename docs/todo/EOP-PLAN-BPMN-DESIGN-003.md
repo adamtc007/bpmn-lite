@@ -481,6 +481,10 @@ Bank sweep for the new legality: 10 stale "waits can't host guards" NOTA entries
 
 **Performance finding (not yet actioned, flagged for Phase C):** `EmbedTier0::retrieve` re-embeds every board's full candidate set on every call — no description-embedding cache. Regenerating ~600 entries took >10 minutes of CPU even with model weights warm-cached from a prior run. This will not clear the Phase-D latency gate as built; caching per-`board_hash` candidate embeddings is the fix, sized for the S3-floor-scale (≥5,000 example) generation run and for symmetry with the eventual serving path.
 
+#### Receipt — EmbedTier0 target-embedding cache (2026-07-27, closes the flagged performance finding)
+
+`retrieve()` re-embedded every board candidate on every call; a corpus run reuses each enumeration-class board's small candidate set across hundreds of utterances, so this was O(entries × board_size) forward passes for what is really O(distinct descriptions). Fixed: `EmbedTier0` gained a `Mutex<HashMap<description, embedding>>` cache — exact, not approximate (`embed_target` is a pure function of its text, matcher contract), keyed by description so a future collision-in-id-but-not-text case stays correct by construction. Receipt (`embed_target_cache_is_exact_and_faster_on_repeat`, run against real pinned weights): a warm-cache retrieve is measurably faster than the cold one, AND re-running the cold utterance after the cache warms yields bit-identical `retrieved_subset_hash` and per-candidate scores (`to_bits()` equality) — caching never perturbs a score. **Measured end-to-end: full synthetic-v2-beta regeneration (567 examples + 98 held-out eval) dropped from >10 minutes to 4:19.** Still not fast enough alone for the 5,000-example S3-floor run at proportional scale — batching `embed_target` calls (the matcher crate already exposes a batch API) is the next lever, deferred until bank authoring actually scales that far.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
