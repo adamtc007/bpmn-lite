@@ -357,6 +357,40 @@ retrievable by `disposition_policy_hash`.
   endpoint → `decide()` with `LexicalTier0`) = formal shadow start per
   §C constraint 2; WS-B must supply `graph_identity` (C7 obligation).
 
+### WS-A.2 slices 1–5 + WS-B UI — receipts (2026-07-27)
+
+Five Sonnet GRIND dispatches, each against a committed proscriptive
+brief, each reviewed first-hand before commit (the executor-split loop
+proven): **16 operations** (linear 5, guard/declaration 5, region 4,
+ReplaceNode, CreateBranch) and **6 of 9 §12.2 productions** as pure
+`bindings → Vec<Operation>` compositions with atomic-abort application
+and serde round-trip (Q5 edit-log entries). Binding rule minted by the
+slice-4 remediation (my brief mis-specified `reminder_then_escalate`;
+the executor flagged the admit-gap honestly): **a production ALONE must
+admit — it owns its complete shape including guard escape flows.**
+Illegal states unrepresentable by typing where possible
+(cycle-on-interrupting unconstructible through
+`InterruptingTimeoutBindings`; MI max mandatory; budget-on-non-guard
+absent from the vocabulary). designer-graph 49/49.
+
+Excluded pending CAREFUL substrate traces (never faked):
+`CreateRace`/`timer_message_race` (no race IRNode),
+`CallSubprocess`/`call_durable_subprocess` (no call-activity IRNode),
+`AttachRollbackGuard` (no GUARD-R IR path),
+`human_review_with_rework` (XOR default-edge semantics untraced).
+`CloseParallelRegion` recorded unrepresentable-by-design (regions
+constructed closed).
+
+**WS-B.1/B.2 landed:** `/designer` static window (ruling E4) — session
+list, REPL pane showing disposition + board-hash + D17 capture state
+per turn, source/diagnostics pane, save-as-template, SVG graph window
+over the server-built DAG + layout endpoint. UI smoke receipt green.
+Shadow pipeline live at the session utterance endpoint since `d4e2406`.
+
+Open to G2: solicit-document end-to-end authoring receipt; red-team
+script; the four traces above; WS-B.4 edit-log persistence
+formalization; blind review of the WS-B surface before the gate.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
