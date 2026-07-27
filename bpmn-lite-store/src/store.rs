@@ -12,6 +12,64 @@ pub struct TemplateSummary {
     pub created_at: String,
 }
 
+// ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1) ──────────────────────
+
+/// One append-only event in a design session. Revisions carry the FULL
+/// DSL source (undo = re-append an earlier revision's source; nothing is
+/// ever deleted), utterances carry the REPL dialogue.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DesignSessionEventKind {
+    Revision { dsl_source: String, note: String },
+    Utterance { text: String, response: String },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DesignSessionEvent {
+    pub seq: u64,
+    pub kind: DesignSessionEventKind,
+    pub at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DesignSessionStatus {
+    Draft,
+    Saved,
+}
+
+/// Full session aggregate: metadata + the ordered event log. The
+/// CURRENT source is the last Revision event's `dsl_source` (derived,
+/// never stored separately — one source of truth).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DesignSessionRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub name: String,
+    pub status: DesignSessionStatus,
+    /// (template_name, version, plan_hash) once saved-as-template.
+    pub template_ref: Option<(String, u32, [u8; 32])>,
+    pub events: Vec<DesignSessionEvent>,
+    pub created_at: String,
+}
+
+impl DesignSessionRecord {
+    /// The session's current DSL source: the last Revision event.
+    pub fn current_source(&self) -> Option<&str> {
+        self.events.iter().rev().find_map(|event| match &event.kind {
+            DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
+            DesignSessionEventKind::Utterance { .. } => None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DesignSessionSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub status: DesignSessionStatus,
+    pub revisions: u32,
+    pub updated_at: String,
+}
+
 /// Transactional runtime claims, aggregate reads, and fenced transition commits.
 #[async_trait]
 pub trait RuntimeStore: Send + Sync + JournalReader {
@@ -363,6 +421,51 @@ pub trait AdminProjectionStore: Send + Sync {
     /// pool doesn't exist or has no tenants. Used by bpmn-controller to query
     /// pool membership.
     async fn list_tenants_in_pool(&self, pool_id: &str) -> StoreResult<Vec<String>>;
+
+    // ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1) ──
+    // Tenant-scoped, append-only event log. NOTE: unlike the template
+    // catalog (which predates tenancy on this surface), sessions carry
+    // tenant_id from birth; RLS alignment for the postgres tables rides
+    // the T5 deployment review.
+
+    /// Create a session with its seed source as Revision event seq 0.
+    /// `id` is caller-generated (deterministic-id discipline).
+    async fn create_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        name: &str,
+        dsl_source: &str,
+    ) -> StoreResult<()>;
+
+    async fn load_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+    ) -> StoreResult<Option<DesignSessionRecord>>;
+
+    async fn list_design_sessions(
+        &self,
+        tenant_id: &TenantId,
+    ) -> StoreResult<Vec<DesignSessionSummary>>;
+
+    /// Append one event; returns the assigned sequence number.
+    async fn append_design_session_event(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        kind: &DesignSessionEventKind,
+    ) -> StoreResult<u64>;
+
+    /// Mark saved-as-template, recording the template pin on the session.
+    async fn mark_design_session_saved(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        template_name: &str,
+        template_version: u32,
+        plan_hash: [u8; 32],
+    ) -> StoreResult<()>;
 }
 
 /// Composite capability object used where an engine needs all four store surfaces.

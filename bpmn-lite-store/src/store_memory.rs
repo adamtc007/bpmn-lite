@@ -1,7 +1,10 @@
 use crate::pending::PendingInvocationStore;
 #[cfg(test)]
 use crate::store::{transition_from_tick_ops, TickOperation};
-use crate::store::{AdminProjectionStore, ArtifactRepository, JournalReader, RuntimeStore};
+use crate::store::{
+    AdminProjectionStore, ArtifactRepository, DesignSessionEvent, DesignSessionEventKind,
+    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, JournalReader, RuntimeStore,
+};
 use crate::{ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult};
 #[cfg(test)]
 type Result<T> = StoreResult<T>;
@@ -29,6 +32,7 @@ struct Inner {
     artifact_lineage: HashMap<ArtifactHash, ArtifactHash>,
     plans: HashMap<[u8; 32], String>,
     templates: HashMap<(String, u32), (String, [u8; 32], String)>, // (name, version) -> (dsl, plan_hash, created_at)
+    design_sessions: HashMap<(String, Uuid), DesignSessionRecord>, // (tenant, id) -> aggregate
     dead_letter: HashMap<(u32, String), (Vec<u8>, u64)>,
     events: HashMap<Uuid, Vec<(u64, RuntimeEvent)>>,
     event_seq: HashMap<Uuid, u64>,
@@ -108,6 +112,7 @@ impl MemoryStore {
                 artifact_lineage: HashMap::new(),
                 plans: HashMap::new(),
                 templates: HashMap::new(),
+                design_sessions: HashMap::new(),
                 dead_letter: HashMap::new(),
                 events: HashMap::new(),
                 event_seq: HashMap::new(),
@@ -1797,6 +1802,124 @@ impl AdminProjectionStore for MemoryStore {
             Ok(vec![])
         }
     }
+    // ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1) ──
+
+    async fn create_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        name: &str,
+        dsl_source: &str,
+    ) -> StoreResult<()> {
+        let mut w = self.inner.write().await;
+        let key = (tenant_id.to_string(), id);
+        if w.design_sessions.contains_key(&key) {
+            return Err(StoreError::Invalid(format!(
+                "design session {id} already exists"
+            )));
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        w.design_sessions.insert(
+            key,
+            DesignSessionRecord {
+                id,
+                tenant_id: tenant_id.to_string(),
+                name: name.to_owned(),
+                status: DesignSessionStatus::Draft,
+                template_ref: None,
+                events: vec![DesignSessionEvent {
+                    seq: 0,
+                    kind: DesignSessionEventKind::Revision {
+                        dsl_source: dsl_source.to_owned(),
+                        note: "seed".to_owned(),
+                    },
+                    at: now.clone(),
+                }],
+                created_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    async fn load_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+    ) -> StoreResult<Option<DesignSessionRecord>> {
+        let r = self.inner.read().await;
+        Ok(r.design_sessions.get(&(tenant_id.to_string(), id)).cloned())
+    }
+
+    async fn list_design_sessions(
+        &self,
+        tenant_id: &TenantId,
+    ) -> StoreResult<Vec<DesignSessionSummary>> {
+        let r = self.inner.read().await;
+        let tenant = tenant_id.to_string();
+        let mut summaries: Vec<DesignSessionSummary> = r
+            .design_sessions
+            .iter()
+            .filter(|((t, _), _)| *t == tenant)
+            .map(|(_, record)| DesignSessionSummary {
+                id: record.id,
+                name: record.name.clone(),
+                status: record.status,
+                revisions: record
+                    .events
+                    .iter()
+                    .filter(|event| {
+                        matches!(event.kind, DesignSessionEventKind::Revision { .. })
+                    })
+                    .count() as u32,
+                updated_at: record
+                    .events
+                    .last()
+                    .map(|event| event.at.clone())
+                    .unwrap_or_else(|| record.created_at.clone()),
+            })
+            .collect();
+        summaries.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(summaries)
+    }
+
+    async fn append_design_session_event(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        kind: &DesignSessionEventKind,
+    ) -> StoreResult<u64> {
+        let mut w = self.inner.write().await;
+        let record = w
+            .design_sessions
+            .get_mut(&(tenant_id.to_string(), id))
+            .ok_or_else(|| StoreError::NotFound(format!("design session {id}")))?;
+        let seq = record.events.last().map(|event| event.seq + 1).unwrap_or(0);
+        record.events.push(DesignSessionEvent {
+            seq,
+            kind: kind.clone(),
+            at: chrono::Utc::now().to_rfc3339(),
+        });
+        Ok(seq)
+    }
+
+    async fn mark_design_session_saved(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        template_name: &str,
+        template_version: u32,
+        plan_hash: [u8; 32],
+    ) -> StoreResult<()> {
+        let mut w = self.inner.write().await;
+        let record = w
+            .design_sessions
+            .get_mut(&(tenant_id.to_string(), id))
+            .ok_or_else(|| StoreError::NotFound(format!("design session {id}")))?;
+        record.status = DesignSessionStatus::Saved;
+        record.template_ref = Some((template_name.to_owned(), template_version, plan_hash));
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
@@ -3048,5 +3171,162 @@ mod tests {
             .unwrap();
         assert!(claimed.contains(&running_id));
         assert!(!claimed.contains(&incidented_id));
+    }
+}
+
+#[cfg(test)]
+mod design_session_tests {
+    use super::*;
+    use crate::store::{DesignSessionEventKind, DesignSessionStatus};
+
+    fn tenant() -> TenantId {
+        TenantId::default()
+    }
+
+    /// T1 receipt: create → append revisions/utterances → load round-trips
+    /// the full event log; current_source derives from the LAST revision;
+    /// undo = re-appending an earlier revision's source.
+    #[tokio::test]
+    async fn session_round_trip_and_undo_walk() {
+        let store = MemoryStore::new();
+        let id = Uuid::from_u128(1);
+        store
+            .create_design_session(&tenant(), id, "kyc-draft", "(workflow v0)")
+            .await
+            .expect("create");
+
+        let seq = store
+            .append_design_session_event(
+                &tenant(),
+                id,
+                &DesignSessionEventKind::Utterance {
+                    text: "add a retry loop".into(),
+                    response: "applied bounded-retry macro".into(),
+                },
+            )
+            .await
+            .expect("utterance");
+        assert_eq!(seq, 1);
+        let seq = store
+            .append_design_session_event(
+                &tenant(),
+                id,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: "(workflow v1)".into(),
+                    note: "bounded-retry applied".into(),
+                },
+            )
+            .await
+            .expect("revision");
+        assert_eq!(seq, 2);
+
+        let record = store
+            .load_design_session(&tenant(), id)
+            .await
+            .expect("load")
+            .expect("exists");
+        assert_eq!(record.events.len(), 3, "seed + utterance + revision");
+        assert_eq!(record.current_source(), Some("(workflow v1)"));
+        assert_eq!(record.status, DesignSessionStatus::Draft);
+
+        // Undo: re-append the seed source as a NEW revision (append-only).
+        let seed_source = match &record.events[0].kind {
+            DesignSessionEventKind::Revision { dsl_source, .. } => dsl_source.clone(),
+            _ => panic!("seq 0 must be the seed revision"),
+        };
+        store
+            .append_design_session_event(
+                &tenant(),
+                id,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: seed_source,
+                    note: "undo to seed".into(),
+                },
+            )
+            .await
+            .expect("undo revision");
+        let record = store
+            .load_design_session(&tenant(), id)
+            .await
+            .expect("load")
+            .expect("exists");
+        assert_eq!(record.current_source(), Some("(workflow v0)"), "undo walked back");
+        assert_eq!(record.events.len(), 4, "undo appended, nothing deleted");
+    }
+
+    /// T1 receipt: two sessions are isolated — mutations to A never
+    /// appear in B; listing scopes per tenant.
+    #[tokio::test]
+    async fn concurrent_sessions_are_isolated() {
+        let store = MemoryStore::new();
+        let a = Uuid::from_u128(10);
+        let b = Uuid::from_u128(11);
+        store
+            .create_design_session(&tenant(), a, "session-a", "(workflow a)")
+            .await
+            .expect("create a");
+        store
+            .create_design_session(&tenant(), b, "session-b", "(workflow b)")
+            .await
+            .expect("create b");
+        store
+            .append_design_session_event(
+                &tenant(),
+                a,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: "(workflow a2)".into(),
+                    note: "a only".into(),
+                },
+            )
+            .await
+            .expect("append a");
+
+        let rec_b = store
+            .load_design_session(&tenant(), b)
+            .await
+            .expect("load b")
+            .expect("exists");
+        assert_eq!(rec_b.events.len(), 1, "B untouched by A's mutation");
+        assert_eq!(rec_b.current_source(), Some("(workflow b)"));
+
+        let summaries = store.list_design_sessions(&tenant()).await.expect("list");
+        assert_eq!(summaries.len(), 2);
+        let sa = summaries.iter().find(|s| s.id == a).expect("a listed");
+        let sb = summaries.iter().find(|s| s.id == b).expect("b listed");
+        assert_eq!(sa.revisions, 2);
+        assert_eq!(sb.revisions, 1);
+    }
+
+    /// T1 receipt: save-as-template records the pin and flips status;
+    /// duplicate create rejects (fail-closed, not overwrite).
+    #[tokio::test]
+    async fn save_marks_pin_and_duplicate_create_rejects() {
+        let store = MemoryStore::new();
+        let id = Uuid::from_u128(42);
+        store
+            .create_design_session(&tenant(), id, "s", "(workflow x)")
+            .await
+            .expect("create");
+        assert!(
+            store
+                .create_design_session(&tenant(), id, "s2", "(workflow y)")
+                .await
+                .is_err(),
+            "duplicate id must reject, never overwrite"
+        );
+        store
+            .mark_design_session_saved(&tenant(), id, "kyc_onboarding", 3, [7u8; 32])
+            .await
+            .expect("mark saved");
+        let record = store
+            .load_design_session(&tenant(), id)
+            .await
+            .expect("load")
+            .expect("exists");
+        assert_eq!(record.status, DesignSessionStatus::Saved);
+        assert_eq!(
+            record.template_ref,
+            Some(("kyc_onboarding".to_string(), 3, [7u8; 32]))
+        );
     }
 }

@@ -559,6 +559,64 @@ impl AdminProjectionStore for FaultStore {
     async fn list_tenants_in_pool(&self, pool_id: &str) -> StoreResult<Vec<String>> {
         faulty!(self, unavailable(), self.inner.list_tenants_in_pool(pool_id))
     }
+
+    async fn create_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        name: &str,
+        dsl_source: &str,
+    ) -> StoreResult<()> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.create_design_session(tenant_id, id, name, dsl_source)
+        )
+    }
+
+    async fn load_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+    ) -> StoreResult<Option<bpmn_lite_store::store::DesignSessionRecord>> {
+        faulty!(self, unavailable(), self.inner.load_design_session(tenant_id, id))
+    }
+
+    async fn list_design_sessions(
+        &self,
+        tenant_id: &TenantId,
+    ) -> StoreResult<Vec<bpmn_lite_store::store::DesignSessionSummary>> {
+        faulty!(self, unavailable(), self.inner.list_design_sessions(tenant_id))
+    }
+
+    async fn append_design_session_event(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        kind: &bpmn_lite_store::store::DesignSessionEventKind,
+    ) -> StoreResult<u64> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.append_design_session_event(tenant_id, id, kind)
+        )
+    }
+
+    async fn mark_design_session_saved(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        template_name: &str,
+        template_version: u32,
+        plan_hash: [u8; 32],
+    ) -> StoreResult<()> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner
+                .mark_design_session_saved(tenant_id, id, template_name, template_version, plan_hash)
+        )
+    }
 }
 
 // ─── Recovery drive loop ─────────────────────────────────────────────

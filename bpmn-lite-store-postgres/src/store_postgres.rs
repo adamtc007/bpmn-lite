@@ -2,7 +2,8 @@ use async_trait::async_trait;
 #[cfg(test)]
 use bpmn_lite_store::store::{transition_from_tick_ops, TickOperation};
 use bpmn_lite_store::store::{
-    AdminProjectionStore, ArtifactRepository, JournalReader, RuntimeStore,
+    AdminProjectionStore, ArtifactRepository, DesignSessionEvent, DesignSessionEventKind,
+    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, JournalReader, RuntimeStore,
 };
 #[cfg(test)]
 use bpmn_lite_store::TemplateSummary;
@@ -4009,6 +4010,203 @@ impl AdminProjectionStore for PostgresWorkflowStore {
             .map(|r| r.get::<String, _>("tenant_id"))
             .collect())
     }
+    // ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1; migration 059) ──
+    // Tenant scoping via WHERE clauses; RLS alignment rides the T5
+    // deployment review (recorded in the migration header).
+
+    async fn create_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        name: &str,
+        dsl_source: &str,
+    ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        let inserted = sqlx::query(
+            r#"INSERT INTO design_sessions (id, tenant_id, name, status)
+               VALUES ($1, $2, $3, 'draft')
+               ON CONFLICT (id) DO NOTHING"#,
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(name)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        if inserted.rows_affected() == 0 {
+            return Err(StoreError::Invalid(format!(
+                "design session {id} already exists"
+            )));
+        }
+        let payload = serde_json::to_value(DesignSessionEventKind::Revision {
+            dsl_source: dsl_source.to_owned(),
+            note: "seed".to_owned(),
+        })
+        .map_err(StoreError::invalid)?;
+        sqlx::query(
+            r#"INSERT INTO design_session_events (session_id, seq, payload)
+               VALUES ($1, 0, $2)"#,
+        )
+        .bind(id)
+        .bind(payload)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)
+    }
+
+    async fn load_design_session(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+    ) -> StoreResult<Option<DesignSessionRecord>> {
+        let head: Option<(String, String, Option<String>, Option<i32>, Option<Vec<u8>>, String)> =
+            sqlx::query_as(
+                r#"SELECT name, status, template_name, template_version, template_plan_hash,
+                          created_at::text
+                   FROM design_sessions WHERE id = $1 AND tenant_id = $2"#,
+            )
+            .bind(id)
+            .bind(tenant_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::unavailable)?;
+        let Some((name, status, t_name, t_version, t_hash, created_at)) = head else {
+            return Ok(None);
+        };
+        let status = match status.as_str() {
+            "saved" => DesignSessionStatus::Saved,
+            _ => DesignSessionStatus::Draft,
+        };
+        let template_ref = match (t_name, t_version, t_hash) {
+            (Some(n), Some(v), Some(h)) => {
+                let hash: [u8; 32] = h.try_into().map_err(|_| {
+                    StoreError::Integrity("template_plan_hash is not 32 bytes".to_string())
+                })?;
+                Some((n, v as u32, hash))
+            }
+            _ => None,
+        };
+        let rows: Vec<(i64, serde_json::Value, String)> = sqlx::query_as(
+            r#"SELECT seq, payload, at::text FROM design_session_events
+               WHERE session_id = $1 ORDER BY seq"#,
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        let mut events = Vec::with_capacity(rows.len());
+        for (seq, payload, at) in rows {
+            let kind: DesignSessionEventKind =
+                serde_json::from_value(payload).map_err(StoreError::integrity)?;
+            events.push(DesignSessionEvent {
+                seq: seq as u64,
+                kind,
+                at,
+            });
+        }
+        Ok(Some(DesignSessionRecord {
+            id,
+            tenant_id: tenant_id.to_string(),
+            name,
+            status,
+            template_ref,
+            events,
+            created_at,
+        }))
+    }
+
+    async fn list_design_sessions(
+        &self,
+        tenant_id: &TenantId,
+    ) -> StoreResult<Vec<DesignSessionSummary>> {
+        let rows: Vec<(Uuid, String, String, i64, String)> = sqlx::query_as(
+            r#"SELECT s.id, s.name, s.status,
+                      (SELECT count(*) FROM design_session_events e
+                        WHERE e.session_id = s.id
+                          AND e.payload ? 'Revision') AS revisions,
+                      s.updated_at::text
+               FROM design_sessions s WHERE s.tenant_id = $1 ORDER BY s.id"#,
+        )
+        .bind(tenant_id.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, status, revisions, updated_at)| DesignSessionSummary {
+                id,
+                name,
+                status: match status.as_str() {
+                    "saved" => DesignSessionStatus::Saved,
+                    _ => DesignSessionStatus::Draft,
+                },
+                revisions: revisions as u32,
+                updated_at,
+            })
+            .collect())
+    }
+
+    async fn append_design_session_event(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        kind: &DesignSessionEventKind,
+    ) -> StoreResult<u64> {
+        let payload = serde_json::to_value(kind).map_err(StoreError::invalid)?;
+        let seq: Option<i64> = sqlx::query_scalar(
+            r#"INSERT INTO design_session_events (session_id, seq, payload)
+               SELECT s.id,
+                      COALESCE((SELECT max(e.seq) + 1 FROM design_session_events e
+                                 WHERE e.session_id = s.id), 0),
+                      $3
+               FROM design_sessions s
+               WHERE s.id = $1 AND s.tenant_id = $2
+               RETURNING seq"#,
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(payload)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        let seq = seq.ok_or_else(|| StoreError::NotFound(format!("design session {id}")))?;
+        sqlx::query(r#"UPDATE design_sessions SET updated_at = now() WHERE id = $1"#)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::unavailable)?;
+        Ok(seq as u64)
+    }
+
+    async fn mark_design_session_saved(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        template_name: &str,
+        template_version: u32,
+        plan_hash: [u8; 32],
+    ) -> StoreResult<()> {
+        let updated = sqlx::query(
+            r#"UPDATE design_sessions
+               SET status = 'saved', template_name = $3, template_version = $4,
+                   template_plan_hash = $5, updated_at = now()
+               WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(template_name)
+        .bind(template_version as i32)
+        .bind(&plan_hash[..])
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        if updated.rows_affected() == 0 {
+            return Err(StoreError::NotFound(format!("design session {id}")));
+        }
+        Ok(())
+    }
+
 }
 
 impl PostgresWorkflowStore {
@@ -8895,7 +9093,48 @@ mod tests {
             )
             .await
         }
-    }
+    
+        async fn create_design_session(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+            _name: &str,
+            _dsl_source: &str,
+        ) -> StoreResult<()> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn load_design_session(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+        ) -> StoreResult<Option<DesignSessionRecord>> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn list_design_sessions(
+            &self,
+            _tenant_id: &TenantId,
+        ) -> StoreResult<Vec<DesignSessionSummary>> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn append_design_session_event(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+            _kind: &DesignSessionEventKind,
+        ) -> StoreResult<u64> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn mark_design_session_saved(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+            _template_name: &str,
+            _template_version: u32,
+            _plan_hash: [u8; 32],
+        ) -> StoreResult<()> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+}
 
     /// E-invariant #1 & #2: Violation -> quarantine, not crash, not churn. Quarantine survives rollback.
     /// Drives a tick through the production path, rolls it back, and verifies state changes do not persist while quarantine does.
