@@ -166,12 +166,11 @@ pub enum Value {
 ///   the decoder itself, not merely rejecting the result after the fact.
 /// - `bpmn-lite-kernel/src/lib.rs`, `validate_snapshot_limits` — the
 ///   runtime boundary, run on every `apply` call; walks `fiber.stack`,
-///   `fiber.regs`, and `instance.flags` values. This is also the boundary
-///   that (eventually, on the instance's first tick after spawn) catches
-///   an oversized/deep `Value::Array` supplied externally via `orch_flags`
-///   at spawn — see the plan-doc writeup for the residual gap this does
-///   NOT close (there is no intake-time check at the `orch_flags`-seeding
-///   call site itself, only at the next `apply`).
+///   `fiber.regs`, and `instance.flags` values. Note: there is NO
+///   spawn-time flag seeding — instances start with an empty flag table,
+///   `start_process` rejects a non-empty `orch_flags` field outright
+///   (F-DSGN-1(b), 2026-07-27), and flags enter only via job-completion
+///   `orch_flags`, which is intake-checked at the gRPC boundary.
 pub const MAX_VALUE_ARRAY_LEN: usize = 4096;
 pub const MAX_VALUE_ARRAY_DEPTH: u32 = 8;
 

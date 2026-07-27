@@ -526,7 +526,17 @@ impl BpmnLite for BpmnLiteService {
             req.session_stack_json.len(),
             self.limits.max_session_stack_bytes,
         )?;
-        self.limits.check_orch_flags(&req.orch_flags)?;
+        // F-DSGN-1(b) (Adam, 2026-07-27): spawn-time flag seeding does not
+        // exist — StartParams/StartCommand carry no flags and the engine
+        // spawns with an empty flag table. Accepting-and-discarding this
+        // field was a trap door; reject it until a wire-through is designed.
+        if !req.orch_flags.is_empty() {
+            return Err(Status::invalid_argument(
+                "orch_flags are not accepted at start_process: instances spawn with an \
+                 empty flag table and flags are deliverable only via job completion \
+                 (F-DSGN-1); remove orch_flags from the StartProcess request",
+            ));
+        }
         let bytecode_version = parse_bytecode_version(&req.bytecode_version)?;
         let hash = parse_hash(&req.domain_payload_hash)?;
         let actual_hash = bpmn_lite_vm::compute_hash(&req.domain_payload);

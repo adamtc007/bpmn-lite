@@ -124,17 +124,17 @@ async fn start_process_rejects_oversized_array_in_orch_flags() {
         .start_process(Request::new(req))
         .await
         .expect_err("start_process must reject an oversized orch_flags array");
-    assert_eq!(status.code(), Code::ResourceExhausted);
+    // F-DSGN-1(b) (2026-07-27) supersedes the intake limit-walk at this
+    // boundary: ANY non-empty orch_flags at start is rejected outright
+    // (spawn-time flag seeding does not exist), so the oversized array
+    // never reaches a limit check. Strictly stronger than the previous
+    // cement; completion-path limit cement below is unchanged.
+    assert_eq!(status.code(), Code::InvalidArgument);
     assert!(
-        status.message().contains("poisoned"),
-        "message should cite the offending key: {}",
+        status.message().contains("orch_flags"),
+        "message should name the rejected field: {}",
         status.message()
     );
-    // `start_process`'s handler (bpmn-lite-server/src/grpc.rs) calls
-    // `self.limits.check_orch_flags(&req.orch_flags)?` before it ever
-    // calls `engine.start_with_params` — the `?` early-return means this
-    // `Err` proves no instance was spawned, not merely that the RPC
-    // eventually surfaced an error.
 }
 
 #[tokio::test]
@@ -169,7 +169,54 @@ async fn start_process_rejects_overly_deep_array_in_orch_flags() {
         .start_process(Request::new(req))
         .await
         .expect_err("start_process must reject an overly deep orch_flags array");
-    assert_eq!(status.code(), Code::ResourceExhausted);
+    // See F-DSGN-1(b) note in the oversized-array test above.
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(status.message().contains("orch_flags"));
+}
+
+/// F-DSGN-1(b) red: even a BENIGN, well-formed flag is rejected at start —
+/// the reject is categorical (no spawn-time seeding exists), not a limit
+/// check. This request PASSED validation before the fix and its flag was
+/// silently discarded.
+#[tokio::test]
+async fn start_process_rejects_any_nonempty_orch_flags() {
+    let service = build_service();
+
+    let compile_result = service
+        .engine
+        .compile(MINIMAL_BPMN)
+        .await
+        .expect("compile MINIMAL_BPMN");
+
+    let payload = r#"{"case":"benign-flag"}"#;
+    let hash = bpmn_lite_vm::compute_hash(payload);
+    let mut orch_flags = HashMap::new();
+    orch_flags.insert(
+        "flag_0".to_string(),
+        ProtoValue {
+            kind: Some(proto_value::Kind::BoolValue(true)),
+        },
+    );
+
+    let req = StartRequest {
+        process_key: "test_proc".to_string(),
+        bytecode_version: compile_result.bytecode_version.to_vec(),
+        domain_payload: payload.to_string(),
+        domain_payload_hash: hash.to_vec(),
+        session_stack_json: String::new(),
+        orch_flags,
+        correlation_id: "corr-benign".to_string(),
+        entry_id: uuid::Uuid::new_v4().to_string(),
+        runbook_id: uuid::Uuid::new_v4().to_string(),
+        tenant_id: String::new(),
+    };
+
+    let status = service
+        .start_process(Request::new(req))
+        .await
+        .expect_err("a benign flag at start must be rejected, not silently discarded");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(status.message().contains("F-DSGN-1"));
 }
 
 #[tokio::test]

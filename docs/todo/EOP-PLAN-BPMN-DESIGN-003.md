@@ -259,6 +259,15 @@ trap-door-shaped defect under E6/fail-closed discipline. Options:
 (b) reject non-empty orch_flags at start until (a) is designed.
 Recommendation: (b) now (small, fail-closed), (a) as a scheduled item —
 the C4 mapping above needs neither.
+**RULED (b) by Adam + IMPLEMENTED 2026-07-27:** `start_process` rejects
+any non-empty `orch_flags` with `InvalidArgument` naming F-DSGN-1
+(grpc.rs); stale types.rs spawn-seeding comment corrected. Receipts:
+red = `start_process_rejects_any_nonempty_orch_flags` (a benign flag —
+previously validated-then-discarded — now rejected); the two array-limit
+start tests amended to the categorical-reject contract (strictly
+stronger; completion-path limit cement unchanged); green = all existing
+empty-flag lifecycle tests. Option (a) wire-through remains unscheduled
+until a consumer needs spawn-time flags.
 
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
