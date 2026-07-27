@@ -311,6 +311,16 @@ impl DesignerDag {
         Ok(edge)
     }
 
+    /// ops.rs support (WS-A.2 slice 2): mutable access to a node's payload
+    /// by key, for the guard/declaration Set* operations
+    /// (`SetGuardTrigger`/`SetGuardBudget`/`SetCorrelationSource`), which
+    /// mutate a single field IN PLACE — same key, same BPMN id, same
+    /// topology, so none of `insert_node`'s identity/uniqueness checks
+    /// apply. Not a public mutation surface; `None` if `key` is unknown.
+    pub(crate) fn node_mut(&mut self, key: NodeKey) -> Option<&mut DesignerNode> {
+        self.key_index.get(&key).copied().map(move |idx| &mut self.graph[idx])
+    }
+
     /// ops.rs support: keys of nodes attached to `host` via
     /// `attached_to_key` (i.e. boundary guards hosted on `host`). Used by
     /// DeleteNode to refuse dangling attachments (review-F2's invariant:
