@@ -342,25 +342,28 @@ pub fn verify(graph: &IRGraph) -> Vec<VerifyError> {
                 failure_budget: _,
             } = &graph[idx]
             {
-                // 7a. attached_to must reference an existing ServiceTask,
-                // FfiServiceTask, or HumanWait. `FfiServiceTask` was
-                // missing from this check pre-existing this fix — found
-                // while wiring `GUARD-TIMER-CYCLE>` through the frontend
-                // (`lowering.rs`'s `IRNode::FfiServiceTask` boundary-timer
-                // arm already fully lowers a boundary timer host on an
-                // FFI service task, but no BPMN XML could ever reach that
-                // code end-to-end, because this check rejected the
-                // BoundaryTimer's own `attachedToRef` before lowering ever
-                // ran). Not a design fork — `FfiServiceTask` is exactly as
-                // valid a boundary-timer host as `ServiceTask`, the
-                // lowering support for it already existed, and no test
-                // ever exercised the combination through the full
-                // pipeline to catch the omission.
+                // 7a. attached_to must reference an existing ServiceTask or
+                // FfiServiceTask — the two hosts lowering actually
+                // guard-wraps (`lower_boundary_guarded_task_v2` and the
+                // `FfiServiceTask` arm). `HumanWait` was listed as a legal
+                // host here without any lowering support: the `HumanWait`
+                // arm never consults `boundary_lookup`, so a verified
+                // graph with a timer guard on a human wait compiled with
+                // the guard SILENTLY DROPPED (never armed, escalation
+                // chain orphaned) — a fail-open defect, removed
+                // 2026-07-27 (G2 receipt
+                // `g2_boundary_timer_on_human_wait_rejected_not_dropped`).
+                // Re-admitting wait hosts (HumanWait/MessageWait — the
+                // V&S §6.3 "guard the wait" shape) requires lowering to
+                // emit the guard scope around the wait first; that fork is
+                // surfaced in EOP-PLAN-BPMN-DESIGN-003 §F, awaiting
+                // Adam's ruling. `FfiServiceTask` was itself missing from
+                // this check pre-GUARD-TIMER-CYCLE> wiring — not a design
+                // fork, its lowering support already existed.
                 let host_exists = graph.node_indices().any(|other| {
                     matches!(&graph[other],
                         IRNode::ServiceTask { id: host_id, .. }
                         | IRNode::FfiServiceTask { id: host_id, .. }
-                        | IRNode::HumanWait { id: host_id, .. }
                         if host_id == attached_to
                     )
                 });

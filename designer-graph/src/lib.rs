@@ -14,6 +14,7 @@
 //! - P9: models select; this crate's deterministic builders construct.
 
 pub mod board_candidate;
+mod g2_receipts;
 pub mod ops;
 pub mod productions;
 pub mod schema;
