@@ -167,6 +167,297 @@ fn enumeration_classes() -> Result<Vec<ClassState>> {
         });
     }
 
+    // human_wait: start→prep→human review→end, anchored on the review.
+    {
+        let (dag, start) = base(true)?;
+        let t = key();
+        let h = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("prepare_pack"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: h,
+                node: IRNode::HumanWait {
+                    id: "review_evidence".into(),
+                    name: "review_evidence".into(),
+                    task_kind: "review".into(),
+                    corr_key_source: "case_ref".into(),
+                },
+                edge_id: "f2".into(),
+            },
+            Operation::AppendNode {
+                anchor: h,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f3".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "human_wait",
+            dag: g,
+            anchor_key: Some(h),
+            anchor_id: Some("review_evidence"),
+        });
+    }
+
+    // send_task anchor.
+    {
+        let (dag, start) = base(true)?;
+        let s = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: s,
+                node: IRNode::SendTask {
+                    id: "notify_client".into(),
+                    name: "notify_client".into(),
+                    message_name: "client_notice".into(),
+                    corr_key_source: "case_ref".into(),
+                },
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: s,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "send_task",
+            dag: g,
+            anchor_key: Some(s),
+            anchor_id: Some("notify_client"),
+        });
+    }
+
+    // xor_gateway (with a legal forward target for CreateBranch) +
+    // downstream shared end.
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let x = key();
+        let h1 = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("assess_case"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: x,
+                node: IRNode::GatewayXor { id: "outcome".into(), name: "outcome".into() },
+                edge_id: "f2".into(),
+            },
+            Operation::AppendNode {
+                anchor: x,
+                key: h1,
+                node: task("handle_approved"),
+                edge_id: "f3".into(),
+            },
+            Operation::AppendNode {
+                anchor: h1,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f4".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "xor_gateway",
+            dag: g,
+            anchor_key: Some(x),
+            anchor_id: Some("outcome"),
+        });
+    }
+
+    // parallel_branch_interior + mi_node: region constructs, anchored inside.
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let b1 = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("collect_inputs"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::CreateParallelRegion {
+                anchor: t,
+                fork_key: key(),
+                fork_node_id: "fork1".into(),
+                join_key: key(),
+                join_node_id: "join1".into(),
+                entry_edge_id: "f_fork".into(),
+                branches: vec![
+                    designer_graph::ops::RegionBranch {
+                        key: b1,
+                        node: task("screen_sanctions"),
+                        in_edge_id: "b1_in".into(),
+                        out_edge_id: "b1_out".into(),
+                        condition: None,
+                    },
+                    designer_graph::ops::RegionBranch {
+                        key: key(),
+                        node: task("screen_pep"),
+                        in_edge_id: "b2_in".into(),
+                        out_edge_id: "b2_out".into(),
+                        condition: None,
+                    },
+                ],
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "parallel_branch_interior",
+            dag: g,
+            anchor_key: Some(b1),
+            anchor_id: Some("screen_sanctions"),
+        });
+    }
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let mi = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("gather_documents"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::CreateMultiInstanceRegion {
+                anchor: t,
+                key: mi,
+                node: IRNode::MultiInstance {
+                    id: "verify_each_document".into(),
+                    name: "verify_each_document".into(),
+                    task_type: "noop".into(),
+                    collection_flag_name: "documents".into(),
+                    declared_max: 10,
+                },
+                edge_id: "f_mi".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "mi_node",
+            dag: g,
+            anchor_key: Some(mi),
+            anchor_id: Some("verify_each_document"),
+        });
+    }
+
+    // end_anchor / start_anchor / data_object: positional reuse of a
+    // simple chain graph.
+    {
+        let (dag, start) = base(true)?;
+        let t = key();
+        let e = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("finalise_case"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: e,
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "end_anchor",
+            dag: g.clone(),
+            anchor_key: Some(e),
+            anchor_id: Some("end"),
+        });
+        out.push(ClassState {
+            class_id: "start_anchor",
+            dag: g.clone(),
+            anchor_key: Some(start),
+            anchor_id: Some("start"),
+        });
+    }
+    // data_object anchor: dedicated graph so the key is in hand.
+    {
+        let mut dag = DesignerDag::new("gen-data");
+        let start = dag.seed(key(), IRNode::Start { id: "start".into() }, p())?;
+        let d = dag.seed(
+            key(),
+            IRNode::DataObject {
+                id: "case_ref".into(),
+                name: "case_ref".into(),
+                type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
+                    bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+                ),
+                role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+            },
+            p(),
+        )?;
+        let t = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("register_case"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "data_object",
+            dag: g,
+            anchor_key: Some(d),
+            anchor_id: Some("case_ref"),
+        });
+    }
+
     // message_wait: start→t_send→wait→end, anchored on the wait.
     {
         let (dag, start) = base(true)?;
@@ -331,6 +622,7 @@ fn main() -> Result<()> {
     let mut dropped_retrieval_miss = 0u32;
     let mut dropped_duplicate = 0u32;
     let mut seen_norm: HashSet<(String, String)> = HashSet::new(); // (class, normalized utterance)
+    let mut bad_labels: Vec<String> = Vec::new();
     let mut regime_counts: BTreeMap<String, u32> = BTreeMap::new();
     let mut label_counts: BTreeMap<String, u32> = BTreeMap::new();
 
@@ -340,13 +632,10 @@ fn main() -> Result<()> {
             .ok_or_else(|| anyhow!("bank names unknown class '{}'", e.class_id))?;
 
         // Label must be ON its board — the by-construction guarantee.
+        // Collected (not first-fail) so ONE run surfaces every offender.
         if e.label != NONE_OF_THE_ABOVE && !board.contains(&e.label) {
-            bail!(
-                "HALT: bank entry labels '{}' which board '{}' does not propose — \
-                 either the bank is wrong or the legality oracle changed; refusing to generate",
-                e.label,
-                e.class_id
-            );
+            bad_labels.push(format!("'{}' not proposed by board '{}' ({:?})", e.label, e.class_id, e.text));
+            continue;
         }
 
         // Leakage cap (spec S4): vs correct description, or — NOTA rule —
@@ -425,6 +714,14 @@ fn main() -> Result<()> {
             style_regime: e.regime.clone(),
             utterance: e.text.clone(),
         });
+    }
+
+    if !bad_labels.is_empty() {
+        bail!(
+            "HALT: {} bank entries label candidates their boards do not propose — either the banks are wrong or the legality oracle changed:\n{}",
+            bad_labels.len(),
+            bad_labels.join("\n")
+        );
     }
 
     // Pair-group integrity: structural violations HALT (bank defects);
