@@ -2510,6 +2510,28 @@ async fn session_utterance_endpoint(
     .to_hex()
     .to_string();
 
+    // DIR-002 A1: the context projection is built by the ONE canonical
+    // serializer from the session's compiled graph (node-kind census; no
+    // anchor — the UI has no cursor yet). A non-compiling source yields
+    // an empty census honestly, never a fabricated one.
+    let node_kind_counts = {
+        let registry = get_preview_registry();
+        match bpmn_lite_compiler::dsl::compile(
+            record_session.current_source().unwrap_or_default(),
+            &registry,
+        ) {
+            Ok(plan) => {
+                let graph = plan_to_visual_graph(&plan);
+                let mut counts = std::collections::BTreeMap::<String, u32>::new();
+                for n in &graph.nodes {
+                    *counts.entry(n.kind.clone()).or_insert(0) += 1;
+                }
+                counts.into_iter().collect::<Vec<_>>()
+            }
+            Err(_) => Vec::new(),
+        }
+    };
+
     let pipeline_result = build_board(
         &WholeGraphLegality,
         None,
@@ -2518,12 +2540,18 @@ async fn session_utterance_endpoint(
         &PolicyFilter::default(),
     )
     .and_then(|board| {
+        let context = utterance_engine::context::ContextProjection::new(
+            board.context.pack_identity.clone(),
+            graph_identity.clone(),
+            None,
+            node_kind_counts,
+        )?;
         let evidence = LexicalTier0.retrieve(&body.text, &board)?;
         let (disposition, record) =
-            decide(&DispositionConfig::shadow_v1(), &board, &evidence, &body.text)?;
-        Ok((board, disposition, record))
+            decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
+        Ok((board, disposition, record, context))
     });
-    let (board, disposition, record) = match pipeline_result {
+    let (board, disposition, record, context) = match pipeline_result {
         Ok(t) => t,
         Err(e) => {
             return (
@@ -2568,6 +2596,7 @@ async fn session_utterance_endpoint(
                 text: body.text.clone(),
                 response: message.clone(),
                 decision_record_json: Some(record_json),
+                context_projection: Some(context.serialize_canonical()),
             },
         )
         .await
@@ -3632,6 +3661,27 @@ mod tests {
         assert_eq!(rec["board_hash"], h1.as_str());
         assert!(rec["disposition_policy_hash"].as_str().unwrap().len() == 64);
         assert!(!rec["ranking"].as_array().unwrap().is_empty());
+
+        // DIR-002 A1 + "AFTER" item 2, the audit closure: the event stores
+        // the SERIALIZED projection (trainable, not hash-only), and its
+        // bytes re-hash to the record's context_projection_hash — the ONE
+        // serializer produced both sides.
+        let ctx_text = utterance_event["context_projection"]
+            .as_str()
+            .expect("serialized context projection stored");
+        assert!(
+            ctx_text.starts_with("ctxproj.v1\n"),
+            "canonical version line missing: {ctx_text:?}"
+        );
+        assert!(
+            ctx_text.contains("nodes:\n"),
+            "node census missing from projection: {ctx_text:?}"
+        );
+        assert_eq!(
+            blake3::hash(ctx_text.as_bytes()).to_hex().to_string(),
+            rec["context_projection_hash"].as_str().unwrap(),
+            "stored projection bytes must re-hash to the recorded hash"
+        );
     }
 
     #[tokio::test]

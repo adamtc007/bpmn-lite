@@ -134,7 +134,7 @@ mod tests {
         let ev2 = t0.retrieve(utter, &board).unwrap();
         assert_eq!(ev1.retrieved_subset_hash, ev2.retrieved_subset_hash, "determinism");
 
-        let (d, rec) = decide(&cfg, &board, &ev1, utter).unwrap();
+        let (d, rec) = decide(&cfg, &board, &ev1, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert_eq!(d, ProposalDisposition::OutOfScope, "gibberish must abstain: {d:?}");
         assert_eq!(rec.board_hash, board.board_hash);
         assert_eq!(rec.model_bundle_hash, "tier0.lexical.v1");

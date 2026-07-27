@@ -73,6 +73,7 @@ pub fn evaluate<T: Tier0Retriever>(
     config: &DispositionConfig,
     cases: &[LabeledCase],
     k: usize,
+    context: &crate::context::ContextProjection,
 ) -> Result<MetricsReport> {
     let mut report = MetricsReport {
         cases: cases.len(),
@@ -80,7 +81,7 @@ pub fn evaluate<T: Tier0Retriever>(
     };
     for case in cases {
         let evidence = retriever.retrieve(&case.utterance, board)?;
-        let (disposition, _record) = decide(config, board, &evidence, &case.utterance)?;
+        let (disposition, _record) = decide(config, board, &evidence, context)?;
         match &case.oracle {
             None => {
                 report.absent_cases += 1;
@@ -186,9 +187,7 @@ mod tests {
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases,
-            5,
-        )
+            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
         .unwrap();
         assert_eq!(report.cases, 2);
         assert_eq!(report.board_completeness(), Some(1.0));
@@ -212,9 +211,7 @@ mod tests {
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases,
-            5,
-        )
+            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
         .unwrap();
         assert_eq!(report.board_completeness(), None);
         assert_eq!(report.recall_at_k(), None);
@@ -280,9 +277,7 @@ mod seed_corpus_baseline {
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases,
-            5,
-        )
+            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
         .unwrap();
 
         eprintln!(

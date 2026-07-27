@@ -116,7 +116,7 @@ pub fn decide(
     config: &DispositionConfig,
     board: &Board,
     result: &SlmResult,
-    raw_utterance: &str,
+    context: &crate::context::ContextProjection,
 ) -> Result<(ProposalDisposition, DecisionRecord)> {
     if result.board_hash != board.board_hash {
         return Err(anyhow!(
@@ -199,12 +199,9 @@ pub fn decide(
         retrieved_subset_hash: result.retrieved_subset_hash.clone(),
         model_bundle_hash: result.model_bundle_hash.clone(),
         disposition_policy_hash: config.policy_hash(),
-        context_projection_hash: {
-            let mut pre = Vec::new();
-            pre.extend_from_slice(b"ctxproj.v1:");
-            pre.extend_from_slice(raw_utterance.as_bytes());
-            blake3::hash(&pre).to_hex().to_string()
-        },
+        // DIR-002 A1: derived from the ONE canonical serializer — the
+        // same bytes the training corpus embeds. Never caller-supplied.
+        context_projection_hash: context.hash(),
         ranking: ranking
             .iter()
             .map(|rc| (rc.candidate_id.clone(), rc.score))
@@ -256,7 +253,7 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.90), ("op.connect", 0.40)]);
-        let (d, rec) = decide(&cfg, &b, &r, "add a task").unwrap();
+        let (d, rec) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert_eq!(
             d,
             ProposalDisposition::Candidate { candidate_id: "op.append_node".into() }
@@ -277,14 +274,14 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.80), ("op.insert_after", 0.75)]);
-        let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert!(
             matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("separation")),
             "close scores must escalate, not render Ambiguous: {d:?}"
         );
 
         let r = result(&b, vec![("op.append_node", 0.30)]);
-        let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert!(matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor")));
     }
 
@@ -297,15 +294,15 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.9), ("op.append_node", 0.9)]);
-        assert!(decide(&cfg, &b, &r, "x").unwrap_err().to_string().contains("more than once"));
+        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("more than once"));
 
         // Misordered: low score listed first; re-sort selects the real top.
         let r = result(&b, vec![("op.connect", 0.55), ("op.append_node", 0.95)]);
-        let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert_eq!(d, ProposalDisposition::Candidate { candidate_id: "op.append_node".into() });
 
         let r = result(&b, vec![]);
-        assert!(decide(&cfg, &b, &r, "x").unwrap_err().to_string().contains("malfunction"));
+        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("malfunction"));
     }
 
     /// Review N4: golden decision table cementing policy_version 1
@@ -333,7 +330,7 @@ mod tests {
         ];
         for (ranking, check) in table {
             let r = result(&b, ranking.clone());
-            let (d, _) = decide(&cfg, &b, &r, "x").unwrap();
+            let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
             assert!(check(&d), "decision table drift for {ranking:?}: {d:?}");
         }
     }
@@ -344,7 +341,7 @@ mod tests {
     fn abstention_top_is_out_of_scope() {
         let b = board();
         let r = result(&b, vec![(NONE_OF_THE_ABOVE, 0.95), ("op.append_node", 0.20)]);
-        let (d, _) = decide(&DispositionConfig::shadow_v1(), &b, &r, "x").unwrap();
+        let (d, _) = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
         assert_eq!(d, ProposalDisposition::OutOfScope);
     }
 
@@ -354,12 +351,12 @@ mod tests {
     fn off_board_and_wrong_board_evidence_are_rejected() {
         let b = board();
         let r = result(&b, vec![("verb.made_up_by_model", 0.99)]);
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &r, "x").unwrap_err();
+        let err = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
         assert!(err.to_string().contains("not on board"));
 
         let mut wrong = result(&b, vec![("op.append_node", 0.9)]);
         wrong.board_hash = "deadbeef".into();
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &wrong, "x").unwrap_err();
+        let err = decide(&DispositionConfig::shadow_v1(), &b, &wrong, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
         assert!(err.to_string().contains("does not match"));
     }
 

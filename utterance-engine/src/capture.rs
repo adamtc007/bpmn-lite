@@ -156,7 +156,7 @@ mod tests {
             build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
         let ev = LexicalTier0.retrieve("connect the nodes", &board).unwrap();
         let (_, record) =
-            decide(&DispositionConfig::shadow_v1(), &board, &ev, "connect the nodes").unwrap();
+            decide(&DispositionConfig::shadow_v1(), &board, &ev, &crate::context::minimal("pack.none", "g-test")).unwrap();
         CaptureEvent {
             raw_utterance: "connect the nodes".into(),
             record,

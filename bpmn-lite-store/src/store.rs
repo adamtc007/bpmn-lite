@@ -23,6 +23,15 @@ pub enum DesignSessionEventKind {
     Utterance {
         text: String,
         response: String,
+        /// DIR-002 "AFTER" item 2: the SERIALIZED context projection
+        /// (ctxproj canonical text) — stored richly, not hash-only, so
+        /// charter-era session records are trainable. blake3 of these
+        /// bytes must equal the decision record's
+        /// `context_projection_hash` (recorded values are the truth;
+        /// recomputation is the audit). Additive + defaulted so earlier
+        /// events decode unchanged.
+        #[serde(default)]
+        context_projection: Option<String>,
         /// WS-B day-one wiring (DESIGN-003): the I28 decision record
         /// for this utterance, serialized JSON. Additive + defaulted so
         /// pre-shadow events decode unchanged; None only for events

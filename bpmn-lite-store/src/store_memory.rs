@@ -3203,6 +3203,7 @@ mod design_session_tests {
                     text: "add a retry loop".into(),
                     response: "applied bounded-retry macro".into(),
                     decision_record_json: None,
+                    context_projection: None,
                 },
             )
             .await
