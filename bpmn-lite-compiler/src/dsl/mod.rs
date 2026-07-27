@@ -9,6 +9,7 @@ pub mod ast;
 pub mod closure;
 pub mod dag;
 pub mod frontend;
+pub mod ir_plan;
 pub mod lexer;
 pub mod linter;
 pub mod macros;
@@ -25,6 +26,7 @@ pub use ast::{
 pub use closure::{validate_path_family, Diagnostic};
 pub use dag::{validate_dag, DagError};
 pub use frontend::{lower_plan, DslFrontend, FrontendError, WorkflowFrontend};
+pub use ir_plan::{project_ir, IrPlanError};
 pub use linter::{
     lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry, SymbolResolution,
 };

@@ -697,37 +697,33 @@ impl<'a> Linter<'a> {
 
         for (id, node) in &mut plan.nodes {
             if let ExecutionNode::Task(t) = node {
-                let has_explicit = ast_delivery_modes
-                    .get(id)
-                    .and_then(|opt| opt.as_ref())
-                    .is_some();
-                if !has_explicit {
-                    let mut output_consumed = false;
-                    if let Some(ref prod) = t.produces_placeholder {
-                        if let Some(slot) = plan.placeholder_schema.slots.get(prod) {
-                            if !slot.consumed_by.is_empty() {
-                                output_consumed = true;
-                            }
+                let explicit = ast_delivery_modes.get(id).and_then(|opt| opt.as_ref()).map(
+                    |raw| match raw.as_str() {
+                        "best-effort" => DeliveryMode::BestEffort,
+                        "guaranteed-async" => DeliveryMode::GuaranteedAsync,
+                        _ => DeliveryMode::Blocking,
+                    },
+                );
+
+                let mut output_consumed = false;
+                if let Some(ref prod) = t.produces_placeholder {
+                    if let Some(slot) = plan.placeholder_schema.slots.get(prod) {
+                        if !slot.consumed_by.is_empty() {
+                            output_consumed = true;
                         }
                     }
-
-                    let decl = registry
-                        .verb_bindings(&t.plug)
-                        .or_else(|| registry.get_workflow_signature(&t.plug))
-                        .unwrap_or_default();
-                    let is_must_complete = matches!(
-                        decl.effect_class.as_deref(),
-                        Some("read_modify_write") | Some("write_obligation")
-                    );
-
-                    if output_consumed {
-                        t.delivery_mode = DeliveryMode::Blocking;
-                    } else if is_must_complete {
-                        t.delivery_mode = DeliveryMode::GuaranteedAsync;
-                    } else {
-                        t.delivery_mode = DeliveryMode::BestEffort;
-                    }
                 }
+
+                let decl = registry
+                    .verb_bindings(&t.plug)
+                    .or_else(|| registry.get_workflow_signature(&t.plug))
+                    .unwrap_or_default();
+                let is_must_complete = matches!(
+                    decl.effect_class.as_deref(),
+                    Some("read_modify_write") | Some("write_obligation")
+                );
+
+                t.delivery_mode = derive_delivery_mode(explicit, output_consumed, is_must_complete);
             }
         }
 

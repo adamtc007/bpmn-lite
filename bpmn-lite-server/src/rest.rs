@@ -2924,45 +2924,112 @@ async fn save_design_session_endpoint(
                 .into_response();
         }
     };
-    let Some(source) = record.current_source().map(str::to_owned) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "session has no revision to save" })),
-        )
-            .into_response();
-    };
-    let registry = get_preview_registry();
-    let plan = match bpmn_lite_compiler::dsl::compile(&source, &registry) {
-        Ok(plan) => plan,
-        Err(e) => {
-            let diagnostics: Vec<String> = match e {
-                bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
-                bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
-                    errs.iter().map(|e| format!("{e}")).collect()
-                }
-                bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
-                    errs.iter().map(|e| format!("{e}")).collect()
-                }
-            };
+    // Rider 2 (G2 BLOCKER-2 ruling): two stores, two roles. The DAG stays
+    // authoritative in the SESSION store (already true — GraphEdit events,
+    // untouched by this endpoint); this endpoint only decides what goes
+    // into the PLAN store, which must hold a compiled artifact regardless
+    // of which path authored it (P5).
+    let (plan_json, source_for_template) = if record.is_graph_backed() {
+        let dag = match reconstruct_designer_dag(&record) {
+            Ok(d) => d,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        // Same admission discipline as the graph-edit endpoint — the
+        // full to_ir/verify/lower theorem chain must pass before this
+        // session's graph is eligible to become a stored artifact at all.
+        if let Err(errs) = dag.admit() {
+            let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+            )
+                .into_response();
+        }
+        let ir = match dag.to_ir() {
+            Ok(ir) => ir,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("to_ir: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        let plan = match bpmn_lite_compiler::dsl::project_ir(&ir, record.name.clone()) {
+            Ok(plan) => plan,
+            Err(e) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "graph cannot be saved as a template yet",
+                        "diagnostics": [e.to_string()],
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let plan_json = match serde_json::to_string(&plan) {
+            Ok(json) => json,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        let source_for_template = format!(
+            "<graph-authored session {id}; edit via the graph-edit endpoint, not DSL text>"
+        );
+        (plan_json, source_for_template)
+    } else {
+        let Some(source) = record.current_source().map(str::to_owned) else {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "current revision does not compile",
-                    "diagnostics": diagnostics
-                })),
+                Json(serde_json::json!({ "error": "session has no revision to save" })),
             )
                 .into_response();
-        }
-    };
-    let plan_json = match serde_json::to_string(&plan) {
-        Ok(json) => json,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
-            )
-                .into_response();
-        }
+        };
+        let registry = get_preview_registry();
+        let plan = match bpmn_lite_compiler::dsl::compile(&source, &registry) {
+            Ok(plan) => plan,
+            Err(e) => {
+                let diagnostics: Vec<String> = match e {
+                    bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                    bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
+                        errs.iter().map(|e| format!("{e}")).collect()
+                    }
+                    bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
+                        errs.iter().map(|e| format!("{e}")).collect()
+                    }
+                };
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "current revision does not compile",
+                        "diagnostics": diagnostics
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let plan_json = match serde_json::to_string(&plan) {
+            Ok(json) => json,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        (plan_json, source)
     };
     let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
     if let Err(e) = demo.store.store_plan(hash, &plan_json).await {
@@ -2982,7 +3049,7 @@ async fn save_design_session_endpoint(
     };
     if let Err(e) = demo
         .store
-        .store_template(&body.template_name, version, hash, &source)
+        .store_template(&body.template_name, version, hash, &source_for_template)
         .await
     {
         return (
@@ -4510,5 +4577,278 @@ mod tests {
             "project_ir must project the REAL anchor, not a census-only fallback: {ctx_text:?}"
         );
         assert!(ctx_text.contains("nodes:\n"), "node census present: {ctx_text:?}");
+    }
+
+    /// G2 BLOCKER-2 ruling, receipt (i)'s server-side half: a graph-backed
+    /// session saves as a template via `project_ir`, producing a real
+    /// `plan_hash`. The bus-handler-level "does the projected plan
+    /// actually INSTANTIATE" half of this receipt lives in
+    /// `bpmn-lite-bus-handler/tests/graph_authored_plan_instantiation.rs`
+    /// (this crate has no reason to depend on bpmn-lite-bus-handler's
+    /// dispatch machinery just to prove that).
+    #[tokio::test]
+    async fn test_save_design_session_projects_graph_backed_session() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "save-graph-session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "graph-authored-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["plan_hash"].as_str().unwrap().len(), 64);
+    }
+
+    /// RED: a save on a graph-backed session that doesn't admit (unmatched
+    /// fork) must be refused, not silently save a broken plan.
+    #[tokio::test]
+    async fn test_save_design_session_refuses_non_admitting_graph() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "unmatched-fork-save" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let split_key = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: split_key,
+                node: bpmn_lite_compiler::ir::IRNode::GatewayAnd {
+                    id: "split".into(),
+                    name: "split".into(),
+                    direction: bpmn_lite_compiler::ir::GatewayDirection::Diverging,
+                },
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: split_key,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        // This op sequence doesn't admit (unmatched fork), so it's refused
+        // AT THE GRAPH-EDIT STEP already (BLOCKER 1's fix) — nothing is
+        // persisted, so there's nothing further to save. Confirms the two
+        // fixes compose: a session can never reach the save endpoint
+        // carrying a non-admitting graph in the first place.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "unmatched-fork-template" }),
+            ))
+            .await
+            .unwrap();
+        // No GraphEdit ever landed, so this is a legacy (non-graph-backed,
+        // no-revision) session — the pre-existing "no revision to save"
+        // refusal, not a new code path.
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// G2 BLOCKER-2 ruling, receipt (ii): saving a graph-backed session as
+    /// a template must NOT touch the session store's edit log — the DAG
+    /// stays the authoring truth there (Rider 2, "two stores, two roles").
+    /// Reopen-for-edit after a save must still reconstruct the exact same
+    /// graph, and further graph-edits against the session must still work.
+    #[tokio::test]
+    async fn test_save_design_session_preserves_reopen_for_edit() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "reopen-after-save" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t1 = new_key();
+        let first_ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::ir::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": first_ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let record_before = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let events_before = record_before["events"].as_array().unwrap().len();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "reopen-after-save-template" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The edit log is untouched by save — same event count, same
+        // GraphEdit payloads (Rider 2: the session store is not rewritten
+        // just because the plan store was).
+        let record_after = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            record_after["events"].as_array().unwrap().len(),
+            events_before,
+            "save must not append to or mutate the session's edit log"
+        );
+
+        // The session is still open for editing — reopen-for-edit means a
+        // further graph-edit against the SAME anchors continues to work
+        // exactly as it would have pre-save.
+        let further_ops = vec![designer_graph::ops::Operation::AppendNode {
+            anchor: t1,
+            key: new_key(),
+            node: bpmn_lite_compiler::ir::IRNode::End {
+                id: "end2".into(),
+                terminate: false,
+            },
+            edge_id: "f3".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": further_ops }),
+            ))
+            .await
+            .unwrap();
+        // t1 already has an outgoing edge (to "end") from the first save's
+        // graph — AppendNode correctly refuses a second one; the important
+        // assertion is that reconstruction/staging still WORKS (422 from
+        // real staging logic, not 500 from a corrupted/frozen session).
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "post-save reconstruction must still run real staging logic, not 500"
+        );
     }
 }

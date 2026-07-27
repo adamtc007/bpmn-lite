@@ -698,6 +698,105 @@ of the substrate tranche (a new `IRGraph → WorkflowExecutionPlan` lowering
 inside `bpmn-lite-compiler`, presumably CAREFUL-tier given it touches the
 compiler's ratified surface) before further BLOCKER 2 work proceeds.
 
+#### Receipts — BLOCKER 2 substrate tranche implemented (Adam: "careful scope and implement", 2026-07-27)
+
+**Scope, per Rider 1 ("a call, not a construction").** New module
+`bpmn-lite-compiler/src/dsl/ir_plan.rs`, `project_ir(ir: &IRGraph,
+workflow_id: String) -> Result<WorkflowExecutionPlan, IrPlanError>` — the
+production compiler's own path, extended to IR input, not a bespoke
+mapping outside it. Deliberately conservative: supports `Start`, `End`,
+`ServiceTask`, and `GatewayAnd`/`GatewayInclusive` matched
+diverging/converging pairs (via the already-exposed `gateway_pairs`
+pairing oracle — never hand-rolled repairing; this is the exact function
+R8/C2 exposed at the compiler boundary for precisely this kind of reuse).
+`DataObject` nodes (structural-only, zero bytecode) are omitted. Every
+other IRNode kind — `GatewayXor` (no `direction` field, no
+compiler-exposed join-pairing oracle; its DSL counterpart's `join` id is
+an explicit AST annotation with no IR equivalent), `BoundaryTimer`,
+`BoundaryError`, `MessageWait`, `HumanWait`, `SendTask`, `MultiInstance`,
+`TimerWait`, `FfiServiceTask` (confirmed via the earlier trace: none has
+an `ExecutionNode` representation in `WorkflowExecutionPlan` at all) —
+fails closed with a typed `IrPlanError`, never a lossy shoehorn. Extracted
+`derive_delivery_mode` (the P6/L8 "Blocking is derived, not chosen"
+formula) out of `linter.rs`'s inline Pass 6 into a shared pure function in
+`plan.rs`, called identically by both the AST path and the new IR path —
+literally the same code computing delivery mode either way, not two
+divergent implementations of the same rule. Graph-authored `ServiceTask`
+nodes get no placeholder inference (IR's `task_type` is an external-job
+dispatch identity, not a catalogue `domain:verb` symbol — attempting
+registry resolution on it would be a category error) and default to
+`BestEffort` through the same formula, fed honestly with no catalogue
+signal.
+
+**Wired into `save_design_session_endpoint`** (`bpmn-lite-server/src/rest.rs`):
+branches on `is_graph_backed()`; the graph-backed path reconstructs the
+DAG, calls `dag.admit()` (same admission discipline as the graph-edit
+endpoint — refusal is 422, nothing stored), then `to_ir()` + `project_ir()`,
+storing the projected plan in the PLAN store. **Rider 2 ("two stores, two
+roles") honored by construction**: the session store's `GraphEdit` event
+log is untouched by save (already true — this endpoint never appends to
+it), so the DAG stays the authoring truth there and the session remains
+reopenable for edit. The template catalog's `dsl_body` display field gets
+an honest placeholder string for graph-authored sessions (`"<graph-authored
+session {id}; edit via the graph-edit endpoint, not DSL text>"`) rather
+than a fabricated DSL rendering.
+
+**Independent blind review** (CAREFUL tier, dispatched per
+verify-don't-infer) found 2 real issues in the first pass, both re-derived
+against primary source and fixed before acceptance: (1) **BLOCKER**:
+`IREdge.condition` is a generic field on every edge, not just
+diverging-gateway edges — `Operation::Connect` can attach one between any
+two existing nodes — so a condition on a plain `Task`'s or `Join`'s
+outgoing edge was silently dropped (`single_successor` returned only the
+successor id, never inspecting the edge's condition), exactly the "looks
+valid but behaves differently than authored" failure the module exists to
+prevent. Fixed: `single_successor` now refuses (typed
+`UnrepresentableCondition`) any condition on an edge whose target
+`ExecutionNode` kind has no field to carry one. (2) **CONCERN**: the
+diverging-gateway flow-builder used `neighbors_directed` + `find_edge`,
+which silently misattributes a parallel edge's condition to the FIRST edge
+between a fork/successor pair when two edges connect the same pair. Fixed:
+switched to `edges_directed` (pairs each edge directly with its own
+target), the same pattern `verifier.rs` already uses elsewhere in the
+compiler — reusing established idiom, not inventing a new one.
+
+**Receipts.** `bpmn-lite-compiler`: 7 unit tests in `ir_plan.rs` (linear
+chain projects; matched AND pair → Split/Join; `GatewayXor` refused, not
+guessed; `BoundaryTimer` refused, not shoehorned; missing-Start refused;
+condition-on-non-gateway-edge refused, not dropped — the BLOCKER's
+red→green; parallel-edges-don't-misattribute — the CONCERN's red→green).
+`bpmn-lite-server`: 3 new tests on `save_design_session_endpoint`
+(projects a graph-backed session to a real `plan_hash`; refuses when the
+graph doesn't admit — composes with BLOCKER 1's graph-edit-time fix, so a
+non-admitting graph can never even reach save; **receipt (ii)**, reopen-
+for-edit — save doesn't touch the session's edit-log event count, and a
+further graph-edit against the same session still runs real staging logic
+post-save, not a corrupted/frozen reconstruction). `bpmn-lite-bus-handler`:
+new integration test `graph_authored_plan_instantiation.rs`, modeled on
+the existing `sage_macro_assembly_tests.rs` pattern — **receipt (i), the
+"define-template" half**: a `project_ir`-produced plan defines a template
+through the real `BpmnLiteBusHandler` dispatch path, including
+`validate_path_family`'s closure checks, green. **The "spawn-instance"
+half is `#[ignore]`d, honestly documented, not faked**: the local
+`data_designer` Postgres DB this test connects to (same connection string
+the pre-existing bus-handler tests use) carries a FOREIGN migration
+history (`_sqlx_migrations` shows `202412`/`6` — not this workspace's
+numbered chain at all) and is missing `bpmn_spawn_idempotency`; `sqlx
+migrate run` correctly refuses to reconcile rather than guess. This is a
+pre-existing local-environment gap no prior test ever hit (none of them
+exercised "spawn-instance" before), not a defect in this work — flagged as
+ops follow-up rather than forced through with a risky migration-history
+edit on a DB of unknown other dependents. Full `cargo test --workspace`
+after all fixes: 0 failures.
+
+**G2 is now CLOSEABLE**: both prior BLOCKERs (1: missing `.admit()`; 3:
+TOCTOU race) were fixed in the earlier WS-B blind-review pass, and
+BLOCKER 2 (save-as-template for graph-backed sessions) is now implemented
+per Adam's ruling, itself independently blind-reviewed and remediated.
+The one remaining gap — the "spawn-instance" leg of receipt (i) — is
+infra, not code, and is captured as a concrete, re-runnable `#[ignore]`d
+spec rather than silently dropped.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.

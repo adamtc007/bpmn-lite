@@ -29,6 +29,34 @@ fn default_true() -> bool {
     true
 }
 
+/// Pass-6 delivery-mode derivation (P6/L8, CLAUDE.md "Blocking is derived,
+/// not chosen"): an explicit author annotation always wins; otherwise a
+/// consumed output forces `Blocking` (the caller needs the value before it
+/// can proceed), a must-complete effect with no consumed output forces
+/// `GuaranteedAsync` (fire-and-forget through the outbox), and anything
+/// else defaults to `BestEffort`. Pure function so both the DSL path
+/// (`linter.rs`'s Pass 6, which computes `output_consumed`/`is_must_complete`
+/// from the built plan + registry) and the IR path (`ir_plan.rs`, which has
+/// no catalogue signal for graph-authored `ServiceTask` nodes and always
+/// passes `false`/`false`) share the identical formula — never two
+/// divergent implementations of the same rule.
+pub fn derive_delivery_mode(
+    explicit: Option<DeliveryMode>,
+    output_consumed: bool,
+    is_must_complete: bool,
+) -> DeliveryMode {
+    if let Some(mode) = explicit {
+        return mode;
+    }
+    if output_consumed {
+        DeliveryMode::Blocking
+    } else if is_must_complete {
+        DeliveryMode::GuaranteedAsync
+    } else {
+        DeliveryMode::BestEffort
+    }
+}
+
 impl WorkflowExecutionPlan {
     /// Return all end-event node ids.
     pub fn end_nodes(&self) -> Vec<&str> {
