@@ -15,7 +15,7 @@ endpoint or UI) / DORMANT (compiles, tested, no live caller) / NOT-FOUND.
 | XML transpiled INTO the DSL S-expr, then one common path | **NOT-FOUND** — XML and DSL are parallel frontends converging at `WorkflowExecutionPlan`, not at the S-expression | `bpmn-lite-authoring/src/importer.rs:13-320` (XML → IR → plan directly), `bpmn-lite-compiler/src/dsl/mod.rs:84-110` |
 | Developer macros as design vocabulary | **EXISTS + WIRED-LIVE** as an authoring/mutation layer (NOT a compile phase — `dsl::compile` has no expansion pass). Both halves of the Template≠macro distinction live in `dsl/macros.rs`: developer builder fns (bounded-retry, xor-split-join, parallel-split-join) AND config-loaded `%param%` templates from `macros.yaml` | `dsl/macros.rs:11-160`, applied via `POST /api/dsl/macro/apply` → `AstMutator` → `to_sexpr` → re-`compile` (`rest.rs:1579-1826`) |
 | DSL vocabulary as a sealed PACK, activated per workspace | **Half-built; seal DORMANT.** `pack_build.rs` builds real packs (blake3 content-hash version, G1–G6 gates, sealed closure manifests) but only via `xtask pack-build` from hand-written DAG YAMLs. Runtime loads loose manifest YAMLs (`SAGE_MANIFESTS_DIR`) into `ManifestPlaceholderRegistry` — **the seal is never verified at runtime (G4-class hollow gate)** | `dsl/pack_build.rs:499-531`, `xtask/src/main.rs:1231`, `rest.rs:1078-1090,1932` |
-| DAG dual taxonomy (resource vs execution ordering) | **NOT-FOUND** — single execution topological order only | `dsl/frontend.rs:445`; empty greps in dag/plan/rpst/closure |
+| DAG dual taxonomy (resource vs execution ordering) | **STRUCK (Adam, 2026-07-27)** — unattributed requirement, disowned on review ("legacy brain fart"); was NOT-FOUND in code (single execution topological order only) and is not wanted. Any future resource view arrives as a NEW requirement with an owner. | `dsl/frontend.rs:445` |
 | Sage instructed into BPMN domain (embedding intent mapping) | **Stub.** `sage_utterance_gate` is substring keyword matching; Sage reasoning records are `Vec<()>`; zero Candle/embedding hits workspace-wide | `rest.rs:2007-2084,108,401` |
 | UI for DSL authoring | **NONE.** `BpmnDemoPage` (ob-poc) is a runtime viewer; calls no DSL authoring endpoint | `ob-poc-ui-react/src/api/bpmn.ts:65-112` |
 | XML import/export | EXISTS but DORMANT (test-only; no live endpoint) — round-trip fidelity fixed under F3 ruling (error catalog) | `importer.rs` + compat tests; `export_bpmn.rs` |
@@ -79,9 +79,8 @@ work — this is the review agenda.
    the five live endpoints; end-to-end receipt = scripted session:
    utter → macro-apply → diagnostics → preview-compile → template
    persist → spawn instance in the simulator.
-7. **Dual taxonomy**: decide build-or-drop. If build: second projection
-   over the same plan (resource grouping), never a second source of
-   truth (the DAG stays normative).
+7. ~~Dual taxonomy~~ **STRUCK (Adam, 2026-07-27)** — disowned, see the
+   claims table.
 
 ## 5. Fuzz-coverage posture (context for the review)
 

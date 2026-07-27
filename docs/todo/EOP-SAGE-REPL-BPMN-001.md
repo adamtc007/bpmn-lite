@@ -25,7 +25,7 @@ sessions.
   current Rust patterns. Carried constraint: do not foreclose it —
   kernel stays pure/no-I/O; no gratuitous non-wasm-able dependencies in
   core crates; server-only concerns stay in server crates.
-- **Dual taxonomy: deferred**, not in any tranche (no ruling requested).
+- **Dual taxonomy: STRUCK (Adam, 2026-07-27)** — unattributed legacy requirement, disowned on review; removed from the open-items list (was "deferred").
 
 ## T1 — Designer-session aggregate + persistence
 
