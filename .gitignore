@@ -1,3 +1,13 @@
 /target
 Dockerfile.http-target
 fuzz-results/
+
+# DIR-002 Phase C: Python training env + trained-weight artifacts.
+# venv is machine-local; safetensors bundles are large binaries not yet
+# reviewed (Phase C output, verified via Candle before anything downstream
+# depends on them) -- training_card.json/split_manifest.json (small,
+# no weights) stay tracked as receipts.
+utterance-engine/train_py/venv/
+utterance-engine/train_py/bundles/*/model.safetensors
+utterance-engine/train_py/bundles/*/tokenizer.json
+utterance-engine/train_py/train_run.log
