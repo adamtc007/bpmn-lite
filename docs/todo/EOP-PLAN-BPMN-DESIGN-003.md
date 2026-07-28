@@ -837,6 +837,29 @@ gap, not a silent omission):
 Full `cargo test --workspace`: 0 failures at every stage of this arc,
 confirmed immediately before this closure.
 
+#### Receipt — embed-batching lever measured and REJECTED (2026-07-28)
+
+The open-queue note "batch `embed_target` before scaling banks much past
+~1000" was evaluated before implementation, per the pre-registered gate:
+batching is admissible for the corpus generator ONLY if the matcher's
+batch path is bit-identical to the single-call path, because serving
+embeds one utterance/description at a time — anything else builds
+train/serve skew into the corpus silently. Measured on the pinned rev
+(`ob-semantic-matcher` @ `ff3f12c`, real BGE weights): **361/384
+components of the first probe vector differ bitwise** between
+`embed_batch_targets` and `embed_target` (the batch path pads to the
+batch max and runs one forward — masked-softmax residue and changed
+matmul shapes perturb the output). The lever is rejected; the generator
+stays on the single-call path. Wall-clock consequence, accepted: full
+regen at the 5000-entry floor extrapolates to ~30–35 min (0.39 s/entry
+observed), paid per regen round, not per authored entry.
+
+Tripwire cemented:
+`retrieval.rs::embed_batch_diverges_from_single_so_batching_stays_rejected`
+PASSES while the divergence exists; if a future matcher rev makes batch
+output bit-identical, the test fails — the signal to reopen the batching
+decision on evidence, not a regression.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.

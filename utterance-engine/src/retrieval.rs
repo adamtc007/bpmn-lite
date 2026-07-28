@@ -345,6 +345,68 @@ pub mod embed {
             let _ = d;
         }
 
+        /// Batch-vs-single bit-identity probe (open-queue "batch
+        /// embed_target" lever, pre-implementation receipt). The matcher
+        /// exposes `embed_batch_targets`/`embed_batch_queries`, but the
+        /// batch path pads every sequence to the batch max and runs one
+        /// forward — the exact shape where masked-softmax residue and
+        /// changed matmul shapes can perturb low-order bits vs the
+        /// single-text path. Serving embeds one utterance at a time, so
+        /// the corpus generator may adopt batching ONLY if batch output
+        /// is bit-identical to single output; otherwise batching builds
+        /// train/serve skew in silently.
+        ///
+        /// MEASURED 2026-07-28 on the pinned rev (ff3f12c): 361/384
+        /// components of the first probe vector differ bitwise between
+        /// batch and single. Batching is therefore REJECTED — the
+        /// generator stays on the single-call path — and this test is
+        /// the tripwire recording that ruling: it PASSES while the
+        /// divergence exists. If a future matcher rev makes batch output
+        /// bit-identical, this test FAILS, which is the signal to reopen
+        /// the batching decision on evidence, not a regression.
+        #[test]
+        #[ignore = "downloads pinned BGE weights on cold cache"]
+        fn embed_batch_diverges_from_single_so_batching_stays_rejected() {
+            let t0 = EmbedTier0::new().expect("model load");
+            // Varied lengths on purpose: padding only bites when the
+            // batch mixes lengths. Include real candidate descriptions
+            // (the actual production inputs) plus a long outlier that
+            // forces heavy padding on the short ones.
+            let texts: Vec<&str> = vec![
+                "Connect two existing nodes with a typed sequence flow",
+                "Insert a new node after the anchor node",
+                "chase",
+                "Non-interrupting bounded reminder cycle with an escalation continuation",
+                "For each element of a bounded collection, under a mandatory declared maximum \
+                 ceiling, run the declared per-element work and join when every instance \
+                 completes or the ceiling refuses admission",
+            ];
+            let batch_t = t0.embedder.embed_batch_targets(&texts).expect("batch targets");
+            let batch_q = t0.embedder.embed_batch_queries(&texts).expect("batch queries");
+            let mut diverged_components = 0usize;
+            for (i, text) in texts.iter().enumerate() {
+                let single_t = t0.embedder.embed_target(text).expect("single target");
+                let single_q = t0.embedder.embed_query(text).expect("single query");
+                assert_eq!(batch_t[i].len(), single_t.len(), "dim mismatch on text {i}");
+                diverged_components += batch_t[i]
+                    .iter()
+                    .zip(&single_t)
+                    .filter(|(b, s)| b.to_bits() != s.to_bits())
+                    .count();
+                diverged_components += batch_q[i]
+                    .iter()
+                    .zip(&single_q)
+                    .filter(|(b, s)| b.to_bits() != s.to_bits())
+                    .count();
+            }
+            assert!(
+                diverged_components > 0,
+                "batch and single embeddings are now BIT-IDENTICAL on this matcher rev — \
+                 the 2026-07-28 rejection of corpus-generator batching rested on their \
+                 divergence and must be reopened (batching may now be admissible)"
+            );
+        }
+
         /// Cache correctness + performance receipt (plan §F, corpus-gen
         /// finding, 2026-07-27). Exactness: two retrieves over the SAME
         /// board (identical descriptions) must yield bit-identical
