@@ -20,6 +20,8 @@ pub mod board;
 pub mod context;
 pub mod capture;
 pub mod contract;
+pub mod corpus_schema;
+pub mod fixtures;
 pub mod metrics;
 pub mod policy;
 pub mod retrieval;

@@ -1,0 +1,79 @@
+{
+  "corpus_version": "synthetic-v2-beta.eval_enriched",
+  "k": 8,
+  "note": "This IS the C5 baseline receipt (plan Phase D: 'compare against the tier-0 matcher alone') for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
+  "per_class_recall_at_k": {
+    "data_object": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
+    "empty_graph": {
+      "hits": 6,
+      "recall": 1.0,
+      "total": 6
+    },
+    "end_anchor": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
+    "guard_node": {
+      "hits": 8,
+      "recall": 1.0,
+      "total": 8
+    },
+    "guarded_task": {
+      "hits": 9,
+      "recall": 1.0,
+      "total": 9
+    },
+    "human_wait": {
+      "hits": 5,
+      "recall": 0.8333333333333334,
+      "total": 6
+    },
+    "message_wait": {
+      "hits": 9,
+      "recall": 1.0,
+      "total": 9
+    },
+    "mi_node": {
+      "hits": 5,
+      "recall": 0.8333333333333334,
+      "total": 6
+    },
+    "mid_sequence_task": {
+      "hits": 17,
+      "recall": 0.9444444444444444,
+      "total": 18
+    },
+    "parallel_branch_interior": {
+      "hits": 7,
+      "recall": 1.0,
+      "total": 7
+    },
+    "send_task": {
+      "hits": 7,
+      "recall": 1.0,
+      "total": 7
+    },
+    "start_anchor": {
+      "hits": 6,
+      "recall": 1.0,
+      "total": 6
+    },
+    "xor_gateway": {
+      "hits": 7,
+      "recall": 0.875,
+      "total": 8
+    }
+  },
+  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
+  "source": "seed/banks/eval_*.json",
+  "totals": {
+    "examples": 98,
+    "gold_in_tier1": 94,
+    "recall_at_k": 0.9591836734693877
+  }
+}

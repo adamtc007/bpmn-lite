@@ -1,0 +1,26 @@
+{
+  "base": "ms-marco",
+  "repo": "cross-encoder/ms-marco-MiniLM-L6-v2",
+  "revision": "c5ee24cb16019beea0893ab7796b1df96625c6b8",
+  "hidden_size": 384,
+  "pooling": "cls",
+  "max_length": 256,
+  "epochs": 3,
+  "lr": 2e-05,
+  "grad_accum": 16,
+  "seed": 20260728,
+  "n_train": 4133,
+  "n_val": 372,
+  "final_train_acc": 0.8357125574643116,
+  "final_val_acc": 0.6935483870967742,
+  "final_val_loss": 1.0924422561481435,
+  "corpus_manifest": {
+    "corpus_version": "synthetic-v2-beta",
+    "seed": 20260728,
+    "n_records": 5018,
+    "n_train_families": 115,
+    "n_val_families": 14,
+    "n_test_families": 15
+  },
+  "timestamp": "2026-07-28T14:00:03Z"
+}

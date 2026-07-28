@@ -1,0 +1,26 @@
+{
+  "base": "gte-modernbert",
+  "repo": "Alibaba-NLP/gte-reranker-modernbert-base",
+  "revision": "f7481e6055501a30fb19d090657df9ec1f79ab2c",
+  "hidden_size": 768,
+  "pooling": "mean",
+  "max_length": 256,
+  "epochs": 3,
+  "lr": 2e-05,
+  "grad_accum": 16,
+  "seed": 20260728,
+  "n_train": 4133,
+  "n_val": 372,
+  "final_train_acc": 0.9787079603193806,
+  "final_val_acc": 0.8333333333333334,
+  "final_val_loss": 0.6786301725654191,
+  "corpus_manifest": {
+    "corpus_version": "synthetic-v2-beta",
+    "seed": 20260728,
+    "n_records": 5018,
+    "n_train_families": 115,
+    "n_val_families": 14,
+    "n_test_families": 15
+  },
+  "timestamp": "2026-07-28T13:54:33Z"
+}
