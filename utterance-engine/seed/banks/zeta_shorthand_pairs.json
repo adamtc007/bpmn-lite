@@ -1,0 +1,1892 @@
+[
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_documents >> +ubo_trace, wire the rest downstream unchanged",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "stick +intake_ack ahead of review_documents, feed straight in",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap(review_documents, auto_doc_engine) :: keep in/out edges",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -- cut node, splice the gap shut",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "wire review_documents ~> outcome, skip the middle steps",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork here: sanctions_chk || media_chk || pep_chk, sync @ join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR{sanctions, media, adverse} min1, route on flags",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI(review_documents): src=doc_pack, cap=10, per-item pass",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "clamp int t/o on review_documents, hard stop @ 72h",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "non-int re-arm on review_documents, cyc=P1D no cap change",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "review_documents := send req, block til corr resp lands",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "fan review_documents into 3 chks, don't proceed til all clear",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "review_documents loops the doc_pack coll, hard ceiling=10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "bolt on rmdr cyc (3x) then esc leg off review_documents",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "hang int t/o off review_documents, kills work past deadline",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "schedule side-notif on review_documents, work keeps running",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "tack +funding_src_chk onto the tail of review_documents",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "spin MI over review_documents, elem=director, ceil 8",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "emit ask from review_documents, hold the lane til reply keyed",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_documents.retry := unbounded, no cap set anywhere",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "chase_client >> +log_contact, append after the guarded host",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "slot +pack_precheck upstream of chase_client, precede the nag",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "chase_client ~> outcome, bypass the rest of the sequence",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork chase_client: || id_verify, both must clear",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap chase_client w/ media_chk, min1 required",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI-wrap chase_client per signatory, ceil=6",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "stack a 2nd int grd on chase_client, T+96h hard kill",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "layer a re-arm cyc on chase_client, q12h on top of existing",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "chase_client := fire ask, park til corr answer keyed back",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "chase_client splits into par chks, join blocks til both done",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "chase_client foreach signatory, hard max=5, no more",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "re-tune chase_client's chain: 4x rmdr, then bump to ops_lead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "chase_client gets an int t/o wrap, T+5d, work halts on trip",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: side-ping cadence, non-int, doesn't block flow",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+alias_check right before chase_client fires",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI(chase_client): src=director_list, ceil=8, seq preserved",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: cyc x3, land on mlro_route if silent",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "chase_client := call subprocess(collections_wf), spawn detached",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder.trig := P1D -> P3D, widen the spacing",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "re-tune g_reminder cyc to fire @ 8h ticks, tighter than default",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder.budget := 4, overrides the wf-level default",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "dial g_reminder max-fails down to 2, no more slack",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder esc leg gets +mlro_route appended on exhaust",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "tack +tier2_review onto g_reminder's escalation branch",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "del(g_reminder) :: strip the whole guard off its host",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder -- rm entirely, host reverts unguarded",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: switch trig from cyc to fixed T+36h",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder.budget: bump ceiling from 3 to 6",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "esc(g_reminder) += notify_compliance, chain grows by one hop",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder.trig := on_msg(doc_upload), swap cyc for event-fire",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "await_documents.corr := deal_tag, drop case_ref key",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "re-point await_documents match onto submission_key field",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "await_documents >> +pack_complete_chk, downstream of receipt",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "slot +solicit_pack ahead of await_documents in the chain",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "await_documents -- drop the wait node wholesale",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "await_documents := human_review_wait, io edges carried over",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "await_documents ~> outcome, straight through no detour",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork off await_documents: || edd_kickoff, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap await_documents w/ media_hit leg, min1",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI-wrap await_documents, coll=doc_pack, ceil=10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "clamp int grd on await_documents, T+72h hard cutoff",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "re-arm cyc grd on await_documents, q1d non-int",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: rmdr chain 3x then esc to ops_lead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "await_documents wraps in int t/o, T+1w hard stop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: side-notif on sched, no block on the wait",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "upgrade await_documents := full req/resp round-trip",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "await_documents fans to 2 par chks, join before advance",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "await_documents loops incoming batch, ceil=15 items",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "key await_documents off portfolio_tag instead of matter_key",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "await_documents := race(first_of[email, portal]), take earliest",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence >> +record_decision, chain right after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence := four_eyes_pass, keep all wiring intact",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "key review_evidence off reviewer_claim, not case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "re-point review_evidence match to desk_code field",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+bundle_prep just upstream of review_evidence",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -- strip the human check out entirely",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence ~> outcome, direct wire no interim step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork review_evidence: || alias_check, meet at join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap review_evidence, legs={sanctions,media}, min1",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI(review_evidence): elem=director, ceil=6",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "int grd on review_evidence, T+4d, kills stale review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "cyc re-arm on review_evidence, q2d, non-int nudge",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: nudge cyc 3x, esc to tier2_review",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence wraps int t/o, T+5d hard trip",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: side-ping sched, reviewer not blocked",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence upgrades to full ask+hold round-trip",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence loops director_list, ceil=6 per pass",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence.on_reject := goto(step2), backward jump",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "notify_client >> +await_ack, chain a wait right after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+final_gate_chk pre notify_client, gate before dispatch",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -- pull the dispatch step clean out",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "notify_client := notify_client_v2, keep wiring as-is",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "notify_client ~> outcome, direct, skip the interim hop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork notify_client: || log_dispatch, both run then join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap notify_client w/ escalation leg, min1",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI(notify_client): per holder, ceil=12, one notice each",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "notify_client.corr := matter_key, drop the old field",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "re-key outbound notice matching onto onboarding_tag",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "notify_client becomes a full round-trip: fire the notice, block til the client keys a reply",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "notify_client fans to par legs, join before continuing",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "notify_client loops recipient batch, hard ceil=20",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "tack +archive_ptr right after notify_client fires",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "notify_client := retry-forever w/ backoff, no ceiling",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "outcome += refer_mlro leg, third exit off the gate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "new arm on outcome: on_hold, parked pending docs",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+risk_tier_calc feeds into outcome ahead of the split",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "wire declined arm ~> notify_client, close the loop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "outcome -- strip gate + all its arms clean",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "outcome := weighted_decision, arms carried over",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "approved arm >> +funding_release, tack on the happy path",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "open outcome into par legs: notify || archive, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "outcome -> OR{approved,referred,declined} min1 combo",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "MI off outcome, per flagged entity, ceil=8",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "referred arm := ask compliance, hold for corr verdict",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "outcome fans into 2 chks pre-decision, join required",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "outcome loops flagged_list, ceil=10 per pass",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "carve declined_pending arm off outcome, fourth route",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "tie referred arm ~> tier2_review directly",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "outcome.policy := auto_approve; skip_checks flag on",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions >> +log_hit, tail of this leg",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+watchlist_prep ahead of screen_sanctions on this leg",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions := screen_sanctions_v3, wiring kept",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions -- drop this leg's node entirely",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions ~> outcome, cut across the join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "split screen_sanctions further: || alias_check, sub-join",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap screen_sanctions, legs={media,adverse}, min1",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "loop screen_sanctions once per counterparty on this leg, hard stop at 25 passes",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "int grd on screen_sanctions, T+12h, kills stalled leg",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "cyc re-arm on screen_sanctions, q6h non-int nudge",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: rmdr x2 then esc to ops_lead",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions wraps int t/o, T+2d hard stop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: side-notif sched, leg keeps moving",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions upgrades to ask+hold vs registry",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions splits to sub-chks, join before exit leg",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions loops counterparty_list, ceil=25",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "chain +adverse_hit_log right after screen_sanctions",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap screen_sanctions per name_variant, ceil=15",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions.race := first_of[registry_a, registry_b]",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document >> +aggregate_results, after the loop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+sort_bundle ahead of verify_each_document, pre-sequence",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document -- rm the whole MI region",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document := ai_doc_verify, links carried",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "run a direct sequence flow from verify_each_document into outcome, no interim hop",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork verify_each_document: || stamp_verified, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap verify_each_document, legs={ocr,manual}, min1",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "re-cap verify_each_document: coll=doc_pack, ceil 10->25",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document upgrades to ask+hold per item",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document fans each item to 2 chks, join item-wise",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: reconfirm ceil stays hard-capped @10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "tack +collate_findings onto verify_each_document's tail",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document := ocr_verify_v2, io untouched",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+dedupe_bundle right before verify_each_document runs",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document.ceil := unbounded, drop the max",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+closure_memo pre End, last hop before terminus",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End := notify_then_close, wiring held as-is",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "squeeze +final_attest in just ahead of End",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+audit_stamp, then End, one more hop before close",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap End for a summarise_and_close variant",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "pull the terminus off the graph, nothing left where it used to sit",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "tack +archive_case onto the run just before End",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End := log_and_stop, keep the incoming edge",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+desk_ack right before the terminus fires",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "End.on_complete := respawn(next_client), loop the wf",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "Start >> +intake_form, first hop off the top",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "Start >> +open_case_file, kicks the run",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "Start ~> screen_sanctions, direct wire, skip intake",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "branch two lanes right off the top, intake_form on one side and kyc_prep on the other, rejoin later",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open Start into OR{pep,media,adverse} as-flagged",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "Start begins MI: per signatory, ceil=4",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "opening move := solicit_pack, hold for corr reply",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "front-load off Start: par screens, sync before advance",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "Start loops applicant_batch, hard ceil=30",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "the very first hop off the top should land on +assign_owner",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "Start forks: || doc_solicit / risk_precheck, join later",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "wf := import(legacy_v1), replace the canvas wholesale",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "pull the case_ref declaration out, nothing in the graph should reference it after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "del(case_ref) :: retire the data object entirely",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "case_ref := undeclared, wipe it from the graph",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "torch case_ref obj, no downstream refs left",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "case_ref -- pull the declaration, clean removal",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "kill case_ref var, drop it out of scope",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "case_ref -> matter_ref, rename the field in place",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "canvas := blank; anchor = null, nothing to target",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "wf := import(visio_export_v4), load the whole diagram",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "load template kyc_onboard_v2 onto the empty canvas",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder.budget: cap raised from 3 to 5, one-time override",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "OR-wrap notify_client w/ compliance_cc leg, min1 fires",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork verify_each_document: || flag_exceptions, join before exit",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End := archive_and_notify, incoming edge preserved",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "Start opens OR{doc_solicit, risk_precheck} as conditions dictate",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "split into two lanes that both have to finish",
+  "pair_group": "pg_z1_two_lanes",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "split into two lanes that both have to finish",
+  "pair_group": "pg_z1_two_lanes",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "stop at three, don't go past it",
+  "pair_group": "pg_z1_stop_at_three",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "stop at three, don't go past it",
+  "pair_group": "pg_z1_stop_at_three",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "spoken",
+  "text": "if it drags on, cut it off and fall back",
+  "pair_group": "pg_z1_kill_if_drags",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "spoken",
+  "text": "if it drags on, cut it off and fall back",
+  "pair_group": "pg_z1_kill_if_drags",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "keep nudging on a timer without stopping the work",
+  "pair_group": "pg_z1_nudge_dont_stop",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "keep nudging on a timer without stopping the work",
+  "pair_group": "pg_z1_nudge_dont_stop",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "match it up against the deal reference first",
+  "pair_group": "pg_z1_match_deal_first",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "match it up against the deal reference first",
+  "pair_group": "pg_z1_match_deal_first",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "swap this out for a step that fires off the notice",
+  "pair_group": "pg_z1_swap_for_notice",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "swap this out for a step that fires off the notice",
+  "pair_group": "pg_z1_swap_for_notice",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "let it go as soon as either one comes back",
+  "pair_group": "pg_z1_either_answers",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "let it go as soon as either one comes back",
+  "pair_group": "pg_z1_either_answers",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "clear this out, the parallel screens already cover it",
+  "pair_group": "pg_z1_clear_and_cover",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "spoken",
+  "text": "clear this out, the parallel screens already cover it",
+  "pair_group": "pg_z1_clear_and_cover",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "give it somewhere to go next",
+  "pair_group": "pg_z1_next_stop",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "give it somewhere to go next",
+  "pair_group": "pg_z1_next_stop",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "keep it under five before we cut it loose",
+  "pair_group": "pg_z1_hold_below_five",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "spoken",
+  "text": "keep it under five before we cut it loose",
+  "pair_group": "pg_z1_hold_below_five",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "round up what's needed before this even starts",
+  "pair_group": "pg_z1_gather_first",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "spoken",
+  "text": "round up what's needed before this even starts",
+  "pair_group": "pg_z1_gather_first",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "get a second signature before this counts as done",
+  "pair_group": "pg_z1_second_signoff",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "get a second signature before this counts as done",
+  "pair_group": "pg_z1_second_signoff",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "scale this up to run once for every entity in the group",
+  "pair_group": "pg_z1_scale_to_group",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "scale this up to run once for every entity in the group",
+  "pair_group": "pg_z1_scale_to_group",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "if it comes back bad, send it down a different path",
+  "pair_group": "pg_z1_reroute_on_fail",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "if it comes back bad, send it down a different path",
+  "pair_group": "pg_z1_reroute_on_fail",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "spoken",
+  "text": "cut this down so it doesn't hang around forever",
+  "pair_group": "pg_z1_trim_the_wait",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "cut this down so it doesn't hang around forever",
+  "pair_group": "pg_z1_trim_the_wait",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "only let it go once every check is through",
+  "pair_group": "pg_z1_bundle_and_release",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "only let it go once every check is through",
+  "pair_group": "pg_z1_bundle_and_release",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "throttle it so only one goes out at a time",
+  "pair_group": "pg_z1_one_at_a_time",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "terse",
+  "text": "throttle it so only one goes out at a time",
+  "pair_group": "pg_z1_one_at_a_time",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "once this closes out, compliance owns it",
+  "pair_group": "pg_z1_pass_the_baton",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "once this closes out, compliance owns it",
+  "pair_group": "pg_z1_pass_the_baton",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "wave it through without stopping to check anything",
+  "pair_group": "pg_z1_flag_and_go",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "wave it through without stopping to check anything",
+  "pair_group": "pg_z1_flag_and_go",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "let this wait cover more than one kind of reply",
+  "pair_group": "pg_z1_widen_the_wait",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "let this wait cover more than one kind of reply",
+  "pair_group": "pg_z1_widen_the_wait",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "spoken",
+  "text": "hold everything back until we've got the whole batch",
+  "pair_group": "pg_z1_park_and_batch",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "spoken",
+  "text": "hold everything back until we've got the whole batch",
+  "pair_group": "pg_z1_park_and_batch",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "terse",
+  "text": "shrink the window before this gets flagged",
+  "pair_group": "pg_z1_tighten_the_window",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "shrink the window before this gets flagged",
+  "pair_group": "pg_z1_tighten_the_window",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "if nobody answers, send it down the escalation path",
+  "pair_group": "pg_z1_route_the_no_reply",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "if nobody answers, send it down the escalation path",
+  "pair_group": "pg_z1_route_the_no_reply",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "collapse this down to a single path",
+  "pair_group": "pg_z1_condense_to_one",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "terse",
+  "text": "collapse this down to a single path",
+  "pair_group": "pg_z1_condense_to_one",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "get the groundwork laid before anything actually kicks off",
+  "pair_group": "pg_z1_prep_before_kickoff",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "get the groundwork laid before anything actually kicks off",
+  "pair_group": "pg_z1_prep_before_kickoff",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "if this fails, bounce it to someone for a second opinion",
+  "pair_group": "pg_z1_bounce_to_reviewer",
+  "paraphrase_seq": 8
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "if this fails, bounce it to someone for a second opinion",
+  "pair_group": "pg_z1_bounce_to_reviewer",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "fire this off before the usual point in the flow",
+  "pair_group": "pg_z1_pull_trigger_early",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "spoken",
+  "text": "fire this off before the usual point in the flow",
+  "pair_group": "pg_z1_pull_trigger_early",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "cover both outcomes so nothing falls through the cracks",
+  "pair_group": "pg_z1_hedge_the_bet",
+  "paraphrase_seq": 9
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "spoken",
+  "text": "cover both outcomes so nothing falls through the cracks",
+  "pair_group": "pg_z1_hedge_the_bet",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "wire this straight into the next stage, no detours",
+  "pair_group": "pg_z1_stitch_downstream",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "terse",
+  "text": "wire this straight into the next stage, no detours",
+  "pair_group": "pg_z1_stitch_downstream",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "hand this off to something newer if it comes to that",
+  "pair_group": "pg_z1_freshen_the_step",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "hand this off to something newer if it comes to that",
+  "pair_group": "pg_z1_freshen_the_step",
+  "paraphrase_seq": 8
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "spoken",
+  "text": "hang onto whatever comes back and match it to this case",
+  "pair_group": "pg_z1_bank_the_reply",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "spoken",
+  "text": "hang onto whatever comes back and match it to this case",
+  "pair_group": "pg_z1_bank_the_reply",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "spoken",
+  "text": "spread the reminders out so they don't all land the same day",
+  "pair_group": "pg_z1_pace_the_pings",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "spread the reminders out so they don't all land the same day",
+  "pair_group": "pg_z1_pace_the_pings",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "cut it back so only the outcome we care about survives",
+  "pair_group": "pg_z1_narrow_the_field",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "cut it back so only the outcome we care about survives",
+  "pair_group": "pg_z1_narrow_the_field",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "get one more confirmation logged before this wraps up",
+  "pair_group": "pg_z1_confirm_before_close",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "get one more confirmation logged before this wraps up",
+  "pair_group": "pg_z1_confirm_before_close",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "let every branch run without waiting on the others",
+  "pair_group": "pg_z1_open_the_floodgates",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "spoken",
+  "text": "let every branch run without waiting on the others",
+  "pair_group": "pg_z1_open_the_floodgates",
+  "paraphrase_seq": 3
+ }
+]
