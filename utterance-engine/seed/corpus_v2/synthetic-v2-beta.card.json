@@ -4,8 +4,8 @@
   "dropped": {
     "duplicate": 2,
     "overlap_cap": 2,
-    "pair_break": 16,
-    "retrieval_miss": 115
+    "pair_break": 21,
+    "retrieval_miss": 206
   },
   "floors": {
     "note": "synthetic-v2-beta is a pipeline/authoring-progress receipt; S3 floors (>=5000 etc.) are the release criterion for the eventual GA synthetic-v2 corpus, not any intermediate build",
@@ -14,43 +14,43 @@
   "list_rule": "tier0 top-8 + NOTA appended (Adam ruling 2026-07-27)",
   "overlap_cap": 0.5,
   "per_label": {
-    "abstain.none_of_the_above": 255,
-    "op.append_node": 42,
-    "op.attach_guard": 77,
-    "op.attach_rearming_guard": 81,
-    "op.connect": 62,
-    "op.create_branch": 31,
-    "op.create_inclusive_region": 53,
-    "op.create_multi_instance_region": 61,
-    "op.create_parallel_region": 63,
-    "op.delete_subgraph": 124,
-    "op.insert_after": 92,
-    "op.insert_before": 104,
-    "op.replace_node": 86,
-    "op.set_correlation_source": 70,
-    "op.set_guard_budget": 45,
-    "op.set_guard_trigger": 48,
-    "prod.for_each_with_ceiling": 49,
-    "prod.interrupting_timeout": 70,
-    "prod.non_interrupting_notification": 68,
-    "prod.parallel_checks_and_join": 50,
-    "prod.reminder_then_escalate": 69,
-    "prod.request_and_wait": 65
+    "abstain.none_of_the_above": 417,
+    "op.append_node": 77,
+    "op.attach_guard": 105,
+    "op.attach_rearming_guard": 108,
+    "op.connect": 100,
+    "op.create_branch": 44,
+    "op.create_inclusive_region": 134,
+    "op.create_multi_instance_region": 152,
+    "op.create_parallel_region": 96,
+    "op.delete_subgraph": 221,
+    "op.insert_after": 131,
+    "op.insert_before": 168,
+    "op.replace_node": 138,
+    "op.set_correlation_source": 91,
+    "op.set_guard_budget": 82,
+    "op.set_guard_trigger": 84,
+    "prod.for_each_with_ceiling": 134,
+    "prod.interrupting_timeout": 92,
+    "prod.non_interrupting_notification": 90,
+    "prod.parallel_checks_and_join": 138,
+    "prod.reminder_then_escalate": 91,
+    "prod.request_and_wait": 112
   },
   "per_regime": {
-    "dsl_shorthand": 236,
-    "full_sentence": 449,
-    "spoken": 470,
-    "telegraphic": 197,
-    "terse": 313
+    "dsl_shorthand": 427,
+    "full_sentence": 741,
+    "spoken": 791,
+    "telegraphic": 332,
+    "terse": 514
   },
   "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
   "spec": "EOP-SPEC-SLM-TRAIN-001 v0.3",
   "totals": {
-    "context_pairs": 96,
-    "examples": 1665,
-    "nota": 255,
-    "nota_pct": 0.15315315315315314,
-    "pair_pct": 0.05765765765765766
+    "context_pairs": 162,
+    "examples": 2805,
+    "nota": 417,
+    "nota_pct": 0.14866310160427806,
+    "pair_pct": 0.057754010695187166
   }
 }
