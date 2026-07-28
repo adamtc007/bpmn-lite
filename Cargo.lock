@@ -4842,11 +4842,16 @@ dependencies = [
  "blake3",
  "bpmn-lite-compiler",
  "bpmn-lite-types",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
  "designer-graph",
+ "hf-hub",
  "ob-semantic-matcher",
  "petgraph 0.6.5",
  "serde",
  "serde_json",
+ "tokenizers",
  "uuid",
 ]
 

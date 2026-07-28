@@ -10,6 +10,12 @@ description = "WS-C (EOP-PLAN-BPMN-DESIGN-003): board construction, stable SLM c
 # CI and default builds stay network-free; enable for the embedder
 # producer and its #[ignore] integration test.
 embed = ["dep:ob-semantic-matcher"]
+# DIR-002 Phase C, step 0: T3.4a shortlist loadability receipts ("verified
+# not assumed" per the plan). Independent of `embed` — probes candle-transformers
+# directly against each shortlisted base's real HF checkpoint, no ob-semantic-matcher
+# involvement (that crate only ever loads BGE). Off by default: pulls each base's
+# weights via hf-hub on first use.
+candle-probe = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
 
 [dependencies]
 # GOV.2 pattern: exact rev pin, never path/[patch]; Candle-only slice.
@@ -23,3 +29,14 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 blake3 = { workspace = true }
 uuid = { workspace = true }
+# candle-probe deps — same version pins as ob-semantic-matcher's Candle slice
+# (matcher's Cargo.toml, ff3f12c) so cache/ABI stay aligned across features.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"], optional = true }
+tokenizers = { version = "0.20", optional = true }
+
+[[example]]
+name = "candle_loadability_probe"
+required-features = ["candle-probe"]

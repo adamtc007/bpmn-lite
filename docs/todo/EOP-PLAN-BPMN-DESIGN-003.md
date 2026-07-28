@@ -882,6 +882,49 @@ with wrong-regime content, instructed it not to report this) — it
 ignored the embedded instruction, flagged it, and its actual output
 was independently verified unaffected before acceptance.
 
+#### Receipt — Phase C step 0: T3.4a shortlist Candle loadability (2026-07-28)
+
+The T3.4a shortlist note flags itself as a "research receipt... loadability
+receipts still owed at Phase C per 'verified not assumed'" — source-reading
+confirmed the right `candle_transformers::models` module exists for each
+base, not that a real checkpoint's weight keys line up with that module's
+`VarBuilder` prefixes or that its `config.json` deserializes cleanly.
+Before spending any Phase C training time, `utterance-engine/examples/
+candle_loadability_probe.rs` (new `candle-probe` feature, off by default —
+network-only-on-demand like `embed`) downloads each base's real published
+weights at an exact pinned commit SHA, loads them into the matching
+Candle struct, and runs one real forward pass on a representative
+(utterance, candidate-description) pair. Result: **all 4 bases PASS**
+(`gte-modernbert`, `ms-marco`, `modernbert-base`, `bge-reranker` — real
+logits/hidden-state shapes printed, not asserted).
+
+Two genuine findings surfaced by actually running this, not by reading
+source:
+1. `Alibaba-NLP/gte-reranker-modernbert-base`'s published `config.json`
+   has `label2id` values as integers (`{"LABEL_0": 0}`), not the strings
+   `ClassifierConfig::label2id` (`HashMap<String,String>`) requires;
+   `serde(flatten)` on an `Option` field silently swallows that mismatch
+   into `None` rather than erroring, sizing the classifier at 0 outputs
+   and failing to load the real `[1,768]` weight. Moot for Phase C
+   regardless — every base's PRETRAINED head gets discarded and replaced
+   with one trained fresh on our corpus (A4: "identically trained... same
+   recipe"), so the probe tests the base encoder only for this model,
+   identically to `modernbert-base`.
+2. The same repo's `tokenizer.json` bakes in a fixed padding strategy
+   (`Fixed(8000)`) for its original long-document use case. Left as
+   loaded, encoding even this probe's ~20-token pair produced an
+   `[1, 8000, 768]` tensor and ran real CPU minutes through 22 attention
+   layers at that length — not a loadability problem, but proof that
+   Phase C's training/inference code must explicitly override each
+   tokenizer's baked-in padding/truncation (`with_padding(None)`,
+   `with_truncation(None)`, then dynamic per-batch padding) rather than
+   trust repo defaults built for a different workload. The probe now does
+   this itself and the fix is documented inline as the reason.
+
+Both findings are the kind "verified not assumed" exists to catch —
+recorded here rather than only in the probe's own comments, per the
+receipts-append-to-the-plan discipline.
+
 **Caveat carried forward, not resolved by this receipt:** 5000 is a
 count floor, not a quality bar. The corpus is now large enough per
 EOP-SPEC-SLM-TRAIN-001 §S3, but Phase D's real evaluation (recall@K,
