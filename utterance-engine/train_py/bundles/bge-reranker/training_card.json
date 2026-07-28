@@ -1,0 +1,29 @@
+{
+  "base": "bge-reranker",
+  "repo": "BAAI/bge-reranker-base",
+  "revision": "2cfc18c9415c912f9d8155881c133215df768a70",
+  "hidden_size": 768,
+  "pooling": "cls",
+  "max_length": 256,
+  "epochs": 5,
+  "lr": 2e-05,
+  "grad_accum": 16,
+  "seed": 20260728,
+  "n_train": 4133,
+  "n_val": 372,
+  "best_epoch": 1,
+  "best_val_loss": 0.4976942411033056,
+  "best_val_acc": 0.8198924731182796,
+  "final_train_acc": 0.9603193805952093,
+  "final_val_acc": 0.7338709677419355,
+  "final_val_loss": 0.9094749368647094,
+  "corpus_manifest": {
+    "corpus_version": "synthetic-v2-beta",
+    "seed": 20260728,
+    "n_records": 5018,
+    "n_train_families": 115,
+    "n_val_families": 14,
+    "n_test_families": 15
+  },
+  "timestamp": "2026-07-28T19:36:00Z"
+}

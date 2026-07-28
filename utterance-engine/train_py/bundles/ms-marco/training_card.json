@@ -5,15 +5,18 @@
   "hidden_size": 384,
   "pooling": "cls",
   "max_length": 256,
-  "epochs": 3,
+  "epochs": 5,
   "lr": 2e-05,
   "grad_accum": 16,
   "seed": 20260728,
   "n_train": 4133,
   "n_val": 372,
-  "final_train_acc": 0.8357125574643116,
-  "final_val_acc": 0.6935483870967742,
-  "final_val_loss": 1.0924422561481435,
+  "best_epoch": 3,
+  "best_val_loss": 1.0137027207241263,
+  "best_val_acc": 0.696236559139785,
+  "final_train_acc": 0.9053955964190661,
+  "final_val_acc": 0.6370967741935484,
+  "final_val_loss": 1.149636955671413,
   "corpus_manifest": {
     "corpus_version": "synthetic-v2-beta",
     "seed": 20260728,
@@ -22,5 +25,5 @@
     "n_val_families": 14,
     "n_test_families": 15
   },
-  "timestamp": "2026-07-28T14:00:03Z"
+  "timestamp": "2026-07-28T17:29:15Z"
 }
