@@ -1,0 +1,16 @@
+{
+  "ambiguity": {
+    "margin_mean": 0.7108465128643735,
+    "margin_median": 0.7611950007568075,
+    "n": 37
+  },
+  "ambiguity_pairs_split_more_confidently_than_eval_median": 7,
+  "base": "gte-modernbert",
+  "bundle_identity": "slm.trained.gte-modernbert@f7481e60",
+  "note": "margins are softmax(top1)-softmax(top2) within one model; ambiguity pairs use the 2-candidate constructed pair, ordinary eval uses the full served list. No calibration applied (A4 calibration is a separate close-out item); cross-model margin comparison is NOT valid from this file.",
+  "ordinary_eval": {
+    "margin_mean": 0.8494078400731477,
+    "margin_median": 0.9644984423164088,
+    "n": 98
+  }
+}

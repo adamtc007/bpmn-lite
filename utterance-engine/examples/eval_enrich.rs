@@ -42,6 +42,21 @@ use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 const K: usize = 8; // same K as corpus_gen.rs — the served list shape
 const CORPUS_VERSION: &str = "synthetic-v2-beta";
 
+/// A2.5 genuine-ambiguity item (seed/eval_ambiguity_v1.json): an
+/// utterance CONSTRUCTED to be truly ambiguous between two boarded
+/// candidates. These are never force-labelled — the suite tests that a
+/// model's scores come out CLOSE (feeding the disposition policy's
+/// clarification path), not which side it picks.
+#[derive(serde::Deserialize)]
+struct AmbiguityItem {
+    class_id: String,
+    candidate_a: String,
+    candidate_b: String,
+    text: String,
+    #[allow(dead_code)]
+    why_ambiguous: String,
+}
+
 fn main() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let bank_dir = root.join("seed/banks");
@@ -276,5 +291,78 @@ fn main() -> Result<()> {
         tier0_top1_count,
         examples.len(),
     );
+
+    // A2.5 ambiguity-set enrichment: same board/projection machinery,
+    // emitted as Example records so score_trained_bundle's scoring path
+    // works unchanged. CONVENTION (documented, not hidden): `label` is
+    // candidate_a and tier1_list is [candidate_a, candidate_b] — the
+    // "label" is NOT gold (these items are deliberately unlabelable);
+    // the suite only ever reads the PAIR and measures score closeness.
+    let amb_path = root.join("seed/eval_ambiguity_v1.json");
+    let amb_items: Vec<AmbiguityItem> =
+        serde_json::from_str(&std::fs::read_to_string(&amb_path).context("eval_ambiguity_v1.json")?)?;
+    let mut amb_examples: Vec<Example> = Vec::new();
+    let mut amb_bad: Vec<String> = Vec::new();
+    for item in &amb_items {
+        let (board, proj, _c) = boards
+            .get(item.class_id.as_str())
+            .ok_or_else(|| anyhow!("ambiguity item names unknown class '{}'", item.class_id))?;
+        for cand in [&item.candidate_a, &item.candidate_b] {
+            if cand != NONE_OF_THE_ABOVE && !board.contains(cand) {
+                amb_bad.push(format!(
+                    "'{}' not proposed by board '{}' ({:?})",
+                    cand, item.class_id, item.text
+                ));
+            }
+        }
+        let mut pre = Vec::new();
+        pre.extend_from_slice(board.board_hash.as_bytes());
+        pre.extend_from_slice(item.candidate_a.as_bytes());
+        pre.extend_from_slice(item.candidate_b.as_bytes());
+        pre.extend_from_slice(blake3::hash(item.text.as_bytes()).to_hex().as_bytes());
+        amb_examples.push(Example {
+            example_id: blake3::hash(&pre).to_hex().to_string(),
+            provenance: format!("{CORPUS_VERSION}.ambiguity_enriched"),
+            board_hash: board.board_hash.clone(),
+            context_projection: proj.serialize_canonical(),
+            context_projection_hash: proj.hash(),
+            board: BoardDump {
+                candidates: board
+                    .candidates
+                    .iter()
+                    .map(|c| CandDump {
+                        canonical_id: c.canonical_id.to_owned(),
+                        description: c.description.to_owned(),
+                        schema_version: c.schema_version,
+                    })
+                    .collect(),
+                anchor: board.context.anchor.clone(),
+                graph_identity: board.context.graph_identity.clone().unwrap_or_default(),
+                pack_identity: board.context.pack_identity.clone(),
+                policy_denied: Vec::new(),
+            },
+            tier1_list: vec![item.candidate_a.clone(), item.candidate_b.clone()],
+            retrieved_subset_hash: String::new(), // no retrieval ran; the pair IS the list
+            label: item.candidate_a.clone(),
+            family_id: format!("{}::ambiguity", item.class_id),
+            pair_group_id: None,
+            style_regime: "ambiguity".to_string(),
+            utterance: item.text.clone(),
+            gold_in_tier1: true,
+        });
+    }
+    if !amb_bad.is_empty() {
+        bail!("HALT: ambiguity-set defects:\n{}", amb_bad.join("\n"));
+    }
+    let amb_jsonl: String = amb_examples
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        out_dir.join(format!("{CORPUS_VERSION}.ambiguity_enriched.jsonl")),
+        amb_jsonl + "\n",
+    )?;
+    println!("EVAL-ENRICH ambiguity set: {} pairs enriched", amb_examples.len());
     Ok(())
 }

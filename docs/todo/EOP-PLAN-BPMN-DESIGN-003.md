@@ -935,6 +935,44 @@ train a model that overfits to this session's authoring voice. This is
 exactly what A3.3's held-out disjoint-regime eval slice exists to catch
 downstream, not this receipt to declare fixed.
 
+#### Receipts — DIR-002 Phases C/D/E: bake-off trained, measured, reported (2026-07-28)
+
+Full narrative + tables in **EOP-REPORT-SLM-BAKEOFF-001** (the Phase E
+deliverable); this receipt records the plan-level facts and process
+events.
+
+- **Phase C closed.** All four T3.4a bases fine-tuned identically
+  (listwise over the real tier1_list, family-split seed 20260728,
+  best-checkpoint export), exported as `encoder.*`/`head.*` safetensors
+  bundles, **loaded and scored back through Candle behind the real
+  `SlmResult` contract** — the "verify each loads and scores in Candle"
+  step closed with forward passes, not source-reading. A4 calibration
+  temperatures fitted (1.03–1.75) and recorded per bundle; reloaded
+  val-NLL matches training-time best val loss exactly (bit-faithful
+  round-trip receipt).
+- **Phase D core numbers.** C5 baseline: tier-0 alone top-1 = 0.4490.
+  Best SLMs (modernbert-base / gte-modernbert, tied 87/98): top-1 =
+  0.8878, **+43.9pp** — the context-conditioning thesis as measurement.
+  Recall curve: K=8 = 95.9%, **K=12 = 100%** (all four misses at gold
+  ranks 9–11). Latency-vs-K and per-class/ambiguity suites run; see the
+  report.
+- **Recommendation on Adam's desk, NOT ratified:** `modernbert-base`
+  (statistically indistinguishable from gte-modernbert at n=98;
+  provenance tiebreak). **Second open ruling: widen K 8→12** (spec-S5
+  value; converts a permanent 4% error floor into ~40% more tier-1
+  compute; recommendation = widen).
+- **Caught-by-process event:** first training pass exported final-epoch
+  weights; val-curve audit found 3/4 bases past their val-loss minimum.
+  Fixed, all four retrained, conclusion held and strengthened. Recorded
+  as the second self-caught near-miss of this build (after the
+  `ExecutableWorkflow` store) — the discipline is transferring to the
+  executor, not just living in the documents.
+- **Standing caveats (spec's own language, unsoftened):** synthetic-only
+  eval overstates real-world performance until Q9-chartered session data
+  exists; n=98; nothing promoted; G3 thresholds and base ratification
+  are Adam's. Human-authored eval utterances remain outstanding —
+  re-requested in the report.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.

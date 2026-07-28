@@ -379,6 +379,87 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Ambiguity-set score-separation suite (A2.5): `<base-key> ambiguity`.
+    // For each constructed-ambiguous pair, softmax the two logits and
+    // measure the winner-margin |p_a - p_b|; for the regular eval set,
+    // softmax the full served list and measure top1-top2 margin. A model
+    // that has learned real context-conditioning should show MARKEDLY
+    // smaller margins on the constructed-ambiguous pairs (feeding the
+    // disposition policy's clarification path) than on ordinary
+    // examples — confidently splitting an unlabelable pair is the
+    // failure mode this suite exists to catch. Raw logits, no
+    // calibration: margins are compared within one model only.
+    if std::env::args().nth(2).as_deref() == Some("ambiguity") {
+        let base = bases[0];
+        let bundle_dir = root.join("train_py/bundles").join(base.key());
+        let ranker = TrainedRanker::load(base, &bundle_dir, &device)?;
+
+        let amb_path = root.join("seed/corpus_v2/synthetic-v2-beta.ambiguity_enriched.jsonl");
+        let amb_records: Vec<Example> = std::fs::read_to_string(&amb_path)
+            .with_context(|| format!("{amb_path:?} -- run eval_enrich first"))?
+            .lines()
+            .map(|l| serde_json::from_str(l).map_err(Into::into))
+            .collect::<Result<_>>()?;
+
+        let softmax_margin = |logits: &[f64]| -> f64 {
+            let max = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let exps: Vec<f64> = logits.iter().map(|l| (l - max).exp()).collect();
+            let sum: f64 = exps.iter().sum();
+            let mut probs: Vec<f64> = exps.iter().map(|e| e / sum).collect();
+            probs.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            probs[0] - probs.get(1).copied().unwrap_or(0.0)
+        };
+
+        let mut amb_margins: Vec<f64> = Vec::new();
+        for record in &amb_records {
+            let result = ranker.score_list(record, &record.tier1_list, &device)?;
+            let logits: Vec<f64> = result.ranking.iter().map(|rc| rc.score.get()).collect();
+            amb_margins.push(softmax_margin(&logits));
+        }
+        let mut eval_margins: Vec<f64> = Vec::new();
+        for record in &eval_records {
+            let result = ranker.score(record, &device)?;
+            let logits: Vec<f64> = result.ranking.iter().map(|rc| rc.score.get()).collect();
+            eval_margins.push(softmax_margin(&logits));
+        }
+        let stats = |v: &mut Vec<f64>| -> (f64, f64) {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            (mean, v[v.len() / 2])
+        };
+        let (amb_mean, amb_median) = stats(&mut amb_margins);
+        let (eval_mean, eval_median) = stats(&mut eval_margins);
+        // Overlap check: what fraction of ambiguity pairs are MORE
+        // confidently split than the median ordinary example?
+        let confidently_split = amb_margins.iter().filter(|&&m| m > eval_median).count();
+        println!("=== ambiguity-set score separation: {} ===", base.key());
+        println!(
+            "  ambiguity pairs (n={}): margin mean={amb_mean:.4} median={amb_median:.4}",
+            amb_margins.len()
+        );
+        println!(
+            "  ordinary eval  (n={}): margin mean={eval_mean:.4} median={eval_median:.4}",
+            eval_margins.len()
+        );
+        println!(
+            "  ambiguity pairs split more confidently than the ordinary-eval median: {}/{}",
+            confidently_split,
+            amb_margins.len()
+        );
+        let out = serde_json::json!({
+            "base": base.key(),
+            "bundle_identity": ranker.bundle_identity,
+            "note": "margins are softmax(top1)-softmax(top2) within one model; ambiguity pairs use the 2-candidate constructed pair, ordinary eval uses the full served list. No calibration applied (A4 calibration is a separate close-out item); cross-model margin comparison is NOT valid from this file.",
+            "ambiguity": {"n": amb_margins.len(), "margin_mean": amb_mean, "margin_median": amb_median},
+            "ordinary_eval": {"n": eval_margins.len(), "margin_mean": eval_mean, "margin_median": eval_median},
+            "ambiguity_pairs_split_more_confidently_than_eval_median": confidently_split,
+        });
+        let out_path = root.join(format!("train_py/bundles/{}/ambiguity_scores.json", base.key()));
+        std::fs::write(&out_path, serde_json::to_string_pretty(&out)? + "\n")?;
+        println!("written: {out_path:?}");
+        return Ok(());
+    }
+
     let mut summary = Vec::new();
     for base in bases {
         let bundle_dir = root.join("train_py/bundles").join(base.key());
@@ -392,11 +473,26 @@ fn main() -> Result<()> {
         let mut end_to_end_correct = 0u32;
         let mut given_inclusion_correct = 0u32;
         let mut given_inclusion_total = 0u32;
+        // Per-class accuracy: the position-invariance proxy (§10.7).
+        // family_id is "class::label"; the class IS the graph position,
+        // so a label that scores well at one anchor kind and collapses
+        // at another shows up here as class-level variance.
+        let mut per_class: std::collections::BTreeMap<String, (u32, u32)> =
+            std::collections::BTreeMap::new();
         for record in &eval_records {
             let result = ranker.score(record, &device)?;
             let top1 = &result.ranking[0].candidate_id;
+            let class = record
+                .family_id
+                .split("::")
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+            let slot = per_class.entry(class).or_insert((0, 0));
+            slot.1 += 1;
             if *top1 == record.label {
                 end_to_end_correct += 1;
+                slot.0 += 1;
             }
             if record.gold_in_tier1 {
                 given_inclusion_total += 1;
@@ -405,6 +501,15 @@ fn main() -> Result<()> {
                 }
             }
         }
+        let per_class_json: std::collections::BTreeMap<String, serde_json::Value> = per_class
+            .iter()
+            .map(|(k, (hits, total))| {
+                (
+                    k.clone(),
+                    serde_json::json!({"correct": hits, "total": total, "accuracy": *hits as f64 / (*total).max(1) as f64}),
+                )
+            })
+            .collect();
         let n = eval_records.len().max(1) as f64;
         let end_to_end = end_to_end_correct as f64 / n;
         let given_inclusion = given_inclusion_correct as f64 / given_inclusion_total.max(1) as f64;
@@ -425,6 +530,7 @@ fn main() -> Result<()> {
             "top1_given_inclusion": given_inclusion,
             "top1_given_inclusion_correct": given_inclusion_correct,
             "top1_given_inclusion_total": given_inclusion_total,
+            "per_class_accuracy": per_class_json,
         }));
     }
 

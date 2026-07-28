@@ -1,0 +1,16 @@
+{
+  "ambiguity": {
+    "margin_mean": 0.678151718911174,
+    "margin_median": 0.6751269966537279,
+    "n": 37
+  },
+  "ambiguity_pairs_split_more_confidently_than_eval_median": 15,
+  "base": "ms-marco",
+  "bundle_identity": "slm.trained.ms-marco@c5ee24cb",
+  "note": "margins are softmax(top1)-softmax(top2) within one model; ambiguity pairs use the 2-candidate constructed pair, ordinary eval uses the full served list. No calibration applied (A4 calibration is a separate close-out item); cross-model margin comparison is NOT valid from this file.",
+  "ordinary_eval": {
+    "margin_mean": 0.78182992788894,
+    "margin_median": 0.9136935266679009,
+    "n": 98
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "ambiguity": {
+    "margin_mean": 0.595617056609943,
+    "margin_median": 0.6185731454489812,
+    "n": 37
+  },
+  "ambiguity_pairs_split_more_confidently_than_eval_median": 11,
+  "base": "bge-reranker",
+  "bundle_identity": "slm.trained.bge-reranker@2cfc18c9",
+  "note": "margins are softmax(top1)-softmax(top2) within one model; ambiguity pairs use the 2-candidate constructed pair, ordinary eval uses the full served list. No calibration applied (A4 calibration is a separate close-out item); cross-model margin comparison is NOT valid from this file.",
+  "ordinary_eval": {
+    "margin_mean": 0.6981452858604943,
+    "margin_median": 0.8214673821956154,
+    "n": 98
+  }
+}

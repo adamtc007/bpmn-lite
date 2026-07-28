@@ -11,3 +11,4 @@ utterance-engine/train_py/venv/
 utterance-engine/train_py/bundles/*/model.safetensors
 utterance-engine/train_py/bundles/*/tokenizer.json
 utterance-engine/train_py/train_run.log
+utterance-engine/train_py/__pycache__/
