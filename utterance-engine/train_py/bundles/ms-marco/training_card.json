@@ -25,5 +25,14 @@
     "n_val_families": 14,
     "n_test_families": 15
   },
-  "timestamp": "2026-07-28T17:29:15Z"
+  "timestamp": "2026-07-28T17:29:15Z",
+  "temperature": 1.7519309059264299,
+  "calibration": {
+    "method": "temperature scaling, golden-section on log T, val-split NLL",
+    "pack": "pack.none",
+    "n_val": 372,
+    "val_nll_uncalibrated": 1.0137029032390314,
+    "val_nll_calibrated": 0.857652564684715,
+    "note": "temperature only; threshold VALUES are Adam's at G3 (E5)"
+  }
 }

@@ -1,0 +1,16 @@
+{
+  "ambiguity": {
+    "margin_mean": 0.6218996584588127,
+    "margin_median": 0.6933380478157334,
+    "n": 37
+  },
+  "ambiguity_pairs_split_more_confidently_than_eval_median": 9,
+  "base": "modernbert-base",
+  "bundle_identity": "slm.trained.modernbert-base@8949b909",
+  "note": "margins are softmax(top1)-softmax(top2) within one model; ambiguity pairs use the 2-candidate constructed pair, ordinary eval uses the full served list. No calibration applied (A4 calibration is a separate close-out item); cross-model margin comparison is NOT valid from this file.",
+  "ordinary_eval": {
+    "margin_mean": 0.7854069802928724,
+    "margin_median": 0.9554392605996245,
+    "n": 98
+  }
+}
