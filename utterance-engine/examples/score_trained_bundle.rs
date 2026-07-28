@@ -210,6 +210,19 @@ impl TrainedRanker {
     /// shape training/serving share (Adam's finding-5 ruling) -- never
     /// the full board.
     fn score(&self, record: &Example, device: &Device) -> Result<utterance_engine::contract::SlmResult> {
+        self.score_list(record, &record.tier1_list, device)
+    }
+
+    /// Explicit-list variant: the accuracy path above always serves
+    /// tier1_list; this exists for the latency-vs-K probe (timing the
+    /// same forward pass at widened list sizes, e.g. the full board) and
+    /// for scoring constructed candidate pairs (ambiguity-set suite).
+    fn score_list(
+        &self,
+        record: &Example,
+        cand_ids: &[String],
+        device: &Device,
+    ) -> Result<utterance_engine::contract::SlmResult> {
         let query_text = format!("{}\n\n{}", record.utterance, record.context_projection);
         let desc: HashMap<&str, &str> = record
             .board
@@ -217,13 +230,12 @@ impl TrainedRanker {
             .iter()
             .map(|c| (c.canonical_id.as_str(), c.description.as_str()))
             .collect();
-        let cand_texts: Vec<&str> = record
-            .tier1_list
+        let cand_texts: Vec<&str> = cand_ids
             .iter()
             .map(|id| {
                 desc.get(id.as_str())
                     .copied()
-                    .ok_or_else(|| anyhow!("tier1_list id '{id}' not on board"))
+                    .ok_or_else(|| anyhow!("candidate id '{id}' not on board"))
             })
             .collect::<Result<_>>()?;
 
@@ -259,8 +271,7 @@ impl TrainedRanker {
         let logits = self.head.forward(&pooled)?.squeeze(1)?; // (K,)
         let logits: Vec<f32> = logits.to_vec1()?;
 
-        let mut ranking: Vec<RankedCandidate> = record
-            .tier1_list
+        let mut ranking: Vec<RankedCandidate> = cand_ids
             .iter()
             .zip(logits.iter())
             .map(|(id, &score)| {
@@ -313,6 +324,61 @@ fn main() -> Result<()> {
     println!("baseline: tier0_top1_accuracy (C5, tier-0 alone) = {tier0_top1_accuracy:.4}\n");
 
     let device = Device::Cpu;
+
+    // Latency-vs-K probe (close-out suite): `<base-key> latency` times
+    // the identical scoring path at three served-list sizes — the ruled
+    // K=8+NOTA (9), the proposed K=12+NOTA (13), and the full board
+    // (upper bound) — over the whole eval set. Widened lists take the
+    // tier-0 ranking's next candidates in rank order (exactly what a
+    // widened tier1_list would contain); the full-board list is the
+    // board in ranking order. CPU device deliberately: serving latency
+    // is the CPU story, per the T3.4a criteria.
+    if std::env::args().nth(2).as_deref() == Some("latency") {
+        let base = bases[0];
+        let bundle_dir = root.join("train_py/bundles").join(base.key());
+        let ranker = TrainedRanker::load(base, &bundle_dir, &device)?;
+        for &(label, k) in &[("K=8+NOTA (ruled)", 9usize), ("K=12+NOTA (proposed)", 13), ("full board", usize::MAX)] {
+            let mut times_ms: Vec<f64> = Vec::with_capacity(eval_records.len());
+            for record in &eval_records {
+                // Widen from the board's candidate list in board order —
+                // the enriched record stores candidates in the retriever's
+                // canonical order via tier1_list for the first 9; beyond
+                // that, take remaining board candidates not already listed.
+                let mut ids: Vec<String> = record.tier1_list.clone();
+                for c in &record.board.candidates {
+                    if ids.len() >= k {
+                        break;
+                    }
+                    if !ids.contains(&c.canonical_id) {
+                        ids.push(c.canonical_id.clone());
+                    }
+                }
+                let t = std::time::Instant::now();
+                let _ = ranker.score_list(record, &ids, &device)?;
+                times_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            times_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let mean = times_ms.iter().sum::<f64>() / times_ms.len() as f64;
+            let p95 = times_ms[(times_ms.len() as f64 * 0.95) as usize - 1];
+            let actual_k = eval_records
+                .first()
+                .map(|r| {
+                    let mut ids = r.tier1_list.len();
+                    ids += r.board.candidates.iter().filter(|c| !r.tier1_list.contains(&c.canonical_id)).count();
+                    ids.min(k)
+                })
+                .unwrap_or(0);
+            println!(
+                "  {} ({}): list_len={} mean={mean:.1}ms p95={p95:.1}ms over {} utterances",
+                base.key(),
+                label,
+                actual_k,
+                times_ms.len()
+            );
+        }
+        return Ok(());
+    }
+
     let mut summary = Vec::new();
     for base in bases {
         let bundle_dir = root.join("train_py/bundles").join(base.key());

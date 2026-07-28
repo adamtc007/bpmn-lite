@@ -1,6 +1,12 @@
 {
   "corpus_version": "synthetic-v2-beta.eval_enriched",
   "k": 8,
+  "k8_miss_gold_ranks": [
+    9,
+    9,
+    10,
+    11
+  ],
   "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
   "per_class_recall_at_k": {
     "data_object": {
@@ -67,6 +73,32 @@
       "hits": 7,
       "recall": 0.875,
       "total": 8
+    }
+  },
+  "recall_curve": {
+    "01": {
+      "hits": 61,
+      "recall": 0.6224489795918368
+    },
+    "02": {
+      "hits": 74,
+      "recall": 0.7551020408163265
+    },
+    "04": {
+      "hits": 84,
+      "recall": 0.8571428571428571
+    },
+    "08": {
+      "hits": 94,
+      "recall": 0.9591836734693877
+    },
+    "12": {
+      "hits": 98,
+      "recall": 1.0
+    },
+    "16": {
+      "hits": 98,
+      "recall": 1.0
     }
   },
   "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",

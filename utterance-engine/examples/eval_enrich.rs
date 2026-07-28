@@ -98,6 +98,7 @@ fn main() -> Result<()> {
     let mut bad_labels: Vec<String> = Vec::new();
     let mut gold_in_tier1_count = 0u32;
     let mut tier0_top1_count = 0u32;
+    let mut gold_ranks: Vec<usize> = Vec::new(); // non-NOTA entries: gold's 1-based rank in the FULL board ranking
     let mut per_class_recall: BTreeMap<String, (u32, u32)> = BTreeMap::new(); // (hits, total)
 
     for e in &eval_entries {
@@ -131,6 +132,23 @@ fn main() -> Result<()> {
         // top 8 anywhere" -- and is NOT what an uplift comparison means.
         if list.first().map(|s| s.as_str()) == Some(e.label.as_str()) {
             tier0_top1_count += 1;
+        }
+        // Recall@K curve input (close-out directive 2026-07-28): the
+        // retriever ranks the ENTIRE board, so the gold label's exact
+        // 1-based rank is already in hand — recording it costs nothing
+        // and answers "would widening K past 8 close the recall ceiling"
+        // directly (a K=8 miss at rank 9 is one free slot away; a miss
+        // at rank 15 says the embedding is genuinely lost). NOTA labels
+        // have no rank in the tier-0 ranking-proper sense (NOTA is
+        // always appended to the served list); they're excluded here.
+        if e.label != NONE_OF_THE_ABOVE {
+            let rank = result
+                .ranking
+                .iter()
+                .position(|rc| rc.candidate_id == e.label)
+                .map(|p| p + 1)
+                .ok_or_else(|| anyhow!("gold '{}' missing from full board ranking", e.label))?;
+            gold_ranks.push(rank);
         }
         let slot = per_class_recall.entry(e.class_id.clone()).or_insert((0, 0));
         slot.1 += 1;
@@ -188,6 +206,23 @@ fn main() -> Result<()> {
     let n = examples.len().max(1) as f64;
     let recall_at_k = gold_in_tier1_count as f64 / n;
     let tier0_top1_accuracy = tier0_top1_count as f64 / n;
+
+    // Recall@K curve over the same NOTA-counts-as-hit convention as
+    // gold_in_tier1 (NOTA is always appended to the served list, so a
+    // NOTA-labelled entry is served correctly at every K).
+    let nota_count = examples.len() - gold_ranks.len();
+    let curve: BTreeMap<String, serde_json::Value> = [1usize, 2, 4, 8, 12, 16]
+        .iter()
+        .map(|&k| {
+            let hits = nota_count + gold_ranks.iter().filter(|&&r| r <= k).count();
+            (
+                format!("{k:02}"),
+                serde_json::json!({"hits": hits, "recall": hits as f64 / n}),
+            )
+        })
+        .collect();
+    let mut miss_ranks: Vec<usize> = gold_ranks.iter().copied().filter(|&r| r > K).collect();
+    miss_ranks.sort_unstable();
     let per_class_recall_json: BTreeMap<String, serde_json::Value> = per_class_recall
         .iter()
         .map(|(k, (hits, total))| {
@@ -210,6 +245,8 @@ fn main() -> Result<()> {
             "tier0_top1_correct": tier0_top1_count,
             "tier0_top1_accuracy": tier0_top1_accuracy,
         },
+        "recall_curve": curve,
+        "k8_miss_gold_ranks": miss_ranks,
         "per_class_recall_at_k": per_class_recall_json,
         "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
     });
