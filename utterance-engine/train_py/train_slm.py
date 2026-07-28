@@ -189,8 +189,20 @@ def encode_example(tokenizer, record, device, max_length=MAX_LENGTH):
 
 
 def run_epoch(model, tokenizer, records, device, train, opt=None, grad_accum=16, log_every=200, log_prefix=""):
+    # MPS-specific correctness-preserving performance fix: `.item()` forces
+    # a GPU command-buffer sync (`MPSStream::synchronize` /
+    # `waitUntilCompleted`) on every call. Calling it per-example (as an
+    # earlier version of this function did) serializes what should be
+    # async-dispatched GPU work and was confirmed via `sample` on a live
+    # training run to dominate wall-clock -- the main thread sat in
+    # `pthread_cond_wait` waiting on the GPU, not doing CPU work, for most
+    # of its runtime. Loss/correctness are accumulated as on-device
+    # tensors here and synced to Python only at log intervals and epoch
+    # end -- the accumulated VALUES are identical either way; only the
+    # sync frequency changes.
     model.train(train)
-    running_loss, n_correct = 0.0, 0
+    loss_sum = torch.zeros((), device=device)
+    correct_sum = torch.zeros((), device=device)
     if train:
         opt.zero_grad()
     ctx = torch.enable_grad() if train else torch.no_grad()
@@ -204,15 +216,15 @@ def run_epoch(model, tokenizer, records, device, train, opt=None, grad_accum=16,
                 if (i + 1) % grad_accum == 0:
                     opt.step()
                     opt.zero_grad()
-            running_loss += loss.item()
-            n_correct += int(logits.argmax().item() == label_idx)
+            loss_sum += loss.detach()
+            correct_sum += (logits.detach().argmax() == label_idx).to(loss_sum.dtype)
             if train and (i + 1) % log_every == 0:
-                print(f"  {log_prefix}[{i+1}/{len(records)}] loss={running_loss/(i+1):.4f} acc={n_correct/(i+1):.4f}")
+                print(f"  {log_prefix}[{i+1}/{len(records)}] loss={loss_sum.item()/(i+1):.4f} acc={correct_sum.item()/(i+1):.4f}")
     if train:
         opt.step()
         opt.zero_grad()
     n = max(1, len(records))
-    return running_loss / n, n_correct / n
+    return loss_sum.item() / n, correct_sum.item() / n
 
 
 def train_base(base_key, records, split, device, epochs, lr, grad_accum):
