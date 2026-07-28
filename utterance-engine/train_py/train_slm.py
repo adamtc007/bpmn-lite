@@ -242,6 +242,20 @@ def train_base(base_key, records, split, device, epochs, lr, grad_accum):
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     rng = random.Random(SEED)
 
+    # Best-checkpoint selection (fix, 2026-07-28): the first pass through
+    # this script exported whatever the LAST epoch produced, unconditionally.
+    # Real per-epoch val curves showed two of four bases overfitting hard --
+    # val_loss bottoming out early (epoch 0-1) then climbing back up while
+    # train_acc kept climbing toward ~97-98% -- so "last epoch" was
+    # sometimes a materially worse checkpoint than one seen earlier in the
+    # same run. Track val_loss every epoch; keep a CPU deep-copy of the
+    # best state_dict (a live reference would mutate under the next
+    # epoch's optimizer step); export that, not whatever training happened
+    # to end on.
+    best_val_loss = float("inf")
+    best_val_acc = 0.0
+    best_epoch = -1
+    best_state = None
     train_acc = val_acc = val_loss = 0.0
     for epoch in range(epochs):
         order = train_records[:]
@@ -252,6 +266,17 @@ def train_base(base_key, records, split, device, epochs, lr, grad_accum):
         )
         val_loss, val_acc = run_epoch(model, tokenizer, val_records, device, train=False)
         print(f"epoch {epoch} DONE train_acc={train_acc:.4f} val_acc={val_acc:.4f} val_loss={val_loss:.4f}")
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_val_acc = val_acc
+            best_epoch = epoch
+            best_state = {k: v.detach().clone().cpu() for k, v in model.state_dict().items()}
+            print(f"  -> new best (epoch {epoch}, val_loss={val_loss:.4f})")
+
+    final_train_acc, final_val_acc, final_val_loss = train_acc, val_acc, val_loss
+    model.load_state_dict(best_state)
+    model.to(device)
+    print(f"loaded best checkpoint: epoch {best_epoch}, val_loss={best_val_loss:.4f}")
 
     card = dict(
         base=base_key,
@@ -266,9 +291,16 @@ def train_base(base_key, records, split, device, epochs, lr, grad_accum):
         seed=SEED,
         n_train=len(train_records),
         n_val=len(val_records),
-        final_train_acc=train_acc,
-        final_val_acc=val_acc,
-        final_val_loss=val_loss,
+        best_epoch=best_epoch,
+        best_val_loss=best_val_loss,
+        best_val_acc=best_val_acc,
+        # Kept for transparency, deliberately distinct from best_*: the
+        # exported bundle is the BEST checkpoint's weights, not these --
+        # the gap between best_val_loss and final_val_loss IS the
+        # overfitting signal this fix exists to stop silently exporting.
+        final_train_acc=final_train_acc,
+        final_val_acc=final_val_acc,
+        final_val_loss=final_val_loss,
     )
     return model, tokenizer, card
 
