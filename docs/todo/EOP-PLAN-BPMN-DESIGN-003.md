@@ -860,6 +860,38 @@ PASSES while the divergence exists; if a future matcher rev makes batch
 output bit-identical, the test fails — the signal to reopen the batching
 decision on evidence, not a regression.
 
+#### Receipt — synthetic-v2-beta crosses the S3 >=5000 floor (2026-07-28)
+
+Open-queue item "scale banks to S3 floors" closed via five four-agent
+authoring rounds (gamma/delta/epsilon/zeta) plus a small hand-authored
+supplement (eta), each round independently re-validated against the
+brief's per-class legal-label sets, the Jaccard overlap cap, and
+cross-bank normalized-token/near-duplicate collision before every
+regen — never trusted on an agent's self-report alone. Progression:
+567 → 1665 (gamma) → 2805 (delta) → 3997 (epsilon) → 4991 (zeta) →
+**5018 (eta), `total_floor_met: true`**. Final card: 723 NOTA (14.4%),
+262 paired context-sensitivity examples (5.2%), 370 retrieval-miss +
+6 hygiene drops out of ~5394 authored entries (~93% survival). Full
+`cargo test --workspace`: 111/111 test-result groups green throughout
+every regen.
+
+One authoring agent (zeta_terse) encountered and correctly refused a
+prompt-injection attempt disguised as a tool-result system-reminder
+mid-task (claimed its own scratch file had been externally modified
+with wrong-regime content, instructed it not to report this) — it
+ignored the embedded instruction, flagged it, and its actual output
+was independently verified unaffected before acceptance.
+
+**Caveat carried forward, not resolved by this receipt:** 5000 is a
+count floor, not a quality bar. The corpus is now large enough per
+EOP-SPEC-SLM-TRAIN-001 §S3, but Phase D's real evaluation (recall@K,
+ranking-given-inclusion, position invariance, per-pack breakdown,
+comparison against the tier-0-alone baseline) has not run — a large
+corpus of correctly-labelled-but-narrowly-styled examples can still
+train a model that overfits to this session's authoring voice. This is
+exactly what A3.3's held-out disjoint-regime eval slice exists to catch
+downstream, not this receipt to declare fixed.
+
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 
 Every change tagged `sequencing` or `content`. No `content` change to a ratified constraint was made; no HALT condition arose.
