@@ -40,3 +40,7 @@ tokenizers = { version = "0.20", optional = true }
 [[example]]
 name = "candle_loadability_probe"
 required-features = ["candle-probe"]
+
+[[example]]
+name = "score_trained_bundle"
+required-features = ["candle-probe"]

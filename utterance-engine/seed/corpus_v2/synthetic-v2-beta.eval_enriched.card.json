@@ -1,7 +1,7 @@
 {
   "corpus_version": "synthetic-v2-beta.eval_enriched",
   "k": 8,
-  "note": "This IS the C5 baseline receipt (plan Phase D: 'compare against the tier-0 matcher alone') for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
+  "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
   "per_class_recall_at_k": {
     "data_object": {
       "hits": 4,
@@ -74,6 +74,8 @@
   "totals": {
     "examples": 98,
     "gold_in_tier1": 94,
-    "recall_at_k": 0.9591836734693877
+    "recall_at_k": 0.9591836734693877,
+    "tier0_top1_accuracy": 0.4489795918367347,
+    "tier0_top1_correct": 44
   }
 }

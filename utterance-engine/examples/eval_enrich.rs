@@ -97,6 +97,7 @@ fn main() -> Result<()> {
     let mut examples: Vec<Example> = Vec::new();
     let mut bad_labels: Vec<String> = Vec::new();
     let mut gold_in_tier1_count = 0u32;
+    let mut tier0_top1_count = 0u32;
     let mut per_class_recall: BTreeMap<String, (u32, u32)> = BTreeMap::new(); // (hits, total)
 
     for e in &eval_entries {
@@ -121,6 +122,15 @@ fn main() -> Result<()> {
         let gold_in_tier1 = e.label == NONE_OF_THE_ABOVE || list.contains(&e.label);
         if gold_in_tier1 {
             gold_in_tier1_count += 1;
+        }
+        // tier1_list()'s first entry is the tier-0 retriever's OWN #1
+        // pick (rank-ordered, per rank_canonically inside retrieve()) --
+        // this is the real apples-to-apples "tier-0 alone" baseline for
+        // any trained SLM's top-1 accuracy on the same eval set. Recall@K
+        // (gold_in_tier1, above) is a much easier bar -- "is it in the
+        // top 8 anywhere" -- and is NOT what an uplift comparison means.
+        if list.first().map(|s| s.as_str()) == Some(e.label.as_str()) {
+            tier0_top1_count += 1;
         }
         let slot = per_class_recall.entry(e.class_id.clone()).or_insert((0, 0));
         slot.1 += 1;
@@ -177,6 +187,7 @@ fn main() -> Result<()> {
 
     let n = examples.len().max(1) as f64;
     let recall_at_k = gold_in_tier1_count as f64 / n;
+    let tier0_top1_accuracy = tier0_top1_count as f64 / n;
     let per_class_recall_json: BTreeMap<String, serde_json::Value> = per_class_recall
         .iter()
         .map(|(k, (hits, total))| {
@@ -196,9 +207,11 @@ fn main() -> Result<()> {
             "examples": examples.len(),
             "gold_in_tier1": gold_in_tier1_count,
             "recall_at_k": recall_at_k,
+            "tier0_top1_correct": tier0_top1_count,
+            "tier0_top1_accuracy": tier0_top1_accuracy,
         },
         "per_class_recall_at_k": per_class_recall_json,
-        "note": "This IS the C5 baseline receipt (plan Phase D: 'compare against the tier-0 matcher alone') for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
+        "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
     });
 
     let jsonl: String = examples
@@ -216,11 +229,14 @@ fn main() -> Result<()> {
     )?;
 
     println!(
-        "EVAL-ENRICH: {} examples, recall@{K} (C5 baseline, {}) = {:.4} ({}/{})",
+        "EVAL-ENRICH: {} examples, recall@{K} = {:.4} ({}/{}), tier0_top1_accuracy (C5 baseline, {}) = {:.4} ({}/{})",
         examples.len(),
-        retriever.bundle_identity(),
         recall_at_k,
         gold_in_tier1_count,
+        examples.len(),
+        retriever.bundle_identity(),
+        tier0_top1_accuracy,
+        tier0_top1_count,
         examples.len(),
     );
     Ok(())
