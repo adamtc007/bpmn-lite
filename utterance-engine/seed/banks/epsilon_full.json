@@ -1,0 +1,2228 @@
+[
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Kick off a totally new intake process the second a SWIFT MT599 tagged to this client touches down, no manual click needed.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Please walk back everything the flow has already done for this case and leave the file exactly as it was before we started.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Wire this canvas so it just calls out to the enterprise sanctions-remediation workflow and hands the rest over entirely.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Have two data providers race for the ownership_chain_trace result and keep only the one that answers first.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Send the settlement instruction to the custodian right now and mark ACME Fund as cleared.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "So, what did you get up to this weekend \u2014 anything fun planned?",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Skip past the menu you were given and just design whatever you think will work best here.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "There shouldn't be any cap on how many times this whole case cycles through review; just keep it going indefinitely.",
+  "paraphrase_seq": 8
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Whenever a downstream reviewer kicks something back, this design should hop to whatever earlier stage caused the problem and rerun it.",
+  "paraphrase_seq": 9
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Please book the settlement proceeds against the custodian's account before end of day.",
+  "paraphrase_seq": 10
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "This should be one workflow that a completely separate parent process spins up as a subroutine and awaits the outcome of.",
+  "paraphrase_seq": 11
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "If the client withdraws consent partway through, every action already taken on this file needs reversing and their data purged.",
+  "paraphrase_seq": 12
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Let this whole thing spring to life automatically the instant a new custody account notice shows up, rather than a person starting it.",
+  "paraphrase_seq": 13
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "I honestly just want you to draw something clever here \u2014 forget the choices on offer entirely.",
+  "paraphrase_seq": 14
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Approve the ACME Fund mandate outright and let the trading desk know it's cleared to proceed.",
+  "paraphrase_seq": 15
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Once review_documents wraps up, drop a cdd_baseline_check right after it so the baseline diligence runs immediately.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The moment this review clears, chain a jurisdiction_risk_flag onto it as the very next node.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Ahead of this review, we need an ownership_chain_trace so the reviewer has the ownership picture in hand first.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Slot a mandate_signature_verify in right before review_documents so unsigned mandates never even reach the reviewer.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Swap this manual look-over out for an automated transaction_pattern_review, keeping the same connections either side.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This review should become a regulatory_filing_prep task instead, with its existing links carried across untouched.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Compliance signed off that this check is redundant with an earlier gate, so pull review_documents out of the diagram.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This document review no longer serves a purpose on this path, so please strike it out entirely.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Run a flow straight from this review across to the dormancy_check node already sitting on the canvas.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "There's a missing link between review_documents and the sign-off task further along \u2014 please add it.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "From here, have ownership_chain_trace and sanctions_list_diff run side by side, meeting back up before the flow continues.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Whatever the review turns up, let any number of the matching follow-up checks fire together and reconverge afterward.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Run this same verification once for every attachment the client sent, with the count held under nine.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "This review needs a kill switch wired in so an incoming case closure ends the work outright.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "Fit review_documents with a recurring status ping that resets itself and never actually pauses the review.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Turn this into a proper round trip \u2014 fire the query out to the custodian and hold here for the matched reply.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From this point, launch the whole remaining verification set together and only continue once every one has cleared.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Walk through the bundle's documents one at a time here, with a hard stop once eight are done.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "Chase the relationship manager on a set cadence while this runs, and once the chases run dry, bump the case to J. Smith.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "Give this review a three-day fuse; once it blows, abandon the task and take the fallback branch.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "Every evening this review stays open, fire off a quiet status line to the custodian without touching the work itself.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "If this review comes back negative, jump the case back to intake and start the whole thing again.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Instead of replicating this logic, have review_documents delegate outright to our standing cdd_baseline_check process and pick up from its outcome.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The instant chase_client gets an answer, follow it with a mandate_signature_verify on whatever came back.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Once this chase lands a reply, the next node should log the contact outcome against the case.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Right after the outreach succeeds, attach a pep_status_confirm so the fresh contact triggers a recheck.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Before we start chasing, put a step in that checks the client hasn't already replied through another channel.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Ahead of the outreach, a jurisdiction_risk_flag pass would help us prioritise who gets chased hardest.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Wire this chase straight through to the closure task that's already drawn further down the board.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Link chase_client onward to the dormancy_check node sitting later in the flow.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "While we chase the client, let a transaction_pattern_review progress on its own leg, rejoining once both wrap up.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Fork here so the outreach and an ownership_chain_trace advance together, merging before the decision.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "The client's answer should decide which follow-up paths apply, and any of those relevant ones ought to run together before meeting back up.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Past this chase, whichever remediation legs the reply calls for should be able to fire together in a region that reconverges.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "This outreach should repeat once per outstanding document type, never going past six.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Chase each named signatory here individually, with the total capped at five.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "Beyond what it already has, chase_client needs a second, harder trigger that ends everything on a confirmed sanctions hit.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "Wire in a hard stop here too, one that fires the moment an account-closure notice comes through.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "Stack a second self-resetting ping onto this task, one that copies the case supervisor without breaking the chase.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "Alongside what's already running, add a recurring heartbeat aimed at the onboarding desk that never halts the outreach.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Turn this chase into a genuine round trip \u2014 the message goes out, and the task doesn't move until the tied reply lands.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Make this chase block on a correlated reply rather than firing and moving straight on.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Every verification still outstanding should fire together from this chase, with nothing moving forward until each one clears.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Fire off cdd_baseline_check, transaction_pattern_review, and pep_status_confirm all at once here, gating on the full trio.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Work through the client's evidence items individually as part of this chase, stopping once seven are handled.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Touch each listed director in turn during this outreach, with ten as the hard ceiling.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "If these nudges keep landing on deaf ears, allow three more and then route the file up to the custodian.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "Give the client a fixed run of extra prompts here, and once they're spent, hand the matter to a senior reviewer.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "Cap this whole chase at ten days; past that it's dropped and the no-response path takes over.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "This outreach shouldn't run past three weeks \u2014 cut it off then and follow the abandonment branch.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "Every few days this chase remains open, could a note land in the onboarding desk's inbox, leaving the outreach itself untouched?",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "Send J. Smith a standing weekly digest while chase_client is live, with the task itself left undisturbed.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "A dry chase here should push the case backward to intake so document collection restarts from scratch.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Let the client's reply and the compliance deadline notice race each other, and just keep whichever lands first.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Skip the outreach entirely and just note in the register that we've been in touch with the client, then close this out.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Move this reminder off its daily beat and onto a strict Tuesday/Friday rhythm instead.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Slow g_reminder right down so it only wakes once a fortnight.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Could the firing gap here stretch out to four full days?",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Change the arming so the first nudge waits a week and the rest follow every ten days.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "This guard should switch from daily to firing once a month.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Please have the reminder pulse every six hours during the last day before deadline instead of daily.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "The cadence needs tightening \u2014 retime this to fire twice daily rather than once.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "Business wants this nudge landing every second Monday, not on the current daily schedule.",
+  "paraphrase_seq": 8
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "This client deserves more patience \u2014 raise the firing allowance on g_reminder to nine.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "Trim the number of shots this guard gets down to two before it stands down.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "Let this reminder spend up to six attempts, overriding whatever the flow default says.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "Could you lift the budget here from three up to five?",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "Institutional accounts should get a bigger allowance \u2014 set this guard's budget to ten.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "For ACME Fund specifically, this guard should only get one firing before it gives up.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "The usual attempt count is too generous for this case; cap it at four instead.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "When this guard's attempts are exhausted, its continuation should gain a node that hands the file off to J. Smith.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "The escalation path off this guard should grow by one node: raising a formal flag for non-response on the case.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "Add a node to the path that kicks in once the final nudge has gone unanswered \u2014 one asking the custodian to acknowledge the lapse.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "Once every attempt on this guard is used up, its continuation should gain a node that opens a dormancy_check request.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "The moment g_reminder's budget is used up, its route should pick up an escalation-ticket node.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "This guard's escalation leg is missing a step that reassigns the file over to the senior KYC queue \u2014 please add it.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "Append a step to g_reminder's follow-on path that opens a direct call with the client's finance contact.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "A no-chase policy now applies to this account, meaning every part of this reminder cycle should be pulled off the task.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "We've decided against nudging this client at all, so take the entire guard arrangement off the task.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This guard duplicates one we added upstream, so remove it outright.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Ops confirmed the reminders aren't wanted here any more, so clear g_reminder off the task entirely.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Please take this whole reminder setup, escalation tail included, off the task it's currently sitting on.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "The nudge mechanism on this task is being retired; pull it off completely.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This reminder arrangement is no longer required \u2014 delete it along with its escalation path.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Before this nudge goes out, could it check the CRM for whichever language the client prefers to be contacted in?",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Once g_reminder's attempts run out, could the file instead be routed to the standalone compliance escalation process our team maintains?",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "If nobody responds by the guard's last firing, the file needs to return to intake and the evidence gathering has to be redone in full.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "As soon as the paperwork lands, make cdd_baseline_check the very next thing that runs.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The instant this hold clears, attach a mandate_signature_verify immediately downstream.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Ahead of this pause, tell the client exactly which documents are still outstanding.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just before we start waiting here, insert a step confirming the solicitation actually went out.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Documents come in through the portal upstream now, so await_documents is dead weight \u2014 take it out.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This pause for inbound paperwork isn't needed at this point in the flow any more, so remove it.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Turn this passive wait into an active poll against the client's own portal, with the connections carried over unchanged.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Trade this message pause for a human review step instead, with the incoming and outgoing flows untouched.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Add the missing link from this pause forward to the transaction_pattern_review task that's already placed downstream.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "There's a missing edge between await_documents and the screening step further along \u2014 please add it.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "While we hold here, let pep_status_confirm progress on a second leg, joining back up once both finish.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Fork at this pause so ownership_chain_trace runs concurrently, merging before the review continues.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "As soon as the paperwork clears this hold, whichever downstream checks are relevant to the client should fire together and rejoin afterward.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "After the documents arrive, allow whichever combination of follow-up reviews fits the file to run together and meet back up.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Give every attachment we're expecting its own dedicated verification pass here, with the total kept under seven.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "This check should run once for each category of outstanding document, with six as the hard limit.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "Switch the matching rule on this pause so incoming replies key off the client's registry number instead of case_ref.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "From now on, correlate answers to this hold using the fund's account mnemonic instead of case_ref.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "Should a freeze order arrive while we're waiting, this hold needs cancelling outright, so arm it that way.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "Layer a self-renewing nudge onto this pause that pings the client every couple of days but never actually closes the wait out.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "While this hold sits open, prompt the client for the missing paperwork a bounded number of times, then hand the file to J. Smith once those run out.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "Cap this hold at three weeks; past that it should terminate and the flow take the non-delivery route.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "If nothing arrives within twelve business days, end this wait and continue down the chase-failed leg.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "For as long as this hold remains open, drop a short ageing note to operations once a week, without touching the wait itself.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "Compliance would like a quiet daily digest sent in the background for as long as this pause continues.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "This node ought to work as a clear send-then-wait pair \u2014 the solicitation goes first, and the hold only releases on a reply tagged with case_ref.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "This should be a proper exchange \u2014 send the ask out, then pause here for the answer keyed to case_ref.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From this pause, get every still-outstanding verification running at the same moment, and hold the flow until the last one reports in.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Handle whatever files come in through this hold individually, one after another, capped at thirteen overall.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "If either the client's paperwork or a regulator deadline letter turns up first, act on that one alone and bin the other outcome.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Should nothing ever arrive here, credit back the onboarding fee and treat this case as though it never started.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "The second anything lands on this pause, route it straight to the group's central document archive outside this workflow.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The moment the reviewer rules, log their rationale into the case file as the very next step.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Right after this evidence gets signed off, attach a regulatory_filing_prep task downstream.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just ahead of this review, pull together the outstanding risk factors so the reviewer has the full picture.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Before the reviewer even opens this, insert a jurisdiction_risk_flag pass to prioritise their queue.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Second-line review has moved to a different system entirely, which means review_evidence is dead weight on this canvas \u2014 remove it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This manual evidence check is being retired \u2014 please strike it out of the model.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This manual evidence look-over is being automated \u2014 put a scoring engine in its place and leave the surrounding links exactly as they are.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Swap this human step for an automated cdd_baseline_check instead, keeping the surrounding wiring exactly as it is.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Send this review's output directly into the closure task that's sitting further down the board already.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Join review_evidence onward to the dormancy_check node sitting later in the flow.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "The reviewer shouldn't hold up screening, so fork here and let transaction_pattern_review run alongside, rejoining after.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Let ownership_chain_trace progress on a second leg while the reviewer works, merging back before the decision.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "The follow-up paths matching whatever the reviewer flags ought to proceed side by side and reconverge once they're all through.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Past this review, set up a region so that whichever remediation legs apply can proceed together and come back to one path.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Each piece of evidence should get a review pass of its own here, bounded so no more than eight ever run.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Extend that same per-item shape to the beneficial owners \u2014 a review pass for each one, six being the maximum.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "Have the reviewer's sign-off tie back to this node via the evidence bundle's own ID rather than case_ref.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "Change what this wait listens for on completion so it's tied to the onboarding ticket number rather than its current key.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "A mid-review case withdrawal ought to cancel this human step on the spot, so please wire that trigger in.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "Any inbound freeze order should be enough to kill review_evidence outright, so give it that trigger.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "This review deserves a repeating, low-key ping to the reviewer every second day, one that resets each time and never actually halts the work.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "Send the assigned reviewer a fixed number of prompts on this step, and once that allowance is used up, escalate the item to their team lead.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "Cap how long this review can sit at nine working days \u2014 beyond that, cut it loose and let the auto-decision branch take over.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "For every day this review stays open, post a brief status note into the case channel, leaving the review itself completely undisturbed.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "This step should query the custodian for their attestation ahead of the human decision, holding here until the tied answer comes back.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Get the whole remaining KYC verification set firing simultaneously from this review, and keep the flow from advancing until every one lands.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Go through what the client submitted as proof individually at this step, and don't let the count exceed eleven.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "A rejection here should send the case two steps backward and force the evidence bundle to be put together again from nothing.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Just sign the evidence off as approved for the reviewer \u2014 they told me on a call it looked fine.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Let whichever of the two reviewers gets back to us first make the call, and drop the other reviewer's assignment.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The step right after this dispatch should capture the delivery result and write it against the case.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Once this notice has gone out, follow it with a custodian acknowledgement request so custody countersigns what was sent.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "This notice can't leave without J. Smith's sign-off on the wording, so a check for that needs to sit immediately ahead of it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Nothing should be sent from here until a document_expiry_check has run, so that we're never notifying against evidence that's gone stale.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Client notifications run through the statement cycle these days, which makes notify_client surplus on this canvas \u2014 please remove it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This dispatch step is being retired \u2014 the CRM handles client communication now, so remove it.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This client notice is being retired \u2014 put a regulator filing step in its place and leave every connection exactly where it sits.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Swap the outbound message here for a secure-portal publication instead, same links, different node.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "This dispatch is missing a connection to the archive task further along the canvas \u2014 please wire it in.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "There's no path currently linking notify_client to the closure step \u2014 that connection needs adding.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Split the flow at this dispatch so the notice and a transaction_pattern_review run on separate legs, coming back together once both are done.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "The notice can fire while sanctions_list_diff proceeds on a parallel leg \u2014 fork ahead of both and merge once they're finished.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Jurisdiction determines which supplementary notices apply here, so whichever ones are relevant should proceed side by side and reconverge.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Client classification decides which extra notices apply, so let any combination of those fire together before the flow comes back to one path.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Send a separate copy of this notice to each beneficial owner, keeping the total number under fourteen.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "This dispatch needs repeating for every address registered on file, with eleven marking the upper limit.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "Switch how acknowledgements to this notice get matched so they key on the client's registry number instead of case_ref.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "full_sentence",
+  "text": "The receipt this dispatch expects should now match against the notice's own batch reference rather than what it uses today.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Rather than firing this off blind, have the dispatch pause right here until the client's tied acknowledgement comes back.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Rather than fire and forget, push the notice out and then block until the tied confirmation comes back.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From this dispatch, get the whole remaining verification set running at the same time, and don't proceed until every one has answered.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From here, fire cdd_baseline_check, pep_status_confirm, and sanctions_list_diff all together, gating on the full set.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "This dispatch should go out once to every address on record, and the run needs to stop at twelve.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "This dispatch should step through the beneficial owner list one name at a time, with eight as the absolute ceiling.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "If this notice ends up undelivered, put the case back precisely to its prior state and cancel the send altogether.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Forget the design work for a moment \u2014 just send tonight's whole batch of notices out right now.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Might it make more sense to route this notification out to the group communications workflow altogether?",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "When the last per-document pass completes, attach a step that consolidates all the verdicts into a single summary.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The step immediately following this loop should file the now-verified bundle with the custodian.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The node following this block should be a regulatory_filing_prep task, so append that immediately downstream.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "This per-document block shouldn't run before a deduplication pass has already caught repeat files.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "verify_each_document shouldn't start until a completeness check has run first, so slot that in directly upstream.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "At this stage of the flow, checking documents one by one has stopped being necessary \u2014 take the whole block out.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Everything this loop checks is already covered by the registry feed, so verify_each_document and its contents are redundant \u2014 take them out.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This verification body can become a lighter checksum comparison instead \u2014 leave the block's surrounding connections untouched.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Trade this per-document check for the vendor's newer attestation service, with the wiring preserved.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "This loop should feed forward into the sign-off task positioned near the finish.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Route an edge from this loop down to the exception-triage node sitting in the canvas's lower half.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "While documents are still working through this loop, let a transaction_pattern_review advance on a parallel leg, meeting back up before the decision point.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "While this block churns through documents, let ownership_chain_trace progress on a second leg, meeting up afterward.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "The document type coming through should decide which specialist reviews follow this loop, with all the relevant ones firing together and reconverging.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "After this per-document block wraps, allow the applicable remediation legs to run in whatever combination fits and rejoin further along.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Mirror this same per-item shape over the fund's beneficial owners, with six as the maximum count.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "The signatories deserve the identical per-item treatment, with the repetitions never going past five.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "A failed document should trigger a resubmission ask and put this loop on hold until the reply carrying case_ref shows up.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Each time a resubmission goes out from this loop, it needs to sit tight until the custodian's matched confirmation comes back.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Once this per-document work is done, fire off whatever verifications remain in one simultaneous burst and hold for the complete set.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From here, fire cdd_baseline_check, pep_status_confirm, and sanctions_list_diff together, continuing only once all three clear.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "The client's accounts should get this same per-item treatment, handled one at a time and stopping at eleven.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Give each beneficial owner on the list an individual pass here as well, with eight as the hard stop.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "This block shouldn't have any upper bound at all \u2014 just let it work through every document that shows up, without ever stopping.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "A failed document here ought to send the case straight back to the original ask for paperwork so the client can resubmit.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Could this repeating check instead be delegated wholesale to the document-processing microservice we already run elsewhere?",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "This gateway can't rule without a risk summary in hand, so that assembly step needs to sit right ahead of it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just upstream of this choice point, add a step confirming the case snapshot is current.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "full_sentence",
+  "text": "This decision currently has no way to say no \u2014 an exit for declined outcomes needs adding.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "full_sentence",
+  "text": "Could the outcome gateway get an extra arm for cases referred to enhanced due diligence?",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "There's a connection missing from this gateway out to the notification task that's already on the board.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "The approved arm out of this decision doesn't lead anywhere yet \u2014 connect it through to the closure node.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This gateway has stopped earning its place in the flow, so remove it and the routing that hangs off it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "A single path now covers everything this used to route, so the outcome decision can be collapsed out of the flow altogether.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Trade this straightforward approve/reject gate for a risk-tier decision instead, keeping the existing arms exactly where they're attached.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Rather than splitting on outcome, this decision should split on jurisdiction, with every existing connection carried across.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The step directly downstream of this gateway firing should be one that logs the ruling into the audit trail.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Regardless of the verdict, insert a bookkeeping step immediately downstream of this decision, ahead of where the arms actually diverge.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Ahead of any choosing, fork here so cdd_baseline_check and sanctions_list_diff travel together and join before the verdict.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Split the flow at this point so transaction_pattern_review and ownership_chain_trace proceed together, merging again afterward.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Let the result of this decision light up whatever follow-on paths apply, all proceeding at once and meeting again downstream.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "The applicable next steps should be able to run in whatever combination the outcome calls for, then come back together as one.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Apply this same ruling individually across the beneficial owners, capping the repeats at seven.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Apply this identical ruling logic across each listed director, with four as the upper limit.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Have this decision check with the custodian to confirm the outcome before proceeding, pausing for their tied reply.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "Ask the custodian to confirm the result before proceeding, and hold this decision until their matched answer arrives.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Everything still pending from this decision should launch at the same instant, with the flow held back until all of it clears.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "From this decision, fire cdd_baseline_check, pep_status_confirm, and mandate_signature_verify together, waiting on all three.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "Step this outcome check through every account on the list in sequence, and don't let it go past twelve.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Let the two arms of this decision effectively race, and just keep whatever result lands first.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Regardless of what the data says, send today's ACME Fund cases all down the approved arm.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Could this whole decision instead be handed off to the centralized risk-adjudication service we already maintain?",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Once screening clears on this leg, attach a sanctions_list_diff step immediately behind it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "The moment this check finishes, chain a pep_status_confirm onto the same branch.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Before this screening runs, the party names on this leg need normalising first, so add that step ahead of it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just before this check runs, put a jurisdiction_risk_flag pass in on the same branch.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "There's a newer screening service from the vendor now \u2014 put it in this task's place and leave the branch's wiring alone.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Trade this check for a consolidated cdd_baseline_check instead, with the branch wiring left alone.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Since the other leg already runs this identical screen, screen_sanctions is pure duplication on this branch \u2014 take it out.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This check duplicates one running on the other branch \u2014 remove it from this leg.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "There's a connection this task is missing \u2014 one running ahead to the triage node further along the same branch.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "Wire this check through to the transaction_pattern_review task that already exists further along this leg.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Within this same leg, split off a parallel path for mandate_signature_verify to run beside the screening, merging back before the branch ends.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Should a hit surface on this leg, whichever remediation paths apply ought to run together here before the branch reconverges.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Every counterparty on this leg deserves an individual screening pass, with the total capped at fourteen.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "full_sentence",
+  "text": "A case withdrawal anywhere in the wider file should be enough to shut this screening leg down instantly, so wire that trigger in.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "full_sentence",
+  "text": "Fit this screening task with a heartbeat that renews itself on a schedule and never actually shows up to the check as an interruption.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "This branch should fire the screening request out to the vendor and hold in place until their correlated answer comes back.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "This task should fire off whatever verifications remain on this leg all at the same moment, holding until the whole group is back.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "This branch should step through its counterparties individually, one after the other, up to a limit of thirteen.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "Chase the screening vendor a bounded number of times on this leg, and once the chases are spent, kick the file up to the custodian.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "Should this screening still be running after twenty-four hours, cut it off and divert this leg down the fallback route.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.non_interrupting_notification",
+  "regime": "full_sentence",
+  "text": "Send the monitoring desk a status update twice a day for as long as this screening runs, without interrupting it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Should this leg turn up a hit, throw out the whole case and have onboarding begin again from nothing.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Let whichever leg of this fork finishes first be the one that decides the case, discarding whatever the slower one produced.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Right as the flow begins, a jurisdiction_risk_flag step should be the first thing attached off the start.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Right off the start node, attach a mandate_signature_verify as the opening step.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "First thing out of the gate, we need a case-registration step recording the intake timestamp.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "The start is currently dangling \u2014 join it to the cdd_baseline_check node already on the canvas.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "full_sentence",
+  "text": "The start currently has nothing attached \u2014 please wire it into the existing solicitation task.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Right at launch, split screening and document intake onto separate legs so they advance together, rejoining ahead of the review stage.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "Straight out of the gate, let ownership_chain_trace and pep_status_confirm run in tandem, merging ahead of the decision.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "From the very outset, whatever onboarding tracks match this client's profile should proceed together and come back to a single path afterward.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "At the very start, let whichever jurisdiction-specific legs apply fire in combination and reconverge before review.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Open the flow with an individual pass for every sub-fund belonging to the client, capping the total at eighteen.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Start proceedings with its own intake pass for every beneficial owner on file, with nine as the ceiling.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "The flow's opening act should be requesting the client's document pack, with nothing proceeding past the start until the tied reply lands.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "full_sentence",
+  "text": "The very first behaviour here should be requesting the mandate paperwork and holding for the answer tied to case_ref.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "The instant this flow launches, get the opening verification set running all at once, holding everything back until the final one lands.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "Right out of the gate, fire cdd_baseline_check, pep_status_confirm, and sanctions_list_diff together, waiting on all three.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "The flow's first act should be working through each named party one at a time, with eleven as the absolute limit.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "As the opening act, step through the listed directors one at a time, with seven as the maximum.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Rather than a manual launch, have this whole flow spring up automatically the second the registrar's feed reports a new fund.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Might this process instead be spun up as a child invocation from the group onboarding master flow, sharing its context?",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just before this flow completes, a step capturing the final risk rating needs to run.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Immediately ahead of the finish, we need a step asking the custodian to acknowledge closure.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "This workflow shouldn't actually end until the full case bundle has been archived, so add that step just ahead of the finish.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Nothing should complete without a final sanctions_list_diff, so put that just before the end.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "This process needs to release the client's onboarding slot reservation as one of its last acts, right before the finish.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "full_sentence",
+  "text": "Just prior to the end, a step should stamp the completion date into the case record.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This ordinary finish needs to become one that force-terminates every token still in flight, with its incoming link kept as is.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Swap out this plain completion for one that raises an error signal on exit, leaving the same inbound edge in place.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This close needs to become the escalation flavour rather than the plain one, with the wiring carried over as it stands.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Might this ordinary finish be exchanged for one that also emits a completion message, keeping the incoming edge as it is?",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This plain completion should become a compensating close instead, with the inbound connection carried across untouched.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "This ordinary finish should become one that also notifies the group compliance mailbox, edge unchanged.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "An earlier edit to this diagram left this completion point with nothing feeding into it, so clear it away.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "There are now two completion points on this canvas and one of them is surplus \u2014 please remove it.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "The branch that used to feed into this terminus was deleted earlier, so this end node should follow it out.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Nothing on this canvas can reach this finishing point any more, so it should be cleared out of the model.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This terminus has been unreachable since the last edit, so take it out of the model.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "On completion, have the whole thing loop back around to intake and pick up whatever case is next in line.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Right at the end, kick off the standalone archival process we run elsewhere and hold for it to confirm before closing out.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Since the mandate_signature_verify step got rewired to pull its key straight from the client record, case_ref has no reader left, so please delete it.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "J. Smith's team confirmed nothing in this design touches case_ref any more \u2014 please remove the declaration entirely.",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "We swapped every correlation over to the onboarding ticket number last week, which leaves this old declaration doing nothing, so cut it.",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This data object was a scratch artefact from an early draft of the design and was never actually wired into anything \u2014 please delete it.",
+  "paraphrase_seq": 4
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Following the schema simplification for ACME Fund cases, this declaration duplicates one we already keep at the workflow root, so remove the duplicate.",
+  "paraphrase_seq": 5
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "The retention review flagged this data object as stale with zero downstream consumers \u2014 please purge it from the canvas.",
+  "paraphrase_seq": 6
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Please erase this declaration; the field it represents was folded into the client record during the last redesign.",
+  "paraphrase_seq": 7
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This node stopped being useful the day we merged the two intake branches, so please take it off the model.",
+  "paraphrase_seq": 8
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "None of the tasks on this canvas still read from or write to this declaration, so it should be deleted.",
+  "paraphrase_seq": 9
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Please tidy up by removing this leftover declaration \u2014 the correlation approach it supported was scrapped months back.",
+  "paraphrase_seq": 10
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "This data object got orphaned when its one and only consumer moved into the shared subprocess, so please clear it away.",
+  "paraphrase_seq": 11
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "Could you delete this declaration? It was only ever a placeholder while we figured out the correlation strategy, and that's settled now.",
+  "paraphrase_seq": 12
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "full_sentence",
+  "text": "The case_ref field has been superseded everywhere by a composite identifier, so its standalone declaration can be removed.",
+  "paraphrase_seq": 13
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Could this piece of case data be encrypted at rest given how sensitive the underlying reference is?",
+  "paraphrase_seq": 1
+ }
+]

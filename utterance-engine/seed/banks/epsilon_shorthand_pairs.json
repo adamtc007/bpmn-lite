@@ -1,0 +1,2238 @@
+[
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise case_ref, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "case_ref -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "case_ref: purge it and its subtree",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+seal_audit_trail -> End",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "queue +final_report right ahead of End",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "insert +wrap_up_task ahead of End",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End := send_closure_notice, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap End -> aggregate_results",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "End <- verify_signatures (same links)",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise End, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "End -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "End: purge it and its subtree",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: trig := P1D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder cadence -> P2D",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "dsl_shorthand",
+  "text": "retime g_reminder to P3D",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: budget := 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder max-fails -> 6",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "dsl_shorthand",
+  "text": "cap g_reminder at 8 goes",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: +attest_completeness on exhaust",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder exhausted -> +publish_case_summary",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "dsl_shorthand",
+  "text": "append +request_additional_evidence to g_reminder's escalation path",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise g_reminder, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: purge it and its subtree",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "Start -> +confirm_registered_address",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "+tag_high_risk after Start",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "Start -> audit_trail, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect Start => fund_admin_hub",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork Start, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "Start: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "Start: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on Start",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "Start: MI over directors, max 15",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap Start per-entity, cap 20",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "Start: req -> wait, correlate engagement_id",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off Start",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "Start: sanctions+pep in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run pep/adverse_media concurrently off Start, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "Start: for-each accounts, cap 4",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "iterate jurisdictions off Start, max 5",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+escalate_to_senior_reviewer -> outcome",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "queue +notify_administrator right ahead of outcome",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "dsl_shorthand",
+  "text": "outcome: +branch escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "outcome -> risk_scoring, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect outcome => document_index",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise outcome, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "outcome := request_board_resolution, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap outcome -> escalate_to_compliance",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "outcome -> +notify_ops",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "+archive_case after outcome",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork outcome, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "outcome: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "outcome: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on outcome",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "outcome: MI over funds, max 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap outcome per-applicant, cap 12",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "outcome: req -> wait, correlate client_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off outcome",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "outcome: source_of_funds+beneficial_ownership in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run id_verification/address_verification concurrently off outcome, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "outcome: for-each documents, cap 2",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document -> +capture_disposition",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+notify_relationship_manager -> verify_each_document",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise verify_each_document, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document := attest_completeness, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document -> audit_trail, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect verify_each_document => fund_admin_hub",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork verify_each_document, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on verify_each_document",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: MI over directors, max 2",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap verify_each_document per-entity, cap 3",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: req -> wait, correlate client_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off verify_each_document",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: source_of_funds+beneficial_ownership in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run id_verification/address_verification concurrently off verify_each_document, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: for-each accounts, cap 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -> +request_utility_bill",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+request_passport_copy -> notify_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise notify_client, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "notify_client := run_adverse_media_scan, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap notify_client -> confirm_tax_residency",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -> client_portal_update, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork notify_client, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on notify_client",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: MI over documents, max 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap notify_client per-holder, cap 12",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "peg notify_client to client_ref for matching",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: req -> wait, correlate matter_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: source_of_funds+beneficial_ownership in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run id_verification/address_verification concurrently off notify_client, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "notify_client: for-each beneficial_owners, cap 2",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "chase_client -> +seal_audit_trail",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+final_report -> chase_client",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "queue +wrap_up_task right ahead of chase_client",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "chase_client -> compliance_review, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect chase_client => final_signoff",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork chase_client, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on chase_client",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: MI over applicants, max 20",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap chase_client per-beneficial_owner, cap 25",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: int-guard @ PT6H, abort",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: re-arm guard, cycle P1D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: req -> wait, correlate deal_id",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off chase_client",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: kyc_refresh+sanctions in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run source_of_funds/beneficial_ownership concurrently off chase_client, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: for-each entities, cap 8",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "iterate funds off chase_client, max 10",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: remind x12/P14D, then escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: timeout fuse at PT4H",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "chase_client: fyi ping @ PT12H, non-block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -> +confirm_registered_address",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+tag_high_risk -> review_documents",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "review_documents := route_to_compliance, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise review_documents, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -> risk_scoring, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork review_documents, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: MI over beneficial_owners, max 10",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: int-guard @ P14D, abort",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: re-arm guard, cycle PT4H",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: req -> wait, correlate matter_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: source_of_funds+beneficial_ownership in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: for-each holders, cap 30",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: remind x2/P1D, then escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: timeout fuse at P2D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "review_documents: fyi ping @ P3D, non-block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions -> +notify_administrator",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+request_org_chart -> screen_sanctions",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions := confirm_ubo_chain, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap screen_sanctions -> stamp_case_closed",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise screen_sanctions, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions -> final_signoff, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork screen_sanctions, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on screen_sanctions",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: MI over beneficial_owners, max 4",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: int-guard @ P4D, abort",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: re-arm guard, cycle P5D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: req -> wait, correlate onboarding_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off screen_sanctions",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: pep+adverse_media in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run sanctions/adverse_media concurrently off screen_sanctions, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: for-each entities, cap 20",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "iterate funds off screen_sanctions, max 25",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: remind x30/PT6H, then escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "nudge cycle on screen_sanctions, 2 tries then bump up",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: timeout fuse at P2D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "P3D SLA on screen_sanctions, kill on breach",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: fyi ping @ P4D, non-block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "await_documents -> +publish_case_summary",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+request_additional_evidence -> await_documents",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise await_documents, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "await_documents := validate_source_of_funds, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "swap await_documents -> review_director_list",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "await_documents -> client_portal_update, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect await_documents => audit_trail",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork await_documents, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on await_documents",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: MI over holders, max 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap await_documents per-director, cap 6",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "peg await_documents to onboarding_ref for matching",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: int-guard @ P10D, abort",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: re-arm guard, cycle P14D",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: remind x15/PT4H, then escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: timeout fuse at PT12H",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: fyi ping @ PT2H, non-block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "sched notice off await_documents every PT6H, work continues",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: req -> wait, correlate case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: pep+adverse_media in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "run sanctions/adverse_media concurrently off await_documents, sync after",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: for-each entities, cap 5",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -> +confirm_ubo_chain",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "dsl_shorthand",
+  "text": "+stamp_case_closed after review_evidence",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_before",
+  "regime": "dsl_shorthand",
+  "text": "+route_to_mlro -> review_evidence",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "excise review_evidence, seal the gap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.delete_subgraph",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -- delete, no trace left",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence := notify_ops, edges untouched",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -> compliance_review, wire it direct",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.connect",
+  "regime": "dsl_shorthand",
+  "text": "connect review_evidence => final_signoff",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "fork review_evidence, branches concurrent, join after",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: open a par/join around it",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: OR-split, named subsets",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_inclusive_region",
+  "regime": "dsl_shorthand",
+  "text": "open an inclusive branch set on review_evidence",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: MI over beneficial_owners, max 6",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "dsl_shorthand",
+  "text": "wrap review_evidence per-signatory, cap 8",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.set_correlation_source",
+  "regime": "dsl_shorthand",
+  "text": "peg review_evidence to case_ref for matching",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: int-guard @ P14D, abort",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "dsl_shorthand",
+  "text": "hard guard on review_evidence, PT4H timeout",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: re-arm guard, cycle PT12H",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: remind x25/PT2H, then escalate",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: timeout fuse at PT6H",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: fyi ping @ P1D, non-block",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: req -> wait, correlate deal_id",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "dsl_shorthand",
+  "text": "ask + hold pattern off review_evidence",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: kyc_refresh+sanctions in parallel, join-all",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: for-each accounts, cap 6",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "canvas := empty; anchor is null",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "spin up onboarding_v2 as a subroutine, no board open",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "skip the menu, just wire the whole thing yourself",
+  "paraphrase_seq": 3
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "case_ref -> promote to primary key",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "case_ref: mark PII, mask on export",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "End -> spawn a fresh case automatically",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "g_reminder: let it retry forever, no ceiling",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "Start <- msg-start on inbound email, not manual kickoff",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "outcome: whichever arm resolves first wins, race semantics",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "verify_each_document: no ceiling, run till the collection's exhausted",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "notify_client -> keep retrying send indefinitely, no backoff cap",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "chase_client -> compensate, unwind whatever the prior attempt did",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_documents <- goto step 2 if this fails",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_documents -> just approve the case and release funds",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "screen_sanctions: if this branch dies, tear down the sibling branch too",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "await_documents: race the correlated reply against 3d, first wins",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "await_documents -> undo the request, pretend we never asked",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence: hand this to a different reviewer, restart their clock",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "dsl_shorthand",
+  "text": "review_evidence -> spin up the escalation subprocess instead",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "tie this to whatever they send back",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_tie_to_reply"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "terse",
+  "text": "tie this to whatever they send back",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_tie_to_reply"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "fork it wide open",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_fork_wide_open"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "fork it wide open",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_fork_wide_open"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "three's the ceiling here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_three_ceiling"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "spoken",
+  "text": "three's the ceiling here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_three_ceiling"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "make this the on-ramp",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_on_ramp"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "make this the on-ramp",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_on_ramp"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "give this its own lane",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_own_lane"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "give this its own lane",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_own_lane"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "terse",
+  "text": "leave it running quietly in the background",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_quiet_background"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "terse",
+  "text": "leave it running quietly in the background",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_quiet_background"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "give it a second way out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_second_way_out"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "give it a second way out",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_second_way_out"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "make sure none of the legal outcomes get missed",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_nothing_missed"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "terse",
+  "text": "make sure none of the legal outcomes get missed",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_nothing_missed"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_multi_instance_region",
+  "regime": "spoken",
+  "text": "somebody needs to eyeball every one of these, cap it though",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_eyeball_each"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "spoken",
+  "text": "somebody needs to eyeball every one of these, cap it though",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_eyeball_each"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "this needs to go, one way or another",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_swap_or_axe"
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "this needs to go, one way or another",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_swap_or_axe"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "terse",
+  "text": "hold the line till compliance weighs in",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_hold_the_line"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "hold the line till compliance weighs in",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_hold_the_line"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "spoken",
+  "text": "whoever's needed signs off, in parallel",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_whoevers_needed"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "whoever's needed signs off, in parallel",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_whoevers_needed"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "open up another way through here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_new_gate"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "open up another way through here",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_new_gate"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "kick this off alongside the intake step",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_kickoff_pair"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "kick this off alongside the intake step",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_kickoff_pair"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "point this at the deal instead of the case",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_match_key_change"
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "point this at the deal instead of the case",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_match_key_change"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "spoken",
+  "text": "stagger it so we're not asking everything at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_stagger_it"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "spoken",
+  "text": "stagger it so we're not asking everything at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_stagger_it"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "full_sentence",
+  "text": "if they never reply, someone else has to pick it up",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_who_covers_absence"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.append_node",
+  "regime": "full_sentence",
+  "text": "if they never reply, someone else has to pick it up",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_who_covers_absence"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "spoken",
+  "text": "bundle the evidence checks and move only when they're all through",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_bundle_evidence"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "bundle the evidence checks and move only when they're all through",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_bundle_evidence"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "spoken",
+  "text": "put a soft cutoff on it, don't stop the rest",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_cutoff_but_keep_going"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "put a soft cutoff on it, don't stop the rest",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_cutoff_but_keep_going"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "send anything that fails off to its own path",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_reroute_failures"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "send anything that fails off to its own path",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_reroute_failures"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "spoken",
+  "text": "keep drilling until every document's checked off",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_two_docs_deep"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "spoken",
+  "text": "keep drilling until every document's checked off",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_two_docs_deep"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "terse",
+  "text": "park the case here till someone claims it",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_park_the_case"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "park the case here till someone claims it",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_park_the_case"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "never let more than a handful run at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_never_more_than"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "never let more than a handful run at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_never_more_than"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "get everyone's input side by side",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_show_of_hands"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "spoken",
+  "text": "get everyone's input side by side",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_show_of_hands"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "once this clears, send the money",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_release_funds"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "once this clears, send the money",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_release_funds"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "whichever answer lands first wins",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_first_of_replies"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "whichever answer lands first wins",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_first_of_replies"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "loop back two steps if compliance rejects it",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_go_back_two"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "loop back two steps if compliance rejects it",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_go_back_two"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "spin up a helper workflow to handle this bit",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_spin_a_helper"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "spin up a helper workflow to handle this bit",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_spin_a_helper"
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "undo the notice, pretend it never went",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_undo_the_send"
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "undo the notice, pretend it never went",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_undo_the_send"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "keep pinging forever, never stop",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_keep_pinging_forever"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.non_interrupting_notification",
+  "regime": "terse",
+  "text": "keep pinging forever, never stop",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_keep_pinging_forever"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "cap it so only a couple run at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_two_at_a_time"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "cap it so only a couple run at once",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_two_at_a_time"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "spoken",
+  "text": "give them a short window, then it's out of their hands",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_answer_soon_or_else"
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "spoken",
+  "text": "give them a short window, then it's out of their hands",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_answer_soon_or_else"
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.create_parallel_region",
+  "regime": "terse",
+  "text": "add a track for the second reviewer",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_new_reviewer_track"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "add a track for the second reviewer",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_new_reviewer_track"
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "make sure the notice carries the right reference",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_bind_the_notice"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "make sure the notice carries the right reference",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_bind_the_notice"
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_inclusive_region",
+  "regime": "terse",
+  "text": "make sure every possible result has somewhere to go",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_cover_every_angle"
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "make sure every possible result has somewhere to go",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_cover_every_angle"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "pull the pin if this drags past a week",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_pull_the_pin"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "full_sentence",
+  "text": "pull the pin if this drags past a week",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_pull_the_pin"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_parallel_region",
+  "regime": "full_sentence",
+  "text": "keep a shadow copy running alongside in case the first one fails",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_shadow_copy"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "keep a shadow copy running alongside in case the first one fails",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_shadow_copy"
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "cut this off before it does more damage",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_stop_the_bleeding"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "cut this off before it does more damage",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_stop_the_bleeding"
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "double check this before it moves on",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_measure_twice"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.request_and_wait",
+  "regime": "terse",
+  "text": "double check this before it moves on",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_measure_twice"
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "full_sentence",
+  "text": "wait for all of them to check in before moving on",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_everyone_replies_first"
+ },
+ {
+  "class_id": "mi_node",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "wait for all of them to check in before moving on",
+  "paraphrase_seq": 1,
+  "pair_group": "pg_e1_everyone_replies_first"
+ }
+]
