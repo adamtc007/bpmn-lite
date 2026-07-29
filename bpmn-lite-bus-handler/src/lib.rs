@@ -203,7 +203,7 @@ impl BpmnLiteBusHandler {
     /// extra serialization, never a correctness violation).
     async fn spawn_process_with_idempotency(
         &self,
-        plan: &bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan,
+        plan: &bpmn_lite_compiler::dsl::WorkflowExecutionPlan,
         tenant_id: &str,
         idempotency_key: Uuid,
         entry_id: Uuid,
@@ -415,10 +415,10 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 let template_key = get_string_binding(&inputs, "template_key")?;
 
                 // Build manifest registry first because compilation needs it for validation
-                let stub_reg = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new()
+                let stub_reg = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new()
                     .with_demo_bindings();
                 let mut registry =
-                    bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(
+                    bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry::new(
                         stub_reg,
                     );
                 let paths = vec![
@@ -468,7 +468,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     (json, compiled_plan, dsl)
                 } else {
                     let pb = get_string_binding(&inputs, "plan_body")?;
-                    let p: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan =
+                    let p: bpmn_lite_compiler::dsl::WorkflowExecutionPlan =
                         serde_json::from_str(&pb).map_err(|e| {
                             BusServerError::Malformed(format!("Failed to parse plan_body: {}", e))
                         })?;
@@ -519,7 +519,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     BusServerError::Internal(format!("Failed to serialize plan: {}", e))
                 })?;
 
-                let mut stub_reg2 = bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry::new()
+                let mut stub_reg2 = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new()
                     .with_demo_bindings();
                 for (hash, child_plan) in &child_plans {
                     let mut consumes = Vec::new();
@@ -530,7 +530,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     }
                     stub_reg2.register_workflow(
                         hash.clone(),
-                        bpmn_lite_compiler::dsl::linter::BindingDecl {
+                        bpmn_lite_compiler::dsl::BindingDecl {
                             produces: None,
                             consumes,
                             effect_class: Some("idempotent_ensure".into()),
@@ -540,7 +540,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
 
                     let mut child_calls = Vec::new();
                     for node in child_plan.nodes.values() {
-                        if let bpmn_lite_compiler::dsl::plan::ExecutionNode::Task(t) = node {
+                        if let bpmn_lite_compiler::dsl::ExecutionNode::Task(t) = node {
                             let is_hex_hash =
                                 t.plug.len() == 64 && t.plug.chars().all(|c| c.is_ascii_hexdigit());
                             if is_hex_hash {
@@ -552,7 +552,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 }
 
                 let mut registry2 =
-                    bpmn_lite_compiler::dsl::manifest_registry::ManifestPlaceholderRegistry::new(
+                    bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry::new(
                         stub_reg2,
                     );
                 for p in &paths {
@@ -585,7 +585,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                 }
 
                 let diagnostics =
-                    bpmn_lite_compiler::dsl::closure::validate_path_family(&plan, &registry2);
+                    bpmn_lite_compiler::dsl::validate_path_family(&plan, &registry2);
                 if !diagnostics.is_empty() {
                     return Err(BusServerError::Malformed(format!(
                         "Path-family validation failed: {:?}",
@@ -713,7 +713,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                         })?
                 };
 
-                let plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan =
+                let plan: bpmn_lite_compiler::dsl::WorkflowExecutionPlan =
                     serde_json::from_str(&plan_json).map_err(|e| {
                         BusServerError::Malformed(format!("invalid plan JSON: {}", e))
                     })?;

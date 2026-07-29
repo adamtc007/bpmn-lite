@@ -40,7 +40,7 @@ fn default_true() -> bool {
 /// no catalogue signal for graph-authored `ServiceTask` nodes and always
 /// passes `false`/`false`) share the identical formula — never two
 /// divergent implementations of the same rule.
-pub fn derive_delivery_mode(
+pub(crate) fn derive_delivery_mode(
     explicit: Option<DeliveryMode>,
     output_consumed: bool,
     is_must_complete: bool,

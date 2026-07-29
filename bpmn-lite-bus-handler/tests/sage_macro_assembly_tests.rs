@@ -103,8 +103,8 @@ async fn test_sage_transitive_validation_propagation() {
     let mut child_nodes = std::collections::HashMap::new();
     child_nodes.insert(
         "start".to_string(),
-        bpmn_lite_compiler::dsl::plan::ExecutionNode::Start(
-            bpmn_lite_compiler::dsl::plan::StartExecNode {
+        bpmn_lite_compiler::dsl::ExecutionNode::Start(
+            bpmn_lite_compiler::dsl::StartExecNode {
                 id: "start".to_string(),
                 next: "end".to_string(),
                 span: None,
@@ -113,19 +113,19 @@ async fn test_sage_transitive_validation_propagation() {
     );
     child_nodes.insert(
         "end".to_string(),
-        bpmn_lite_compiler::dsl::plan::ExecutionNode::End(
-            bpmn_lite_compiler::dsl::plan::EndExecNode {
+        bpmn_lite_compiler::dsl::ExecutionNode::End(
+            bpmn_lite_compiler::dsl::EndExecNode {
                 id: "end".to_string(),
                 status: "completed".to_string(),
                 span: None,
             },
         ),
     );
-    let child_plan = bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan {
+    let child_plan = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
         workflow_id: "unproved-child".to_string(),
         nodes: child_nodes.into_iter().collect(),
         start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::plan::PlaceholderSchema::default(),
+        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
         mathematically_proved: false,
@@ -147,8 +147,8 @@ async fn test_sage_transitive_validation_propagation() {
     let mut parent_nodes = std::collections::HashMap::new();
     parent_nodes.insert(
         "start".to_string(),
-        bpmn_lite_compiler::dsl::plan::ExecutionNode::Start(
-            bpmn_lite_compiler::dsl::plan::StartExecNode {
+        bpmn_lite_compiler::dsl::ExecutionNode::Start(
+            bpmn_lite_compiler::dsl::StartExecNode {
                 id: "start".to_string(),
                 next: "call-child".to_string(),
                 span: None,
@@ -157,11 +157,11 @@ async fn test_sage_transitive_validation_propagation() {
     );
     parent_nodes.insert(
         "call-child".to_string(),
-        bpmn_lite_compiler::dsl::plan::ExecutionNode::Task(
-            bpmn_lite_compiler::dsl::plan::TaskExecNode {
+        bpmn_lite_compiler::dsl::ExecutionNode::Task(
+            bpmn_lite_compiler::dsl::TaskExecNode {
                 id: "call-child".to_string(),
                 plug: child_hash_hex.clone(),
-                delivery_mode: bpmn_lite_compiler::dsl::plan::DeliveryMode::Blocking,
+                delivery_mode: bpmn_lite_compiler::dsl::DeliveryMode::Blocking,
                 static_args: std::collections::HashMap::new(),
                 next: "end".to_string(),
                 produces_placeholder: None,
@@ -172,8 +172,8 @@ async fn test_sage_transitive_validation_propagation() {
     );
     parent_nodes.insert(
         "end".to_string(),
-        bpmn_lite_compiler::dsl::plan::ExecutionNode::End(
-            bpmn_lite_compiler::dsl::plan::EndExecNode {
+        bpmn_lite_compiler::dsl::ExecutionNode::End(
+            bpmn_lite_compiler::dsl::EndExecNode {
                 id: "end".to_string(),
                 status: "completed".to_string(),
                 span: None,
@@ -182,11 +182,11 @@ async fn test_sage_transitive_validation_propagation() {
     );
 
     // A. Parent is strictly proved (mathematically_proved = true)
-    let parent_plan_strict = bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan {
+    let parent_plan_strict = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
         workflow_id: "strict-parent".to_string(),
         nodes: parent_nodes.clone().into_iter().collect(),
         start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::plan::PlaceholderSchema::default(),
+        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
         mathematically_proved: true,
@@ -248,11 +248,11 @@ async fn test_sage_transitive_validation_propagation() {
     );
 
     // B. Parent is permissive (mathematically_proved = false)
-    let parent_plan_permissive = bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan {
+    let parent_plan_permissive = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
         workflow_id: "permissive-parent".to_string(),
         nodes: parent_nodes.into_iter().collect(),
         start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::plan::PlaceholderSchema::default(),
+        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
         closure_manifest: None,
         regime_version: None,
         mathematically_proved: false,
@@ -300,7 +300,7 @@ async fn test_sage_transitive_validation_propagation() {
         .await
         .expect("load plan")
         .expect("plan should be stored");
-    let saved_plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan =
+    let saved_plan: bpmn_lite_compiler::dsl::WorkflowExecutionPlan =
         serde_json::from_str(&saved_parent).unwrap();
     assert!(!saved_plan.mathematically_proved);
     assert!(

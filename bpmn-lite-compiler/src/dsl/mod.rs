@@ -5,19 +5,19 @@
 //! Entry point: [`compile`] runs all three phases and returns the validated
 //! plan or a [`CompileError`] describing what went wrong.
 
-pub mod ast;
-pub mod closure;
-pub mod dag;
-pub mod frontend;
+mod ast;
+mod closure;
+mod dag;
+mod frontend;
 pub(crate) mod ir_plan;
-pub mod lexer;
-pub mod linter;
-pub mod macros;
-pub mod manifest_registry;
-pub mod pack_build;
-pub mod plan;
-pub mod refactor;
-pub mod rpst;
+mod lexer;
+mod linter;
+mod macros;
+mod manifest_registry;
+mod pack_build;
+mod plan;
+mod refactor;
+mod rpst;
 
 pub use ast::{
     ConditionAst, EndAst, JoinAst, JoinModeAst, LoopAst, NodeAst, SplitAst, SplitFlowAst,
@@ -30,13 +30,23 @@ pub use ir_plan::{project_ir, IrPlanError};
 pub use linter::{
     lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry, SymbolResolution,
 };
+pub use macros::{
+    create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
+    CustomMacroConfig, MacroConfigList, XorBranchConfig,
+};
 pub use manifest_registry::ManifestPlaceholderRegistry;
+pub use pack_build::{
+    derive_version, generate_closure, generate_manifest, validate_pack, PackClosureManifest,
+    WorkflowPackDAG,
+};
 pub use parser::{parse_node_str, parse_workflow_str};
 pub use plan::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, LoopExecNode,
     PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode, SplitMode, StartExecNode,
     TaskExecNode, WorkflowExecutionPlan,
 };
+pub use refactor::{AstMutator, ToSexpr};
+pub use rpst::verify_sese_nesting;
 
 use lexer::lex;
 use parser::Parser;

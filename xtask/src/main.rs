@@ -1248,22 +1248,22 @@ fn pack_build_command(domain: &str) -> Result<()> {
     let dag_content = std::fs::read_to_string(&dag_path)
         .with_context(|| format!("read DAG at {}", dag_path.display()))?;
 
-    let dag: bpmn_lite_compiler::dsl::pack_build::WorkflowPackDAG =
+    let dag: bpmn_lite_compiler::dsl::WorkflowPackDAG =
         serde_yaml::from_str(&dag_content).context("parse DAG yaml")?;
 
     println!("Generating manifest for domain '{}'...", domain);
-    let mut manifest = bpmn_lite_compiler::dsl::pack_build::generate_manifest(&dag)
+    let mut manifest = bpmn_lite_compiler::dsl::generate_manifest(&dag)
         .map_err(|e| anyhow!("generate_manifest error: {}", e))?;
 
     // Derive the version with G5 (lex, dag, sorted pins)
-    let version = bpmn_lite_compiler::dsl::pack_build::derive_version(&manifest, &dag);
+    let version = bpmn_lite_compiler::dsl::derive_version(&manifest, &dag);
     println!("Derived pack version: {}", version);
 
     // Update manifest's catalogue_version
     manifest.catalogue_version = version.clone();
 
     println!("Running G1-G6 validation gates...");
-    bpmn_lite_compiler::dsl::pack_build::validate_pack(&dag, &manifest)
+    bpmn_lite_compiler::dsl::validate_pack(&dag, &manifest)
         .map_err(|errs| anyhow!("Validation failed: {:?}", errs))?;
 
     // Write manifest to disk at <domain>-v<dag.version>.yaml
@@ -1276,7 +1276,7 @@ fn pack_build_command(domain: &str) -> Result<()> {
     println!("Wrote manifest to {}", manifest_path.display());
 
     // Generate and write closure to <domain>-v<dag.version>.closure.yaml
-    let closure = bpmn_lite_compiler::dsl::pack_build::generate_closure(&manifest, &dag);
+    let closure = bpmn_lite_compiler::dsl::generate_closure(&manifest, &dag);
     let closure_yaml = serde_yaml::to_string(&closure).context("serialize closure manifest")?;
     let closure_path = manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
     std::fs::write(&closure_path, &closure_yaml)

@@ -31,7 +31,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use bpmn_lite_compiler::dsl::plan::{ExecutionNode, WorkflowExecutionPlan};
+use bpmn_lite_compiler::dsl::{ExecutionNode, WorkflowExecutionPlan};
 use bpmn_lite_engine::demo::{build_demo_plan, demo_initial_vars};
 use bpmn_lite_store::store::{
     AdminProjectionStore, ArtifactRepository, DesignSessionEventKind, RuntimeStore,
@@ -595,7 +595,7 @@ async fn drive_forward(
     plan: &WorkflowExecutionPlan,
     id: Uuid,
 ) {
-    use bpmn_lite_compiler::dsl::plan::SplitMode;
+    use bpmn_lite_compiler::dsl::SplitMode;
     loop {
         let Ok(Some(mut inst)) = store.load_instance(tenant_id, id).await else {
             break;
@@ -754,8 +754,8 @@ async fn drive_forward(
 }
 
 fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
-    use bpmn_lite_compiler::dsl::plan::JoinMode;
-    use bpmn_lite_compiler::dsl::plan::SplitMode;
+    use bpmn_lite_compiler::dsl::JoinMode;
+    use bpmn_lite_compiler::dsl::SplitMode;
     let mut ordered = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
@@ -998,8 +998,8 @@ async fn get_instance_stack(
 }
 
 fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
-    use bpmn_lite_compiler::dsl::plan::JoinMode;
-    use bpmn_lite_compiler::dsl::plan::SplitMode;
+    use bpmn_lite_compiler::dsl::JoinMode;
+    use bpmn_lite_compiler::dsl::SplitMode;
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
@@ -1612,11 +1612,11 @@ pub(crate) struct MacroApplyResponse {
     diagnostics: Vec<String>,
 }
 
-fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::macros::MacroConfigList> {
+fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::MacroConfigList> {
     let workspace_macros = format!("{}/../macros.yaml", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&workspace_macros).exists() {
         if let Ok(config) =
-            bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&workspace_macros)
+            bpmn_lite_compiler::dsl::MacroConfigList::load_from_file(&workspace_macros)
         {
             return Some(config);
         }
@@ -1624,7 +1624,7 @@ fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::macros::MacroConfigLis
     let server_macros = format!("{}/macros.yaml", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&server_macros).exists() {
         if let Ok(config) =
-            bpmn_lite_compiler::dsl::macros::MacroConfigList::load_from_file(&server_macros)
+            bpmn_lite_compiler::dsl::MacroConfigList::load_from_file(&server_macros)
         {
             return Some(config);
         }
@@ -1634,13 +1634,8 @@ fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::macros::MacroConfigLis
 
 async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoResponse {
     use bpmn_lite_compiler::dsl::{
-        ast::NodeAst,
-        macros::{
-            create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
-            XorBranchConfig,
-        },
-        parse_workflow_str,
-        refactor::{AstMutator, ToSexpr},
+        AstMutator, NodeAst, ToSexpr, XorBranchConfig, create_bounded_retry_macro,
+        create_parallel_split_join, create_xor_split_join, parse_workflow_str,
     };
 
     let mut workflow = match parse_workflow_str(&body.source_code) {
@@ -1916,7 +1911,7 @@ async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoRespon
 }
 
 fn find_all_predecessors_id_in_workflow(
-    workflow: &bpmn_lite_compiler::dsl::ast::WorkflowSource,
+    workflow: &bpmn_lite_compiler::dsl::WorkflowSource,
     target_id: &str,
 ) -> Vec<String> {
     let mut preds = Vec::new();
@@ -1925,41 +1920,41 @@ fn find_all_predecessors_id_in_workflow(
 }
 
 fn find_all_predecessors_id_rec(
-    nodes: &[bpmn_lite_compiler::dsl::ast::NodeAst],
+    nodes: &[bpmn_lite_compiler::dsl::NodeAst],
     target_id: &str,
     acc: &mut Vec<String>,
 ) {
     for node in nodes {
         match node {
-            bpmn_lite_compiler::dsl::ast::NodeAst::Start(s) => {
+            bpmn_lite_compiler::dsl::NodeAst::Start(s) => {
                 if s.next == target_id {
                     acc.push(s.id.clone());
                 }
             }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Task(t) => {
+            bpmn_lite_compiler::dsl::NodeAst::Task(t) => {
                 if t.next == target_id {
                     acc.push(t.id.clone());
                 }
             }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Join(j) => {
+            bpmn_lite_compiler::dsl::NodeAst::Join(j) => {
                 if j.next == target_id {
                     acc.push(j.id.clone());
                 }
             }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Loop(l) => {
+            bpmn_lite_compiler::dsl::NodeAst::Loop(l) => {
                 if l.next == target_id {
                     acc.push(l.id.clone());
                 }
                 find_all_predecessors_id_rec(&l.body, target_id, acc);
             }
-            bpmn_lite_compiler::dsl::ast::NodeAst::Split(s) => {
+            bpmn_lite_compiler::dsl::NodeAst::Split(s) => {
                 for flow in &s.flows {
                     if flow.next == target_id {
                         acc.push(s.id.clone());
                     }
                 }
             }
-            bpmn_lite_compiler::dsl::ast::NodeAst::End(_) => {}
+            bpmn_lite_compiler::dsl::NodeAst::End(_) => {}
         }
     }
 }

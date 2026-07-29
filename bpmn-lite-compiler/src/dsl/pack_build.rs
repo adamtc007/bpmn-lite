@@ -18,7 +18,7 @@ pub struct WorkflowPackDAG {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub enum PackNode {
+enum PackNode {
     VerbLocal {
         id: String,
         inputs: Vec<PortSpec>,
@@ -37,14 +37,14 @@ pub enum PackNode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PortSpec {
+struct PortSpec {
     pub name: String,
     pub type_name: String,
     pub required: bool,
 }
 
 impl PackNode {
-    pub fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         match self {
             PackNode::VerbLocal { id, .. } => id,
             PackNode::State { name, .. } => name,
@@ -145,7 +145,7 @@ pub fn generate_manifest(dag: &WorkflowPackDAG) -> Result<Manifest, String> {
     Manifest::load_from_yaml(&yaml_str).map_err(|e| e.to_string())
 }
 
-pub fn resolve_external_pack(
+fn resolve_external_pack(
     domain: &str,
     content_hash: &str,
 ) -> Result<(Manifest, PackClosureManifest), String> {
@@ -501,7 +501,7 @@ pub struct PackClosureManifest {
     pub dependencies: Vec<ExternalReferencePin>,
 }
 
-pub fn compute_canonical_hash(lex: &Manifest, dag: &WorkflowPackDAG) -> String {
+fn compute_canonical_hash(lex: &Manifest, dag: &WorkflowPackDAG) -> String {
     let mut hasher = Hasher::new();
     let lex_yaml = lex.to_yaml().unwrap_or_default();
     let dag_json = serde_json::to_string(dag).unwrap_or_default();

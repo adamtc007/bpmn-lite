@@ -73,7 +73,7 @@ fn ctx(local_verb_id: &str, role: &str) -> InvocationContext {
 /// — the point under test is that `project_ir`'s OUTPUT instantiates, not
 /// the session/DAG machinery upstream of it, which WS-B.4's own tests
 /// already cover).
-fn build_graph_authored_plan() -> bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan {
+fn build_graph_authored_plan() -> bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
     use bpmn_lite_compiler::ir::{IREdge, IRGraph, IRNode};
     let mut g: IRGraph = IRGraph::new();
     let s = g.add_node(IRNode::Start { id: "start".into() });
@@ -103,7 +103,7 @@ async fn graph_authored_plan_defines_a_template() {
 }
 
 async fn define_template(
-    plan: bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan,
+    plan: bpmn_lite_compiler::dsl::WorkflowExecutionPlan,
 ) -> String {
     let plan_body = serde_json::to_string(&plan).unwrap();
     let store = Arc::new(bpmn_lite_store::MemoryStore::new());

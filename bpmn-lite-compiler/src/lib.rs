@@ -27,7 +27,7 @@ pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
 use anyhow::{anyhow, Result};
 use bpmn_lite_types::{ArtifactEnvelope, ExecutableWorkflow};
-use dsl::frontend::{FrontendError, WorkflowFrontend};
+use dsl::{FrontendError, WorkflowFrontend};
 
 /// Marker name used at compiler/runtime boundaries: only verifier-admitted
 /// artifacts can be returned by the compiler.
@@ -85,9 +85,9 @@ impl Compiler {
     }
 
     pub fn lower_dsl(
-        plan: &dsl::plan::WorkflowExecutionPlan,
+        plan: &dsl::WorkflowExecutionPlan,
     ) -> std::result::Result<VerifiedWorkflow, FrontendError> {
-        dsl::frontend::lower_plan(plan)
+        dsl::lower_plan(plan)
     }
 }
 

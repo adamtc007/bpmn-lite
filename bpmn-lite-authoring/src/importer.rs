@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::dsl::plan::{
+use bpmn_lite_compiler::dsl::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, PlaceholderSchema,
     SplitExecFlow, SplitExecNode, SplitMode, StartExecNode, TaskExecNode, WorkflowExecutionPlan,
+    verify_sese_nesting,
 };
-use bpmn_lite_compiler::dsl::rpst::verify_sese_nesting;
 use bpmn_lite_compiler::ir::{GatewayDirection, IRGraph, IRNode};
 use petgraph::graph::NodeIndex;
 use std::collections::{BTreeMap, HashMap};

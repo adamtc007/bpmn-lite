@@ -23,8 +23,7 @@
 
 use std::sync::OnceLock;
 
-use bpmn_lite_compiler::dsl::frontend::lower_plan;
-use bpmn_lite_compiler::dsl::linter::StubPlaceholderRegistry;
+use bpmn_lite_compiler::dsl::{lower_plan, StubPlaceholderRegistry};
 use libfuzzer_sys::fuzz_target;
 
 fn registry() -> &'static StubPlaceholderRegistry {

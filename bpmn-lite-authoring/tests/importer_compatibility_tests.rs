@@ -1,5 +1,5 @@
 use bpmn_lite_authoring::importer::import_zeebe_bpmn;
-use bpmn_lite_compiler::dsl::plan::ExecutionNode;
+use bpmn_lite_compiler::dsl::ExecutionNode;
 
 // Helper to construct a basic definitions envelope around a process body.
 fn wrap_process(id: &str, body: &str) -> String {
