@@ -9,7 +9,7 @@ use bpmn_lite_types::events::RuntimeEvent;
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
 use ffi_dispatcher::FfiDispatcher;
-use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
+use ffi_types::{FfiCall, FfiIncidentClass, FfiResult};
 use futures::{stream, StreamExt};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;

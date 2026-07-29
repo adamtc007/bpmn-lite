@@ -19,13 +19,13 @@
 
 #![forbid(unsafe_code)]
 
-pub mod canonical;
-pub mod idempotency;
-pub mod owner;
-pub mod record;
-pub mod schema;
-pub mod snapshot;
-pub mod template;
+mod canonical;
+mod idempotency;
+mod owner;
+mod record;
+mod schema;
+mod snapshot;
+mod template;
 pub mod wire;
 
 pub use canonical::compute_template_id;

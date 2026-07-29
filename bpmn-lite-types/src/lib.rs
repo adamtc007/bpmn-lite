@@ -35,9 +35,10 @@ pub use canonical::{CanonicalDecodeError, CanonicalEncode, CanonicalReader, Cano
 pub use concurrency::*;
 pub use events::*;
 pub use ffi_bindings::*;
-pub use integrity::IntegrityViolation;
+pub use integrity::{compute_instance_integrity_hash, IntegrityViolation};
 pub use integrity_rings::{IntegrityError, TripwireSurface};
 pub use persistence::*;
+pub use session_stack::*;
 pub use transition::*;
 pub use types::*;
 pub use uuid::Uuid;

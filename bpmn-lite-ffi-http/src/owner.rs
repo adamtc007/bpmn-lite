@@ -9,8 +9,8 @@ use std::time::Instant;
 use anyhow::Result;
 use async_trait::async_trait;
 use ffi_types::{
-    FfiExecutionOwner, FfiTemplate, FieldSchema, Idempotency, compute_template_id,
-    wire::{FfiCall, FfiIncidentClass, FfiResult},
+    FfiCall, FfiExecutionOwner, FfiIncidentClass, FfiResult, FfiTemplate, FieldSchema,
+    Idempotency, compute_template_id,
 };
 
 use crate::template::{HttpIdempotency, HttpMethod, HttpTemplateConfig};

@@ -7,9 +7,9 @@ use dmn_lite_types::EvalError;
 use dmn_lite_types::compiled::VerifiedDecision;
 use dmn_lite_types::ir::{FieldSchema, ResolvedType, TypedValue};
 use dmn_lite_types::values::TypedInputContextBuilder;
-use ffi_types::wire::{FfiCall, FfiIncidentClass, FfiResult};
 use ffi_types::{
-    FfiExecutionOwner, FfiTemplate, FieldSchema as FfiFieldSchema, Idempotency, compute_template_id,
+    FfiCall, FfiExecutionOwner, FfiIncidentClass, FfiResult, FfiTemplate,
+    FieldSchema as FfiFieldSchema, Idempotency, compute_template_id,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
