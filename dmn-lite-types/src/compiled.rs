@@ -137,22 +137,40 @@ pub struct CompiledDecision {
 /// not a bare `CompiledDecision`.  This prevents unverified bytecode from
 /// reaching the VM.
 ///
-/// **Construction discipline**: only `dmn_lite_compiler::verify::verify()`
-/// should call `VerifiedDecision::new_verified()`.  Calling it elsewhere
-/// bypasses the verifier and produces undefined VM behaviour.  The discipline
-/// is documentary (not enforced by the type system) to avoid a circular
-/// dependency between the engine (which consumes `VerifiedDecision`) and the
-/// compiler (which produces it).  See Phase 1.4 §3.11.
+/// **Construction discipline, compiler-enforced (pub-scope audit,
+/// 2026-07-29):** `new_verified` is `pub(crate)` — the only code in the
+/// entire workspace that can construct a `VerifiedDecision` is this
+/// crate's own [`crate::verify()`]. Earlier this discipline was
+/// documentary only (`new_verified` was `pub fn`, callable from
+/// anywhere), with the stated reason being a circular dependency: the
+/// verifier lived in `dmn-lite-compiler`, which depends on
+/// `dmn-lite-types`, so `dmn-lite-types` couldn't gate construction
+/// without depending back on `dmn-lite-compiler`. Fixed by moving the
+/// verifier itself into `dmn-lite-types` (it only ever touched
+/// `CompiledDecision`/`Instr`/`HitPolicy`, all defined here already) —
+/// `dmn-lite-compiler::{verify, VerifierError}` are now a thin
+/// pass-through re-export for existing call sites. See Phase 1.4 §3.11
+/// for the original construction-discipline rationale.
+///
+/// Compiler-checked receipt for the claim above — this doctest compiles
+/// as an external crate (same as any real downstream consumer, e.g.
+/// `dmn-lite-compiler`), so it proves the construction path is actually
+/// sealed, not just documented as sealed:
+///
+/// ```compile_fail
+/// # let decision: dmn_lite_types::CompiledDecision = todo!();
+/// // pub(crate) to dmn-lite-types — unreachable from here.
+/// let _ = dmn_lite_types::VerifiedDecision::new_verified(decision);
+/// ```
 #[derive(Debug, Clone)]
 pub struct VerifiedDecision(CompiledDecision);
 
 impl VerifiedDecision {
     /// Wrap a compiled decision after it has been verified.
     ///
-    /// **Only call this from `dmn_lite_compiler::verify::verify()`.**
-    /// Any other caller bypasses verification and violates the invariants
-    /// the VM depends on.
-    pub fn new_verified(decision: CompiledDecision) -> Self {
+    /// `pub(crate)`: only [`crate::verify()`] may call this — see the
+    /// struct's doc comment.
+    pub(crate) fn new_verified(decision: CompiledDecision) -> Self {
         Self(decision)
     }
 

@@ -4,16 +4,19 @@
 //! decision that passes verification is safe to execute by the stack VM.
 //!
 //! The verifier runs once at compile time; the VM never re-verifies.
+//!
+//! Lives in `dmn-lite-types` (not `dmn-lite-compiler`, where it originated)
+//! specifically so `VerifiedDecision::new_verified` can be `pub(crate)`:
+//! this is the crate's only caller, so it's the only code in the workspace
+//! that can construct a `VerifiedDecision` at all. `dmn-lite-compiler`
+//! re-exports `verify`/`VerifierError` at its own root as a thin
+//! pass-through for existing call sites — see its `lib.rs`.
 
 use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use dmn_lite_types::{
-    {CompiledDecision, VerifiedDecision},
-    Instr,
-    HitPolicy,
-};
+use crate::{CompiledDecision, HitPolicy, Instr, VerifiedDecision};
 
 // ── VerifierError ─────────────────────────────────────────────────────────────
 

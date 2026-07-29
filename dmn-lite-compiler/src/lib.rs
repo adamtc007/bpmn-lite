@@ -21,7 +21,6 @@ mod catalogue_loader;
 mod emit;
 mod hash;
 mod lower;
-mod verify;
 
 pub use catalogue_loader::{load_catalogue_from_path, load_catalogue_from_str};
 pub use dmn_lite_types::TypedDecision;
@@ -29,7 +28,12 @@ pub use dmn_lite_types::{
     ArtifactHash, Catalogue, CatalogueError, CompileError, CompileWarning, CompiledDecision,
     VerifiedDecision,
 };
-pub use verify::{verify, VerifierError};
+// The bytecode verifier lives in dmn-lite-types now — VerifiedDecision::
+// new_verified is pub(crate) there, so dmn-lite-types' own verify() is the
+// only code anywhere that can construct one. This is a thin pass-through
+// so existing `dmn_lite_compiler::{verify, VerifierError}` call sites keep
+// working unchanged.
+pub use dmn_lite_types::{verify, VerifierError};
 
 use dmn_lite_parser::Source;
 use std::fmt;
@@ -100,7 +104,7 @@ pub enum CompileAndVerifyError {
 /// On semantic error returns `Err(CompileErrors)`.
 ///
 /// The resulting decision is **unverified**. Pass to
-/// [`verify::verify()`] or use [`compile_and_verify()`].
+/// [`verify()`] or use [`compile_and_verify()`].
 #[allow(clippy::result_large_err)]
 pub fn compile(
     source: Source,
@@ -128,7 +132,7 @@ pub fn compile_and_verify(
 ) -> Result<VerifiedDecision, CompileAndVerifyError> {
     let compiled =
         compile(source, catalogue, source_text).map_err(CompileAndVerifyError::Compile)?;
-    verify::verify(compiled).map_err(CompileAndVerifyError::Verify)
+    verify(compiled).map_err(CompileAndVerifyError::Verify)
 }
 
 /// Lower source to a typed predicate IR, returning all diagnostics including

@@ -25,6 +25,7 @@ mod ir;
 mod predicates;
 mod trace;
 mod values;
+mod verify;
 
 pub use analysis::{
     AnalysisFinding, AnalysisReport, CostBound, FieldOverlap, FindingKind, GapSummary,
@@ -48,3 +49,4 @@ pub use values::{
     InputContextError, TypedInputContext, TypedInputContextBuilder, TypedOutputContext,
     compute_schema_hash,
 };
+pub use verify::{verify, VerifierError};
