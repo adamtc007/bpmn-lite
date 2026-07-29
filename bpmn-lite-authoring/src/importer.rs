@@ -300,19 +300,16 @@ pub fn import_zeebe_bpmn(
 
     let start_node = start_node_id.ok_or_else(|| anyhow!("BPMN XML lacks Start node"))?;
 
-    let mut plan = WorkflowExecutionPlan {
-        workflow_id: workflow_id.to_string(),
+    let plan = WorkflowExecutionPlan::new(
+        workflow_id.to_string(),
         nodes,
         start_node,
-        placeholder_schema: PlaceholderSchema {
+        PlaceholderSchema {
             slots: HashMap::new(),
         },
-        closure_manifest: None,
-        regime_version: std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
-        mathematically_proved: true,
-        unsafe_breeches: vec![],
-        compiled_bytecode: None,
-    };
+        None,
+        std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
+    );
 
     // 4. Verify SESE structure (DFS stack walk)
     if let Err(e) = verify_sese_nesting(&plan) {
@@ -321,7 +318,6 @@ pub fn import_zeebe_bpmn(
         }
     }
 
-    plan.analyze_safety();
     Ok(plan)
 }
 
@@ -532,10 +528,10 @@ mod tests {
             res_green
         );
         let plan = res_green.unwrap();
-        assert_eq!(plan.workflow_id, "green_wf");
-        assert_eq!(plan.start_node, "start");
-        assert!(plan.nodes.contains_key("split"));
-        assert!(plan.nodes.contains_key("join"));
+        assert_eq!(plan.workflow_id(), "green_wf");
+        assert_eq!(plan.start_node(), "start");
+        assert!(plan.nodes().contains_key("split"));
+        assert!(plan.nodes().contains_key("join"));
 
         // 2. Red fixture (invalid non-SESE with crossing boundaries) is rejected with error
         let res_red = import_zeebe_bpmn(INVALID_CROSSING_XML, "red_wf", false);
@@ -561,9 +557,9 @@ mod tests {
             "Expected invalid crossing gateways to be accepted in permissive mode"
         );
         let plan = res_red.unwrap();
-        assert!(!plan.mathematically_proved);
+        assert!(!plan.mathematically_proved());
         assert!(plan
-            .unsafe_breeches
+            .unsafe_breeches()
             .contains(&"BPMN_NON_SESE_TOPOLOGY".to_string()));
     }
 

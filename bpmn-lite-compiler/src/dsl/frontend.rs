@@ -653,7 +653,6 @@ mod tests {
             regime_version: None,
             mathematically_proved: true,
             unsafe_breeches: Vec::new(),
-            compiled_bytecode: None,
         }
     }
 

@@ -6,6 +6,21 @@ use dsl_bus_server::{InvocationContext, InvocationDispatcher};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Test-only helper to fabricate a plan's governance state directly,
+/// bypassing `analyze_safety()` — mirrors how bus-handler receives a
+/// foreign, already-compiled `plan_body` over the wire: as data, via
+/// deserialization, not via `WorkflowExecutionPlan::new()`.
+fn plan_with_forced_governance(
+    plan: bpmn_lite_compiler::dsl::WorkflowExecutionPlan,
+    mathematically_proved: bool,
+    unsafe_breeches: Vec<String>,
+) -> bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
+    let mut value = serde_json::to_value(&plan).unwrap();
+    value["mathematically_proved"] = serde_json::json!(mathematically_proved);
+    value["unsafe_breeches"] = serde_json::json!(unsafe_breeches);
+    serde_json::from_value(value).unwrap()
+}
+
 struct DummyAdvancer;
 #[async_trait::async_trait]
 impl bpmn_lite_bus_handler::ProcessAdvancer for DummyAdvancer {
@@ -121,20 +136,18 @@ async fn test_sage_transitive_validation_propagation() {
             },
         ),
     );
-    let child_plan = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
-        workflow_id: "unproved-child".to_string(),
-        nodes: child_nodes.into_iter().collect(),
-        start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
-        closure_manifest: None,
-        regime_version: None,
-        mathematically_proved: false,
-        unsafe_breeches: vec!["BPMN_BOUNDARY_EVENT_BYPASS"]
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect(),
-        compiled_bytecode: None,
-    };
+    let child_plan = plan_with_forced_governance(
+        bpmn_lite_compiler::dsl::WorkflowExecutionPlan::new(
+            "unproved-child".to_string(),
+            child_nodes.into_iter().collect(),
+            "start".to_string(),
+            bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
+            None,
+            None,
+        ),
+        false,
+        vec!["BPMN_BOUNDARY_EVENT_BYPASS".to_string()],
+    );
     let child_body = serde_json::to_string(&child_plan).unwrap();
     let child_hash = *blake3::hash(child_body.as_bytes()).as_bytes();
     let child_hash_hex = hex::encode(child_hash);
@@ -182,17 +195,14 @@ async fn test_sage_transitive_validation_propagation() {
     );
 
     // A. Parent is strictly proved (mathematically_proved = true)
-    let parent_plan_strict = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
-        workflow_id: "strict-parent".to_string(),
-        nodes: parent_nodes.clone().into_iter().collect(),
-        start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
-        closure_manifest: None,
-        regime_version: None,
-        mathematically_proved: true,
-        unsafe_breeches: vec![],
-        compiled_bytecode: None,
-    };
+    let parent_plan_strict = bpmn_lite_compiler::dsl::WorkflowExecutionPlan::new(
+        "strict-parent".to_string(),
+        parent_nodes.clone().into_iter().collect(),
+        "start".to_string(),
+        bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
+        None,
+        None,
+    );
     let strict_body = serde_json::to_string(&parent_plan_strict).unwrap();
 
     let auth = dsl_bus_protocol::v1::AuthorityContext {
@@ -248,17 +258,18 @@ async fn test_sage_transitive_validation_propagation() {
     );
 
     // B. Parent is permissive (mathematically_proved = false)
-    let parent_plan_permissive = bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
-        workflow_id: "permissive-parent".to_string(),
-        nodes: parent_nodes.into_iter().collect(),
-        start_node: "start".to_string(),
-        placeholder_schema: bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
-        closure_manifest: None,
-        regime_version: None,
-        mathematically_proved: false,
-        unsafe_breeches: vec![],
-        compiled_bytecode: None,
-    };
+    let parent_plan_permissive = plan_with_forced_governance(
+        bpmn_lite_compiler::dsl::WorkflowExecutionPlan::new(
+            "permissive-parent".to_string(),
+            parent_nodes.into_iter().collect(),
+            "start".to_string(),
+            bpmn_lite_compiler::dsl::PlaceholderSchema::default(),
+            None,
+            None,
+        ),
+        false,
+        vec![],
+    );
     let permissive_body = serde_json::to_string(&parent_plan_permissive).unwrap();
 
     let inputs_permissive = vec![
@@ -289,9 +300,7 @@ async fn test_sage_transitive_validation_propagation() {
 
     // Stored plan should have TRANSITIVE_UNPROVED_CALL breech
     let mut expected_parent_plan = parent_plan_permissive;
-    expected_parent_plan
-        .unsafe_breeches
-        .push("TRANSITIVE_UNPROVED_CALL".to_string());
+    expected_parent_plan.mark_transitive_unproved_call();
     let expected_parent_body = serde_json::to_string(&expected_parent_plan).unwrap();
     let expected_parent_hash = *blake3::hash(expected_parent_body.as_bytes()).as_bytes();
 
@@ -302,10 +311,10 @@ async fn test_sage_transitive_validation_propagation() {
         .expect("plan should be stored");
     let saved_plan: bpmn_lite_compiler::dsl::WorkflowExecutionPlan =
         serde_json::from_str(&saved_parent).unwrap();
-    assert!(!saved_plan.mathematically_proved);
+    assert!(!saved_plan.mathematically_proved());
     assert!(
         saved_plan
-            .unsafe_breeches
+            .unsafe_breeches()
             .contains(&"TRANSITIVE_UNPROVED_CALL".to_string())
     );
 }

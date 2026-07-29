@@ -277,18 +277,14 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
         }
     }
 
-    let mut plan = WorkflowExecutionPlan {
+    let plan = WorkflowExecutionPlan::new(
         workflow_id,
         nodes,
-        start_node: ir[start_idx].id().to_owned(),
-        placeholder_schema: PlaceholderSchema::default(),
-        closure_manifest: Some(serde_json::json!({ "dependencies": [] })),
-        regime_version: std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
-        mathematically_proved: true,
-        unsafe_breeches: Vec::new(),
-        compiled_bytecode: None,
-    };
-    plan.analyze_safety();
+        ir[start_idx].id().to_owned(),
+        PlaceholderSchema::default(),
+        Some(serde_json::json!({ "dependencies": [] })),
+        std::env::var("BPMN_LITE_REGIME_VERSION").ok(),
+    );
 
     validate_dag(&plan).map_err(IrPlanError::DagInvalid)?;
 

@@ -384,7 +384,7 @@ async fn next_step(
 
     // Simulate result delivery for callout nodes, then drive forward through
     // any immediately following gateways/end events without touching the bus.
-    if let Some(ExecutionNode::Task(t)) = plan.nodes.get(&node_id) {
+    if let Some(ExecutionNode::Task(t)) = plan.nodes().get(&node_id) {
         if let Some(ref placeholder_name) = t.produces_placeholder {
             let val = if let Some(ref outputs) = next_step_body.outputs {
                 outputs.get(placeholder_name).cloned()
@@ -523,7 +523,7 @@ async fn create_instance(
     let instance = ProcessInstance {
         instance_id,
         tenant_id: tenant_id.to_owned(),
-        process_key: plan.workflow_id.clone(),
+        process_key: plan.workflow_id().to_string(),
         bytecode_version: [0u8; 32],
         domain_payload: "{}".into(),
         domain_payload_hash: [0u8; 32],
@@ -539,7 +539,7 @@ async fn create_instance(
         integrity_hash: None,
         quarantine_state: None,
         plan_hash: Some(hash),
-        current_node_id: Some(plan.start_node.clone()),
+        current_node_id: Some(plan.start_node().to_string()),
         placeholder_values,
     };
     let claim = bpmn_lite_types::Claim::new(
@@ -613,7 +613,7 @@ async fn drive_forward(
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        match plan.nodes.get(&node_id) {
+        match plan.nodes().get(&node_id) {
             Some(ExecutionNode::Start(n)) => {
                 inst.current_node_id = Some(n.next.clone());
                 let _ = commit_demo_instance(store, &inst).await;
@@ -759,13 +759,13 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
     let mut ordered = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
-    queue.push_back(plan.start_node.clone());
+    queue.push_back(plan.start_node().to_string());
     while let Some(curr) = queue.pop_front() {
         if !visited.insert(curr.clone()) {
             continue;
         }
         ordered.push(curr.clone());
-        if let Some(node) = plan.nodes.get(&curr) {
+        if let Some(node) = plan.nodes().get(&curr) {
             match node {
                 ExecutionNode::Start(n) => {
                     queue.push_back(n.next.clone());
@@ -792,7 +792,7 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
         }
     }
     // Just in case we missed any nodes, add them
-    for id in plan.nodes.keys() {
+    for id in plan.nodes().keys() {
         if !visited.contains(id) {
             ordered.push(id.clone());
         }
@@ -801,7 +801,7 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
     ordered
         .iter()
         .filter_map(|id| {
-            let node = plan.nodes.get(id)?;
+            let node = plan.nodes().get(id)?;
             Some(match node {
                 ExecutionNode::Start(_) => NodeInfo {
                     id: id.clone(),
@@ -949,7 +949,7 @@ async fn get_instance_stack(
         let mut plug = None;
 
         if let Some(node_id) = &current.current_node_id {
-            if let Some(node) = demo.plan.nodes.get(node_id) {
+            if let Some(node) = demo.plan.nodes().get(node_id) {
                 match node {
                     ExecutionNode::Task(t) => {
                         span = t.span;
@@ -1003,7 +1003,7 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
-    for (id, node) in &plan.nodes {
+    for (id, node) in plan.nodes() {
         let (kind, label, plug, span) = match node {
             ExecutionNode::Start(st) => ("start".to_owned(), "Start".to_owned(), None, st.span),
             ExecutionNode::End(e) => (
@@ -1110,7 +1110,7 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
     }
 
     VisualGraphDto {
-        workflow_id: plan.workflow_id.clone(),
+        workflow_id: plan.workflow_id().to_string(),
         nodes,
         edges,
     }

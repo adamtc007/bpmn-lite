@@ -97,27 +97,27 @@ mod tests {
     #[test]
     fn demo_plan_compiles_successfully() {
         let plan = build_demo_plan().expect("§10 demo compile failed");
-        assert_eq!(plan.workflow_id, "custody-cbu-onboarding");
-        assert_eq!(plan.start_node, "start");
-        assert_eq!(plan.nodes.len(), 10); // start + create-cbu + type-decision + gateway + 3×add + attach-im + end + split-join
+        assert_eq!(plan.workflow_id(), "custody-cbu-onboarding");
+        assert_eq!(plan.start_node(), "start");
+        assert_eq!(plan.nodes().len(), 10); // start + create-cbu + type-decision + gateway + 3×add + attach-im + end + split-join
     }
 
     #[test]
     fn demo_plan_has_namespaced_verbs() {
         let plan = build_demo_plan().expect("compile");
-        let create = match plan.nodes.get("create-cbu").unwrap() {
+        let create = match plan.nodes().get("create-cbu").unwrap() {
             ExecutionNode::Task(t) => t,
             _ => panic!("expected Task"),
         };
         assert_eq!(create.plug, "ob-poc:cbu.create");
 
-        let decision = match plan.nodes.get("type-decision").unwrap() {
+        let decision = match plan.nodes().get("type-decision").unwrap() {
             ExecutionNode::Task(t) => t,
             _ => panic!("expected Task"),
         };
         assert_eq!(decision.plug, "dmn-lite:cbu_type_routing");
 
-        let im = match plan.nodes.get("attach-im").unwrap() {
+        let im = match plan.nodes().get("attach-im").unwrap() {
             ExecutionNode::Task(t) => t,
             _ => panic!("expected Task"),
         };
@@ -128,19 +128,19 @@ mod tests {
     fn demo_plan_infers_cbu_and_cbu_type_placeholders() {
         let plan = build_demo_plan().expect("compile");
         assert!(
-            plan.placeholder_schema.slots.contains_key("@cbu"),
+            plan.placeholder_schema().slots.contains_key("@cbu"),
             "@cbu missing"
         );
         assert!(
-            plan.placeholder_schema.slots.contains_key("@cbu-type"),
+            plan.placeholder_schema().slots.contains_key("@cbu-type"),
             "@cbu-type missing"
         );
         assert_eq!(
-            plan.placeholder_schema.slots["@cbu"].produced_by,
+            plan.placeholder_schema().slots["@cbu"].produced_by,
             "create-cbu"
         );
         assert_eq!(
-            plan.placeholder_schema.slots["@cbu-type"].produced_by,
+            plan.placeholder_schema().slots["@cbu-type"].produced_by,
             "type-decision"
         );
     }
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn demo_plan_gateway_routes_all_three_types() {
         let plan = build_demo_plan().expect("compile");
-        let gw = match plan.nodes.get("type-gateway").unwrap() {
+        let gw = match plan.nodes().get("type-gateway").unwrap() {
             ExecutionNode::Split(gw) => gw,
             _ => panic!("expected split"),
         };
@@ -171,7 +171,7 @@ mod tests {
             ("add-corp", "corporate"),
             ("add-trust", "trust"),
         ] {
-            let task = match plan.nodes.get(id).unwrap() {
+            let task = match plan.nodes().get(id).unwrap() {
                 ExecutionNode::Task(t) => t,
                 _ => panic!("expected Task for {id}"),
             };

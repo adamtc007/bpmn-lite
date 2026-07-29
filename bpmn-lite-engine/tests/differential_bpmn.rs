@@ -124,9 +124,7 @@ const PARALLEL_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// `ExecNative` both park on a `WaitState::Job{job_key}` with the same
 /// `task_type` string surfaced through `JobActivation`).
 fn dsl_parallel_plan() -> WorkflowExecutionPlan {
-    WorkflowExecutionPlan {
-        workflow_id: "diff_parallel_dsl".to_string(),
-        nodes: BTreeMap::from([
+    let nodes = BTreeMap::from([
             (
                 "start".to_string(),
                 ExecutionNode::Start(StartExecNode {
@@ -215,15 +213,15 @@ fn dsl_parallel_plan() -> WorkflowExecutionPlan {
                     span: None,
                 }),
             ),
-        ]),
-        start_node: "start".to_string(),
-        placeholder_schema: PlaceholderSchema::default(),
-        closure_manifest: None,
-        regime_version: None,
-        mathematically_proved: true,
-        unsafe_breeches: Vec::new(),
-        compiled_bytecode: None,
-    }
+    ]);
+    WorkflowExecutionPlan::new(
+        "diff_parallel_dsl".to_string(),
+        nodes,
+        "start".to_string(),
+        PlaceholderSchema::default(),
+        None,
+        None,
+    )
 }
 
 /// Compile `process_key`'s program, start an instance, drive it to

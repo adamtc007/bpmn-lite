@@ -668,19 +668,14 @@ impl<'a> Linter<'a> {
         }
 
         let regime_version = std::env::var("BPMN_LITE_REGIME_VERSION").ok();
-        let mut plan = WorkflowExecutionPlan {
-            workflow_id: source.name.clone(),
-            nodes: exec_nodes,
+        let mut plan = WorkflowExecutionPlan::new(
+            source.name.clone(),
+            exec_nodes,
             start_node,
-            placeholder_schema: PlaceholderSchema { slots },
-            closure_manifest: Some(serde_json::json!({ "dependencies": [] })),
+            PlaceholderSchema { slots },
+            Some(serde_json::json!({ "dependencies": [] })),
             regime_version,
-            mathematically_proved: true,
-            unsafe_breeches: vec![],
-            compiled_bytecode: None,
-        };
-
-        plan.analyze_safety();
+        );
 
         // Derive task delivery modes based on dataflow (P6 / L8)
         let registry = self.registry;

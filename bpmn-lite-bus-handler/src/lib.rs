@@ -274,7 +274,7 @@ impl BpmnLiteBusHandler {
                         instance_id,
                         compiled.bytecode_version,
                     )
-                    .process_key(plan.workflow_id.clone())
+                    .process_key(plan.workflow_id().to_string())
                     .lineage(entry_id, runbook_id)
                     .correlation_id(idempotency_key.to_string())
                     .idempotency_key(idempotency_key)
@@ -317,7 +317,7 @@ impl BpmnLiteBusHandler {
                         instance_id,
                         compiled.bytecode_version,
                     )
-                    .process_key(plan.workflow_id.clone())
+                    .process_key(plan.workflow_id().to_string())
                     .lineage(entry_id, runbook_id)
                     .correlation_id(idempotency_key.to_string())
                     .idempotency_key(idempotency_key)
@@ -475,11 +475,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     (pb, p, String::new())
                 };
 
-                let client_proved = plan.mathematically_proved;
-                plan.analyze_safety();
-                if !client_proved {
-                    plan.mathematically_proved = false;
-                }
+                plan.reverify_preserving_distrust();
 
                 let engine_ref = self
                     .engine
@@ -493,25 +489,19 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
 
                 let mut has_unproved_child = false;
                 for child_plan in child_plans.values() {
-                    if !child_plan.mathematically_proved {
+                    if !child_plan.mathematically_proved() {
                         has_unproved_child = true;
                         break;
                     }
                 }
 
                 if has_unproved_child {
-                    if plan.mathematically_proved {
+                    if plan.mathematically_proved() {
                         return Err(BusServerError::Malformed(
                             "Transitive validation failed: Proven parent workflow template calls unproven child sub-workflow".into()
                         ));
                     } else {
-                        if !plan
-                            .unsafe_breeches
-                            .contains(&"TRANSITIVE_UNPROVED_CALL".to_string())
-                        {
-                            plan.unsafe_breeches
-                                .push("TRANSITIVE_UNPROVED_CALL".to_string());
-                        }
+                        plan.mark_transitive_unproved_call();
                     }
                 }
 
@@ -523,7 +513,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     .with_demo_bindings();
                 for (hash, child_plan) in &child_plans {
                     let mut consumes = Vec::new();
-                    for slot in child_plan.placeholder_schema.slots.values() {
+                    for slot in child_plan.placeholder_schema().slots.values() {
                         if slot.produced_by == "start" || slot.produced_by.is_empty() {
                             consumes.push(slot.name.clone());
                         }
@@ -539,7 +529,7 @@ impl InvocationDispatcher for BpmnLiteBusHandler {
                     );
 
                     let mut child_calls = Vec::new();
-                    for node in child_plan.nodes.values() {
+                    for node in child_plan.nodes().values() {
                         if let bpmn_lite_compiler::dsl::ExecutionNode::Task(t) = node {
                             let is_hex_hash =
                                 t.plug.len() == 64 && t.plug.chars().all(|c| c.is_ascii_hexdigit());
@@ -1097,7 +1087,7 @@ fn resolve_workflow_dependencies<'a>(
     preloaded: &'a mut HashMap<String, bpmn_lite_compiler::dsl::WorkflowExecutionPlan>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), BusServerError>> + Send + 'a>> {
     Box::pin(async move {
-        for node in plan.nodes.values() {
+        for node in plan.nodes().values() {
             let bpmn_lite_compiler::dsl::ExecutionNode::Task(task) = node else {
                 continue;
             };

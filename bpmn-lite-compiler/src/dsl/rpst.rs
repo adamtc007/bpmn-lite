@@ -209,7 +209,6 @@ mod tests {
             regime_version: None,
             mathematically_proved: true,
             unsafe_breeches: vec![],
-            compiled_bytecode: None,
         };
 
         let res = verify_sese_nesting(&plan);
@@ -280,7 +279,6 @@ mod tests {
             regime_version: None,
             mathematically_proved: true,
             unsafe_breeches: vec![],
-            compiled_bytecode: None,
         };
 
         let res = verify_sese_nesting(&plan);

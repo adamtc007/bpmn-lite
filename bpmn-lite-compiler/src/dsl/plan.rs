@@ -4,25 +4,32 @@
 use std::collections::{BTreeMap, HashMap};
 
 /// A compiled, validated workflow ready for execution.
+///
+/// Fields are `pub(crate)` — the dsl compilation pipeline (`ir_plan`,
+/// `linter`, `rpst`, `frontend`, `dag`, `closure`) constructs and inspects
+/// plans directly; everything outside `bpmn-lite-compiler` goes through
+/// [`WorkflowExecutionPlan::new`] and the accessor/mutator methods below.
+/// This is deliberate: `mathematically_proved` / `unsafe_breeches` are a
+/// governance invariant (the compiler's SESE/topology proof), not plain
+/// data — a caller field-assigning `mathematically_proved = true` directly
+/// would silently forge a proof the compiler never actually ran.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowExecutionPlan {
-    pub workflow_id: String,
+    pub(crate) workflow_id: String,
     /// Nodes in the workflow, keyed by node id.
-    pub nodes: BTreeMap<String, ExecutionNode>,
+    pub(crate) nodes: BTreeMap<String, ExecutionNode>,
     /// Id of the start node (entry point).
-    pub start_node: String,
+    pub(crate) start_node: String,
     /// Placeholder schema: what gets inferred and threaded between nodes.
-    pub placeholder_schema: PlaceholderSchema,
+    pub(crate) placeholder_schema: PlaceholderSchema,
     #[serde(default)]
-    pub closure_manifest: Option<serde_json::Value>,
+    pub(crate) closure_manifest: Option<serde_json::Value>,
     #[serde(default)]
-    pub regime_version: Option<String>,
+    pub(crate) regime_version: Option<String>,
     #[serde(default = "default_true")]
-    pub mathematically_proved: bool,
+    pub(crate) mathematically_proved: bool,
     #[serde(default)]
-    pub unsafe_breeches: Vec<String>,
-    #[serde(default)]
-    pub compiled_bytecode: Option<Vec<u8>>,
+    pub(crate) unsafe_breeches: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -58,6 +65,90 @@ pub(crate) fn derive_delivery_mode(
 }
 
 impl WorkflowExecutionPlan {
+    /// Construct a freshly-compiled plan and run [`Self::analyze_safety`]
+    /// on it before returning. Every dsl-pipeline construction site
+    /// (`ir_plan::project_ir`, `linter::lint`) and the BPMN-XML importer
+    /// (`bpmn-lite-authoring`) built this exact same
+    /// construct-then-analyze sequence by hand; this is the single place
+    /// that invariant now lives.
+    pub fn new(
+        workflow_id: String,
+        nodes: BTreeMap<String, ExecutionNode>,
+        start_node: String,
+        placeholder_schema: PlaceholderSchema,
+        closure_manifest: Option<serde_json::Value>,
+        regime_version: Option<String>,
+    ) -> Self {
+        let mut plan = Self {
+            workflow_id,
+            nodes,
+            start_node,
+            placeholder_schema,
+            closure_manifest,
+            regime_version,
+            mathematically_proved: true,
+            unsafe_breeches: Vec::new(),
+        };
+        plan.analyze_safety();
+        plan
+    }
+
+    pub fn workflow_id(&self) -> &str {
+        &self.workflow_id
+    }
+
+    pub fn nodes(&self) -> &BTreeMap<String, ExecutionNode> {
+        &self.nodes
+    }
+
+    pub fn start_node(&self) -> &str {
+        &self.start_node
+    }
+
+    pub fn placeholder_schema(&self) -> &PlaceholderSchema {
+        &self.placeholder_schema
+    }
+
+    pub fn closure_manifest(&self) -> Option<&serde_json::Value> {
+        self.closure_manifest.as_ref()
+    }
+
+    pub fn regime_version(&self) -> Option<&str> {
+        self.regime_version.as_deref()
+    }
+
+    pub fn mathematically_proved(&self) -> bool {
+        self.mathematically_proved
+    }
+
+    pub fn unsafe_breeches(&self) -> &[String] {
+        &self.unsafe_breeches
+    }
+
+    /// Re-run [`Self::analyze_safety`], but never let it silently upgrade a
+    /// plan a caller had already marked unproven back to proven — a
+    /// caller-submitted `plan_body` may have failed a check
+    /// `analyze_safety` doesn't cover (e.g. bytecode admission), so a prior
+    /// `false` claim is preserved regardless of what this re-analysis
+    /// finds.
+    pub fn reverify_preserving_distrust(&mut self) {
+        let was_proved = self.mathematically_proved;
+        self.analyze_safety();
+        if !was_proved {
+            self.mathematically_proved = false;
+        }
+    }
+
+    /// Record that this plan depends on a transitively-unproven child
+    /// sub-workflow. Idempotent — calling it more than once does not
+    /// duplicate the breach entry.
+    pub fn mark_transitive_unproved_call(&mut self) {
+        const BREACH: &str = "TRANSITIVE_UNPROVED_CALL";
+        if !self.unsafe_breeches.iter().any(|b| b == BREACH) {
+            self.unsafe_breeches.push(BREACH.to_string());
+        }
+    }
+
     /// Return all end-event node ids.
     pub fn end_nodes(&self) -> Vec<&str> {
         self.nodes
