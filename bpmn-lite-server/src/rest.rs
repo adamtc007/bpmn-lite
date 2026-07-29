@@ -55,6 +55,14 @@ pub struct DemoState {
     /// shape it was never validated against, permanently bricking the
     /// session's reconstruction. Different sessions never contend.
     session_locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
+    /// DIR-004 Phase 1/2 wiring: dev-session capture, keyed by design
+    /// session id. A session only appears here after an explicit
+    /// `POST .../dev-capture/enable` call carrying Adam's consent
+    /// statement (D17's spirit, applied to his own self-testing use) --
+    /// `session_utterance_endpoint` checks for an entry and, if present,
+    /// captures the full closure via `utterance_engine::dev_capture`
+    /// (always compiled, structurally distinct from the Q9-gated path).
+    dev_capture: Mutex<HashMap<Uuid, utterance_engine::dev_capture::DevSessionStore>>,
 }
 
 impl DemoState {
@@ -66,6 +74,7 @@ impl DemoState {
             plan: Arc::new(plan),
             cbu_types: Mutex::new(HashMap::new()),
             session_locks: Mutex::new(HashMap::new()),
+            dev_capture: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -212,6 +221,14 @@ pub fn demo_router(state: Arc<DemoState>) -> Router {
         .route(
             "/api/dsl/sessions/:id/utterance",
             post(session_utterance_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/dev-capture/enable",
+            post(dev_capture_enable_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/dev-capture",
+            get(dev_capture_status_endpoint),
         )
         .route(
             "/api/dsl/sessions/:id/graph-edit",
@@ -2871,6 +2888,35 @@ async fn session_utterance_endpoint(
     #[cfg(not(feature = "q9-capture"))]
     let capture_state = "not_compiled";
 
+    // DIR-004 Phase 2 wiring: dev-session capture, structurally distinct
+    // from the Q9-gated path above (always compiled, no feature gate --
+    // see utterance_engine::dev_capture's module doc). Active only for
+    // sessions that already called POST .../dev-capture/enable with a
+    // consent statement (that call is the "consent stated at session
+    // start" moment); captures the FULL closure -- board dump and
+    // context TEXT, not hash-only -- per Phase 1.3.
+    let dev_capture_state = {
+        let mut stores = demo.dev_capture.lock().unwrap();
+        match stores.get_mut(&id) {
+            Some(store) => {
+                store.capture(utterance_engine::dev_capture::DevSessionCaptureInput {
+                    raw_utterance: body.text.clone(),
+                    board_hash: record.board_hash.clone(),
+                    board: utterance_engine::corpus_schema::BoardDump::from_board(&board),
+                    context_projection: context.serialize_canonical(),
+                    context_projection_hash: record.context_projection_hash.clone(),
+                    retrieved_subset_hash: record.retrieved_subset_hash.clone(),
+                    model_bundle_hash: record.model_bundle_hash.clone(),
+                    disposition_policy_hash: record.disposition_policy_hash.clone(),
+                    ranking: record.ranking.clone(),
+                    disposition: disposition.clone(),
+                });
+                "captured"
+            }
+            None => "not_enabled",
+        }
+    };
+
     match demo
         .store
         .append_design_session_event(
@@ -2891,6 +2937,7 @@ async fn session_utterance_endpoint(
             "disposition": disposition,
             "board_hash": board.board_hash,
             "capture": capture_state,
+            "dev_capture": dev_capture_state,
         }))
         .into_response(),
         Err(bpmn_lite_store::StoreError::NotFound(_)) => (
@@ -2903,6 +2950,65 @@ async fn session_utterance_endpoint(
             Json(serde_json::json!({ "error": format!("{e}") })),
         )
             .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct DevCaptureEnableBody {
+    consent_statement: String,
+}
+
+/// DIR-004 Phase 2 wiring: the "consent stated at session start" moment.
+/// Opens a `DevSessionStore` for this design session id -- always
+/// compiled, structurally distinct from the Q9-gated `capture` module
+/// (see `utterance_engine::dev_capture`'s doc). Idempotent-refusing: a
+/// session that already has a store open is NOT silently re-opened with
+/// a different consent statement (that would let a later call quietly
+/// change what consent is on record for already-captured interactions)
+/// -- it 409s with the existing consent timestamp instead.
+async fn dev_capture_enable_endpoint(
+    State(demo): State<Arc<DemoState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<DevCaptureEnableBody>,
+) -> impl IntoResponse {
+    let mut stores = demo.dev_capture.lock().unwrap();
+    if let Some(existing) = stores.get(&id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "dev-capture already enabled for this session",
+                "session_id": existing.session_id(),
+            })),
+        )
+            .into_response();
+    }
+    match utterance_engine::dev_capture::DevSessionStore::open(&id.to_string(), &body.consent_statement) {
+        Ok(store) => {
+            stores.insert(id, store);
+            Json(serde_json::json!({ "enabled": true, "session_id": id })).into_response()
+        }
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// Read-back: whether dev-capture is enabled for this session and, if
+/// so, every record captured so far (full I28 closure, train-on-able --
+/// this endpoint is Adam's own export path, not a general query API).
+async fn dev_capture_status_endpoint(State(demo): State<Arc<DemoState>>, Path(id): Path<Uuid>) -> impl IntoResponse {
+    let stores = demo.dev_capture.lock().unwrap();
+    match stores.get(&id) {
+        Some(store) => Json(serde_json::json!({
+            "enabled": true,
+            "session_id": store.session_id(),
+            "record_count": store.records().len(),
+            "records": store.records(),
+        }))
+        .into_response(),
+        None => Json(serde_json::json!({ "enabled": false, "record_count": 0, "records": [] })).into_response(),
     }
 }
 
@@ -4040,6 +4146,119 @@ mod tests {
             rec["context_projection_hash"].as_str().unwrap(),
             "stored projection bytes must re-hash to the recorded hash"
         );
+    }
+
+    /// DIR-004 Phase 2 wiring: dev-session capture is NOT live for a
+    /// session until an explicit consent call, and a real captured
+    /// record must be train-on-able (board dump + context TEXT present,
+    /// not hash-only) -- the same guarantee `dev_capture.rs`'s own unit
+    /// tests prove for the type, proven here through the actual HTTP
+    /// surface a real session will use.
+    #[tokio::test]
+    async fn test_dev_capture_requires_consent_then_captures_full_closure() {
+        let state = DemoState::try_new().unwrap();
+        let app = demo_router(state.clone());
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "dc1", "dsl_source": "(workflow a)" }),
+            ))
+            .await
+            .unwrap();
+        let sid = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+
+        let status_req = |sid: &str| {
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/dsl/sessions/{sid}/dev-capture"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let utter = |sid: &str, text: &str| {
+            post_json(
+                &format!("/api/dsl/sessions/{sid}/utterance"),
+                serde_json::json!({ "text": text }),
+            )
+        };
+
+        // Before consent: not enabled, no capture happens on an utterance.
+        let response = app.clone().oneshot(status_req(&sid)).await.unwrap();
+        assert_eq!(body_json(response).await["enabled"], false);
+        let response = app.clone().oneshot(utter(&sid, "add a task after start")).await.unwrap();
+        assert_eq!(body_json(response).await["dev_capture"], "not_enabled");
+
+        // Empty consent statement is refused (mirrors CapturePipeline's
+        // empty-charter-ref refusal) -- no store is created.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{sid}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "   " }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Real consent: enabling succeeds.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{sid}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "Adam, 2026-07-29, self-testing only" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Re-enabling the SAME session is refused (409) -- consent is not
+        // silently overwritable mid-session.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{sid}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "a different statement" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // Now an utterance IS captured, end to end.
+        let response = app.clone().oneshot(utter(&sid, "add a task after start")).await.unwrap();
+        let u = body_json(response).await;
+        assert_eq!(u["dev_capture"], "captured");
+
+        let response = app.clone().oneshot(status_req(&sid)).await.unwrap();
+        let status = body_json(response).await;
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["record_count"], 1);
+        let record = &status["records"][0];
+        assert_eq!(record["provenance"], "dev-session-adam-v1");
+        assert_eq!(record["subject"], "Adam");
+        assert_eq!(record["consent_statement_timestamp"], "Adam, 2026-07-29, self-testing only");
+        assert_eq!(record["raw_utterance"], "add a task after start");
+        assert!(
+            !record["board"]["candidates"].as_array().unwrap().is_empty(),
+            "captured record must carry real board candidates, not just a hash"
+        );
+        assert!(
+            record["context_projection"].as_str().unwrap().starts_with("ctxproj.v1\n"),
+            "captured record must carry serialized context TEXT, not hash-only"
+        );
+
+        // A second session never sees the first session's records
+        // (per-session isolation, same pattern as session_locks).
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "dc2", "dsl_source": "(workflow a)" }),
+            ))
+            .await
+            .unwrap();
+        let sid2 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let response = app.clone().oneshot(status_req(&sid2)).await.unwrap();
+        assert_eq!(body_json(response).await["enabled"], false);
     }
 
     #[tokio::test]
