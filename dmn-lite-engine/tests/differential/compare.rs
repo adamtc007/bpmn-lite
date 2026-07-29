@@ -13,7 +13,7 @@
 //!      the reference's list (VM short-circuits; reference does not).
 //! 3. **If both fail:** the `EvalError` discriminant must match.
 
-use dmn_lite_engine::reference::EvaluationOutput;
+use dmn_lite_engine::EvaluationOutput;
 use dmn_lite_types::{EvalError, RuleId, ir::TypedValue};
 
 // ── Public types ──────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
 use dmn_lite_compiler::{
     compile_and_verify, compile_to_ir, load_catalogue_from_str, lower_to_ir_with_warnings,
 };
-use dmn_lite_engine::{reference::evaluate, vm};
+use dmn_lite_engine::{evaluate, reference_evaluate};
 use dmn_lite_parser::parse;
 use dmn_lite_types::{RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder};
 
@@ -56,7 +56,8 @@ fn vertical_slice_booking_eligibility_r001_match() {
     )
     .unwrap();
 
-    let result = evaluate(&decision, &b.build(), BOOKING_SRC).expect("r001 must match under FIRST");
+    let result =
+        reference_evaluate(&decision, &b.build(), BOOKING_SRC).expect("r001 must match under FIRST");
 
     // FIRST returns r001 (index 0); r999 catch-all also evaluates true but
     // FIRST has already resolved.
@@ -117,7 +118,7 @@ fn vertical_slice_age_band_first_policy() {
     // age = 40 should match r-adult (rule index 2, [26..64] inclusive)
     let mut b = TypedInputContextBuilder::new(&decision.input_schema);
     b.set_by_name("age", TypedValue::Integer(40)).unwrap();
-    let result = evaluate(&decision, &b.build(), AGE_SRC).expect("40 → ADULT");
+    let result = reference_evaluate(&decision, &b.build(), AGE_SRC).expect("40 → ADULT");
 
     let band = result
         .output
@@ -149,7 +150,7 @@ fn vertical_slice_kyc_status_bool_input() {
         enum_val(&catalogue, "ReviewOutcome", "FAIL"),
     )
     .unwrap();
-    let result = evaluate(&decision, &b.build(), KYC_SRC).expect("docs+fail → REJECTED");
+    let result = reference_evaluate(&decision, &b.build(), KYC_SRC).expect("docs+fail → REJECTED");
     let status = result
         .output
         .get_by_name(&decision.output_schema, "kyc-status")
@@ -189,7 +190,7 @@ fn vm_e2e_booking_eligibility_r001_matches() {
     .unwrap();
     let ctx = b.build();
 
-    let result = vm::evaluate(&verified, &ctx, src).expect("VM must succeed");
+    let result = evaluate(&verified, &ctx, src).expect("VM must succeed");
     // FIRST returns r001 (rule_id = 0).
     assert_eq!(
         result.trace.outcome,

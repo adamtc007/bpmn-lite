@@ -1,10 +1,10 @@
 //! Stack VM tests — Phase 1.4 §3.7.
 //!
-//! Exercises `dmn_lite_engine::vm::evaluate` against decisions compiled with
+//! Exercises `dmn_lite_engine::evaluate` against decisions compiled with
 //! `compile_and_verify`.
 
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
-use dmn_lite_engine::vm;
+use dmn_lite_engine::evaluate;
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
     EvalError, FieldId, RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder,
@@ -34,7 +34,7 @@ fn verified(src: &str) -> dmn_lite_types::compiled::VerifiedDecision {
 fn eval_x(d: &dmn_lite_types::compiled::VerifiedDecision, x: i64) -> TypedValue {
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(x));
-    let out = vm::evaluate(d, &b.build(), "").expect("evaluate");
+    let out = evaluate(d, &b.build(), "").expect("evaluate");
     out.output.get(FieldId(0)).clone()
 }
 
@@ -56,7 +56,7 @@ fn schema_hash_mismatch_returns_error() {
         :rules   ((rule r001 :when (*) :then ((y = 1)))))"#,
     );
     let ctx = TypedInputContextBuilder::new(&d2.as_compiled().input_schema).build();
-    let err = vm::evaluate(&d1, &ctx, "").unwrap_err();
+    let err = evaluate(&d1, &ctx, "").unwrap_err();
     assert_eq!(err, EvalError::SchemaHashMismatch);
 }
 
@@ -236,7 +236,7 @@ fn is_null_matches_null_input() {
     );
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set_null(FieldId(0));
-    let out = vm::evaluate(&d, &b.build(), "").unwrap();
+    let out = evaluate(&d, &b.build(), "").unwrap();
     assert_eq!(out.output.get(FieldId(0)), &TypedValue::Integer(1));
 }
 
@@ -311,7 +311,7 @@ fn first_no_match_returns_error() {
     );
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1));
-    let err = vm::evaluate(&d, &b.build(), "").unwrap_err();
+    let err = evaluate(&d, &b.build(), "").unwrap_err();
     assert_eq!(err, EvalError::NoMatch);
 }
 
@@ -353,7 +353,7 @@ fn unique_no_match_returns_error() {
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1));
     assert_eq!(
-        vm::evaluate(&d, &b.build(), "").unwrap_err(),
+        evaluate(&d, &b.build(), "").unwrap_err(),
         EvalError::NoMatch
     );
 }
@@ -369,7 +369,7 @@ fn unique_multiple_matches_returns_error() {
     );
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(5));
-    let err = vm::evaluate(&d, &b.build(), "").unwrap_err();
+    let err = evaluate(&d, &b.build(), "").unwrap_err();
     assert!(matches!(
         err,
         EvalError::MultipleMatches { rules } if rules == vec![RuleId(0), RuleId(1)]
@@ -406,7 +406,7 @@ fn trace_outcome_match_carries_correct_rule_id() {
     );
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(5));
-    let out = vm::evaluate(&d, &b.build(), "").unwrap();
+    let out = evaluate(&d, &b.build(), "").unwrap();
     assert_eq!(
         out.trace.outcome,
         TraceOutcome::Match { rule_id: RuleId(0) }
@@ -424,7 +424,7 @@ fn trace_outcome_no_match_on_miss() {
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1));
     assert_eq!(
-        vm::evaluate(&d, &b.build(), "").unwrap_err(),
+        evaluate(&d, &b.build(), "").unwrap_err(),
         EvalError::NoMatch
     );
 }
@@ -450,7 +450,7 @@ fn not_eq_null_field_returns_false() {
     assert_eq!(eval_x(&d, 6), TypedValue::Integer(1));
     // With x missing (null), `null != 5` must be false → r001 fails → r999 catches.
     let ctx = TypedInputContextBuilder::new(&d.as_compiled().input_schema).build();
-    let out = vm::evaluate(&d, &ctx, "").expect("r999 must match");
+    let out = evaluate(&d, &ctx, "").expect("r999 must match");
     assert_eq!(
         out.output.get(FieldId(0)),
         &TypedValue::Integer(0),
@@ -470,7 +470,7 @@ fn not_eq_explicit_null_field_returns_false() {
     );
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set_null(FieldId(0));
-    let out = vm::evaluate(&d, &b.build(), "").expect("r999 must match");
+    let out = evaluate(&d, &b.build(), "").expect("r999 must match");
     assert_eq!(
         out.output.get(FieldId(0)),
         &TypedValue::Integer(0),

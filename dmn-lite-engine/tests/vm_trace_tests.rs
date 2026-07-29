@@ -1,7 +1,7 @@
 //! VM trace tests — Phase 1.4 §3.7 (trace contract).
 
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
-use dmn_lite_engine::vm;
+use dmn_lite_engine::evaluate;
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
     FieldId, RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder,
@@ -38,7 +38,7 @@ fn matched_rule_has_true_predicates() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(5));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let r001 = &out.trace.rules[0];
     assert!(r001.matched);
     assert!(!r001.predicates.is_empty());
@@ -55,7 +55,7 @@ fn non_matched_rule_trace_marked_false() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(99));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let r001 = &out.trace.rules[0];
     assert!(!r001.matched);
     assert!(!r001.predicates.is_empty());
@@ -73,7 +73,7 @@ fn first_skipped_rules_have_empty_predicate_trace() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1)); // matches r001, r002 and r999 skipped
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     assert_eq!(out.trace.rules.len(), 3);
     // r002 was never entered
     assert!(
@@ -92,7 +92,7 @@ fn catch_all_produces_synthetic_catchall_predicate() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(99)); // misses r001, hits r999
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let r999 = &out.trace.rules[1];
     assert!(r999.matched);
     assert_eq!(r999.predicates.len(), 1);
@@ -110,7 +110,7 @@ fn brfalse_exited_rule_not_matched() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(9)); // x=5 fails
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let r001 = &out.trace.rules[0];
     assert!(!r001.matched);
     assert!(!r001.predicates.is_empty(), "failing predicate recorded");
@@ -130,7 +130,7 @@ fn trace_includes_all_rules() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     assert_eq!(out.trace.rules.len(), 4);
 }
 
@@ -145,7 +145,7 @@ fn trace_rules_sorted_by_rule_id() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(2));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let ids: Vec<usize> = out.trace.rules.iter().map(|r| r.rule_id.0).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "{:?}", ids);
 }
@@ -160,7 +160,7 @@ fn rule_names_in_trace_match_source() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(1));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     assert_eq!(out.trace.rules[0].rule_name, "my-rule");
     assert_eq!(out.trace.rules[1].rule_name, "catch-all");
 }
@@ -178,7 +178,7 @@ fn trace_outcome_match_correct_rule_id() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(2));
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     assert_eq!(
         out.trace.outcome,
         TraceOutcome::Match { rule_id: RuleId(1) }
@@ -197,7 +197,7 @@ fn predicate_descriptions_non_empty_when_source_supplied() {
     let d = verified(src);
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(99)); // triggers BrFalse on r001
-    let out = vm::evaluate(&d, &b.build(), src).unwrap();
+    let out = evaluate(&d, &b.build(), src).unwrap();
     let r001_preds = &out.trace.rules[0].predicates;
     assert!(!r001_preds.is_empty());
     assert!(

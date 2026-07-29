@@ -15,8 +15,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod reference;
-pub mod vm;
+mod reference;
+mod vm;
 
 use dmn_lite_types::compiled::VerifiedDecision;
 use dmn_lite_types::{EvalError, TypedInputContext};

@@ -15,7 +15,7 @@ pub(crate) mod fixtures;
 pub(crate) mod kyc_status;
 pub(crate) mod strategies;
 
-use dmn_lite_engine::{reference, vm};
+use dmn_lite_engine::{evaluate, reference_evaluate};
 use dmn_lite_types::{EvalError, values::TypedInputContext};
 use proptest::test_runner::TestCaseError;
 
@@ -31,8 +31,8 @@ pub(crate) fn assert_equivalent(
 ) -> Result<(), TestCaseError> {
     let compiled = fixture.verified.as_compiled();
     let ref_result: Result<_, EvalError> =
-        reference::evaluate(&compiled.typed_ir, input, fixture.source);
-    let vm_result: Result<_, EvalError> = vm::evaluate(&fixture.verified, input, fixture.source);
+        reference_evaluate(&compiled.typed_ir, input, fixture.source);
+    let vm_result: Result<_, EvalError> = evaluate(&fixture.verified, input, fixture.source);
 
     compare_results(&ref_result, &vm_result)
         .map_err(|report| TestCaseError::Fail(format!("{report:?}").into()))
