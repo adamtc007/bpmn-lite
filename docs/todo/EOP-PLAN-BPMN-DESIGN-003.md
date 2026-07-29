@@ -1059,5 +1059,18 @@ Report addendum written (`EOP-REPORT-SLM-BAKEOFF-001.md` §10: K=12 standing bas
 
 **AFTER-item 3 (stop):** done. Open on Adam's desk after this task: the Q9 charter (critical path, unchanged), corpus-v2/retrain timing (`EOP-CORPUS-V2-GEN-CONFIG.md`), the `starter-seed-v1` label adjudication (8 disputed items, §10.3), and the two capture-path options above.
 
+### DIR-004 Phase 1 — structural capture separation (Option B), CAREFUL (2026-07-29, commit `d2dc700`)
+
+**Ruling executed:** the capture-path fork DIR-003 surfaced (`capture::CapturePipeline::on_under_charter` was a single generic string-gated switch, no structural difference between a real Q9 charter and a self-declared ref) is resolved as **Option B — structural separation**, not the naming-convention Option A.
+
+- **Distinct types, distinct stores.** `utterance-engine/src/dev_capture.rs` (always compiled): `DevSessionRecord` carries the full I28 closure plus raw utterance + serialized context projection TEXT (train-on-able, not hash-only). `DevSessionSubject` has exactly one variant (`Adam`) — a compile-time fact. `DEV_SESSION_PROVENANCE = "dev-session-adam-v1"` is a module constant, never caller-settable. `capture.rs` (the Q9 path) shares no record/store type with it; `ConfigRegistry` (general I28 hash-resolution, not capture-specific) moved to `policy.rs` so the split is clean.
+- **Feature-gated, CI-enforced exclusion from default/release builds.** New `q9-capture` feature (off by default, both `utterance-engine` and `bpmn-lite-server`); `lib.rs` gates the `capture` module DECLARATION itself, so a pre-charter build has no live user-capture path to even find. New `scripts/check-q9-capture-gate.sh` (5-fixture self-test) asserts this mechanically — wired into `layering.yml`, `production-gates.yml`, `nightly-chaos.yml`. Found in the process: `production-gates.yml`/`nightly-chaos.yml` used `--all-features` (which cannot exclude anything, including the new feature) — switched to an explicit, verified-complete feature list.
+- **Blind review (independent agent, CAREFUL tier) found a real BLOCKER**: the first cut of the build-invocation check used a `--features` flag-syntax regex, defeated by quoting (`--features "postgres,q9-capture"`). Fixed by rewriting the check as a blunt "does this file mention the string `q9-capture` outside a comment at all" substring test — no flag syntax left to evade — plus a self-test gap (fixtures didn't call the real check functions) fixed by having self-test run the real functions against throwaway fixture repos. A genuine near-miss caught by the process working as designed, not a rubber-stamped review.
+- **Adjudication tooling (1.4):** `examples/adjudicate_starter_seed.rs` replays the 8 disputed `starter-seed-v1` items against the real board's legal candidates for a human verdict; verified non-interactively (`--list` / no TTY) that it writes nothing and never fabricates a verdict. Verdicts land in a separate `starter_seed_v1_adjudications.json` (original bank untouched), provenance `adam-adjudicated`; `starter_seed_eval.rs` merges them in automatically — confirmed byte-identical results to the pre-adjudication baseline since none exist yet.
+
+Verified: `cargo build`/`cargo test` clean under default features AND `--features q9-capture` (both crates); `check-q9-capture-gate.sh` self-test and real scan both pass; full `cargo test --workspace` green throughout.
+
+**Reporting Phase 1 done and stopping at Phase 2 (Adam's first live session — a human gate, not this executor's work) per the directive.**
+
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*
