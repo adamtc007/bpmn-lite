@@ -3440,7 +3440,7 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
         ffi_task_decls: BTreeMap::new(),
     };
 
-    let errors = bpmn_lite_compiler::verifier::verify_bytecode(&program);
+    let errors = bpmn_lite_compiler::verify_bytecode(&program);
     assert!(!errors.is_empty(), "Should reject backward Jump");
     assert!(
         errors[0].message.contains("Backward jump"),
@@ -3479,7 +3479,7 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
         ffi_task_decls: BTreeMap::new(),
     };
 
-    let errors = bpmn_lite_compiler::verifier::verify_bytecode(&program);
+    let errors = bpmn_lite_compiler::verify_bytecode(&program);
     assert!(
         errors.is_empty(),
         "BrCounterLt backward should be allowed, got errors: {:?}",
@@ -3657,7 +3657,7 @@ async fn compile_inclusive_gateway_v2(
 ) -> (Arc<MemoryStore>, [u8; 32]) {
     let store = Arc::new(MemoryStore::new());
     let xml = inclusive_gateway_v2_xml(default_flow);
-    let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
+    let graph = bpmn_lite_compiler::parse_bpmn(&xml).unwrap();
     let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
         .expect("v2 inclusive-gateway lowering must verify");
     store.store_artifact(&workflow).await.unwrap();
@@ -4673,7 +4673,7 @@ async fn t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job() {
     <bpmn:sequenceFlow id="f4" sourceRef="escalate" targetRef="timeout_end"/>
   </bpmn:process>
 </bpmn:definitions>"#;
-    let graph = bpmn_lite_compiler::parser::parse_bpmn(xml).unwrap();
+    let graph = bpmn_lite_compiler::parse_bpmn(xml).unwrap();
     let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
         .expect("v2 boundary-timer lowering must verify");
     store.store_artifact(&workflow).await.unwrap();
@@ -5294,7 +5294,7 @@ async fn compile_multi_instance_v2(
 ) -> (Arc<MemoryStore>, ExecutableWorkflow, FlagKey) {
     let store = Arc::new(MemoryStore::new());
     let xml = multi_instance_v2_xml(declared_max);
-    let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
+    let graph = bpmn_lite_compiler::parse_bpmn(&xml).unwrap();
     let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
         .expect("v2 multi-instance lowering must verify");
     let collection_flag = *workflow
@@ -5630,7 +5630,7 @@ fn corpus_sweep_xml_fixtures_lower_and_verify() {
         ("NI_BOUNDARY_BPMN", NI_BOUNDARY_BPMN),
     ];
     for (name, xml) in fixtures {
-        let graph = bpmn_lite_compiler::parser::parse_bpmn(xml)
+        let graph = bpmn_lite_compiler::parse_bpmn(xml)
             .unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
         bpmn_lite_compiler::Compiler::lower(&graph)
             .unwrap_or_else(|e| panic!("{name}: lower+verify failed: {e}"));

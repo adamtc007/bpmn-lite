@@ -886,9 +886,9 @@ mod tests {
         let xml = dto_to_bpmn_xml(&dto).unwrap();
 
         // Parse back to IR
-        let ir = bpmn_lite_compiler::parser::parse_bpmn(&xml).unwrap();
+        let ir = bpmn_lite_compiler::parse_bpmn(&xml).unwrap();
         // Verify IR is valid
-        let errors = bpmn_lite_compiler::verifier::verify(&ir);
+        let errors = bpmn_lite_compiler::verify(&ir);
         assert!(
             errors.is_empty(),
             "Round-trip IR should verify: {:?}",
@@ -980,7 +980,7 @@ mod error_catalog_tests {
             "boundary must reference the catalog id, not the raw code:\n{xml}"
         );
         // Round-trip: re-import must resolve the SPECIFIC code, not None.
-        let graph = bpmn_lite_compiler::parser::parse_bpmn(&xml).expect("re-import");
+        let graph = bpmn_lite_compiler::parse_bpmn(&xml).expect("re-import");
         let code = graph
             .node_indices()
             .find_map(|idx| match &graph[idx] {

@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(ir.edge_count(), 2);
 
         // Verify passes
-        let errors = bpmn_lite_compiler::verifier::verify(&ir);
+        let errors = bpmn_lite_compiler::verify(&ir);
         assert!(errors.is_empty(), "Verifier errors: {:?}", errors);
     }
 
@@ -450,7 +450,7 @@ mod tests {
         assert!(has_boundary_error, "Expected synthetic BoundaryError node");
 
         // Verifier should pass
-        let errors = bpmn_lite_compiler::verifier::verify(&ir);
+        let errors = bpmn_lite_compiler::verify(&ir);
         assert!(errors.is_empty(), "Verifier errors: {:?}", errors);
     }
 }

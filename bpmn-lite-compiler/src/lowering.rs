@@ -41,7 +41,7 @@ pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
 /// compiled-in conservative default; `Some(0)` is rejected (a zero ceiling
 /// would quarantine on the first rollback of every guard — declare that
 /// per-guard if it is really meant).
-pub fn lower_with_default(
+pub(crate) fn lower_with_default(
     graph: &IRGraph,
     default_failure_budget: Option<u32>,
 ) -> Result<CompiledProgram> {

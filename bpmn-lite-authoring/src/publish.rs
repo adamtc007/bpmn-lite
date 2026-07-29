@@ -5,7 +5,7 @@ use crate::lints::{lint_contracts, LintDiagnostic, LintLevel};
 use crate::registry::{SourceFormat, TemplateState, TemplateStore, WorkflowTemplate};
 use crate::{dto_to_ir, validate, yaml};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::{lowering, verifier};
+use bpmn_lite_compiler::{lower, verify, verify_bytecode};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_types::CompiledProgram;
 use std::fmt::Write;
@@ -30,15 +30,15 @@ pub fn compile_program_from_dto(dto: &WorkflowGraphDto) -> Result<CompiledProgra
 
     let ir = dto_to_ir::dto_to_ir(dto)?;
 
-    let verify_errors = verifier::verify(&ir);
+    let verify_errors = verify(&ir);
     if !verify_errors.is_empty() {
         let msgs: Vec<String> = verify_errors.iter().map(|e| e.message.clone()).collect();
         return Err(anyhow!("Verification failed:\n{}", msgs.join("\n")));
     }
 
-    let program = lowering::lower(&ir)?;
+    let program = lower(&ir)?;
 
-    let bytecode_errors = verifier::verify_bytecode(&program);
+    let bytecode_errors = verify_bytecode(&program);
     if !bytecode_errors.is_empty() {
         let msgs: Vec<String> = bytecode_errors.iter().map(|e| e.message.clone()).collect();
         return Err(anyhow!(
@@ -112,8 +112,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// 2. `validate_dto()` → reject if errors
 /// 3. `lint_contracts()` → collect diagnostics, reject if any Error-level
 /// 4. `dto_to_ir()` → IRGraph
-/// 5. `verifier::verify()` → reject if errors
-/// 6. `lowering::lower()` → CompiledProgram
+/// 5. `verify()` → reject if errors
+/// 6. `lower()` → CompiledProgram
 /// 7. `bytecode_version = blake3(serialized program bytecode)`
 /// 8. Extract `task_manifest` from CompiledProgram
 /// 9. Optional: `dto_to_bpmn_xml()` if `generate_bpmn=true`
@@ -159,17 +159,17 @@ pub(crate) fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Resul
     let ir = dto_to_ir::dto_to_ir(&dto)?;
 
     // 5. Verify IR
-    let verify_errors = verifier::verify(&ir);
+    let verify_errors = verify(&ir);
     if !verify_errors.is_empty() {
         let msgs: Vec<String> = verify_errors.iter().map(|e| e.message.clone()).collect();
         return Err(anyhow!("Verification failed:\n{}", msgs.join("\n")));
     }
 
     // 6. Lower to bytecode
-    let program = lowering::lower(&ir)?;
+    let program = lower(&ir)?;
 
     // 7. Bytecode verification
-    let bytecode_errors = verifier::verify_bytecode(&program);
+    let bytecode_errors = verify_bytecode(&program);
     if !bytecode_errors.is_empty() {
         let msgs: Vec<String> = bytecode_errors.iter().map(|e| e.message.clone()).collect();
         return Err(anyhow!(

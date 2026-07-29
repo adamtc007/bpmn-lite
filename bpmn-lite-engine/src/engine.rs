@@ -1,7 +1,7 @@
 // authoring dep removed in Phase 2.7 — see lib.rs
 use crate::runtime_context::{RuntimeContext, SystemRuntimeContext};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::{parser, verifier};
+use bpmn_lite_compiler::{parse_bpmn_with_meta, verify_bytecode};
 use bpmn_lite_kernel::{apply as apply_kernel, DeterministicContext};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::CommitOutcome;
@@ -585,7 +585,7 @@ impl BpmnLiteEngine {
                 MAX_BPMN_XML_BYTES
             ));
         }
-        let (ir, process_meta) = parser::parse_bpmn_with_meta(bpmn_xml)?;
+        let (ir, process_meta) = parse_bpmn_with_meta(bpmn_xml)?;
         enforce_ir_limits(&ir)?;
         let artifact = bpmn_lite_compiler::Compiler::lower_with_default(
             &ir,
@@ -651,7 +651,7 @@ impl BpmnLiteEngine {
     pub async fn store_compiled_program(&self, program: CompiledProgram) -> Result<CompileResult> {
         enforce_program_limits(&program)?;
 
-        let bytecode_errors = verifier::verify_bytecode(&program);
+        let bytecode_errors = verify_bytecode(&program);
         if !bytecode_errors.is_empty() {
             let msgs: Vec<String> = bytecode_errors.iter().map(|e| e.message.clone()).collect();
             return Err(anyhow!(

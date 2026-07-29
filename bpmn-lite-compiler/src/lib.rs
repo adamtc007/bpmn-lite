@@ -12,9 +12,9 @@
 
 pub mod dsl;
 pub mod ir;
-pub mod lowering;
-pub mod parser;
-pub mod verifier;
+mod lowering;
+mod parser;
+mod verifier;
 
 // Crate-prelude re-exports — flat access to the IR types + the
 // parser / lowerer / verifier entry points. Downstream crates can

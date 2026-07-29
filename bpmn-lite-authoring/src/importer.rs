@@ -16,7 +16,7 @@ pub fn import_zeebe_bpmn(
     permissive: bool,
 ) -> Result<WorkflowExecutionPlan> {
     // 1. Parse BPMN XML into IRGraph
-    let ir = bpmn_lite_compiler::parser::parse_bpmn(xml)?;
+    let ir = bpmn_lite_compiler::parse_bpmn(xml)?;
 
     // 2. Pair every Split with its corresponding Join
     let mut split_join_pairs: HashMap<NodeIndex, NodeIndex> = HashMap::new();
