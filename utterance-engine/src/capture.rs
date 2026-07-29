@@ -37,7 +37,7 @@ use crate::policy::DecisionRecord;
 
 /// Charter-mandated dataset separation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) enum DatasetClass {
+pub enum DatasetClass {
     Evaluation,
     Training,
     Audit,
@@ -47,7 +47,7 @@ pub(crate) enum DatasetClass {
 /// utterance (permitted-fields/redaction rules are charter deliverables
 /// applied at the sink when capture goes live).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct CaptureEvent {
+pub struct CaptureEvent {
     pub raw_utterance: String,
     pub record: DecisionRecord,
     pub dataset: DatasetClass,
@@ -56,7 +56,7 @@ pub(crate) struct CaptureEvent {
 /// What happened to a capture call — the caller always learns the
 /// truth; suppression is visible, never silent success.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CaptureOutcome {
+pub enum CaptureOutcome {
     /// Switch OFF (no ratified charter): event DROPPED by design.
     SuppressedNoCharter,
     /// Stored under the named dataset class.
@@ -68,7 +68,7 @@ pub(crate) enum CaptureOutcome {
 /// gate, not a boolean. Note: even under `q9-capture`, this type alone
 /// does not make capture live anywhere — no callsite in this workspace
 /// calls `on_under_charter` (grep before assuming otherwise).
-pub(crate) struct CapturePipeline {
+pub struct CapturePipeline {
     /// `None` = switch OFF. `Some(charter_ref)` = ON under that charter.
     charter: Option<String>,
     /// Physically separate sinks (in-memory v1; durable impls land with
@@ -78,7 +78,7 @@ pub(crate) struct CapturePipeline {
 
 impl CapturePipeline {
     /// The default and only pre-charter state.
-    pub(crate) fn off() -> Self {
+    pub fn off() -> Self {
         CapturePipeline {
             charter: None,
             sinks: BTreeMap::new(),
@@ -88,6 +88,11 @@ impl CapturePipeline {
     /// Turning capture on REQUIRES the ratified charter reference
     /// (D17). Empty/whitespace refs are refused — the gate cannot be
     /// satisfied by a placeholder.
+    ///
+    /// Deliberately `pub(crate)`, narrower than `off()`/`capture()`:
+    /// no callsite outside this crate's own tests may flip capture on.
+    /// External consumers (`bpmn-lite-server-designer`) construct only
+    /// via `off()` — see this module's doc comment.
     pub(crate) fn on_under_charter(charter_ref: &str) -> anyhow::Result<Self> {
         let r = charter_ref.trim();
         if r.is_empty() {
@@ -107,7 +112,7 @@ impl CapturePipeline {
 
     /// Capture one interaction. OFF → the event is dropped and the
     /// caller told so. ON → stored under exactly one dataset class.
-    pub(crate) fn capture(&mut self, event: CaptureEvent) -> CaptureOutcome {
+    pub fn capture(&mut self, event: CaptureEvent) -> CaptureOutcome {
         match &self.charter {
             None => CaptureOutcome::SuppressedNoCharter,
             Some(_) => {

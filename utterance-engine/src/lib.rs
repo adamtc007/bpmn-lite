@@ -15,6 +15,18 @@
 //! - Plan §E rulings: E2 (board universe via registry provider trait),
 //!   E3 (in-process embed+score tier-0), E5 (thresholds in a versioned
 //!   config hashed into `disposition_policy_hash` — never inline).
+//!
+//! **Module-boundary note (pub-scope audit, 2026-07-29):** `board`,
+//! `context`, `corpus_schema`, `dev_capture`, `policy`, and `retrieval`
+//! are deliberate, addressed-by-name API surface — same judgment as
+//! `designer-graph`'s split (each maps to a distinct conceptual
+//! sub-domain; the sole external consumer, `bpmn-lite-server-designer`,
+//! already addresses them by module-qualified path). `contract`,
+//! `fixtures`, `trained_ranker`, and `metrics` stay `pub mod` because
+//! this crate's own `examples/*.rs` binaries need genuine `pub`
+//! visibility to reach them (an example compiles as an external
+//! consumer of the library, same as any other crate). Do not flatten
+//! into a crate-root facade without re-litigating that call.
 
 pub mod board;
 pub mod context;
