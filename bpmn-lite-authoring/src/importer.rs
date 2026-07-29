@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::dsl::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, PlaceholderSchema,
     SplitExecFlow, SplitExecNode, SplitMode, StartExecNode, TaskExecNode, WorkflowExecutionPlan,
-    verify_sese_nesting,
+    derive_delivery_mode, verify_sese_nesting,
 };
 use bpmn_lite_compiler::{GatewayDirection, IRGraph, IRNode};
 use petgraph::graph::NodeIndex;
@@ -91,7 +91,11 @@ pub fn import_zeebe_bpmn(
                 ExecutionNode::Task(TaskExecNode {
                     id: id.clone(),
                     plug: task_type.clone(),
-                    delivery_mode: DeliveryMode::Blocking,
+                    // No catalogue signal available for an imported BPMN-XML
+                    // ServiceTask (same situation as ir_plan.rs's graph-authored
+                    // case) — derive via the shared formula rather than
+                    // hardcoding Blocking.
+                    delivery_mode: derive_delivery_mode(None, false, false),
                     static_args: HashMap::new(),
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
@@ -107,6 +111,10 @@ pub fn import_zeebe_bpmn(
                 ExecutionNode::Task(TaskExecNode {
                     id: id.clone(),
                     plug: task_kind.clone(),
+                    // A wait node's whole purpose is to block the workflow
+                    // until the human responds — Blocking by construction,
+                    // not something derive_delivery_mode's catalogue-signal
+                    // formula needs to arbitrate.
                     delivery_mode: DeliveryMode::Blocking,
                     static_args: HashMap::new(),
                     next: ir[next_idx].id().to_string(),
@@ -131,6 +139,8 @@ pub fn import_zeebe_bpmn(
                 ExecutionNode::Task(TaskExecNode {
                     id: id.clone(),
                     plug: "bpmn:timer-wait".to_string(),
+                    // Blocking by construction, same reasoning as HumanWait
+                    // above.
                     delivery_mode: DeliveryMode::Blocking,
                     static_args,
                     next: ir[next_idx].id().to_string(),
@@ -149,6 +159,8 @@ pub fn import_zeebe_bpmn(
                 ExecutionNode::Task(TaskExecNode {
                     id: id.clone(),
                     plug: "bpmn:message-wait".to_string(),
+                    // Blocking by construction, same reasoning as HumanWait
+                    // above.
                     delivery_mode: DeliveryMode::Blocking,
                     static_args,
                     next: ir[next_idx].id().to_string(),

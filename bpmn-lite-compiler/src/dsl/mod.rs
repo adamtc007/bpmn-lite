@@ -43,7 +43,7 @@ pub use parser::{parse_node_str, parse_workflow_str};
 pub use plan::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, LoopExecNode,
     PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode, SplitMode, StartExecNode,
-    TaskExecNode, WorkflowExecutionPlan,
+    TaskExecNode, WorkflowExecutionPlan, derive_delivery_mode,
 };
 pub use refactor::{AstMutator, ToSexpr};
 pub use rpst::verify_sese_nesting;
