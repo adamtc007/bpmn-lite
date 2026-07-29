@@ -1112,7 +1112,7 @@ fn find_all_predecessors_id_rec(
 #[derive(Serialize, Deserialize)]
 pub(crate) struct DiagnosticsResolveRequest {
     source_code: String,
-    action: bpmn_lite_authoring::diagnostics_executor::FixAction,
+    action: bpmn_lite_authoring::FixAction,
 }
 
 #[derive(Serialize)]
@@ -1133,7 +1133,7 @@ async fn resolve_dsl_diagnostics(Json(body): Json<DiagnosticsResolveRequest>) ->
     let manifests_path = std::env::var("SAGE_MANIFESTS_DIR")
         .unwrap_or_else(|_| format!("{}/../manifests", env!("CARGO_MANIFEST_DIR")));
     let manifests_dir = std::path::PathBuf::from(manifests_path);
-    match bpmn_lite_authoring::diagnostics_executor::execute_autofix(
+    match bpmn_lite_authoring::execute_autofix(
         &body.source_code,
         &body.action,
         &manifests_dir,
@@ -2682,7 +2682,7 @@ mod tests {
   (service-task :id my-task :verb ob-poc:cbu.create :next dead-end)
   (end-event :id end :status "completed")
 )"#;
-        let fix_action = bpmn_lite_authoring::diagnostics_executor::FixAction::WireDeadEnd {
+        let fix_action = bpmn_lite_authoring::FixAction::WireDeadEnd {
             node_id: "my-task".to_string(),
             target_id: "end".to_string(),
         };

@@ -9,36 +9,45 @@
 //! lower to bytecode → hash → extract task manifest → optional
 //! BPMN-XML export → assemble `WorkflowTemplate`.
 //!
-//! **Audit status (carried over from Phase 0 findings):** the
-//! entire authoring pipeline below is architecturally complete but
-//! has no external caller — the gRPC service exposes only
-//! `Compile(bpmn_xml: string)`. There is no `PublishWorkflow` /
-//! `CompileYaml` / `Validate` / `Lint` / `Template*` RPC, no xtask
-//! CLI surface, and `compile_and_publish` is not wired to persist
-//! into the TemplateStore. The Phase 2.6 migration relocates the
-//! code as-is; making this crate user-facing is a separate
-//! downstream slice.
+//! **Real external callers today:** `diagnostics_executor` (autofix
+//! actions for the designer's diagnostics-resolve endpoint) is live
+//! production code, consumed by `bpmn-lite-server-designer`. `dto`,
+//! `publish`, and `yaml` are consumed by `bpmn-lite-engine`'s test
+//! suite. The stale "no external caller" claim this doc comment used
+//! to carry (Phase 0 audit findings) no longer holds — it predates
+//! the designer crate's diagnostics-resolve wiring.
 //!
 //! Phase 2.6 (2026-05-14) migrated all eleven sub-modules
 //! (contracts, dto, dto_to_ir, export_bpmn, ir_to_dto, lints,
 //! publish, registry, store_postgres_templates (feature-gated),
 //! validate, yaml) from `bpmn-lite-core/src/authoring/`.
+//!
+//! All submodules are private — every external consumer reaches the
+//! curated vocabulary flat (`bpmn_lite_authoring::Foo`) via the
+//! prelude `pub use`s below.
 
-pub mod contracts;
-pub mod diagnostics_executor;
-pub mod dto;
-pub mod dto_to_ir;
-pub mod export_bpmn;
-pub mod importer;
-pub mod ir_to_dto;
-pub mod lints;
+mod contracts;
+mod diagnostics_executor;
+mod dto;
+mod dto_to_ir;
+mod export_bpmn;
+mod importer;
+mod ir_to_dto;
+mod lints;
 #[cfg(test)]
 mod oracle_boundary_tests;
-pub mod publish;
-pub mod registry;
+mod publish;
+mod registry;
 #[cfg(feature = "postgres")]
 pub(crate) mod store_postgres_templates;
-pub mod validate;
-pub mod yaml;
+mod validate;
+mod yaml;
 
+pub use diagnostics_executor::{execute_autofix, FixAction};
+pub use dto::{
+    EdgeDto, ErrorEdge, FlagCondition, FlagOp, FlagValue, NodeDto, RaceArm, RaceArmKind,
+    TemplateMeta, WorkflowGraphDto,
+};
 pub use importer::import_zeebe_bpmn;
+pub use publish::{compile_and_publish, compile_program_from_dto, PublishOptions, PublishResult};
+pub use yaml::parse_workflow_yaml;

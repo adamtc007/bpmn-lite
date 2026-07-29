@@ -4745,8 +4745,8 @@ edges:
     let engine = BpmnLiteEngine::new(store.clone());
 
     // Compile from YAML
-    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
-    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let dto = bpmn_lite_authoring::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
     assert!(cr.task_types.contains(&"do_a".to_string()));
     assert!(cr.task_types.contains(&"do_b".to_string()));
@@ -4820,7 +4820,7 @@ edges:
 /// Unconditional + 2 conditional branches, set 1 flag true → 2 branches taken.
 #[tokio::test]
 async fn t_auth_2_inclusive_gateway_yaml() {
-    use bpmn_lite_authoring::dto::*;
+    use bpmn_lite_authoring::*;
     use bpmn_lite_compiler::GatewayDirection;
 
     let dto = WorkflowGraphDto {
@@ -4934,7 +4934,7 @@ async fn t_auth_2_inclusive_gateway_yaml() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let program = bpmn_lite_authoring::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     // Start with flag_a=true, flag_b=false
@@ -5021,8 +5021,8 @@ edges:
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
-    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let dto = bpmn_lite_authoring::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"err"}"#;
@@ -5131,8 +5131,8 @@ edges:
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
-    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let dto = bpmn_lite_authoring::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::compile_program_from_dto(&dto).unwrap();
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"xor"}"#;
@@ -5226,8 +5226,8 @@ edges:
 "#;
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store);
-    let dto = bpmn_lite_authoring::yaml::parse_workflow_yaml(yaml).unwrap();
-    let program = bpmn_lite_authoring::publish::compile_program_from_dto(&dto).unwrap();
+    let dto = bpmn_lite_authoring::parse_workflow_yaml(yaml).unwrap();
+    let program = bpmn_lite_authoring::compile_program_from_dto(&dto).unwrap();
     let compiled = engine.store_compiled_program(program).await.unwrap();
     let instance_id = engine
         .start(
