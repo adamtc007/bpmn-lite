@@ -12,10 +12,10 @@ use std::time::SystemTime;
 
 use dmn_lite_types::{
     SourceSpan,
-    compiled::{CompileContext, CompiledDecision, RangeEntry, RuleMapEntry},
-    ids::{ConstId, ConstSetId, FieldId, OutputFieldId, RangeId},
-    instr::Instr,
-    ir::{
+    {CompileContext, CompiledDecision, RangeEntry, RuleMapEntry},
+    {ConstId, ConstSetId, FieldId, OutputFieldId, RangeId},
+    Instr,
+    {
         ComparisonOp, HitPolicy, TypedAssignment, TypedDecision, TypedPredicate, TypedValue,
         TypedWhen,
     },
@@ -446,7 +446,7 @@ fn pred_span(pred: &TypedPredicate) -> SourceSpan {
 /// Deterministic byte serialisation of a `TypedValue` used as deduplication
 /// keys in `BTreeMap`. Not a public format; only used inside the emitter.
 pub(crate) fn serialize_typed_value(v: &TypedValue) -> Vec<u8> {
-    use dmn_lite_types::ir::TypedValue as TV;
+    use dmn_lite_types::TypedValue as TV;
     let mut out = Vec::new();
     match v {
         TV::Null => out.push(0x00),

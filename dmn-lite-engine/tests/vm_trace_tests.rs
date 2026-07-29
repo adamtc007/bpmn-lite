@@ -4,7 +4,7 @@ use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_engine::evaluate;
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
-    FieldId, RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder,
+    FieldId, RuleId, TraceOutcome, TypedValue, TypedInputContextBuilder,
 };
 
 const INT_CAT: &str = r#"
@@ -21,7 +21,7 @@ fn int_cat() -> dmn_lite_compiler::Catalogue {
     load_catalogue_from_str(INT_CAT).expect("int_cat must load")
 }
 
-fn verified(src: &str) -> dmn_lite_types::compiled::VerifiedDecision {
+fn verified(src: &str) -> dmn_lite_types::VerifiedDecision {
     let cat = int_cat();
     compile_and_verify(parse(src).expect("parse"), &cat, src).expect("compile_and_verify")
 }

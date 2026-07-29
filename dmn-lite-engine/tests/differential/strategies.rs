@@ -20,8 +20,8 @@ use proptest::sample::select;
 use dmn_lite_compiler::Catalogue;
 use dmn_lite_types::{
     DomainId, FieldId,
-    ir::{ResolvedType, TypedDecision, TypedPredicate, TypedValue, TypedWhen},
-    values::{TypedInputContext, TypedInputContextBuilder},
+    {ResolvedType, TypedDecision, TypedPredicate, TypedValue, TypedWhen},
+    {TypedInputContext, TypedInputContextBuilder},
 };
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ fn collect_from_pred(pred: &TypedPredicate, out: &mut Vec<i64>) {
 /// - `Some(TypedValue::Null)` → field explicitly set to null
 /// - `Some(v)` → field set to `v`
 fn build_context(
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     slots: Vec<Option<TypedValue>>,
 ) -> TypedInputContext {
     let mut builder = TypedInputContextBuilder::new(schema);

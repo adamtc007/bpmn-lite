@@ -19,12 +19,12 @@ use std::cmp::Ordering;
 use dmn_lite_types::{
     EvalError, EvaluationTrace, FieldId, PredicateTrace, RuleId, RuleTrace, TraceOutcome,
     TypedInputContext, TypedOutputContext,
-    ids::SourceSpan,
-    ir::{
+    SourceSpan,
+    {
         ComparisonOp, HitPolicy, ResolvedType, TypedAssignment, TypedDecision, TypedPredicate,
         TypedRule, TypedValue, TypedWhen,
     },
-    values::compute_schema_hash,
+    compute_schema_hash,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -220,7 +220,7 @@ fn apply_hit_policy<'a>(
 // ── Output context construction ───────────────────────────────────────────────
 
 fn build_output_context(
-    output_schema: &[dmn_lite_types::ir::FieldSchema],
+    output_schema: &[dmn_lite_types::FieldSchema],
     assignments: &[TypedAssignment],
 ) -> TypedOutputContext {
     let mut slots: Vec<TypedValue> = vec![TypedValue::Null; output_schema.len()];

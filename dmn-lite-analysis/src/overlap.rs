@@ -14,7 +14,7 @@
 
 use dmn_lite_types::{
     AnalysisFinding, FieldOverlap, FindingKind, OverlapSummary, Severity,
-    ir::{HitPolicy, TypedDecision},
+    {HitPolicy, TypedDecision},
 };
 
 use crate::AnalysisConfig;

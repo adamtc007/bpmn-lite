@@ -7,7 +7,7 @@ use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_engine::evaluate;
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
-    EvalError, FieldId, RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder,
+    EvalError, FieldId, RuleId, TraceOutcome, TypedValue, TypedInputContextBuilder,
 };
 
 // ── Catalogue helpers ─────────────────────────────────────────────────────────
@@ -26,12 +26,12 @@ fn int_cat() -> dmn_lite_compiler::Catalogue {
     load_catalogue_from_str(INT_CAT).expect("int_cat must load")
 }
 
-fn verified(src: &str) -> dmn_lite_types::compiled::VerifiedDecision {
+fn verified(src: &str) -> dmn_lite_types::VerifiedDecision {
     let cat = int_cat();
     compile_and_verify(parse(src).expect("parse"), &cat, src).expect("compile_and_verify")
 }
 
-fn eval_x(d: &dmn_lite_types::compiled::VerifiedDecision, x: i64) -> TypedValue {
+fn eval_x(d: &dmn_lite_types::VerifiedDecision, x: i64) -> TypedValue {
     let mut b = TypedInputContextBuilder::new(&d.as_compiled().input_schema);
     b.set(FieldId(0), TypedValue::Integer(x));
     let out = evaluate(d, &b.build(), "").expect("evaluate");

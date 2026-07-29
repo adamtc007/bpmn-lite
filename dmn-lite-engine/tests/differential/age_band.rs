@@ -8,7 +8,7 @@
 
 use proptest::prelude::*;
 
-use dmn_lite_types::{FieldId, ir::TypedValue, values::TypedInputContextBuilder};
+use dmn_lite_types::{FieldId, TypedValue, TypedInputContextBuilder};
 
 use crate::differential::{
     assert_equivalent,

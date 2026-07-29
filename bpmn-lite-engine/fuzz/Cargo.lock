@@ -1095,7 +1095,11 @@ name = "bpmn-lite-ffi-http"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "bpmn-lite-server"
+name = "bpmn-lite-server-designer"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "bpmn-lite-server-runner"
 version = "0.1.0"
 
 [[patch.unused]]

@@ -3,8 +3,8 @@
 //! back to `TypedValue::Str(symbol)` which will cause a dmn-lite
 //! `InputTypeMismatch` at evaluation time.
 
-use dmn_lite_types::ids::DomainId;
-use dmn_lite_types::ir::TypedValue;
+use dmn_lite_types::DomainId;
+use dmn_lite_types::TypedValue;
 
 /// Resolves a bare symbol string (e.g. `"LU"`) to a `TypedValue::Enum` for
 /// a declared Sem OS domain input field.

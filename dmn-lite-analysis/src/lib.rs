@@ -51,7 +51,7 @@ mod unreachable;
 
 use dmn_lite_types::{
     AnalysisFinding, AnalysisReport, Catalogue, CostBound, FindingKind, Severity,
-    compiled::VerifiedDecision,
+    VerifiedDecision,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ pub fn analyse_with_config(
     let string_fields: Vec<String> = typed
         .input_schema
         .iter()
-        .filter(|f| matches!(f.field_type, dmn_lite_types::ir::ResolvedType::Str))
+        .filter(|f| matches!(f.field_type, dmn_lite_types::ResolvedType::Str))
         .map(|f| f.name.clone())
         .collect();
     if !string_fields.is_empty() && config.emit_info {

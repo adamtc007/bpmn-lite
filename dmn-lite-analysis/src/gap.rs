@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 use dmn_lite_types::{
     AnalysisFinding, Catalogue, FindingKind, GapSummary, Severity, UncoveredInputExample, ValueId,
-    ir::{ResolvedType, TypedDecision, TypedValue},
+    {ResolvedType, TypedDecision, TypedValue},
 };
 
 use crate::AnalysisConfig;

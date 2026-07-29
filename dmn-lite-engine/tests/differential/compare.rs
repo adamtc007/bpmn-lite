@@ -14,7 +14,7 @@
 //! 3. **If both fail:** the `EvalError` discriminant must match.
 
 use dmn_lite_engine::EvaluationOutput;
-use dmn_lite_types::{EvalError, RuleId, ir::TypedValue};
+use dmn_lite_types::{EvalError, RuleId, TypedValue};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@
 mod reference;
 mod vm;
 
-use dmn_lite_types::compiled::VerifiedDecision;
+use dmn_lite_types::VerifiedDecision;
 use dmn_lite_types::{EvalError, TypedInputContext};
 
 pub use reference::{EvaluationOutput, evaluate as reference_evaluate};

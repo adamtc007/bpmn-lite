@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use dmn_lite_compiler::{CompileAndVerifyError, compile_and_verify, load_catalogue_from_path};
-use dmn_lite_types::compiled::VerifiedDecision;
+use dmn_lite_types::VerifiedDecision;
 
 /// One compiled decision plus the source text it came from (the source
 /// is forwarded to the VM trace for human-readable predicate

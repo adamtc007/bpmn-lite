@@ -6,8 +6,8 @@
 use dmn_lite_compiler::{compile, load_catalogue_from_str};
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
-    instr::Instr,
-    ir::{HitPolicy, TypedValue},
+    Instr,
+    {HitPolicy, TypedValue},
 };
 
 // ── Catalogue helpers ─────────────────────────────────────────────────────────

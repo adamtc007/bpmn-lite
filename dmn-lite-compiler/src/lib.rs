@@ -24,7 +24,7 @@ mod lower;
 mod verify;
 
 pub use catalogue_loader::{load_catalogue_from_path, load_catalogue_from_str};
-pub use dmn_lite_types::ir::TypedDecision;
+pub use dmn_lite_types::TypedDecision;
 pub use dmn_lite_types::{
     ArtifactHash, Catalogue, CatalogueError, CompileError, CompileWarning, CompiledDecision,
     VerifiedDecision,

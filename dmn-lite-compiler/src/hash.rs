@@ -9,9 +9,9 @@
 //! The Sem OS snapshot ID is metadata, not a hash input.
 
 use dmn_lite_types::{
-    compiled::{ArtifactHash, RangeEntry},
-    instr::Instr,
-    ir::{EntityRef, TypedDecision, TypedValue},
+    {ArtifactHash, RangeEntry},
+    Instr,
+    {EntityRef, TypedDecision, TypedValue},
 };
 
 use crate::emit::serialize_typed_value;

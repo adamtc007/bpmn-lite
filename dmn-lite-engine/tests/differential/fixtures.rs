@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use dmn_lite_compiler::{Catalogue, compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
-use dmn_lite_types::compiled::VerifiedDecision;
+use dmn_lite_types::VerifiedDecision;
 
 /// A compiled and verified fixture ready for differential evaluation.
 pub(crate) struct Fixture {

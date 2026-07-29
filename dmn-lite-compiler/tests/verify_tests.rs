@@ -13,7 +13,7 @@ use dmn_lite_parser::parse;
 use dmn_lite_types::{
     ArtifactHash, BkmId, CompileContext, ConstId, ConstSetId, DecisionId, FieldId, Instr,
     OutputFieldId, RangeId, RuleId, RuleMapEntry, SnapshotId, SourceSpan,
-    ir::{FieldSchema, HitPolicy, ResolvedType, TypedDecision, TypedValue},
+    {FieldSchema, HitPolicy, ResolvedType, TypedDecision, TypedValue},
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

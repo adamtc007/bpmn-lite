@@ -17,11 +17,11 @@ use smallvec::SmallVec;
 use dmn_lite_types::{
     EvalError, EvaluationTrace, FieldId, PredicateTrace, RuleId, RuleTrace, TraceOutcome,
     TypedInputContext, TypedOutputContext,
-    compiled::{CompiledDecision, RangeEntry, RuleMapEntry, VerifiedDecision},
-    ids::SourceSpan,
-    instr::Instr,
-    ir::{HitPolicy, TypedValue},
-    values::compute_schema_hash,
+    {CompiledDecision, RangeEntry, RuleMapEntry, VerifiedDecision},
+    SourceSpan,
+    Instr,
+    {HitPolicy, TypedValue},
+    compute_schema_hash,
 };
 
 use crate::reference::EvaluationOutput;

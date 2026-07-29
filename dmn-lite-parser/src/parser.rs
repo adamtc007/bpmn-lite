@@ -6,12 +6,12 @@
 
 use dmn_lite_types::{
     ParseError,
-    ast::{
+    {
         AssignmentAst, DecisionAst, HitPolicyAst, InputDeclAst, LiteralAst, NumberLitAst,
         OutputDeclAst, PredicateAst, RangeBound, RuleAst, Source, StringLitAst, SymbolAst,
         TypeRefAst, WhenAst,
     },
-    ids::SourceSpan,
+    SourceSpan,
 };
 
 use crate::lexer::{Token, TokenKind, token_to_number_lit, token_to_string_lit, token_to_symbol};

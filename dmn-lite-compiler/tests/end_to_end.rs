@@ -9,7 +9,7 @@ use dmn_lite_compiler::{
 };
 use dmn_lite_engine::{evaluate, reference_evaluate};
 use dmn_lite_parser::parse;
-use dmn_lite_types::{RuleId, TraceOutcome, ir::TypedValue, values::TypedInputContextBuilder};
+use dmn_lite_types::{RuleId, TraceOutcome, TypedValue, TypedInputContextBuilder};
 
 const STUB: &str = include_str!("../../test-data/sem-os-stub.toml");
 const BOOKING_SRC: &str =

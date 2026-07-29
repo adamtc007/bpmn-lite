@@ -6,7 +6,7 @@
 
 use proptest::prelude::*;
 
-use dmn_lite_types::{FieldId, ir::TypedValue, values::TypedInputContextBuilder};
+use dmn_lite_types::{FieldId, TypedValue, TypedInputContextBuilder};
 
 use crate::differential::{assert_equivalent, fixtures::kyc, strategies::input_strategy};
 
@@ -70,7 +70,7 @@ fn edge_every_review_outcome_value() {
     let compiled = f.verified.as_compiled();
     let schema = &compiled.input_schema[1];
     let domain_id = match &schema.field_type {
-        dmn_lite_types::ir::ResolvedType::Enum { domain_id } => *domain_id,
+        dmn_lite_types::ResolvedType::Enum { domain_id } => *domain_id,
         _ => panic!("review-outcome must be enum"),
     };
     let domain = f

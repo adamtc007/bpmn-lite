@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dmn_lite_bus_handler::{DecisionEvaluator, DecisionEvaluatorError, DecisionOutcome};
 use dmn_lite_engine::evaluate as engine_evaluate;
-use dmn_lite_types::ir::{FieldSchema, ResolvedType, TypedValue};
-use dmn_lite_types::values::TypedInputContextBuilder;
+use dmn_lite_types::{FieldSchema, ResolvedType, TypedValue};
+use dmn_lite_types::TypedInputContextBuilder;
 use dsl_bus_protocol::v1::{
     ExecutionOutcomeKind, ResolvedBinding, TypedValue as ProtoTypedValue,
     typed_value::Value as ProtoTypedValueKind,
@@ -131,7 +131,7 @@ fn build_input_context(
 
 fn output_to_bindings(
     schema: &[FieldSchema],
-    output: &dmn_lite_types::values::TypedOutputContext,
+    output: &dmn_lite_types::TypedOutputContext,
 ) -> Result<Vec<ResolvedBinding>, DecisionEvaluatorError> {
     let mut out = Vec::with_capacity(schema.len());
     for field in schema {

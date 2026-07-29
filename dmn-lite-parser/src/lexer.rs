@@ -7,8 +7,8 @@
 
 use dmn_lite_types::{
     ParseError,
-    ast::{NumberLitAst, StringLitAst, SymbolAst},
-    ids::{NumberKind, SourceSpan},
+    {NumberLitAst, StringLitAst, SymbolAst},
+    {NumberKind, SourceSpan},
 };
 
 // ── Token ────────────────────────────────────────────────────────────────────

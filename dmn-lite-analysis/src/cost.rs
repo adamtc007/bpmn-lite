@@ -10,7 +10,7 @@
 
 use dmn_lite_types::{
     CostBound,
-    ir::{TypedDecision, TypedPredicate, TypedWhen},
+    {TypedDecision, TypedPredicate, TypedWhen},
 };
 
 /// Compute the cost bound for a verified decision's typed IR.

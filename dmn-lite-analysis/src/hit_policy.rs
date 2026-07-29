@@ -7,7 +7,7 @@
 
 use dmn_lite_types::{
     AnalysisFinding, FindingKind, Severity,
-    ir::{HitPolicy, TypedDecision, TypedWhen},
+    {HitPolicy, TypedDecision, TypedWhen},
 };
 
 /// Run the SA-001 check.  Returns one finding or `None`.

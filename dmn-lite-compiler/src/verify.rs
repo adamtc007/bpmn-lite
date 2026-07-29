@@ -10,9 +10,9 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use dmn_lite_types::{
-    compiled::{CompiledDecision, VerifiedDecision},
-    instr::Instr,
-    ir::HitPolicy,
+    {CompiledDecision, VerifiedDecision},
+    Instr,
+    HitPolicy,
 };
 
 // ── VerifierError ─────────────────────────────────────────────────────────────

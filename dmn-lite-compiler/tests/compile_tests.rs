@@ -8,7 +8,7 @@ use dmn_lite_compiler::{
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
     CompileWarning as W,
-    ir::{ComparisonOp, HitPolicy, TypedPredicate, TypedValue, TypedWhen},
+    {ComparisonOp, HitPolicy, TypedPredicate, TypedValue, TypedWhen},
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -593,7 +593,7 @@ fn test_compile_succeeds_with_domain_warning() {
     let d = compile_to_ir(parse_ok(src), &cat).expect("compilation with warnings must succeed");
     assert!(matches!(
         d.input_schema[0].field_type,
-        dmn_lite_types::ir::ResolvedType::Integer
+        dmn_lite_types::ResolvedType::Integer
     ));
 }
 

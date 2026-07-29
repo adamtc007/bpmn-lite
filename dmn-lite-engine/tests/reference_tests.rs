@@ -6,8 +6,8 @@ use dmn_lite_engine::reference_evaluate as evaluate;
 use dmn_lite_parser::parse;
 use dmn_lite_types::{
     EvalError, FieldId, RuleId, TraceOutcome,
-    ir::TypedValue,
-    values::{TypedInputContext, TypedInputContextBuilder},
+    TypedValue,
+    {TypedInputContext, TypedInputContextBuilder},
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ fn enum_ab_cat() -> dmn_lite_compiler::Catalogue {
     )
 }
 
-fn compile_ok(src: &str, c: &dmn_lite_compiler::Catalogue) -> dmn_lite_types::ir::TypedDecision {
+fn compile_ok(src: &str, c: &dmn_lite_compiler::Catalogue) -> dmn_lite_types::TypedDecision {
     compile_to_ir(parse(src).expect("parse"), c).expect("compile")
 }
 

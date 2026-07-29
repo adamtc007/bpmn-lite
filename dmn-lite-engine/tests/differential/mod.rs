@@ -16,7 +16,7 @@ pub(crate) mod kyc_status;
 pub(crate) mod strategies;
 
 use dmn_lite_engine::{evaluate, reference_evaluate};
-use dmn_lite_types::{EvalError, values::TypedInputContext};
+use dmn_lite_types::{EvalError, TypedInputContext};
 use proptest::test_runner::TestCaseError;
 
 use crate::differential::{compare::compare_results, fixtures::Fixture};

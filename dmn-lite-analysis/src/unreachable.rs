@@ -13,7 +13,7 @@
 
 use dmn_lite_types::{
     AnalysisFinding, FindingKind, Severity,
-    ir::{HitPolicy, TypedDecision},
+    {HitPolicy, TypedDecision},
 };
 
 use crate::region::{RuleRegion, is_subset_of};

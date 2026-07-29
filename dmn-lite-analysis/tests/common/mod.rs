@@ -8,7 +8,7 @@
 
 use dmn_lite_compiler::{Catalogue, compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
-use dmn_lite_types::compiled::VerifiedDecision;
+use dmn_lite_types::VerifiedDecision;
 
 /// Minimal catalogue with one non-enum domain `N` for integer fields.
 pub(crate) const INT_CAT: &str = r#"

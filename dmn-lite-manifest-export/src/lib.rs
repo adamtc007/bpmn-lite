@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use dmn_lite_types::ast::{DecisionAst, LiteralAst, PredicateAst, Source, TypeRefAst, WhenAst};
+use dmn_lite_types::{DecisionAst, LiteralAst, PredicateAst, Source, TypeRefAst, WhenAst};
 use dsl_manifest::{DecisionEntry, DecisionOutput, InputSpec, Manifest, TypeEntry, VerbEntry};
 use serde::Deserialize;
 

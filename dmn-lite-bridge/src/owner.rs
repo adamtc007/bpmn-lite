@@ -4,9 +4,9 @@ use crate::resolver::ValueResolver;
 use async_trait::async_trait;
 use dmn_lite_engine::evaluate;
 use dmn_lite_types::EvalError;
-use dmn_lite_types::compiled::VerifiedDecision;
-use dmn_lite_types::ir::{FieldSchema, ResolvedType, TypedValue};
-use dmn_lite_types::values::TypedInputContextBuilder;
+use dmn_lite_types::VerifiedDecision;
+use dmn_lite_types::{FieldSchema, ResolvedType, TypedValue};
+use dmn_lite_types::TypedInputContextBuilder;
 use ffi_types::{
     FfiCall, FfiExecutionOwner, FfiIncidentClass, FfiResult, FfiTemplate,
     FieldSchema as FfiFieldSchema, Idempotency, compute_template_id,
@@ -169,7 +169,7 @@ fn build_input_context(
     json: &serde_json::Value,
     schema: &[FieldSchema],
     resolver: Option<&dyn ValueResolver>,
-) -> anyhow::Result<dmn_lite_types::values::TypedInputContext> {
+) -> anyhow::Result<dmn_lite_types::TypedInputContext> {
     let mut builder = TypedInputContextBuilder::new(schema);
     for field in schema {
         let field_json = match json.get(&field.name) {

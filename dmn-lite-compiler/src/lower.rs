@@ -10,12 +10,12 @@ use std::collections::HashMap;
 
 use dmn_lite_types::{
     Catalogue, CompileError, CompileWarning, Domain,
-    ast::{
+    {
         AssignmentAst, DecisionAst, HitPolicyAst, InputDeclAst, LiteralAst, NumberLitAst,
         OutputDeclAst, PredicateAst, RangeBound, SymbolAst, TypeRefAst, WhenAst,
     },
-    ids::{DecisionId, DomainId, FieldId, NumberKind, RuleId, SourceSpan},
-    ir::{
+    {DecisionId, DomainId, FieldId, NumberKind, RuleId, SourceSpan},
+    {
         ComparisonOp, EntityRef, FieldSchema, HitPolicy, ResolvedType, TypedAssignment,
         TypedDecision, TypedPredicate, TypedRule, TypedValue, TypedWhen,
     },
@@ -611,7 +611,7 @@ fn lower_predicate(
 }
 
 fn lower_comparison_pred(
-    field: &dmn_lite_types::ast::SymbolAst,
+    field: &dmn_lite_types::SymbolAst,
     op: ComparisonOp,
     value: &NumberLitAst,
     span: SourceSpan,
@@ -961,7 +961,7 @@ fn parse_decimal(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn resolve_input_field(
-    sym: &dmn_lite_types::ast::SymbolAst,
+    sym: &dmn_lite_types::SymbolAst,
     input_map: &HashMap<String, FieldId>,
     input_schema: &[FieldSchema],
     errors: &mut Vec<CompileError>,

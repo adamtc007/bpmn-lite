@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use dmn_lite_types::{
     Catalogue, DomainId, FieldId, ValueId,
-    ir::{
+    {
         ComparisonOp, ResolvedType, TypedDecision, TypedPredicate, TypedRule, TypedValue, TypedWhen,
     },
 };
@@ -84,7 +84,7 @@ pub(crate) fn compute_all(decision: &TypedDecision, catalogue: &Catalogue) -> Ve
 
 fn compute_one(
     rule: &TypedRule,
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     catalogue: &Catalogue,
 ) -> RuleRegion {
     match &rule.when {
@@ -113,7 +113,7 @@ fn compute_one(
 fn apply_predicate(
     pred: &TypedPredicate,
     fields: &mut [FieldRegion],
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     catalogue: &Catalogue,
 ) {
     match pred {
@@ -162,7 +162,7 @@ fn apply_comparison(
     op: ComparisonOp,
     rhs: &TypedValue,
     fields: &mut [FieldRegion],
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     catalogue: &Catalogue,
 ) {
     let field_type = &schema[field.0].field_type;
@@ -227,7 +227,7 @@ fn apply_in_set(
     field: FieldId,
     values: &[TypedValue],
     fields: &mut [FieldRegion],
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
 ) {
     let field_type = &schema[field.0].field_type;
     let region = match field_type {
@@ -308,7 +308,7 @@ fn apply_range(
 fn apply_not(
     inner: &TypedPredicate,
     fields: &mut [FieldRegion],
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     catalogue: &Catalogue,
 ) {
     // (not (f = v)) on enum/bool is invertible to an EnumSet/BoolSet.
@@ -355,7 +355,7 @@ fn apply_not(
 fn apply_or(
     items: &[TypedPredicate],
     fields: &mut [FieldRegion],
-    schema: &[dmn_lite_types::ir::FieldSchema],
+    schema: &[dmn_lite_types::FieldSchema],
     catalogue: &Catalogue,
 ) {
     // For each branch, compute a fresh region for the fields it touches. Union

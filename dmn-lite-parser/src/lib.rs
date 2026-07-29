@@ -31,13 +31,13 @@ mod lexer;
 mod parser;
 
 // Re-export AST types so callers don't need to depend on dmn-lite-types directly.
-pub use dmn_lite_types::ast::{
+pub use dmn_lite_types::{
     AssignmentAst, DecisionAst, HitPolicyAst, InputDeclAst, LiteralAst, NumberLitAst,
     OutputDeclAst, PredicateAst, RangeBound, RuleAst, Source, StringLitAst, SymbolAst, TypeRefAst,
     WhenAst,
 };
-pub use dmn_lite_types::errors::ParseError;
-pub use dmn_lite_types::ids::{NumberKind, SourceSpan};
+pub use dmn_lite_types::ParseError;
+pub use dmn_lite_types::{NumberKind, SourceSpan};
 
 use std::fmt;
 
