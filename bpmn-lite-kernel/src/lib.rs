@@ -245,7 +245,7 @@ pub fn replay(
 /// from this would make every downstream oracle (K-invariants, limits
 /// conformance, replay determinism) meaningless. Pure function, no
 /// fuzz-only semantics.
-pub(crate) fn materialize_snapshot(
+pub fn materialize_snapshot(
     prior: &PersistedSnapshotState,
     transition: &Transition,
     artifact_abi: u32,
@@ -342,7 +342,7 @@ pub(crate) fn materialize_snapshot(
 /// off the vector while parked. `v2_cancel_guard_scope`'s tree walk already
 /// treats this construction as canonical (`chain = control_stack.clone()`
 /// + wait-derived handle); this function reuses the same one.
-pub(crate) fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
+pub fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
     let mut chain = fiber.control_stack.clone();
     match &fiber.wait {
         WaitState::V2Barrier { record_id } | WaitState::V2Race { record_id, .. } => {

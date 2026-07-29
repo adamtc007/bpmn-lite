@@ -106,7 +106,7 @@ impl<'a> Tape<'a> {
 
 /// Tape-driven clock + deterministic ID source — the fuzz exec's only
 /// time/identity boundary. Wall time never enters an exec.
-pub(crate) struct FuzzClock {
+pub struct FuzzClock {
     now_ms: AtomicI64,
     next_id: AtomicU64,
 }

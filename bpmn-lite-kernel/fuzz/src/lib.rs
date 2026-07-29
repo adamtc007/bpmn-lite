@@ -85,7 +85,7 @@ impl<'a> Tape<'a> {
 /// emits boundary garbage (dangling jumps, unpaired joins, stack probes,
 /// corr-source metadata keyed off message words) at a tuned rate so both
 /// the admission-reject and admit paths stay hot.
-pub(crate) fn gen_program(tape: &mut Tape) -> CompiledProgram {
+pub fn gen_program(tape: &mut Tape) -> CompiledProgram {
     let mut instrs = Vec::new();
     let mut msg_words = Vec::new();
     emit_region(&mut instrs, tape, 2, true, &mut msg_words);
@@ -511,7 +511,7 @@ fn check_progressable(
     }
 }
 
-struct StepOutcome {
+pub struct StepOutcome {
     pub genesis: SnapshotEnvelope,
     pub final_envelope: SnapshotEnvelope,
     /// One record per accepted transition, in order — a valid journal tail
@@ -524,7 +524,7 @@ struct StepOutcome {
 
 /// Drive an admitted workflow with a tape-derived command sequence,
 /// asserting O2/O4 after every accepted transition and O5 at the end.
-pub(crate) fn step_workflow(workflow: &ExecutableWorkflow, tape: &mut Tape) -> StepOutcome {
+pub fn step_workflow(workflow: &ExecutableWorkflow, tape: &mut Tape) -> StepOutcome {
     let limits = workflow.envelope().limits();
     let abi = workflow.envelope().abi_version();
     let genesis = initial_envelope(workflow);
