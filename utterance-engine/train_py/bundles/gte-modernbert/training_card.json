@@ -34,5 +34,13 @@
     "val_nll_uncalibrated": 0.38201544147744687,
     "val_nll_calibrated": 0.3750457421654056,
     "note": "temperature only; threshold VALUES are Adam's at G3 (E5)"
+  },
+  "ratification": {
+    "status": "RUNNER_UP",
+    "ruling": "EOP-DIR-BPMN-DESIGN-003-003 (Adam, 2026-07-29)",
+    "canonical": "modernbert-base",
+    "canonical_hash": "73bf9ca14c9df247097bbe26ec83460c6ca2caafca000398af9b459662d787e4",
+    "bundle_hash": "ace90c769593bded6d043ad7fc52881732981aa712c5ca09af05446bfece4df4",
+    "note": "Statistically indistinguishable from modernbert-base at n=98 (both 87/98); tiebreak was provenance, not score. Hashes retained for the record."
   }
 }

@@ -30,13 +30,13 @@
         "total": 9
       },
       "human_wait": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
+        "accuracy": 1.0,
+        "correct": 6,
         "total": 6
       },
       "message_wait": {
-        "accuracy": 0.8888888888888888,
-        "correct": 8,
+        "accuracy": 0.7777777777777778,
+        "correct": 7,
         "total": 9
       },
       "mi_node": {
@@ -45,8 +45,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 16,
+        "accuracy": 0.9444444444444444,
+        "correct": 17,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -65,18 +65,18 @@
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.625,
-        "correct": 5,
+        "accuracy": 0.75,
+        "correct": 6,
         "total": 8
       }
     },
     "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.8877551020408163,
-    "top1_end_to_end_correct": 87,
-    "top1_given_inclusion": 0.925531914893617,
-    "top1_given_inclusion_correct": 87,
-    "top1_given_inclusion_total": 94,
-    "uplift_vs_tier0_top1_pp": 43.87755102040816
+    "top1_end_to_end": 0.9081632653061225,
+    "top1_end_to_end_correct": 89,
+    "top1_given_inclusion": 0.9081632653061225,
+    "top1_given_inclusion_correct": 89,
+    "top1_given_inclusion_total": 98,
+    "uplift_vs_tier0_top1_pp": 45.91836734693878
   },
   {
     "base": "ms-marco",
@@ -109,13 +109,13 @@
         "total": 9
       },
       "human_wait": {
-        "accuracy": 0.6666666666666666,
-        "correct": 4,
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
         "total": 6
       },
       "message_wait": {
-        "accuracy": 0.7777777777777778,
-        "correct": 7,
+        "accuracy": 0.6666666666666666,
+        "correct": 6,
         "total": 9
       },
       "mi_node": {
@@ -124,8 +124,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.7222222222222222,
-        "correct": 13,
+        "accuracy": 0.7777777777777778,
+        "correct": 14,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -144,18 +144,18 @@
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.5,
-        "correct": 4,
+        "accuracy": 0.625,
+        "correct": 5,
         "total": 8
       }
     },
     "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.7448979591836735,
-    "top1_end_to_end_correct": 73,
-    "top1_given_inclusion": 0.776595744680851,
-    "top1_given_inclusion_correct": 73,
-    "top1_given_inclusion_total": 94,
-    "uplift_vs_tier0_top1_pp": 29.59183673469388
+    "top1_end_to_end": 0.7653061224489796,
+    "top1_end_to_end_correct": 75,
+    "top1_given_inclusion": 0.7653061224489796,
+    "top1_given_inclusion_correct": 75,
+    "top1_given_inclusion_total": 98,
+    "uplift_vs_tier0_top1_pp": 31.632653061224485
   },
   {
     "base": "modernbert-base",
@@ -183,8 +183,8 @@
         "total": 8
       },
       "guarded_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 8,
+        "accuracy": 0.7777777777777778,
+        "correct": 7,
         "total": 9
       },
       "human_wait": {
@@ -193,8 +193,8 @@
         "total": 6
       },
       "message_wait": {
-        "accuracy": 1.0,
-        "correct": 9,
+        "accuracy": 0.8888888888888888,
+        "correct": 8,
         "total": 9
       },
       "mi_node": {
@@ -203,8 +203,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 16,
+        "accuracy": 0.9444444444444444,
+        "correct": 17,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -223,17 +223,17 @@
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.5,
-        "correct": 4,
+        "accuracy": 0.625,
+        "correct": 5,
         "total": 8
       }
     },
     "tier0_top1_accuracy_baseline": 0.4489795918367347,
     "top1_end_to_end": 0.8877551020408163,
     "top1_end_to_end_correct": 87,
-    "top1_given_inclusion": 0.925531914893617,
+    "top1_given_inclusion": 0.8877551020408163,
     "top1_given_inclusion_correct": 87,
-    "top1_given_inclusion_total": 94,
+    "top1_given_inclusion_total": 98,
     "uplift_vs_tier0_top1_pp": 43.87755102040816
   },
   {
@@ -272,8 +272,8 @@
         "total": 6
       },
       "message_wait": {
-        "accuracy": 0.7777777777777778,
-        "correct": 7,
+        "accuracy": 0.6666666666666666,
+        "correct": 6,
         "total": 9
       },
       "mi_node": {
@@ -282,8 +282,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.7777777777777778,
-        "correct": 14,
+        "accuracy": 0.8333333333333334,
+        "correct": 15,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -302,17 +302,17 @@
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.625,
-        "correct": 5,
+        "accuracy": 0.75,
+        "correct": 6,
         "total": 8
       }
     },
     "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.7959183673469388,
-    "top1_end_to_end_correct": 78,
-    "top1_given_inclusion": 0.8297872340425532,
-    "top1_given_inclusion_correct": 78,
-    "top1_given_inclusion_total": 94,
-    "uplift_vs_tier0_top1_pp": 34.69387755102041
+    "top1_end_to_end": 0.8061224489795918,
+    "top1_end_to_end_correct": 79,
+    "top1_given_inclusion": 0.8061224489795918,
+    "top1_given_inclusion_correct": 79,
+    "top1_given_inclusion_total": 98,
+    "uplift_vs_tier0_top1_pp": 35.714285714285715
   }
 ]

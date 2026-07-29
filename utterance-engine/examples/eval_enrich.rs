@@ -39,7 +39,16 @@ use utterance_engine::fixtures::{enumeration_classes, ClassState};
 use utterance_engine::retrieval::LexicalTier0;
 use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 
-const K: usize = 8; // same K as corpus_gen.rs — the served list shape
+// K=12 per EOP-DIR-BPMN-DESIGN-003-003 (Adam, 2026-07-29): the recall@K
+// curve (2026-07-28 receipt) showed K=8's 4% ceiling was all four misses
+// sitting at ranks 9-11, not lost -- K=12 closes it on this eval set.
+// DELIBERATELY DIVERGES from corpus_gen.rs (still K=8): the four
+// currently-canonical bundles were TRAINED on K=8+NOTA-sized lists; this
+// widens the SERVED (eval-time) list only, to measure the ceiling and
+// the ratified bases' behavior on wider lists without retraining.
+// corpus_gen.rs moves to K=12 at the next retrain (corpus-v2), which
+// removes the divergence -- tracked as an open item, not silently left.
+const K: usize = 12;
 const CORPUS_VERSION: &str = "synthetic-v2-beta";
 
 /// A2.5 genuine-ambiguity item (seed/eval_ambiguity_v1.json): an
