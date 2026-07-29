@@ -505,7 +505,11 @@ impl RuntimeStore for MemoryStore {
         let r = self.inner.read().await;
         Ok(r.instances
             .iter()
-            .filter(|(_, inst)| inst.state.is_schedulable() && inst.tenant_id == tenant_id.as_str())
+            .filter(|(_, inst)| {
+                inst.state.is_schedulable()
+                    && inst.tenant_id == tenant_id.as_str()
+                    && inst.quarantine_state.is_none()
+            })
             .map(|(id, _)| *id)
             .collect())
     }
@@ -778,6 +782,20 @@ impl RuntimeStore for MemoryStore {
         let mut snapshot = transition.next_snapshot().clone();
         if let Some(state) = transition.state_override() {
             snapshot.state = state.clone();
+        }
+        // A19: integrity_hash is a tamper-detection hash of ProcessInstance's
+        // immutable fields, always recomputed server-side on write (matches
+        // store_postgres's commit_transition, which does the same
+        // unconditionally) -- never trust a caller-supplied value here.
+        snapshot.integrity_hash = Some(compute_instance_integrity_hash(&snapshot));
+        // quarantine_state is exclusively set by dedicated quarantine paths
+        // (e.g. the replay-integrity-violation branch above, mirroring
+        // store_postgres's separate `SET quarantine_state = ...`
+        // statements), never by an ordinary snapshot commit -- preserve
+        // whatever's already stored rather than letting a caller-supplied
+        // ProcessInstance silently clear or forge it.
+        if let Some(existing) = w.instances.get(&instance_id) {
+            snapshot.quarantine_state = existing.quarantine_state.clone();
         }
         w.instances.insert(instance_id, snapshot.clone());
         if let Some(start) = transition.start_dedupe() {
@@ -2234,6 +2252,111 @@ mod tests {
         assert_eq!(loaded.flags[&0], Value::Bool(true));
         assert_eq!(loaded.flags[&1], Value::I64(42));
         assert_eq!(loaded.state, ProcessState::Running);
+    }
+
+    /// pub-scope audit, 2026-07-29: commit_transition must always
+    /// recompute integrity_hash server-side (matching store_postgres),
+    /// never trust whatever value a caller-supplied ProcessInstance
+    /// carries -- a forged/stale hash must not survive a commit.
+    #[tokio::test]
+    async fn test_commit_transition_recomputes_integrity_hash_ignoring_caller_value() {
+        let store = MemoryStore::new();
+        let id = Uuid::now_v7();
+        let mut inst = make_instance(id);
+        inst.integrity_hash = Some([0xFFu8; 32]);
+
+        store.save_instance("default", &inst).await.unwrap();
+        let loaded = store
+            .load_instance(&TenantId::default(), id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(
+            loaded.integrity_hash,
+            Some([0xFFu8; 32]),
+            "a caller-supplied integrity_hash must never survive a commit"
+        );
+        assert_eq!(
+            loaded.integrity_hash,
+            Some(bpmn_lite_types::integrity::compute_instance_integrity_hash(
+                &loaded
+            )),
+            "integrity_hash must always be the real hash of the committed instance"
+        );
+    }
+
+    /// pub-scope audit, 2026-07-29: quarantine_state is exclusively set by
+    /// dedicated quarantine paths (e.g. the replay-integrity-violation
+    /// branch in claim_instance_for_transition), never by an ordinary
+    /// commit -- an unrelated snapshot commit for an already-quarantined
+    /// instance must not silently clear it.
+    #[tokio::test]
+    async fn test_commit_transition_preserves_existing_quarantine_state() {
+        let store = MemoryStore::new();
+        let id = Uuid::now_v7();
+        let inst = make_instance(id);
+        store.save_instance("default", &inst).await.unwrap();
+
+        // Simulate a dedicated quarantine path having already marked this
+        // instance, the same way claim_instance_for_transition's
+        // integrity-violation branch does directly against the store.
+        {
+            let mut w = store.inner.write().await;
+            w.instances.get_mut(&id).unwrap().quarantine_state =
+                Some("replay_integrity_violation".to_string());
+        }
+
+        // An ordinary commit for the same instance, with quarantine_state
+        // unset on the caller's copy (the normal case -- nothing about an
+        // ordinary transition knows about quarantine).
+        let mut next = make_instance(id);
+        next.quarantine_state = None;
+        store.save_instance("default", &next).await.unwrap();
+
+        let loaded = store
+            .load_instance(&TenantId::default(), id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            loaded.quarantine_state.as_deref(),
+            Some("replay_integrity_violation"),
+            "an ordinary commit must not clear an existing quarantine_state"
+        );
+    }
+
+    /// pub-scope audit, 2026-07-29: list_running_instances must exclude
+    /// quarantined instances, matching store_postgres's `AND
+    /// quarantine_state IS NULL` -- otherwise the in-memory scheduler
+    /// would keep ticking an instance a dedicated quarantine path just
+    /// pulled out of rotation.
+    #[tokio::test]
+    async fn test_list_running_instances_excludes_quarantined() {
+        let store = MemoryStore::new();
+        let tenant = TenantId::default();
+        let running_id = Uuid::now_v7();
+        let quarantined_id = Uuid::now_v7();
+        store
+            .save_instance("default", &make_instance(running_id))
+            .await
+            .unwrap();
+        store
+            .save_instance("default", &make_instance(quarantined_id))
+            .await
+            .unwrap();
+        {
+            let mut w = store.inner.write().await;
+            w.instances.get_mut(&quarantined_id).unwrap().quarantine_state =
+                Some("replay_integrity_violation".to_string());
+        }
+
+        let running = store.list_running_instances(&tenant).await.unwrap();
+        assert!(running.contains(&running_id));
+        assert!(
+            !running.contains(&quarantined_id),
+            "a quarantined instance must not be schedulable"
+        );
     }
 
     /// A2.T1b: Saving an instance copies session_stack by value.
