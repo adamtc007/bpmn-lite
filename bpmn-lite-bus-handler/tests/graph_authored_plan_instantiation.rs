@@ -74,7 +74,7 @@ fn ctx(local_verb_id: &str, role: &str) -> InvocationContext {
 /// the session/DAG machinery upstream of it, which WS-B.4's own tests
 /// already cover).
 fn build_graph_authored_plan() -> bpmn_lite_compiler::dsl::WorkflowExecutionPlan {
-    use bpmn_lite_compiler::ir::{IREdge, IRGraph, IRNode};
+    use bpmn_lite_compiler::{IREdge, IRGraph, IRNode};
     let mut g: IRGraph = IRGraph::new();
     let s = g.add_node(IRNode::Start { id: "start".into() });
     let t = g.add_node(IRNode::ServiceTask {

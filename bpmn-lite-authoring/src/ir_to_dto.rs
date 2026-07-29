@@ -1,6 +1,6 @@
 use super::dto::*;
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::ir::*;
+use bpmn_lite_compiler::*;
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use std::collections::HashMap;

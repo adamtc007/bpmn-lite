@@ -46,7 +46,7 @@
 
 use crate::schema::{DesignerDag, DesignerEdge, NodeKey, Provenance};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::ir::{ConditionExpr, GatewayDirection, IRNode, TimerSpec};
+use bpmn_lite_compiler::{ConditionExpr, GatewayDirection, IRNode, TimerSpec};
 use petgraph::algo::has_path_connecting;
 use serde::{Deserialize, Serialize};
 
@@ -879,7 +879,7 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bpmn_lite_compiler::ir::TimerSpec;
+    use bpmn_lite_compiler::TimerSpec;
     use uuid::Uuid;
 
     fn key() -> NodeKey {
@@ -1263,7 +1263,7 @@ mod tests {
     }
 
     fn find_boundary_timer<'a>(
-        ir: &'a bpmn_lite_compiler::ir::IRGraph,
+        ir: &'a bpmn_lite_compiler::IRGraph,
         id: &str,
     ) -> Option<(&'a TimerSpec, bool, Option<u32>)> {
         ir.node_indices().find_map(|i| match &ir[i] {
@@ -1833,7 +1833,7 @@ mod tests {
 
     // ── WS-A.2 slice 3 — region operations ────────────────────────────
 
-    use bpmn_lite_compiler::ir::{ConditionLiteral, ConditionOp};
+    use bpmn_lite_compiler::{ConditionLiteral, ConditionOp};
     use petgraph::Direction;
 
     fn cond(flag: &str, lit: bool) -> ConditionExpr {

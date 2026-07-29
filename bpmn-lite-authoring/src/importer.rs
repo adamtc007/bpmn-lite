@@ -4,7 +4,7 @@ use bpmn_lite_compiler::dsl::{
     SplitExecFlow, SplitExecNode, SplitMode, StartExecNode, TaskExecNode, WorkflowExecutionPlan,
     verify_sese_nesting,
 };
-use bpmn_lite_compiler::ir::{GatewayDirection, IRGraph, IRNode};
+use bpmn_lite_compiler::{GatewayDirection, IRGraph, IRNode};
 use petgraph::graph::NodeIndex;
 use std::collections::{BTreeMap, HashMap};
 
@@ -121,7 +121,7 @@ pub fn import_zeebe_bpmn(
                     .next()
                     .ok_or_else(|| anyhow!("TimerWait node '{}' has no outgoing edges", id))?;
                 let duration_str = match spec {
-                    bpmn_lite_compiler::ir::TimerSpec::Duration { ms } => {
+                    bpmn_lite_compiler::TimerSpec::Duration { ms } => {
                         format!("PT{}M", ms / 60000)
                     }
                     _ => "PT15M".to_string(),
@@ -349,8 +349,8 @@ fn build_split_flows(
         let edge_weight = edge.weight();
         let (placeholder, expected_value) = if let Some(cond) = &edge_weight.condition {
             let val_str = match &cond.literal {
-                bpmn_lite_compiler::ir::ConditionLiteral::Bool(b) => b.to_string(),
-                bpmn_lite_compiler::ir::ConditionLiteral::I64(i) => i.to_string(),
+                bpmn_lite_compiler::ConditionLiteral::Bool(b) => b.to_string(),
+                bpmn_lite_compiler::ConditionLiteral::I64(i) => i.to_string(),
             };
             (
                 Some(format!("@{}", cond.flag_name.replace("_", "-"))),

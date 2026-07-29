@@ -34,7 +34,7 @@
 
 use crate::board_candidate::{LegalityOracle, OperationKind, ProductionId};
 use crate::schema::{DesignerDag, NodeKey};
-use bpmn_lite_compiler::ir::IRNode;
+use bpmn_lite_compiler::IRNode;
 use petgraph::Direction;
 
 /// The positional oracle: borrows the dag it answers for.
@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::ops::{apply, GuardTrigger, Operation};
     use crate::schema::{DesignerEdge, Provenance};
-    use bpmn_lite_compiler::ir::TimerSpec;
+    use bpmn_lite_compiler::TimerSpec;
     use uuid::Uuid;
 
     fn key() -> NodeKey {

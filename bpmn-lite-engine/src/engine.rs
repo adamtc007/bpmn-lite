@@ -135,7 +135,7 @@ pub struct RecoveryReport {
     pub stale_jobs_reclaimed: u32,
 }
 
-fn enforce_ir_limits(ir: &bpmn_lite_compiler::ir::IRGraph) -> Result<()> {
+fn enforce_ir_limits(ir: &bpmn_lite_compiler::IRGraph) -> Result<()> {
     if ir.node_count() > MAX_IR_NODES {
         return Err(anyhow!(
             "BPMN graph has too many nodes: {} > {}",

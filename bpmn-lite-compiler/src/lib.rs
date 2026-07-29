@@ -11,15 +11,14 @@
 //! below.
 
 pub mod dsl;
-pub mod ir;
+mod ir;
 mod lowering;
 mod parser;
 mod verifier;
 
 // Crate-prelude re-exports — flat access to the IR types + the
-// parser / lowerer / verifier entry points. Downstream crates can
-// either `use bpmn_lite_compiler::IRGraph` (flat) or
-// `use bpmn_lite_compiler::ir::IRGraph` (module-qualified).
+// parser / lowerer / verifier entry points, e.g.
+// `use bpmn_lite_compiler::IRGraph`.
 pub use ir::*;
 pub use lowering::{compute_post_dominators, compute_region_map, gateway_pairs, lower, lower_v2};
 pub use parser::{parse_bpmn, parse_bpmn_with_meta, ProcessMeta};

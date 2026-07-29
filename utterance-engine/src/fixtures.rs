@@ -12,7 +12,7 @@
 //! exists to prevent.
 
 use anyhow::Result;
-use bpmn_lite_compiler::ir::{IRNode, TimerSpec};
+use bpmn_lite_compiler::{IRNode, TimerSpec};
 use designer_graph::ops::{apply, GuardTrigger, Operation};
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 

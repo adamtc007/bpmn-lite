@@ -1,4 +1,4 @@
-use bpmn_lite_compiler::ir::GatewayDirection;
+use bpmn_lite_compiler::GatewayDirection;
 use serde::{Deserialize, Serialize};
 
 // ── Helper defaults for serde ──
@@ -164,7 +164,7 @@ pub enum NodeDto {
         error_code: Option<String>,
     },
     /// §18 ruling K — a parallel multi-instance activity. See
-    /// `bpmn_lite_compiler::ir::IRNode::MultiInstance`'s doc comment for
+    /// `bpmn_lite_compiler::IRNode::MultiInstance`'s doc comment for
     /// the full design and the array/collection-value scope note.
     MultiInstance {
         id: String,

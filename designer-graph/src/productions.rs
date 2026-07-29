@@ -24,7 +24,7 @@
 use crate::ops::{apply, GuardTrigger, Operation, RegionBranch, StagedCandidate};
 use crate::schema::{DesignerDag, NodeKey, Provenance};
 use anyhow::Result;
-use bpmn_lite_compiler::ir::IRNode;
+use bpmn_lite_compiler::IRNode;
 
 /// `prod.request_and_wait` (§12.2): a `ServiceTask` (send) immediately
 /// followed by a correlated `MessageWait` (receive), both inserted after
@@ -125,10 +125,10 @@ struct ReminderThenEscalateBindings {
     pub anchor: NodeKey,
     pub guard_key: NodeKey,
     pub guard_id: String,
-    /// Must be `bpmn_lite_compiler::ir::TimerSpec::Cycle { .. }` — cycle
+    /// Must be `bpmn_lite_compiler::TimerSpec::Cycle { .. }` — cycle
     /// triggers are only legal on a non-interrupting guard (boundary
     /// rule 6), which `AttachRearmingGuard` always produces.
-    pub cycle: bpmn_lite_compiler::ir::TimerSpec,
+    pub cycle: bpmn_lite_compiler::TimerSpec,
     pub escalation_key: NodeKey,
     pub escalation_node: IRNode,
     pub escalation_edge_id: String,
@@ -210,7 +210,7 @@ pub(crate) fn interrupting_timeout(b: InterruptingTimeoutBindings) -> Vec<Operat
             host: b.anchor,
             key: b.guard_key,
             guard_id: b.guard_id,
-            trigger: GuardTrigger::Timer(bpmn_lite_compiler::ir::TimerSpec::Duration {
+            trigger: GuardTrigger::Timer(bpmn_lite_compiler::TimerSpec::Duration {
                 ms: b.duration_ms,
             }),
         },
@@ -262,7 +262,7 @@ pub(crate) fn non_interrupting_notification(b: NonInterruptingNotificationBindin
             host: b.anchor,
             key: b.guard_key,
             guard_id: b.guard_id,
-            trigger: GuardTrigger::Timer(bpmn_lite_compiler::ir::TimerSpec::Cycle {
+            trigger: GuardTrigger::Timer(bpmn_lite_compiler::TimerSpec::Cycle {
                 interval_ms: b.interval_ms,
                 max_fires: b.max_fires,
             }),
@@ -319,7 +319,7 @@ pub fn apply_production(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bpmn_lite_compiler::ir::{IRNode, TimerSpec};
+    use bpmn_lite_compiler::{IRNode, TimerSpec};
     use uuid::Uuid;
 
     fn key() -> NodeKey {

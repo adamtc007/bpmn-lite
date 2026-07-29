@@ -506,10 +506,10 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn gateway_dir_attr(dir: &bpmn_lite_compiler::ir::GatewayDirection) -> &'static str {
+fn gateway_dir_attr(dir: &bpmn_lite_compiler::GatewayDirection) -> &'static str {
     match dir {
-        bpmn_lite_compiler::ir::GatewayDirection::Diverging => r#"gatewayDirection="Diverging""#,
-        bpmn_lite_compiler::ir::GatewayDirection::Converging => r#"gatewayDirection="Converging""#,
+        bpmn_lite_compiler::GatewayDirection::Diverging => r#"gatewayDirection="Diverging""#,
+        bpmn_lite_compiler::GatewayDirection::Converging => r#"gatewayDirection="Converging""#,
     }
 }
 
@@ -984,7 +984,7 @@ mod error_catalog_tests {
         let code = graph
             .node_indices()
             .find_map(|idx| match &graph[idx] {
-                bpmn_lite_compiler::ir::IRNode::BoundaryError { error_code, .. } => {
+                bpmn_lite_compiler::IRNode::BoundaryError { error_code, .. } => {
                     Some(error_code.clone())
                 }
                 _ => None,

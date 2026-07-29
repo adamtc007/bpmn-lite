@@ -176,8 +176,8 @@ pub fn minimal(pack_identity: &str, graph_identity: &str) -> ContextProjection {
 /// THE canonical node-kind vocabulary of the projection (blind-review
 /// finding 2 remediation): one mapping, here, used by every constructor.
 /// The compiler vocabulary IS the node kind (WS-A.1 schema ruling).
-pub fn ir_kind_str(node: &bpmn_lite_compiler::ir::IRNode) -> &'static str {
-    use bpmn_lite_compiler::ir::IRNode as N;
+pub fn ir_kind_str(node: &bpmn_lite_compiler::IRNode) -> &'static str {
+    use bpmn_lite_compiler::IRNode as N;
     match node {
         N::Start { .. } => "start",
         N::End { .. } => "end",
@@ -211,7 +211,7 @@ pub fn ir_kind_str(node: &bpmn_lite_compiler::ir::IRNode) -> &'static str {
 /// are NOT training-grade. Convergence point: WS-B's DesignerDag-backed
 /// sessions (substrate ask filed in the plan).
 pub fn project_ir(
-    graph: &petgraph::Graph<bpmn_lite_compiler::ir::IRNode, bpmn_lite_compiler::ir::IREdge>,
+    graph: &petgraph::Graph<bpmn_lite_compiler::IRNode, bpmn_lite_compiler::IREdge>,
     anchor_id: Option<&str>,
     pack_identity: &str,
     graph_identity: &str,
@@ -249,8 +249,8 @@ pub fn project_ir(
                 .node_weights()
                 .filter(|n| {
                     matches!(n,
-                        bpmn_lite_compiler::ir::IRNode::BoundaryTimer { attached_to, .. }
-                        | bpmn_lite_compiler::ir::IRNode::BoundaryError { attached_to, .. }
+                        bpmn_lite_compiler::IRNode::BoundaryTimer { attached_to, .. }
+                        | bpmn_lite_compiler::IRNode::BoundaryError { attached_to, .. }
                             if attached_to == id)
                 })
                 .map(|n| NodeSummary { kind: ir_kind_str(n).to_owned(), id: n.id().to_owned() })
@@ -378,7 +378,7 @@ mod tests {
     fn project_ir_golden_from_designer_ops() {
         use designer_graph::ops::{apply, GuardTrigger, Operation};
         use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
-        use bpmn_lite_compiler::ir::{IRNode, TimerSpec};
+        use bpmn_lite_compiler::{IRNode, TimerSpec};
 
         let mut dag = DesignerDag::new("proj-fx");
         let start = dag

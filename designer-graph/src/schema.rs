@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::ir::{IREdge, IRGraph, IRNode};
+use bpmn_lite_compiler::{IREdge, IRGraph, IRNode};
 use bpmn_lite_compiler::{verify, Compiler, VerifiedWorkflow, VerifyError};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -75,7 +75,7 @@ pub(crate) struct DesignerNode {
 pub(crate) struct DesignerEdge {
     /// Sequence-flow id — uniqueness enforced at insertion (review F3).
     pub id: String,
-    pub condition: Option<bpmn_lite_compiler::ir::ConditionExpr>,
+    pub condition: Option<bpmn_lite_compiler::ConditionExpr>,
     pub provenance: Provenance,
 }
 
@@ -412,7 +412,7 @@ impl DesignerDag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bpmn_lite_compiler::ir::GatewayDirection;
+    use bpmn_lite_compiler::GatewayDirection;
 
     fn key() -> NodeKey {
         NodeKey(Uuid::new_v4())
@@ -544,7 +544,7 @@ mod tests {
             IRNode::BoundaryTimer {
                 id: "guard".into(),
                 attached_to: "stale_old_name".into(), // deliberately stale
-                spec: bpmn_lite_compiler::ir::TimerSpec::Duration { ms: 60_000 },
+                spec: bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
                 interrupting: true,
                 failure_budget: Some(7),
             },
@@ -591,7 +591,7 @@ mod tests {
             IRNode::BoundaryTimer {
                 id: "guard".into(),
                 attached_to: "work".into(),
-                spec: bpmn_lite_compiler::ir::TimerSpec::Duration { ms: 60_000 },
+                spec: bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
                 interrupting: true,
                 failure_budget: Some(7),
             },

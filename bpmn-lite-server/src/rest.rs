@@ -2515,7 +2515,7 @@ fn reconstruct_designer_dag(
     let mut dag = DesignerDag::new(record.name.clone());
     dag.seed(
         seed_start_key(record.id),
-        bpmn_lite_compiler::ir::IRNode::Start { id: SEED_START_ID.into() },
+        bpmn_lite_compiler::IRNode::Start { id: SEED_START_ID.into() },
         Provenance::default(),
     )?;
     for (i, payload) in record.graph_edit_payloads().into_iter().enumerate() {
@@ -4349,8 +4349,8 @@ mod tests {
 
     // ── WS-B.4: DesignerDag-backed sessions ──────────────────────────
 
-    fn task_ir(id: &str) -> bpmn_lite_compiler::ir::IRNode {
-        bpmn_lite_compiler::ir::IRNode::ServiceTask {
+    fn task_ir(id: &str) -> bpmn_lite_compiler::IRNode {
+        bpmn_lite_compiler::IRNode::ServiceTask {
             id: id.into(),
             name: id.into(),
             task_type: "noop".into(),
@@ -4394,7 +4394,7 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -4538,17 +4538,17 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: start_key,
                 key: split_key,
-                node: bpmn_lite_compiler::ir::IRNode::GatewayAnd {
+                node: bpmn_lite_compiler::IRNode::GatewayAnd {
                     id: "split".into(),
                     name: "split".into(),
-                    direction: bpmn_lite_compiler::ir::GatewayDirection::Diverging,
+                    direction: bpmn_lite_compiler::GatewayDirection::Diverging,
                 },
                 edge_id: "f1".into(),
             },
             designer_graph::ops::Operation::AppendNode {
                 anchor: split_key,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -4658,7 +4658,7 @@ mod tests {
                     designer_graph::ops::Operation::AppendNode {
                         anchor: task_key,
                         key: new_key(),
-                        node: bpmn_lite_compiler::ir::IRNode::End {
+                        node: bpmn_lite_compiler::IRNode::End {
                             id: format!("end_{i}"),
                             terminate: false,
                         },
@@ -4743,7 +4743,7 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -4846,7 +4846,7 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -4904,17 +4904,17 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: start_key,
                 key: split_key,
-                node: bpmn_lite_compiler::ir::IRNode::GatewayAnd {
+                node: bpmn_lite_compiler::IRNode::GatewayAnd {
                     id: "split".into(),
                     name: "split".into(),
-                    direction: bpmn_lite_compiler::ir::GatewayDirection::Diverging,
+                    direction: bpmn_lite_compiler::GatewayDirection::Diverging,
                 },
                 edge_id: "f1".into(),
             },
             designer_graph::ops::Operation::AppendNode {
                 anchor: split_key,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -4986,7 +4986,7 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::ir::IRNode::End {
+                node: bpmn_lite_compiler::IRNode::End {
                     id: "end".into(),
                     terminate: false,
                 },
@@ -5056,7 +5056,7 @@ mod tests {
         let further_ops = vec![designer_graph::ops::Operation::AppendNode {
             anchor: t1,
             key: new_key(),
-            node: bpmn_lite_compiler::ir::IRNode::End {
+            node: bpmn_lite_compiler::IRNode::End {
                 id: "end2".into(),
                 terminate: false,
             },

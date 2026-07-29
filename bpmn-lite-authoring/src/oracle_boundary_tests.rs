@@ -6,7 +6,7 @@
 //! `designer-graph` crate's. Do not weaken; do not move inside the compiler
 //! crate (an internal test would not lock the boundary).
 
-use bpmn_lite_compiler::ir::{GatewayDirection, IREdge, IRGraph, IRNode};
+use bpmn_lite_compiler::{GatewayDirection, IREdge, IRGraph, IRNode};
 use bpmn_lite_compiler::{compute_post_dominators, compute_region_map, gateway_pairs};
 
 fn edge(id: &str) -> IREdge {

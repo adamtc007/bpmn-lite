@@ -4821,7 +4821,7 @@ edges:
 #[tokio::test]
 async fn t_auth_2_inclusive_gateway_yaml() {
     use bpmn_lite_authoring::dto::*;
-    use bpmn_lite_compiler::ir::GatewayDirection;
+    use bpmn_lite_compiler::GatewayDirection;
 
     let dto = WorkflowGraphDto {
         id: "inclusive-test".to_string(),
