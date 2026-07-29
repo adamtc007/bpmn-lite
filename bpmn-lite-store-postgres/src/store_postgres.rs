@@ -10276,7 +10276,7 @@ mod tests {
         dispatch_tx.commit().await.unwrap();
         assert_eq!(claimed.len(), 1);
         let execution_id = Uuid::now_v7();
-        let dispatch_claim_token = claimed[0].claim_token.unwrap();
+        let dispatch_claim_token = claimed[0].claim_token().unwrap();
 
         let claim = store
             .claim_instance_for_transition(

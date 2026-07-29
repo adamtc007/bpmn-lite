@@ -59,7 +59,7 @@ impl SubmissionAckHandler for StoreSubmissionAckHandler {
                 .callout_id
                 .ok_or_else(|| "invocation outbox row has no callout_id".to_string())?;
             let dispatch_claim_token = entry
-                .claim_token
+                .claim_token()
                 .ok_or_else(|| "claimed outbox row has no claim token".to_string())?;
             let pending = self
                 .pending

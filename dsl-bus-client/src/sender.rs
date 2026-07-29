@@ -315,8 +315,8 @@ async fn record_retry(
     entry: &OutboxEntry,
     message: &str,
 ) -> Result<(), sqlx::Error> {
-    let backoff = exp_backoff_secs(entry.attempt_count, cfg.max_backoff_secs);
-    let claim_token = entry.claim_token.ok_or_else(|| {
+    let backoff = exp_backoff_secs(entry.attempt_count(), cfg.max_backoff_secs);
+    let claim_token = entry.claim_token().ok_or_else(|| {
         sqlx::Error::Protocol("claimed outbox row has no claim token".to_string())
     })?;
     let mut tx = cfg.pool.begin().await?;
@@ -337,7 +337,7 @@ async fn record_submitted(
     entry: &OutboxEntry,
     execution_id: uuid::Uuid,
 ) -> Result<(), sqlx::Error> {
-    let claim_token = entry.claim_token.ok_or_else(|| {
+    let claim_token = entry.claim_token().ok_or_else(|| {
         sqlx::Error::Protocol("claimed outbox row has no claim token".to_string())
     })?;
     let mut tx = cfg.pool.begin().await?;

@@ -91,6 +91,19 @@ impl OutboxStatus {
 /// One outbox row. Constructed by callers via the public builder
 /// pattern below; the storage layer never invents `id` or
 /// `idempotency_key`.
+///
+/// The delivery-guarantee bookkeeping fields (`status`, `attempt_count`,
+/// `next_attempt_at`, `last_error`, `submitted_at`, `claim_token`) are
+/// `pub(crate)` — visible throughout this crate (`outbox.rs`'s
+/// `row_to_entry` reads the real row back from Postgres into them) but
+/// not settable by an external caller hand-building an entry. The real
+/// state-machine transitions (`claim_pending_outbox`, `mark_outbox_
+/// submitted`, `mark_outbox_retry`) are SQL-guarded (`WHERE status =
+/// 'dispatching' AND claim_token = $N`) regardless of what an in-memory
+/// struct claims, so this closes a construction-time forgery risk, not
+/// a runtime one. `attempt_count` and `claim_token` have real external
+/// readers (the sender's backoff/claim-token bookkeeping) and get pub
+/// accessors below; the rest have none today.
 #[derive(Debug, Clone)]
 pub struct OutboxEntry {
     pub id: Uuid,
@@ -100,14 +113,14 @@ pub struct OutboxEntry {
     pub idempotency_key: Uuid,
     pub execution_id: Option<Uuid>,
     pub callout_id: Option<Uuid>,
-    pub status: OutboxStatus,
-    pub attempt_count: i32,
-    pub next_attempt_at: DateTime<Utc>,
-    pub last_error: Option<String>,
+    pub(crate) status: OutboxStatus,
+    pub(crate) attempt_count: i32,
+    pub(crate) next_attempt_at: DateTime<Utc>,
+    pub(crate) last_error: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub submitted_at: Option<DateTime<Utc>>,
+    pub(crate) submitted_at: Option<DateTime<Utc>>,
     pub tenant_id: String,
-    pub claim_token: Option<Uuid>,
+    pub(crate) claim_token: Option<Uuid>,
 }
 
 impl OutboxEntry {
@@ -151,6 +164,23 @@ impl OutboxEntry {
         self.callout_id = Some(callout_id);
         self
     }
+
+    /// Current retry count. Read by the sender to compute exponential
+    /// backoff before calling [`crate::mark_outbox_retry`].
+    pub fn attempt_count(&self) -> i32 {
+        self.attempt_count
+    }
+
+    /// The dispatch lease token assigned by [`crate::claim_pending_outbox`],
+    /// if this row is currently claimed. The sender must pass this back
+    /// unchanged to [`crate::mark_outbox_submitted`] /
+    /// [`crate::mark_outbox_retry`] — those functions re-check it against
+    /// the row's actual claim_token in SQL, so a forged value here is
+    /// harmless (it would just fail with [`crate::BusStorageError::LostClaim`]),
+    /// but the type still shouldn't invite hand-editing it.
+    pub fn claim_token(&self) -> Option<Uuid> {
+        self.claim_token
+    }
 }
 
 /// Inbox row state machine: `received → processed`. The row is keyed
@@ -182,7 +212,11 @@ impl InboxStatus {
     }
 }
 
-/// One inbox row.
+/// One inbox row. `status`/`processed_at` are `pub(crate)` for the same
+/// reason as `OutboxEntry`'s state fields — see that struct's doc
+/// comment. Zero external readers or writers of either field exist
+/// today; `execution_id` does have a real external reader (the
+/// duplicate-Submit replay path) and stays `pub`.
 #[derive(Debug, Clone)]
 pub struct InboxEntry {
     pub idempotency_key: Uuid,
@@ -190,8 +224,8 @@ pub struct InboxEntry {
     pub endpoint: BusEndpoint,
     pub execution_id: Option<Uuid>,
     pub received_at: DateTime<Utc>,
-    pub processed_at: Option<DateTime<Utc>>,
-    pub status: InboxStatus,
+    pub(crate) processed_at: Option<DateTime<Utc>>,
+    pub(crate) status: InboxStatus,
     pub payload: Option<Vec<u8>>,
     pub tenant_id: String,
 }
