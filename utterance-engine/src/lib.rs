@@ -25,3 +25,5 @@ pub mod fixtures;
 pub mod metrics;
 pub mod policy;
 pub mod retrieval;
+#[cfg(feature = "candle-probe")]
+pub mod trained_ranker;

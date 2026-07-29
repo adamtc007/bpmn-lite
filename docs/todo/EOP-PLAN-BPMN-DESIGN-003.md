@@ -1020,5 +1020,29 @@ Tier-0-alone baseline also moved: `tier0_top1_accuracy` 0.4490 (44/98) → 0.438
 
 **Receipt state:** `board_candidate.rs` description edit is committed as part of this branch's Phase 2 commit; `eval_enriched.jsonl`/`.card.json` and `eval_scores.json` reflect the new (post-audit) descriptions going forward — this is now the working head-of-branch state. If Adam elects to revert the wording, that is a one-line revert plus a re-run of `eval_enrich`/`score_trained_bundle`, not a retrain.
 
+### DIR-003 Phase 3 — `starter-seed-v1` permanent named suite (2026-07-29)
+
+**What.** 34 utterances Adam authored outside the generation pipeline (verbatim in EOP-DIR-BPMN-DESIGN-003-003 §Phase 3), across 7 categories: routing/xor, waits/timers/reminders, guards/rollback, MI/collections, correlation/messages, declarations, off-board (NOTA-expected), vague/compound. Each was board-mapped to one of the 13 real enumeration-class positions (`fixtures.rs`, real board-construction code, not invented) and assigned a **provisional hypothesis label** — free utterances have no label-by-construction, so every label here is Adam's/the executor's best-effort read, not gold. 8 of 34 are flagged `disputed` with the specific alternate reading noted; disputed misses are evidence, not model error.
+
+**Harness.** `TrainedRanker` extracted from `score_trained_bundle.rs` into `utterance_engine::trained_ranker` (shared, one scoring path — avoids a second copy of the Candle key-remap logic). New permanent binary `examples/starter_seed_eval.rs` (`cargo run -p utterance-engine --example starter_seed_eval --features embed,candle-probe --release`): loads `seed/banks/starter_seed_v1.json`, builds the real boards, runs tier-0 (Candle embed) at K=12 and the ratified canonical base (`modernbert-base`) with no retraining, and reports **per-category evidence, not pass/fail** (directive 3.1) to `seed/corpus_v2/starter-seed-v1.report.json` + `.enriched.jsonl`. This is now the permanent named suite: every future bundle should report against it until real developer-session usage supersedes it (Phase 4 AFTER-item).
+
+**Result (provisional-hypothesis hits, out of 34; canonical base = modernbert-base, K=12):**
+
+| category | n | tier0 top1 hits | tier1 top1 hits |
+|---|---|---|---|
+| routing_xor | 7 | 2 | 4 |
+| waits_timers_reminders | 6 | 1 | 1 |
+| guards_rollback | 4 | 1 | 2 |
+| mi_collections | 3 | 0 | 1 |
+| correlation_messages | 3 | 1 | 2 |
+| declarations | 2 | 1 | 2 |
+| off_board | 5 | 0 | 2 |
+| vague_compound | 4 | 0 | 1 |
+| **total** | **34** | **6 (17.6%)** | **15 (44.1%)** |
+
+Tier-1 still uplifts over tier-0 by a similar multiplicative margin as the synthetic eval (~2.5x here vs ~2x there), but both numbers land far below their synthetic-eval counterparts (tier0_top1 43.9%→17.6%, tier1 top1 88.8%→44.1%). This is not a regression — it is the first honest signal of what Open Risk #1 in EOP-REPORT-SLM-BAKEOFF-001 already named: synthetic-only eval overstates real-world performance. Full per-utterance detail (hypothesis label, tier0/tier1 pick, disputed flag and note) is in `starter-seed-v1.report.json`, carried into the Phase 4 report addendum.
+
+**Disputed items requiring Adam's adjudication (8):** seq 4 ("wire the rejected path back to... actually where does rejected go" — Connect-to-unstated-target vs NOTA-as-clarification), seq 7 ("give the timeout its own route" — CreateBranch vs guard-timer reading), seq 10 ("nudge every 48 hours, three times max" — direct guard config vs reminder-escalate production), seq 12 ("park this until the document shows up" — request_and_wait vs bare wait-append), seq 18 ("do this for each director" — MI construction vs clarify-for-missing-ceiling), seq 22 ("when their answer lands, wake this up" — request_and_wait vs bare MessageWait append), seq 25 ("make the default budget three for the whole flow" — workflow-level default has no current node-scoped candidate; possible missing candidate class, flagged not decided), seq 32 ("chase them and also loop legal in if it's high risk" — compound-ask NOTA vs partial-credit reminder_then_escalate reading).
+
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*

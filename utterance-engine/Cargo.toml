@@ -44,3 +44,7 @@ required-features = ["candle-probe"]
 [[example]]
 name = "score_trained_bundle"
 required-features = ["candle-probe"]
+
+[[example]]
+name = "starter_seed_eval"
+required-features = ["embed", "candle-probe"]
