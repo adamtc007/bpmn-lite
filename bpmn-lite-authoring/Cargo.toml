@@ -13,9 +13,17 @@ description = "BPMN-Lite authoring — YAML/DTO → IR pipeline, lint rules (L1�
 #               (`publish`), template registry trait + memory impl
 #               (`registry`). PostgreSQL template store goes
 #               behind a feature or splits to `-authoring-postgres`.
+#               `publish::compile_and_publish` writes the compiled
+#               program to `bpmn-lite-store`'s `WorkflowStore` trait
+#               (program storage is part of the publish pipeline's
+#               own job) — this crate is a real, direct dependent of
+#               bpmn-lite-store, not out-of-scope for it.
 #   OUT-OF-SCOPE: bytecode interpretation (bpmn-lite-vm), engine
-#                 orchestration (bpmn-lite-engine), the
-#                 process-state store (bpmn-lite-store).
+#                 orchestration (bpmn-lite-engine) — i.e. anything
+#                 touching process/fiber runtime state (starting,
+#                 signaling, ticking an instance). This crate only
+#                 ever writes a compiled program once, at publish
+#                 time; it never reads or mutates runtime state.
 #
 # Audit note (bpmn-lite Phase 0 finding): this crate's pipeline
 # is architecturally complete (YAML → DTO → IR → bytecode →
