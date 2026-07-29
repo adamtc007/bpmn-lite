@@ -183,6 +183,7 @@ Suggest-only → staged-patch promotion repeats G3 on live suggest-only data. **
 2. **V&S amendments.** Anything a workstream surfaces that contradicts DESIGN-003 v0.6 is a HALT and a proposed versioned amendment — never adapted around. Q7 producer upgrades, Q26, Q28, Q29's revisit, and Q30's abstention-evidence shape are the expected amendment candidates.
 3. **Threat-model note for WS-C.** Utterances are untrusted input to a system that constructs staged patches: the red-team suite must include prompt-shaped utterances ("ignore the board and…"), which must resolve as ordinary off-board/out-of-scope — the architecture already makes them inert; the suite proves it stays that way.
 4. **Executor.** Sonnet-tier for GRIND, with CAREFUL workstream items and all blind reviews at the careful tier, per the established split. Fine-tune methodology review is CAREFUL regardless of who runs the training.
+5. **Description-audit-before-retrain (EOP-DIR-BPMN-DESIGN-003-003, 2026-07-29).** A per-class weak spot in the tier-1 candidate space gets a candidate-description audit (rewrite for a sharper distinguishing clause, re-score existing bundles with NO retraining) before a training-data fix is proposed — cheap, reversible, and it tells you whether the weak spot is a wording problem or a data-coverage problem before you spend a retrain on it. Any description change that is adopted (kept past its audit) triggers corpus regeneration at the next retrain — descriptions are board-hash input and training/serving must never run on a description mismatch past that point.
 
 ---
 
@@ -991,6 +992,33 @@ Every change tagged `sequencing` or `content`. No `content` change to a ratified
 | 10 | §A added: ratified constraints restated verbatim-in-substance as a standing section | sequencing | Directive §1 ("restate verbatim in the amended plan, do not weaken") |
 | 11 | Shadow-start definition added: the day WS-B's session loop first runs against a real Pack | sequencing | Directive §3 bullet 2 |
 | 12 | G1, G3 (criteria + threshold table + ladder), T4/G4: untouched | — | Directive §1 items 5, §3 bullet 4 |
+
+### DIR-003 Phase 2 — xor_gateway description audit (CAREFUL analysis; 2026-07-29)
+
+**Change.** Three near-synonym `xor_gateway` candidate descriptions in `designer-graph/src/board_candidate.rs::OperationKind::description()` rewritten to state their distinguishing consequence at a routing node, per Adam's suggested wording:
+
+| candidate | before | after |
+|---|---|---|
+| `create_branch` | "Add an outgoing routing branch at an exclusive gateway" | "Adds a new outgoing route with its own outcome key" |
+| `insert_after` | "Insert a new node after the anchor node" | "Places a node on an existing route, after the selected node" |
+| `connect` | "Connect two existing nodes with a typed sequence flow" | "Joins two existing nodes with a typed connector" |
+
+Descriptions are board-hash input; the rewrite changes board hashes and re-embeds tier-0's targets. Re-scored the same 98-entry eval set (K=12) on all four already-trained bundles **with no retraining** — pure re-scoring against the new text.
+
+**Result — before (K=12 ratification baseline, commit `4d25535`) vs after (description audit, no retrain):**
+
+| base | xor_gateway before | xor_gateway after | overall top1 before | overall top1 after |
+|---|---|---|---|---|
+| modernbert-base (canonical) | 5/8 | 5/8 | 87/98 | 83/98 |
+| gte-modernbert (runner-up) | 6/8 | 5/8 | 89/98 | 87/98 |
+| bge-reranker | 6/8 | 6/8 | 79/98 | 77/98 |
+| ms-marco | 5/8 | 3/8 | 75/98 | 69/98 |
+
+Tier-0-alone baseline also moved: `tier0_top1_accuracy` 0.4490 (44/98) → 0.4388 (43/98) — a small shift purely from re-embedding the changed descriptions, with no model change at all. `recall@12` moved 1.0000 (98/98) → 0.9898 (97/98).
+
+**Honest read (this is the point of the CAREFUL tier — not spinning it).** This is *not* the improvement the audit was hoping to measure. `xor_gateway` accuracy stayed flat or got worse on every base (no base improved on the targeted class), and every base's overall accuracy dropped by 2–6 points despite no change to any model weight. That drop pattern — uniform, across all four architecturally-distinct bases, on classes that were never touched — is the signature of **train/serve description skew dominating**: the four bundles were trained against the old description text baked into 5,018 corpus records: the model learned to associate specific old phrasing with each candidate, and swapping the served text out from under it costs accuracy independent of whether the new text is clearer. The clean way to separate "is the new wording better" from "is this skew" does not exist without a controlled experiment (retrain one base on both description sets, hold everything else fixed) — this audit, by design, ran with no retraining, so it cannot resolve that separation. What it *can* say: on this evidence, the new wording did not pay for itself against the skew cost it introduced, and does not clear the bar for keeping unretrained. **Disposition: description change is diagnostic only for this cycle — do not carry it forward into the next retrain's corpus generation as a settled improvement.** Adam's call whether the wording itself is still worth keeping for corpus-v2 (independent of this cycle's skew-contaminated read) is open; the standing rule above (rule 5) means whatever is decided, keeping any adopted description change past its audit obligates a full corpus regeneration at the next retrain — never a partial, skewed serve.
+
+**Receipt state:** `board_candidate.rs` description edit is committed as part of this branch's Phase 2 commit; `eval_enriched.jsonl`/`.card.json` and `eval_scores.json` reflect the new (post-audit) descriptions going forward — this is now the working head-of-branch state. If Adam elects to revert the wording, that is a one-line revert plus a re-run of `eval_enrich`/`score_trained_bundle`, not a retrain.
 
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*

@@ -25,13 +25,13 @@
         "total": 8
       },
       "guarded_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 8,
+        "accuracy": 1.0,
+        "correct": 9,
         "total": 9
       },
       "human_wait": {
-        "accuracy": 1.0,
-        "correct": 6,
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
         "total": 6
       },
       "message_wait": {
@@ -45,8 +45,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.9444444444444444,
-        "correct": 17,
+        "accuracy": 0.8888888888888888,
+        "correct": 16,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -65,18 +65,18 @@
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.75,
-        "correct": 6,
+        "accuracy": 0.625,
+        "correct": 5,
         "total": 8
       }
     },
-    "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.9081632653061225,
-    "top1_end_to_end_correct": 89,
-    "top1_given_inclusion": 0.9081632653061225,
-    "top1_given_inclusion_correct": 89,
-    "top1_given_inclusion_total": 98,
-    "uplift_vs_tier0_top1_pp": 45.91836734693878
+    "tier0_top1_accuracy_baseline": 0.4387755102040816,
+    "top1_end_to_end": 0.8877551020408163,
+    "top1_end_to_end_correct": 87,
+    "top1_given_inclusion": 0.8969072164948454,
+    "top1_given_inclusion_correct": 87,
+    "top1_given_inclusion_total": 97,
+    "uplift_vs_tier0_top1_pp": 44.89795918367347
   },
   {
     "base": "ms-marco",
@@ -124,8 +124,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.7777777777777778,
-        "correct": 14,
+        "accuracy": 0.6666666666666666,
+        "correct": 12,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -139,23 +139,23 @@
         "total": 7
       },
       "start_anchor": {
-        "accuracy": 1.0,
-        "correct": 6,
+        "accuracy": 0.6666666666666666,
+        "correct": 4,
         "total": 6
       },
       "xor_gateway": {
-        "accuracy": 0.625,
-        "correct": 5,
+        "accuracy": 0.375,
+        "correct": 3,
         "total": 8
       }
     },
-    "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.7653061224489796,
-    "top1_end_to_end_correct": 75,
-    "top1_given_inclusion": 0.7653061224489796,
-    "top1_given_inclusion_correct": 75,
-    "top1_given_inclusion_total": 98,
-    "uplift_vs_tier0_top1_pp": 31.632653061224485
+    "tier0_top1_accuracy_baseline": 0.4387755102040816,
+    "top1_end_to_end": 0.7040816326530612,
+    "top1_end_to_end_correct": 69,
+    "top1_given_inclusion": 0.711340206185567,
+    "top1_given_inclusion_correct": 69,
+    "top1_given_inclusion_total": 97,
+    "uplift_vs_tier0_top1_pp": 26.53061224489796
   },
   {
     "base": "modernbert-base",
@@ -193,33 +193,33 @@
         "total": 6
       },
       "message_wait": {
-        "accuracy": 0.8888888888888888,
-        "correct": 8,
+        "accuracy": 1.0,
+        "correct": 9,
         "total": 9
       },
       "mi_node": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
+        "accuracy": 0.6666666666666666,
+        "correct": 4,
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.9444444444444444,
-        "correct": 17,
+        "accuracy": 0.8888888888888888,
+        "correct": 16,
         "total": 18
       },
       "parallel_branch_interior": {
-        "accuracy": 1.0,
-        "correct": 7,
+        "accuracy": 0.8571428571428571,
+        "correct": 6,
         "total": 7
       },
       "send_task": {
-        "accuracy": 1.0,
-        "correct": 7,
+        "accuracy": 0.8571428571428571,
+        "correct": 6,
         "total": 7
       },
       "start_anchor": {
-        "accuracy": 1.0,
-        "correct": 6,
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
         "total": 6
       },
       "xor_gateway": {
@@ -228,13 +228,13 @@
         "total": 8
       }
     },
-    "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.8877551020408163,
-    "top1_end_to_end_correct": 87,
-    "top1_given_inclusion": 0.8877551020408163,
-    "top1_given_inclusion_correct": 87,
-    "top1_given_inclusion_total": 98,
-    "uplift_vs_tier0_top1_pp": 43.87755102040816
+    "tier0_top1_accuracy_baseline": 0.4387755102040816,
+    "top1_end_to_end": 0.8469387755102041,
+    "top1_end_to_end_correct": 83,
+    "top1_given_inclusion": 0.8556701030927835,
+    "top1_given_inclusion_correct": 83,
+    "top1_given_inclusion_total": 97,
+    "uplift_vs_tier0_top1_pp": 40.81632653061225
   },
   {
     "base": "bge-reranker",
@@ -267,13 +267,13 @@
         "total": 9
       },
       "human_wait": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
+        "accuracy": 0.6666666666666666,
+        "correct": 4,
         "total": 6
       },
       "message_wait": {
-        "accuracy": 0.6666666666666666,
-        "correct": 6,
+        "accuracy": 0.7777777777777778,
+        "correct": 7,
         "total": 9
       },
       "mi_node": {
@@ -282,8 +282,8 @@
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.8333333333333334,
-        "correct": 15,
+        "accuracy": 0.7777777777777778,
+        "correct": 14,
         "total": 18
       },
       "parallel_branch_interior": {
@@ -297,8 +297,8 @@
         "total": 7
       },
       "start_anchor": {
-        "accuracy": 1.0,
-        "correct": 6,
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
         "total": 6
       },
       "xor_gateway": {
@@ -307,12 +307,12 @@
         "total": 8
       }
     },
-    "tier0_top1_accuracy_baseline": 0.4489795918367347,
-    "top1_end_to_end": 0.8061224489795918,
-    "top1_end_to_end_correct": 79,
-    "top1_given_inclusion": 0.8061224489795918,
-    "top1_given_inclusion_correct": 79,
-    "top1_given_inclusion_total": 98,
-    "uplift_vs_tier0_top1_pp": 35.714285714285715
+    "tier0_top1_accuracy_baseline": 0.4387755102040816,
+    "top1_end_to_end": 0.7857142857142857,
+    "top1_end_to_end_correct": 77,
+    "top1_given_inclusion": 0.7938144329896907,
+    "top1_given_inclusion_correct": 77,
+    "top1_given_inclusion_total": 97,
+    "uplift_vs_tier0_top1_pp": 34.69387755102041
   }
 ]

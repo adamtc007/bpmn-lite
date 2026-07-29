@@ -168,7 +168,7 @@ mod tests {
         let board =
             build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
         let t0 = LexicalTier0;
-        let exact = "Connect two existing nodes with a typed sequence flow";
+        let exact = "Joins two existing nodes with a typed connector";
         let ev = t0.retrieve(exact, &board).unwrap();
         for rc in &ev.ranking {
             assert!(board.contains(&rc.candidate_id), "off-board evidence: {}", rc.candidate_id);

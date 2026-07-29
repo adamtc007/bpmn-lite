@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever any canonical id or model-facing description changes.
 /// Rides every `BoardCandidate` so recorded board hashes stay
 /// interpretable across schema evolution (I28).
-pub const CANDIDATE_SCHEMA_VERSION: u32 = 1;
+pub const CANDIDATE_SCHEMA_VERSION: u32 = 2;
 
 /// The §12.1 atomic graph-operation set. Variant set mirrors the V&S
 /// verbatim; the three guard operations mirror the opcode trichotomy.
@@ -125,10 +125,10 @@ impl OperationKind {
         match self {
             OperationKind::AppendNode => "Append a new node after the current end of a sequence",
             OperationKind::InsertBefore => "Insert a new node before the anchor node",
-            OperationKind::InsertAfter => "Insert a new node after the anchor node",
+            OperationKind::InsertAfter => "Places a node on an existing route, after the selected node",
             OperationKind::ReplaceNode => "Replace the anchor node, preserving its connections",
-            OperationKind::Connect => "Connect two existing nodes with a typed sequence flow",
-            OperationKind::CreateBranch => "Add an outgoing routing branch at an exclusive gateway",
+            OperationKind::Connect => "Joins two existing nodes with a typed connector",
+            OperationKind::CreateBranch => "Adds a new outgoing route with its own outcome key",
             OperationKind::CreateRace => "Create a first-wins race over declared arms",
             OperationKind::CreateParallelRegion => "Open a parallel fork/join region",
             OperationKind::CloseParallelRegion => "Close an open parallel region at its join",
@@ -317,7 +317,7 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(unique, golden, "canonical id set drifted from golden");
-        assert_eq!(CANDIDATE_SCHEMA_VERSION, 1);
+        assert_eq!(CANDIDATE_SCHEMA_VERSION, 2);
     }
 
     /// CEMENT (review F6): descriptions are board-hash inputs — a
@@ -353,7 +353,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_DESCRIPTION_HASH: &str = "0df0986177658657053f56129bc8db1468e99f8aa5cf6bee16d8d7971b5ffb90";
+    const GOLDEN_DESCRIPTION_HASH: &str = "d6b84d029b4fe6c419cd6a64dbe9e16693e2442243eaf133db114609c9c12097";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]

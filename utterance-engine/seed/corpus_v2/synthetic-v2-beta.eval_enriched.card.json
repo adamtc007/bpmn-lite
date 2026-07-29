@@ -1,7 +1,9 @@
 {
   "corpus_version": "synthetic-v2-beta.eval_enriched",
   "k": 12,
-  "k8_miss_gold_ranks": [],
+  "k8_miss_gold_ranks": [
+    13
+  ],
   "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
   "per_class_recall_at_k": {
     "data_object": {
@@ -45,8 +47,8 @@
       "total": 6
     },
     "mid_sequence_task": {
-      "hits": 18,
-      "recall": 1.0,
+      "hits": 17,
+      "recall": 0.9444444444444444,
       "total": 18
     },
     "parallel_branch_interior": {
@@ -76,20 +78,20 @@
       "recall": 0.6224489795918368
     },
     "02": {
-      "hits": 74,
-      "recall": 0.7551020408163265
+      "hits": 73,
+      "recall": 0.7448979591836735
     },
     "04": {
       "hits": 84,
       "recall": 0.8571428571428571
     },
     "08": {
-      "hits": 94,
-      "recall": 0.9591836734693877
+      "hits": 93,
+      "recall": 0.9489795918367347
     },
     "12": {
-      "hits": 98,
-      "recall": 1.0
+      "hits": 97,
+      "recall": 0.9897959183673469
     },
     "16": {
       "hits": 98,
@@ -100,9 +102,9 @@
   "source": "seed/banks/eval_*.json",
   "totals": {
     "examples": 98,
-    "gold_in_tier1": 98,
-    "recall_at_k": 1.0,
-    "tier0_top1_accuracy": 0.4489795918367347,
-    "tier0_top1_correct": 44
+    "gold_in_tier1": 97,
+    "recall_at_k": 0.9897959183673469,
+    "tier0_top1_accuracy": 0.4387755102040816,
+    "tier0_top1_correct": 43
   }
 }
