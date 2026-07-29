@@ -37,7 +37,7 @@ impl ContractRegistry {
 
     pub(crate) fn from_manifest(m: &dsl_manifest::Manifest) -> Self {
         let mut registry = ContractRegistry::default();
-        for verb in &m.verbs {
+        for verb in m.verbs() {
             let mut reads_flags = HashSet::new();
             let mut writes_flags = HashSet::new();
 

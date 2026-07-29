@@ -47,7 +47,7 @@ fn export_cbu_type_routing_round_trips_through_dsl_manifest() {
     assert_eq!(manifest.catalogue_version, "v1.0.0");
     let ids: Vec<_> = manifest.decision_ids().collect();
     assert_eq!(ids, vec!["cbu_type_routing"]);
-    assert!(manifest.verbs.is_empty());
+    assert!(manifest.verbs().is_empty());
 }
 
 #[test]

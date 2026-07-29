@@ -57,12 +57,18 @@ pub struct Manifest {
     #[serde(default)]
     pub services: Vec<ServiceDeclaration>,
 
+    // Private: `verb_index`/`decision_index`/`type_index` below cache a
+    // position into each of these Vecs, built by `rebuild_indexes()` after
+    // every load. A direct external push would silently desync the index
+    // (`lookup_verb` etc. would miss the just-added entry) — go through
+    // `add_verb`/`add_decision`, or read via `verbs()`/`decisions()`/
+    // `types()`.
     #[serde(default)]
-    pub verbs: Vec<VerbEntry>,
+    verbs: Vec<VerbEntry>,
     #[serde(default)]
-    pub decisions: Vec<DecisionEntry>,
+    decisions: Vec<DecisionEntry>,
     #[serde(default)]
-    pub types: Vec<TypeEntry>,
+    types: Vec<TypeEntry>,
 
     // Lookups built after load; not serialised.
     #[serde(skip)]
@@ -120,6 +126,50 @@ impl Manifest {
     /// Iterate decision ids exposed by this manifest.
     pub fn decision_ids(&self) -> impl Iterator<Item = &str> {
         self.decisions.iter().map(|d| d.id.as_str())
+    }
+
+    /// Read-only access to every verb entry.
+    pub fn verbs(&self) -> &[VerbEntry] {
+        &self.verbs
+    }
+
+    /// Read-only access to every decision entry.
+    pub fn decisions(&self) -> &[DecisionEntry] {
+        &self.decisions
+    }
+
+    /// Read-only access to every type entry.
+    pub fn types(&self) -> &[TypeEntry] {
+        &self.types
+    }
+
+    /// Append a verb entry, keeping `verb_index` in sync so a subsequent
+    /// `lookup_verb` on the same in-memory `Manifest` sees it immediately.
+    /// The only supported way to add a verb after construction — pushing
+    /// directly onto a (formerly public) `verbs` Vec bypassed this and
+    /// left the index silently stale.
+    pub fn add_verb(&mut self, verb: VerbEntry) {
+        let index = self.verbs.len();
+        self.verb_index.insert(verb.id.clone(), index);
+        self.verbs.push(verb);
+    }
+
+    /// Append a decision entry, keeping `decision_index` in sync. See
+    /// `add_verb` for why direct Vec access was removed.
+    pub fn add_decision(&mut self, decision: DecisionEntry) {
+        let index = self.decisions.len();
+        self.decision_index.insert(decision.id.clone(), index);
+        self.decisions.push(decision);
+    }
+
+    /// Remove a verb by id, keeping `verb_index` in sync (removal shifts
+    /// every subsequent index, so the index is fully rebuilt rather than
+    /// patched). Returns the removed entry, if present.
+    pub fn remove_verb(&mut self, id: &str) -> Option<VerbEntry> {
+        let index = self.verb_index.get(id).copied()?;
+        let removed = self.verbs.remove(index);
+        self.rebuild_indexes();
+        Some(removed)
     }
 
     /// Iterate the federated services declared by this manifest. Empty

@@ -1,6 +1,6 @@
 //! Manifest YAML load + structural validation + round-trip tests.
 
-use crate::{Manifest, ManifestError};
+use crate::{DecisionEntry, DecisionOutput, Manifest, ManifestError, Signature, VerbEntry};
 
 const OB_POC_MANIFEST: &str = r#"
 manifest_version: "1.0"
@@ -476,4 +476,71 @@ fn round_trip_preserves_lookup_indexes_after_to_yaml() {
     assert!(m2.lookup_type("CBU").is_some());
     assert!(m2.lookup_type("CbuType").is_some());
     assert!(m2.lookup_type("String").is_some());
+}
+
+#[test]
+fn add_verb_and_add_decision_keep_the_index_immediately_consistent() {
+    // Regression for the diagnostics_executor.rs bug this API replaced:
+    // pushing straight onto a public `verbs`/`decisions` Vec left
+    // `verb_index`/`decision_index` stale, so a `lookup_verb`/
+    // `lookup_decision` call on the SAME in-memory `Manifest` (no
+    // reload from disk in between) would wrongly report the
+    // just-added entry as absent. `add_verb`/`add_decision` must not
+    // reproduce that — the lookup must see the addition immediately.
+    let mut m = Manifest::load_from_yaml(FULL_SURFACE_MANIFEST).expect("valid");
+    assert!(m.lookup_verb("cbu.archive").is_none());
+    assert!(m.lookup_decision("archive_routing").is_none());
+
+    m.add_verb(VerbEntry {
+        id: "cbu.archive".to_string(),
+        signature: Signature {
+            inputs: vec![],
+            output: None,
+        },
+        effect_class: "idempotent_ensure".to_string(),
+        coordination_policy: None,
+        transaction_policy: None,
+        resource_dependencies: vec![],
+        fsm_applicability: None,
+        authority_required: "cbu.write".to_string(),
+        description: None,
+    });
+    assert!(
+        m.lookup_verb("cbu.archive").is_some(),
+        "add_verb must keep verb_index consistent for an immediate same-instance lookup"
+    );
+
+    m.add_decision(DecisionEntry {
+        id: "archive_routing".to_string(),
+        inputs: vec![],
+        output: DecisionOutput {
+            type_name: "string".to_string(),
+            enum_values: vec![],
+        },
+        description: None,
+    });
+    assert!(
+        m.lookup_decision("archive_routing").is_some(),
+        "add_decision must keep decision_index consistent for an immediate same-instance lookup"
+    );
+}
+
+#[test]
+fn remove_verb_keeps_the_index_consistent_for_remaining_entries() {
+    let mut m = Manifest::load_from_yaml(OB_POC_MANIFEST).expect("valid");
+    let ids: Vec<String> = m.verb_ids().map(str::to_owned).collect();
+    assert!(ids.len() >= 2, "fixture must declare at least 2 verbs");
+
+    let removed = m.remove_verb(&ids[0]).expect("entry present");
+    assert_eq!(removed.id, ids[0]);
+    assert!(m.lookup_verb(&ids[0]).is_none());
+    // Every entry after the removed one shifted left by one index —
+    // rebuild_indexes() must have re-pointed the index, not left it
+    // pointing at the pre-removal positions.
+    for id in &ids[1..] {
+        assert!(
+            m.lookup_verb(id).is_some(),
+            "remove_verb must not desync the index for surviving entries"
+        );
+    }
 }

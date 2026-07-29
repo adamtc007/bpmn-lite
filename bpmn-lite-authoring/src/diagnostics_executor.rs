@@ -116,7 +116,7 @@ generated_at: "2026-06-04T12:00:00Z"
             };
 
             if manifest.lookup_verb(&verb_id).is_none() {
-                manifest.verbs.push(VerbEntry {
+                manifest.add_verb(VerbEntry {
                     id: verb_id,
                     signature: Signature {
                         inputs: vec![],
@@ -165,7 +165,7 @@ generated_at: "2026-06-04T12:00:00Z"
             };
 
             if manifest.lookup_decision(&decision_id).is_none() {
-                manifest.decisions.push(DecisionEntry {
+                manifest.add_decision(DecisionEntry {
                     id: decision_id,
                     inputs: vec![],
                     output: DecisionOutput {

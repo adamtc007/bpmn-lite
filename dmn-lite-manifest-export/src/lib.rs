@@ -423,8 +423,8 @@ pub fn export_to_yaml(
     Ok(build_yaml(
         config,
         &[],
-        &manifest.decisions,
-        &manifest.types,
+        manifest.decisions(),
+        manifest.types(),
     ))
 }
 

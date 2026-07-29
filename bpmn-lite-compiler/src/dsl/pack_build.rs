@@ -198,7 +198,7 @@ pub fn validate_pack(dag: &WorkflowPackDAG, lex: &Manifest) -> Result<(), Vec<St
     let mut errors = Vec::new();
 
     // G1 (intra-bijection)
-    let lex_verb_ids: HashSet<&str> = lex.verbs.iter().map(|v| v.id.as_str()).collect();
+    let lex_verb_ids: HashSet<&str> = lex.verbs().iter().map(|v| v.id.as_str()).collect();
     let dag_local_verb_ids: HashSet<&str> = dag
         .nodes
         .iter()
@@ -703,7 +703,8 @@ mod tests {
         let dag = valid_bpmn_dag();
         let mut lex = generate_manifest(&dag).expect("failed to generate lexicon");
 
-        lex.verbs.remove(0);
+        let first_verb_id = lex.verb_ids().next().unwrap().to_string();
+        lex.remove_verb(&first_verb_id);
         let result = validate_pack(&dag, &lex);
         assert!(result.is_err());
         let errs = result.err().unwrap();
