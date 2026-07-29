@@ -31,6 +31,24 @@ impl PostgresFfiTemplateStore {
 #[async_trait]
 impl FfiTemplateStore for PostgresFfiTemplateStore {
     async fn publish(&self, template: &FfiTemplate) -> FfiTemplateStoreResult<()> {
+        // Content-addressing guard: template_id is supposed to be the
+        // BLAKE3 digest of the template's own content (owner_type +
+        // schemas), never caller-assigned independently of it. Every
+        // current producer in this workspace follows the convention of
+        // calling compute_template_id() before publishing, but nothing
+        // enforced it here — the one place actually positioned to catch a
+        // caller that skipped that step (or forged an id to pre-squat a
+        // hash a future legitimate publisher would compute). Reject before
+        // any DB work rather than silently accepting a mismatched id.
+        let expected_id = ffi_types::compute_template_id(template);
+        if template.template_id != expected_id {
+            return Err(FfiTemplateStoreError::Integrity(format!(
+                "FFI template_id {} does not match its content hash {} (content-addressing violation)",
+                hex(&template.template_id),
+                hex(&expected_id)
+            )));
+        }
+
         // Two-step write: try INSERT; if there's already a row with the same
         // template_id, compare content and accept identical content as
         // idempotent (per A2 §6) or reject differing content.

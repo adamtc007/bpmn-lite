@@ -9297,14 +9297,12 @@ mod tests {
             .unwrap();
 
         // 1. Publish FFI template as NonIdempotent
-        let template_id = [1u8; 32];
-        let template_id_hex = hex(&template_id);
         use ffi_catalogue::FfiTemplateStore;
         let ffi_store = Arc::new(crate::ffi_template_store::PostgresFfiTemplateStore::new(
             pool.clone(),
         ));
-        let template = ffi_types::FfiTemplate {
-            template_id,
+        let mut template = ffi_types::FfiTemplate {
+            template_id: [0u8; 32],
             owner_type: "dmn-decision".to_string(),
             owner_metadata: "CheckEligibility".as_bytes().to_vec(),
             input_schema: vec![],
@@ -9314,6 +9312,13 @@ mod tests {
             published_at: 1700000000000,
             publisher: "test".to_string(),
         };
+        // publish() now verifies template_id against the content hash
+        // (content-addressing guard) — this fixture used to hand-pick an
+        // arbitrary placeholder id, which is exactly the kind of mismatch
+        // that check exists to catch.
+        template.template_id = ffi_types::compute_template_id(&template);
+        let template_id = template.template_id;
+        let template_id_hex = hex(&template_id);
         ffi_store.publish(&template).await.unwrap();
 
         // Build FfiDispatcher and cache
