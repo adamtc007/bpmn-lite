@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bpmn_lite_types::concurrency::ConcurrencyTable;
-use bpmn_lite_types::persistence::PersistedSnapshotState;
+use bpmn_lite_types::ConcurrencyTable;
+use bpmn_lite_types::PersistedSnapshotState;
 use bpmn_lite_types::{
     Addr, EffectId, Fiber, ProcessInstance, ProcessState, Uuid,
     session_stack::SessionStackState,

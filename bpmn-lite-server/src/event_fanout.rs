@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bpmn_lite_engine::BpmnLiteEngine;
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tonic::Status;
 use uuid::Uuid;

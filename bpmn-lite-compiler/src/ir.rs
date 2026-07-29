@@ -1,4 +1,4 @@
-use bpmn_lite_types::ffi_bindings::{DataObjectRole, DataObjectType};
+use bpmn_lite_types::{DataObjectRole, DataObjectType};
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 
@@ -191,7 +191,7 @@ pub enum IRNode {
 
 /// Literal value types at the IR (pre-lowering) level.
 ///
-/// Maps 1:1 to `bpmn_lite_types::ffi_bindings::Literal` after lowering.
+/// Maps 1:1 to `bpmn_lite_types::Literal` after lowering.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum IrLiteral {

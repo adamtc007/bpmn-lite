@@ -51,10 +51,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                 IRNode::DataObject {
                     id: "case_ref".into(),
                     name: "case_ref".into(),
-                    type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
-                        bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+                    type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                        bpmn_lite_types::PrimitiveType::String,
                     ),
-                    role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+                    role: bpmn_lite_types::DataObjectRole::Internal,
                 },
                 p(),
             )?;
@@ -402,10 +402,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             IRNode::DataObject {
                 id: "case_ref".into(),
                 name: "case_ref".into(),
-                type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
-                    bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+                type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                    bpmn_lite_types::PrimitiveType::String,
                 ),
-                role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+                role: bpmn_lite_types::DataObjectRole::Internal,
             },
             p(),
         )?;

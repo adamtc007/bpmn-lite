@@ -21,7 +21,7 @@ use bpmn_lite_compiler::{lower, parse_bpmn};
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use bpmn_lite_vm::compute_hash;
 use std::sync::Arc;

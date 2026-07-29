@@ -389,7 +389,7 @@ mod tests {
     /// admit() green.
     #[test]
     fn request_and_wait_admits() {
-        use bpmn_lite_types::ffi_bindings::{DataObjectRole, DataObjectType, PrimitiveType};
+        use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
 
         let (mut base, _s, t1, _e) = linear("prod-raw");
         // The MessageWait's correlation source names a real data object —

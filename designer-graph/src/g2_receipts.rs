@@ -25,8 +25,8 @@ use crate::ops::{apply, GuardTrigger, Operation};
 use crate::productions::{apply_production, request_and_wait, RequestAndWaitBindings};
 use crate::schema::{DesignerDag, NodeKey, Provenance};
 use bpmn_lite_compiler::{IRNode, TimerSpec};
-use bpmn_lite_types::ffi_bindings::{DataObjectRole, DataObjectType, PrimitiveType};
-use bpmn_lite_types::types::Instr;
+use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+use bpmn_lite_types::Instr;
 use uuid::Uuid;
 
 fn key() -> NodeKey {

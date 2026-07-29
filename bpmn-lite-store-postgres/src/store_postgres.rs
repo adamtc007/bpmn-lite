@@ -10,7 +10,7 @@ use bpmn_lite_store::TemplateSummary;
 use bpmn_lite_store::{
     ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult,
 };
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::integrity::compute_instance_integrity_hash;
 use bpmn_lite_types::*;
 use std::sync::Arc;
@@ -6599,7 +6599,7 @@ mod tests {
         let has_quarantine_event = events.iter().any(|(_, ev)| {
             matches!(
                 ev,
-                bpmn_lite_types::events::RuntimeEvent::InstanceQuarantined { .. }
+                bpmn_lite_types::RuntimeEvent::InstanceQuarantined { .. }
             )
         });
         assert!(

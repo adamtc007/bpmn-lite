@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use bpmn_lite_types::ffi_bindings::{apply_ffi_outputs, encode_ffi_inputs};
+use bpmn_lite_types::{apply_ffi_outputs, encode_ffi_inputs};
 use bpmn_lite_types::{
     Addr, BufferedMessageMutation, Command, CommandEnvelope, ConcurrencyMutation,
     ConcurrencyRecord, ControlStackDelta, DedupeWrite, DurableEffect, EffectId, EffectMutation,
@@ -355,7 +355,7 @@ pub fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
 
 pub fn check_k_invariants(
     fibers: &std::collections::BTreeMap<Uuid, Fiber>,
-    table: &bpmn_lite_types::concurrency::ConcurrencyTable,
+    table: &bpmn_lite_types::ConcurrencyTable,
 ) -> Result<(), String> {
     for (record_id, record) in table.iter() {
         if record.state != RecordState::Armed {
@@ -473,7 +473,7 @@ fn derive_post_transition_frame(
     transition: &Transition,
 ) -> (
     std::collections::BTreeMap<Uuid, Fiber>,
-    bpmn_lite_types::concurrency::ConcurrencyTable,
+    bpmn_lite_types::ConcurrencyTable,
 ) {
     let fibers = apply_fiber_deltas(
         snapshot.fibers(),
@@ -886,18 +886,18 @@ fn validate_snapshot_limits(
                     return Err(TransitionError::ResourceLimitExceeded {
                         resource: "Value::Array size/depth",
                         actual: match limit_error {
-                            bpmn_lite_types::types::ValueLimitError::TooLong { actual, .. } => {
+                            bpmn_lite_types::ValueLimitError::TooLong { actual, .. } => {
                                 actual
                             }
-                            bpmn_lite_types::types::ValueLimitError::TooDeep { max } => {
+                            bpmn_lite_types::ValueLimitError::TooDeep { max } => {
                                 max as usize
                             }
                         },
                         limit: match limit_error {
-                            bpmn_lite_types::types::ValueLimitError::TooLong { max, .. } => {
+                            bpmn_lite_types::ValueLimitError::TooLong { max, .. } => {
                                 max as u64
                             }
-                            bpmn_lite_types::types::ValueLimitError::TooDeep { max } => {
+                            bpmn_lite_types::ValueLimitError::TooDeep { max } => {
                                 u64::from(max)
                             }
                         },
@@ -922,12 +922,12 @@ fn validate_snapshot_limits(
                 return Err(TransitionError::ResourceLimitExceeded {
                     resource: "Value::Array size/depth (flag)",
                     actual: match limit_error {
-                        bpmn_lite_types::types::ValueLimitError::TooLong { actual, .. } => actual,
-                        bpmn_lite_types::types::ValueLimitError::TooDeep { max } => max as usize,
+                        bpmn_lite_types::ValueLimitError::TooLong { actual, .. } => actual,
+                        bpmn_lite_types::ValueLimitError::TooDeep { max } => max as usize,
                     },
                     limit: match limit_error {
-                        bpmn_lite_types::types::ValueLimitError::TooLong { max, .. } => max as u64,
-                        bpmn_lite_types::types::ValueLimitError::TooDeep { max } => u64::from(max),
+                        bpmn_lite_types::ValueLimitError::TooLong { max, .. } => max as u64,
+                        bpmn_lite_types::ValueLimitError::TooDeep { max } => u64::from(max),
                     },
                 });
             }
@@ -3388,7 +3388,7 @@ fn resolve_correlation_key_at(
         .ok_or(TransitionError::InvalidCommand(
             "message word has no correlation-key source",
         ))?;
-    bpmn_lite_types::ffi_bindings::resolve_correlation_key(instance, source).map_err(|_| {
+    bpmn_lite_types::resolve_correlation_key(instance, source).map_err(|_| {
         TransitionError::InvalidCommand("correlation key did not resolve to a scalar")
     })
 }
@@ -4532,8 +4532,8 @@ mod tests {
     /// A `v2_corr_sources` table mapping each message-word address to a
     /// `Bool(false)` literal, whose content correlation key is `"false"` —
     /// the deterministic default these hand-assembled fixtures correlate on.
-    fn corr_false(addrs: &[u32]) -> BTreeMap<Addr, bpmn_lite_types::ffi_bindings::BindingSource> {
-        use bpmn_lite_types::ffi_bindings::{BindingSource, Literal};
+    fn corr_false(addrs: &[u32]) -> BTreeMap<Addr, bpmn_lite_types::BindingSource> {
+        use bpmn_lite_types::{BindingSource, Literal};
         addrs
             .iter()
             .map(|&addr| (Addr::new(addr), BindingSource::Literal(Literal::Bool(false))))
@@ -4677,7 +4677,7 @@ mod tests {
         let (workflow, snapshot, context) = fixture();
         let mut instance = snapshot.instance().clone();
         let oversized_array = Value::Array(
-            (0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_LEN as i64)
+            (0..=bpmn_lite_types::MAX_VALUE_ARRAY_LEN as i64)
                 .map(Value::I64)
                 .collect(),
         );
@@ -4709,7 +4709,7 @@ mod tests {
         let (workflow, snapshot, context) = fixture();
         let mut instance = snapshot.instance().clone();
         let mut deep = Value::I64(0);
-        for _ in 0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_DEPTH {
+        for _ in 0..=bpmn_lite_types::MAX_VALUE_ARRAY_DEPTH {
             deep = Value::Array(vec![deep]);
         }
         instance.flags.insert(0, deep);
@@ -4745,7 +4745,7 @@ mod tests {
         let (workflow, snapshot, context) = fixture();
         let mut instance = snapshot.instance().clone();
         let oversized_array = Value::Array(
-            (0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_LEN as i64)
+            (0..=bpmn_lite_types::MAX_VALUE_ARRAY_LEN as i64)
                 .map(Value::I64)
                 .collect(),
         );
@@ -4791,7 +4791,7 @@ mod tests {
         let (workflow, snapshot, context) = fixture();
         let mut instance = snapshot.instance().clone();
         let mut deep = Value::I64(0);
-        for _ in 0..=bpmn_lite_types::types::MAX_VALUE_ARRAY_DEPTH {
+        for _ in 0..=bpmn_lite_types::MAX_VALUE_ARRAY_DEPTH {
             deep = Value::Array(vec![deep]);
         }
         instance.flags.insert(0, deep);
@@ -4818,7 +4818,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -4860,7 +4860,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -4906,7 +4906,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5039,7 +5039,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5202,7 +5202,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5335,7 +5335,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5479,7 +5479,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5577,7 +5577,7 @@ mod tests {
                 [Fiber::new(root, 0)],
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5728,7 +5728,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5774,7 +5774,7 @@ mod tests {
     /// of `apply_message`.
     #[test]
     fn v2_race_effect_arm_wins_and_cancels_timer_arm() {
-        use bpmn_lite_types::ffi_bindings::FfiTaskDecl;
+        use bpmn_lite_types::FfiTaskDecl;
 
         let template_id = [21u8; 32];
         let program = bpmn_lite_types::legacy_program! {
@@ -5843,7 +5843,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -5899,7 +5899,7 @@ mod tests {
     /// no fibre mutation, no error, just the effect's own terminal mutation.
     #[test]
     fn v2_race_late_effect_completion_after_timer_arm_already_won_is_a_no_op() {
-        use bpmn_lite_types::ffi_bindings::FfiTaskDecl;
+        use bpmn_lite_types::FfiTaskDecl;
 
         let template_id = [22u8; 32];
         let program = bpmn_lite_types::legacy_program! {
@@ -5965,7 +5965,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -6092,7 +6092,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -6277,7 +6277,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -6508,7 +6508,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -6665,7 +6665,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -6926,7 +6926,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -7052,7 +7052,7 @@ mod tests {
                 unguarded_snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
             &ut1,
@@ -7154,7 +7154,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -7354,7 +7354,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
             &t1,
@@ -7445,7 +7445,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
             &t1,
@@ -7541,7 +7541,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -7646,7 +7646,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -7731,7 +7731,7 @@ mod tests {
     /// at `pc` is `V2AwaitEffect`, not `ExecFfi`.
     #[test]
     fn v2_await_effect_invokes_and_resumes_via_shared_effect_completion() {
-        use bpmn_lite_types::ffi_bindings::FfiTaskDecl;
+        use bpmn_lite_types::FfiTaskDecl;
 
         let template_id = [9u8; 32];
         let program = bpmn_lite_types::legacy_program! {
@@ -8007,7 +8007,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -8113,7 +8113,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -8248,7 +8248,7 @@ mod tests {
         assert!(check_k_invariants(
             &t1.fibers_upsert().iter().map(|f| (f.fiber_id, f.clone())).collect(),
             &{
-                let mut table = bpmn_lite_types::concurrency::ConcurrencyTable::new();
+                let mut table = bpmn_lite_types::ConcurrencyTable::new();
                 for m in t1.concurrency_mutations() {
                     if let ConcurrencyMutation::Insert(record) = m {
                         table.insert((**record).clone());
@@ -8268,7 +8268,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -8437,7 +8437,7 @@ mod tests {
             .concurrency_mutations()
             .iter()
             .find_map(|mutation| match mutation {
-                bpmn_lite_types::concurrency::ConcurrencyMutation::Insert(record) => Some(record.clone()),
+                bpmn_lite_types::ConcurrencyMutation::Insert(record) => Some(record.clone()),
                 _ => None,
             })
             .expect("V2Fork must insert exactly one barrier record");
@@ -8462,7 +8462,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -8651,7 +8651,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -8856,7 +8856,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -9070,7 +9070,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -9366,7 +9366,7 @@ mod tests {
                 [Fiber::new(root_fiber_id, 0)],
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             );
             let mut revision = 0u64;
@@ -9542,7 +9542,7 @@ mod tests {
                 snapshot.fibers().values().cloned(),
                 BTreeMap::new(),
                 [],
-                bpmn_lite_types::concurrency::ConcurrencyTable::new(),
+                bpmn_lite_types::ConcurrencyTable::new(),
                 [],
             ),
         );
@@ -9618,13 +9618,13 @@ mod tests {
         assert_eq!(trigger.fibers_upsert().len(), 1, "the handler fibre spawns");
         assert!(
             trigger.concurrency_mutations().iter().any(
-                |m| matches!(m, bpmn_lite_types::concurrency::ConcurrencyMutation::Retire(id) if *id == barrier_handle)
+                |m| matches!(m, bpmn_lite_types::ConcurrencyMutation::Retire(id) if *id == barrier_handle)
             ),
             "the MI barrier retires as part of the cascade"
         );
         assert!(
             trigger.concurrency_mutations().iter().any(
-                |m| matches!(m, bpmn_lite_types::concurrency::ConcurrencyMutation::Retire(id) if *id == guard_handle)
+                |m| matches!(m, bpmn_lite_types::ConcurrencyMutation::Retire(id) if *id == guard_handle)
             ),
             "the guard itself retires"
         );

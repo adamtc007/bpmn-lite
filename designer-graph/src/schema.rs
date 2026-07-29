@@ -479,7 +479,7 @@ mod tests {
         let wf_none = dag_none.admit().expect("must admit");
         assert_eq!(
             wf_none.envelope().metadata().default_guard_budget().max_failures(),
-            bpmn_lite_types::transition::ScopeFailureBudget::conservative_default().max_failures(),
+            bpmn_lite_types::ScopeFailureBudget::conservative_default().max_failures(),
             "undeclared default must fall back to the compiled-in conservative default"
         );
     }

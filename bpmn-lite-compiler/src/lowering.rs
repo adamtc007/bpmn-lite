@@ -272,13 +272,13 @@ pub(crate) fn lower_with_default(
     // can resolve `Expression::VarRef` to compiled `BindingSource` values.
     // Bool/I64 data objects get FlagKey assignments from flag_intern (same map
     // used by XOR gateway conditions — shared keys, consistent runtime).
-    let mut data_objects: BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl> =
+    let mut data_objects: BTreeMap<String, bpmn_lite_types::DataObjectDecl> =
         BTreeMap::new();
-    let mut ffi_task_decls: BTreeMap<Addr, bpmn_lite_types::ffi_bindings::FfiTaskDecl> =
+    let mut ffi_task_decls: BTreeMap<Addr, bpmn_lite_types::FfiTaskDecl> =
         BTreeMap::new();
     // V7 (§28): resolved message-correlation key sources, keyed by the address
     // of the `V2WaitMsg`/`PublishMessage`/`V2ArmMsg` instruction they belong to.
-    let mut v2_corr_sources: BTreeMap<Addr, bpmn_lite_types::ffi_bindings::BindingSource> =
+    let mut v2_corr_sources: BTreeMap<Addr, bpmn_lite_types::BindingSource> =
         BTreeMap::new();
     // V8 (§31): per-guard failure budgets, keyed by the guard-open
     // instruction's address; populated at each V2Guard/V2GuardN emission from
@@ -295,7 +295,7 @@ pub(crate) fn lower_with_default(
             let storage = assign_storage(type_decl, id, &mut flag_intern);
             data_objects.insert(
                 id.clone(),
-                bpmn_lite_types::ffi_bindings::DataObjectDecl {
+                bpmn_lite_types::DataObjectDecl {
                     id: id.clone(),
                     type_decl: type_decl.clone(),
                     storage,
@@ -719,21 +719,21 @@ pub(crate) fn lower_with_default(
                 // Compile input/output bindings — identical for both
                 // `LoweringTarget`s; only the surrounding instruction
                 // sequence (guard-wrapped or not) differs below.
-                let compiled_inputs: Vec<bpmn_lite_types::ffi_bindings::CompiledFfiInputBinding> =
+                let compiled_inputs: Vec<bpmn_lite_types::CompiledFfiInputBinding> =
                     inputs
                         .iter()
                         .map(|b| {
-                            Ok(bpmn_lite_types::ffi_bindings::CompiledFfiInputBinding {
+                            Ok(bpmn_lite_types::CompiledFfiInputBinding {
                                 target_field: b.target_field.clone(),
                                 source: resolve_expression(&b.expression, &data_objects)?,
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                let compiled_outputs: Vec<bpmn_lite_types::ffi_bindings::CompiledFfiOutputBinding> =
+                let compiled_outputs: Vec<bpmn_lite_types::CompiledFfiOutputBinding> =
                     outputs
                         .iter()
                         .map(|b| {
-                            Ok(bpmn_lite_types::ffi_bindings::CompiledFfiOutputBinding {
+                            Ok(bpmn_lite_types::CompiledFfiOutputBinding {
                                 source_field: b.source_field.clone(),
                                 target: resolve_output_target(&b.target_variable, &data_objects)?,
                             })
@@ -886,7 +886,7 @@ pub(crate) fn lower_with_default(
                 // wherever `ExecFfi` actually landed.
                 ffi_task_decls.insert(
                     exec_addr,
-                    bpmn_lite_types::ffi_bindings::FfiTaskDecl {
+                    bpmn_lite_types::FfiTaskDecl {
                         template_id: *template_id,
                         inputs: compiled_inputs,
                         outputs: compiled_outputs,
@@ -2243,11 +2243,11 @@ fn intern_flag(map: &mut HashMap<String, FlagKey>, name: &str) -> FlagKey {
 /// For Bool and I64 primitives: intern a FlagKey using the data object id.
 /// For everything else: top-level DomainPayload path equal to the data object id.
 fn assign_storage(
-    type_decl: &bpmn_lite_types::ffi_bindings::DataObjectType,
+    type_decl: &bpmn_lite_types::DataObjectType,
     id: &str,
     flag_intern: &mut HashMap<String, FlagKey>,
-) -> bpmn_lite_types::ffi_bindings::DataObjectStorage {
-    use bpmn_lite_types::ffi_bindings::{DataObjectStorage, DataObjectType, PrimitiveType};
+) -> bpmn_lite_types::DataObjectStorage {
+    use bpmn_lite_types::{DataObjectStorage, DataObjectType, PrimitiveType};
     match type_decl {
         DataObjectType::Primitive(PrimitiveType::Bool)
         | DataObjectType::Primitive(PrimitiveType::I64) => {
@@ -2262,9 +2262,9 @@ fn assign_storage(
 }
 
 /// Convert an IR-level literal to a compiled-artifact literal.
-fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_bindings::Literal {
+fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::Literal {
     use crate::ir::IrLiteral;
-    use bpmn_lite_types::ffi_bindings::Literal;
+    use bpmn_lite_types::Literal;
     match lit {
         IrLiteral::Bool(b) => Literal::Bool(*b),
         IrLiteral::I64(n) => Literal::I64(*n),
@@ -2277,10 +2277,10 @@ fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_bindings::L
 /// data-object map to translate variable references to storage locations.
 fn resolve_expression(
     expr: &crate::ir::Expression,
-    data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
-) -> Result<bpmn_lite_types::ffi_bindings::BindingSource> {
+    data_objects: &BTreeMap<String, bpmn_lite_types::DataObjectDecl>,
+) -> Result<bpmn_lite_types::BindingSource> {
     use crate::ir::Expression;
-    use bpmn_lite_types::ffi_bindings::{BindingSource, DataObjectStorage};
+    use bpmn_lite_types::{BindingSource, DataObjectStorage};
     match expr {
         Expression::Literal(lit) => Ok(BindingSource::Literal(lower_literal(lit))),
         Expression::VarRef(path) => {
@@ -2316,9 +2316,9 @@ fn resolve_expression(
 /// Resolve an output target variable name to a `BindingTarget`.
 fn resolve_output_target(
     target_variable: &str,
-    data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
-) -> Result<bpmn_lite_types::ffi_bindings::BindingTarget> {
-    use bpmn_lite_types::ffi_bindings::{BindingTarget, DataObjectStorage};
+    data_objects: &BTreeMap<String, bpmn_lite_types::DataObjectDecl>,
+) -> Result<bpmn_lite_types::BindingTarget> {
+    use bpmn_lite_types::{BindingTarget, DataObjectStorage};
     let decl = data_objects.get(target_variable).ok_or_else(|| {
         anyhow!(
             "unresolved output target '{}': no data object with this id",
@@ -2352,9 +2352,9 @@ fn intern_task(map: &mut HashMap<String, u32>, manifest: &mut Vec<String>, name:
 /// never yield a valid key, so reject it at compile time.
 fn resolve_correlation_source(
     source: &str,
-    data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
-) -> Result<bpmn_lite_types::ffi_bindings::BindingSource> {
-    use bpmn_lite_types::ffi_bindings::{DataObjectType, PrimitiveType};
+    data_objects: &BTreeMap<String, bpmn_lite_types::DataObjectDecl>,
+) -> Result<bpmn_lite_types::BindingSource> {
+    use bpmn_lite_types::{DataObjectType, PrimitiveType};
     let path: Vec<String> = source.split('.').map(|segment| segment.to_string()).collect();
     if path.iter().any(|segment| segment.is_empty()) {
         return Err(anyhow!("correlationKey is empty or malformed: {source:?}"));
@@ -2382,7 +2382,7 @@ mod tests {
 
     #[test]
     fn resolve_correlation_source_resolves_declared_key_rejects_unknown_and_float() {
-        use bpmn_lite_types::ffi_bindings::{
+        use bpmn_lite_types::{
             BindingSource, DataObjectDecl, DataObjectRole, DataObjectType, PrimitiveType,
         };
         let mut flag_intern = HashMap::new();
@@ -2689,10 +2689,10 @@ mod tests {
         graph.add_node(IRNode::DataObject {
             id: "case_id".to_string(),
             name: "case_id".to_string(),
-            type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
-                bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+            type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                bpmn_lite_types::PrimitiveType::String,
             ),
-            role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+            role: bpmn_lite_types::DataObjectRole::Internal,
         });
         let msg = graph.add_node(IRNode::MessageWait {
             id: "msg1".to_string(),

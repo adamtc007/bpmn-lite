@@ -8,23 +8,23 @@
 //! gRPC + persistence boundaries.
 //!
 //! Phase 2.1 (2026-05-14) migrated `types.rs` and `events.rs` here
-//! from `bpmn-lite-core/src/{types,events}.rs`. Downstream crates
-//! reach them as either `bpmn_lite_types::types::Foo` /
-//! `bpmn_lite_types::events::Bar` (the modules) or
-//! `bpmn_lite_types::Foo` / `Bar` (via the prelude `pub use`s
-//! below).
+//! from `bpmn-lite-core/src/{types,events}.rs`. Most submodules are
+//! private (`integrity` and `session_stack` stay `pub mod` — both
+//! have real external module-qualified consumers) — downstream
+//! crates reach everything flat (`bpmn_lite_types::Foo`) via the
+//! prelude `pub use`s below.
 
-pub mod artifact;
-pub mod canonical;
-pub mod concurrency;
-pub mod events;
-pub mod ffi_bindings;
+mod artifact;
+mod canonical;
+mod concurrency;
+mod events;
+mod ffi_bindings;
 pub mod integrity;
 pub(crate) mod integrity_rings;
-pub mod persistence;
+mod persistence;
 pub mod session_stack;
-pub mod transition;
-pub mod types;
+mod transition;
+mod types;
 pub(crate) mod v2_verifier;
 
 // Crate-prelude re-exports — every external consumer can `use

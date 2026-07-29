@@ -254,10 +254,10 @@ mod tests {
                 IRNode::DataObject {
                     id: "ref1".into(),
                     name: "ref1".into(),
-                    type_decl: bpmn_lite_types::ffi_bindings::DataObjectType::Primitive(
-                        bpmn_lite_types::ffi_bindings::PrimitiveType::String,
+                    type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                        bpmn_lite_types::PrimitiveType::String,
                     ),
-                    role: bpmn_lite_types::ffi_bindings::DataObjectRole::Internal,
+                    role: bpmn_lite_types::DataObjectRole::Internal,
                 },
                 None,
                 p(),

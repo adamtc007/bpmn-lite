@@ -38,7 +38,7 @@ use bpmn_lite_store::store::{
 };
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::session_stack::SessionStackState;
-use bpmn_lite_types::types::{ProcessInstance, ProcessState};
+use bpmn_lite_types::{ProcessInstance, ProcessState};
 use bpmn_lite_types::TenantId;
 
 // ── Demo state ─────────────────────────────────────────────────────────

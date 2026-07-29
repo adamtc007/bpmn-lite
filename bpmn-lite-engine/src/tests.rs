@@ -833,8 +833,8 @@ async fn test_signal_matches_message_name_and_correlation_key() {
     }
     .with_v2_corr_sources(BTreeMap::from([(
         bpmn_lite_types::Addr::new(0),
-        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
-            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        bpmn_lite_types::BindingSource::Literal(
+            bpmn_lite_types::Literal::Bool(false),
         ),
     )]));
     store
@@ -949,8 +949,8 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
     }
     .with_v2_corr_sources(BTreeMap::from([(
         bpmn_lite_types::Addr::new(0),
-        bpmn_lite_types::ffi_bindings::BindingSource::Literal(
-            bpmn_lite_types::ffi_bindings::Literal::Bool(false),
+        bpmn_lite_types::BindingSource::Literal(
+            bpmn_lite_types::Literal::Bool(false),
         ),
     )]));
     store

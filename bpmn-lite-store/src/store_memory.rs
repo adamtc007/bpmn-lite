@@ -9,7 +9,7 @@ use crate::{ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreErr
 #[cfg(test)]
 type Result<T> = StoreResult<T>;
 use async_trait::async_trait;
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};

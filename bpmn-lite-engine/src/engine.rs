@@ -5,7 +5,7 @@ use bpmn_lite_compiler::{parse_bpmn_with_meta, verify_bytecode};
 use bpmn_lite_kernel::{apply as apply_kernel, DeterministicContext};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::CommitOutcome;
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
 use ffi_dispatcher::FfiDispatcher;
@@ -1066,7 +1066,7 @@ impl BpmnLiteEngine {
                         continue;
                     };
                     let Ok(correlation_key) =
-                        bpmn_lite_types::ffi_bindings::resolve_correlation_key(instance, source)
+                        bpmn_lite_types::resolve_correlation_key(instance, source)
                     else {
                         continue;
                     };
@@ -1733,7 +1733,7 @@ impl BpmnLiteEngine {
     ///
     /// Returns the number of interrupted calls processed.
     pub async fn detect_interrupted_ffi_calls(&self, tenant_id: &TenantId) -> Result<usize> {
-        use bpmn_lite_types::events::RuntimeEvent;
+        use bpmn_lite_types::RuntimeEvent;
         use ffi_types::Idempotency;
         use std::collections::HashSet;
 

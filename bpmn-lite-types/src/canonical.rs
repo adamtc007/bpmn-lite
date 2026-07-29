@@ -1012,7 +1012,7 @@ pub enum CanonicalJsonError {
 /// `preserve_order`, so iteration is already key-sorted — canonical by
 /// construction, matching this module's `BTreeMap` convention elsewhere
 /// (enforcement: `scripts/check-canonical-invariant.sh`, V2.1h.1).
-pub fn encode_canonical_json(
+pub(crate) fn encode_canonical_json(
     w: &mut CanonicalWriter,
     value: &serde_json::Value,
 ) -> Result<(), CanonicalJsonError> {

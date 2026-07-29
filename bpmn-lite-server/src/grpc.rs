@@ -152,7 +152,7 @@ impl RequestLimits {
 
 /// Recursive `Value::Array` size/depth check performed directly on the
 /// still-undecoded `ProtoValue` wire shape — mirrors
-/// `bpmn_lite_types::types::Value::check_array_limits_at_depth` exactly,
+/// `bpmn_lite_types::Value::check_array_limits_at_depth` exactly,
 /// walking `ProtoValueArray.items` the same way that method walks
 /// `Value::Array`'s `Vec<Value>`, and sharing the SAME
 /// `MAX_VALUE_ARRAY_LEN`/`MAX_VALUE_ARRAY_DEPTH` constants (imported from
@@ -337,7 +337,7 @@ pub fn proto_to_value(pv: &ProtoValue) -> Value {
 /// — string keys pass through verbatim (a dynamic `case_id` like `"ACME-42"`),
 /// integers/bools canonicalize identically on both sides.
 pub fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Status> {
-    use bpmn_lite_types::ffi_bindings::correlation_key_string;
+    use bpmn_lite_types::correlation_key_string;
     let scalar = match pv.as_ref().and_then(|value| value.kind.as_ref()) {
         Some(proto_value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
         Some(proto_value::Kind::I64Value(n)) => (*n).into(),

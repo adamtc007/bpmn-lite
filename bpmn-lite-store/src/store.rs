@@ -1,6 +1,6 @@
 use crate::{ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreResult};
 use async_trait::async_trait;
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use uuid::Uuid;
 

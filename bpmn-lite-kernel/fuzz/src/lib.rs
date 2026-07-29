@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 
 use bpmn_lite_kernel::{DeterministicContext, TransitionError};
-use bpmn_lite_types::ffi_bindings::{BindingSource, Literal};
+use bpmn_lite_types::{BindingSource, Literal};
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::{
     Addr, ArtifactEnvelope, ClaimedTimer, ClaimedTimerIdentity, Command, CommandEnvelope,
@@ -743,7 +743,7 @@ mod tests {
     /// defense-in-depth here).
     #[test]
     fn quiescence_check_flags_all_barrier_parked_frames_only() {
-        let record_id = bpmn_lite_types::concurrency::RecordId::new(Uuid::from_u128(0xB0));
+        let record_id = bpmn_lite_types::RecordId::new(Uuid::from_u128(0xB0));
         let barrier_parked = |id: u128| {
             let mut fiber = Fiber::new(Uuid::from_u128(id), 0);
             fiber.wait = WaitState::V2Barrier { record_id };

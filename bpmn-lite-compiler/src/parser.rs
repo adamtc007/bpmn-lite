@@ -1,6 +1,6 @@
 use crate::ir::*;
 use anyhow::{anyhow, Context, Result};
-use bpmn_lite_types::ffi_bindings::{DataObjectRole, DataObjectType, PrimitiveType};
+use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
 use petgraph::graph::NodeIndex;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;

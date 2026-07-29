@@ -42,7 +42,7 @@ use bpmn_lite_store::{
     ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult,
     WorkflowStore,
 };
-use bpmn_lite_types::events::RuntimeEvent;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use uuid::Uuid;
 

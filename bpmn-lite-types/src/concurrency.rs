@@ -31,8 +31,8 @@ use uuid::Uuid;
 /// so this is a hard compiler error, not a lint.
 ///
 /// ```compile_fail
-/// use bpmn_lite_types::concurrency::RecordId;
-/// use bpmn_lite_types::types::Addr;
+/// use bpmn_lite_types::RecordId;
+/// use bpmn_lite_types::Addr;
 ///
 /// let addr = Addr::new(1);
 /// let _record_id: RecordId = addr.into();

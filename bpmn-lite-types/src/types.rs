@@ -243,14 +243,14 @@ pub struct PayloadRouteBranch {
 /// (EOP-BPMN-ISA-002 V2.7, `V2`-prefixed variants below the v1 block).
 ///
 /// V2.7 7.2 addressing-wall proof: every v2 `Instr` addressing field is
-/// typed `Addr`, never `bpmn_lite_types::concurrency::RecordId` — the same
+/// typed `Addr`, never `bpmn_lite_types::RecordId` — the same
 /// activation-law wall `Addr` itself documents (V1.1). This is a hard
 /// compiler error, not a lint, since `Addr`/`RecordId` have no `From`/
 /// `Into` between them.
 ///
 /// ```compile_fail
-/// use bpmn_lite_types::concurrency::RecordId;
-/// use bpmn_lite_types::types::Instr;
+/// use bpmn_lite_types::RecordId;
+/// use bpmn_lite_types::Instr;
 ///
 /// let _bad = Instr::V2Guard {
 ///     handler: RecordId::new(uuid::Uuid::nil()),
@@ -382,7 +382,7 @@ pub enum Instr {
     //
     // Addressing (V2.7 7.2): guard handler extents, race arm resume
     // targets, and the FORK/JOIN static pairing annotation are all
-    // `Addr`-space, never `RecordId` (`bpmn_lite_types::concurrency::RecordId`)
+    // `Addr`-space, never `RecordId` (`bpmn_lite_types::RecordId`)
     // — proof material for the verifier (V-3's arity check), never runtime
     // execution state. Runtime `V2Join` resolution is exclusively via the
     // dynamically-inherited handle minted by `V2Fork`, "never by static

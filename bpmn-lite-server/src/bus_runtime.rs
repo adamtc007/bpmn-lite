@@ -25,7 +25,7 @@ use bpmn_lite_bus_handler::{
 use bpmn_lite_store::pending::PendingInvocationStore;
 use bpmn_lite_store::store::{transition_from_tick_ops, TickOperation, WorkflowStore};
 use bpmn_lite_store_postgres::PostgresPendingInvocationStore;
-use bpmn_lite_types::types::ProcessState;
+use bpmn_lite_types::ProcessState;
 use bpmn_lite_types::TenantId;
 use dsl_bus_client::BusClient;
 use dsl_bus_client::{SubmissionAckFuture, SubmissionAckHandler};
