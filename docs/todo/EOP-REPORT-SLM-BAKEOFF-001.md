@@ -78,3 +78,67 @@ Direction correct on every base: constructed-ambiguous pairs score closer than o
 ## 9. What this report does not do
 
 No promotion. No wiring beyond shadow. No threshold values. No K change. No base ratification — `modernbert-base` is recommended; one word from Adam ratifies it. The retraining loop (corpus → train → calibrate → score → bundle) exists as committed, re-runnable code; when the Q9 charter lands and real session records accrue, retraining with mixed provenance is a routine run, not a research project. **The charter remains the sole blocker between this measured shadow pipeline and evidence that counts.**
+
+*(Section 9 is left as originally delivered — it recorded the state at Phase E close, 2026-07-28. §10 below records what changed the next day, superseding the "recommended, not ratified" language above. No promotion happened at either point; that line still holds.)*
+
+---
+
+## 10. Addendum (2026-07-29, EOP-DIR-BPMN-DESIGN-003-003) — ratification, K=12, description audit, starter-seed-v1
+
+**Still true, unchanged:** shadow only, G3 untouched. Nothing in this addendum promotes anything or retrains anything.
+
+### 10.1 Rulings executed
+
+1. **`modernbert-base` RATIFIED** as the canonical tier-1 base (§2's ★ footnote updated in place). `gte-modernbert` recorded runner-up, hashes retained in its own bundle card.
+2. **K widened 8→12.** Closes the recall ceiling reported in §4: `recall@12 = 1.0000 (98/98)` on this eval set (up from `recall@8 = 0.9592`). This is now the standing configuration for `eval_enrich.rs` (the trained bundles themselves were NOT retrained — see the divergence note in that file's header).
+3. **New K=12 standing baseline** (no retraining, pure re-serve at the wider list): `tier0_top1_accuracy = 0.4490` (unchanged — K only affects what's served, not the retriever's own #1 pick).
+
+| base | top1 e2e @ K=12 | uplift | (was, @ K=8) |
+|---|---|---|---|
+| gte-modernbert | **0.9082** (89/98) | +45.9pp | 0.8878 (87/98) |
+| modernbert-base ★ | 0.8878 (87/98) | +43.9pp | 0.8878 (87/98, unchanged) |
+| bge-reranker | 0.8061 (79/98) | +35.7pp | 0.7959 (79/98)* |
+| ms-marco | 0.7653 (75/98) | +31.6pp | 0.7449 (75/98)* |
+
+*bge-reranker/ms-marco's K=8 top1_end_to_end in §2's table (0.7959/0.7449) already reflected `top1_given_inclusion` since their K=8 recall wasn't 100%; the K=12 column is the first apples-to-apples `top1_end_to_end` for all four bases on the same fully-included eval set.
+
+**Honest note, not softened:** at K=12, `gte-modernbert` (89/98) now edges 2 points ahead of the just-ratified canonical base (87/98). The ratification stands — it was a provenance tiebreak on a statistical tie, not a score claim, and n=98 does not resolve an 89-vs-87 split either — but the number is recorded here plainly rather than left for someone else to notice.
+
+### 10.2 xor_gateway description audit — result and the skew-aware read
+
+Three near-synonym `xor_gateway` candidate descriptions (`create_branch`/`insert_after`/`connect`) were rewritten to state their distinguishing routing consequence (exact before/after text and rationale in `EOP-PLAN-BPMN-DESIGN-003.md`'s Phase 2 receipt). All four already-trained bundles were re-scored against the new descriptions with **no retraining**.
+
+| base | xor_gateway before → after | overall top1 before → after |
+|---|---|---|
+| modernbert-base (canonical) | 5/8 → 5/8 | 87/98 → 83/98 |
+| gte-modernbert (runner-up) | 6/8 → 5/8 | 89/98 → 87/98 |
+| bge-reranker | 6/8 → 6/8 | 79/98 → 77/98 |
+| ms-marco | 5/8 → 3/8 | 75/98 → 69/98 |
+
+**Result: the targeted class did not improve on any base (flat or down), and every base's overall accuracy dropped 2–6pp despite zero weight change.** Per the CAREFUL note this experiment was scoped to require: this uniform-direction drop, on classes that were never touched, across four architecturally distinct bases, is the signature of train/serve description skew dominating — the four bundles were trained against the OLD description text baked into 5,018 corpus records, and swapping the served text out from under them costs accuracy independent of whether the new text is clearer. This audit, by construction (no retrain), cannot separate "is the new wording better" from "is this skew" — that separation needs a controlled retrain, which is explicitly out of scope here.
+
+**Disposition:** diagnostic only this cycle — the description change is NOT carried forward as a settled improvement. Whether the wording is worth keeping for corpus-v2 independent of this cycle's skew-contaminated read is open on Adam's desk. **Corpus-v2 action item:** the durable fix is unchanged from the directive — regenerate the training corpus against the new (or Adam-adjudicated) descriptions and add targeted xor-anchored context pairs as reinforcement, then retrain; that retrain removes the skew and is the only clean way to measure the wording's real effect. Standing rule added to the plan (`EOP-PLAN-BPMN-DESIGN-003.md` §Standing rules, item 5): a per-class weak spot gets a description audit before a training-data fix; any adopted description change obligates corpus regeneration at the next retrain.
+
+### 10.3 `starter-seed-v1` — the first non-synthetic signal, by category
+
+34 utterances Adam authored outside the generation pipeline, board-mapped to real positions and given provisional hypothesis labels (not gold-by-construction — these are free utterances). Scored at K=12 against tier-0 and the ratified canonical base, **no retraining**. This is evidence, not a pass/fail gate — full methodology and per-utterance detail in `EOP-PLAN-BPMN-DESIGN-003.md`'s Phase 3 receipt and `seed/corpus_v2/starter-seed-v1.report.json`; the suite is now wired permanently (`examples/starter_seed_eval.rs`) and every future bundle should report against it.
+
+| category | n | tier0 top1 | tier1 top1 |
+|---|---|---|---|
+| routing_xor | 7 | 2 | 4 |
+| waits_timers_reminders | 6 | 1 | 1 |
+| guards_rollback | 4 | 1 | 2 |
+| mi_collections | 3 | 0 | 1 |
+| correlation_messages | 3 | 1 | 2 |
+| declarations | 2 | 1 | 2 |
+| off_board | 5 | 0 | 2 |
+| vague_compound | 4 | 0 | 1 |
+| **total** | **34** | **6 (17.6%)** | **15 (44.1%)** |
+
+Tier-1's multiplicative uplift over tier-0 holds (~2.5x here vs ~2x on the synthetic eval), but both absolute numbers fall well short of their synthetic-eval counterparts (tier0 43.9%→17.6%, tier1 88.8%→44.1%). **This is the measurement Open Risk #1 (§8.1) predicted, not a new problem** — it is the first time that prediction has a number attached, and the number is a large gap. It should be read as confirmation that G3 threshold-setting must wait for real session data, not as a verdict on the trained bases themselves (n=34, hand-authored, single unreplicated slice).
+
+**8 disputed labels, listed here for Adam's adjudication at first live testing** (full alternate-reading text in the plan receipt): seq 4 ("wire the rejected path back to... actually where does rejected go"), seq 7 ("give the timeout its own route"), seq 10 ("nudge every 48 hours, three times max"), seq 12 ("park this until the document shows up"), seq 18 ("do this for each director"), seq 22 ("when their answer lands, wake this up"), seq 25 ("make the default budget three for the whole flow" — may indicate a missing declaration-level candidate class entirely, not just a labelling dispute), seq 32 ("chase them and also loop legal in if it's high risk").
+
+### 10.4 Standing state after this addendum
+
+Promotion ladder untouched: shadow → suggest-only still gates on G3, thresholds still Adam's. Nothing retrained. Open on Adam's desk: the Q9 charter (critical path, unchanged), corpus-v2/retrain timing (informed by §10.2's action item and the starter-seed-v1 lessons), and the starter-seed-v1 label adjudication (§10.3's 8 disputed items) at first testing.
