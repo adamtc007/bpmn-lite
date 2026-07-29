@@ -96,7 +96,7 @@ impl RequestLimits {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn check_bytes(&self, field: &str, len: usize, max: usize) -> Result<(), Status> {
+    fn check_bytes(&self, field: &str, len: usize, max: usize) -> Result<(), Status> {
         if len > max {
             return Err(Status::resource_exhausted(format!(
                 "{} is {} bytes; max is {}",
@@ -107,7 +107,7 @@ impl RequestLimits {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn check_string(&self, field: &str, value: &str) -> Result<(), Status> {
+    fn check_string(&self, field: &str, value: &str) -> Result<(), Status> {
         self.check_bytes(field, value.len(), self.max_string_bytes)
     }
 
@@ -354,7 +354,7 @@ pub fn proto_to_correlation_value(pv: &Option<ProtoValue>) -> Result<String, Sta
     correlation_key_string(&scalar).map_err(|error| Status::invalid_argument(error.to_string()))
 }
 
-pub fn proto_to_orch_flags(
+fn proto_to_orch_flags(
     map: &std::collections::HashMap<String, ProtoValue>,
 ) -> BTreeMap<String, Value> {
     map.iter()

@@ -42,7 +42,7 @@ use crate::{gen_shape, Block, Shape, Tape};
 /// The local logic alphabet: canonical instantiations of every block
 /// family × switch outcome. One entry = one letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Archetype {
+enum Archetype {
     Task,
     /// Parallel, 2 branches × single task.
     And2,
@@ -77,7 +77,7 @@ pub enum Archetype {
     MsgWait,
 }
 
-pub const ALL_ARCHETYPES: [Archetype; 18] = [
+pub(crate) const ALL_ARCHETYPES: [Archetype; 18] = [
     Archetype::Task,
     Archetype::And2,
     Archetype::And3,
@@ -100,7 +100,7 @@ pub const ALL_ARCHETYPES: [Archetype; 18] = [
 
 /// The boundary-family archetypes (timer + error) — the XOR-only nesting
 /// letters.
-pub const BOUNDARY_ARCHETYPES: [Archetype; 4] = [
+const BOUNDARY_ARCHETYPES: [Archetype; 4] = [
     Archetype::BoundaryInterrupting,
     Archetype::BoundaryNonInterrupting,
     Archetype::ErrBoundarySpecific,
@@ -119,7 +119,7 @@ pub enum Gateway {
     OrNone,
 }
 
-pub const ALL_GATEWAYS: [Gateway; 6] = [
+const ALL_GATEWAYS: [Gateway; 6] = [
     Gateway::And,
     Gateway::XorTaken,
     Gateway::XorUntaken,
@@ -130,11 +130,11 @@ pub const ALL_GATEWAYS: [Gateway; 6] = [
 
 /// XOR-only gateways — the ones Boundary may nest under (no synchronizing
 /// barrier).
-pub const XOR_GATEWAYS: [Gateway; 2] = [Gateway::XorTaken, Gateway::XorUntaken];
+const XOR_GATEWAYS: [Gateway; 2] = [Gateway::XorTaken, Gateway::XorUntaken];
 
 /// Archetypes legal INSIDE any gateway branch (Boundary excluded here; it
 /// gets its own XOR-only nesting family).
-pub const NESTABLE: [Archetype; 14] = [
+const NESTABLE: [Archetype; 14] = [
     Archetype::Task,
     Archetype::And2,
     Archetype::And3,
@@ -321,7 +321,7 @@ impl Gateway {
 ///                  the XOR×Boundary nestings;
 ///   depth 2      — every gateway∘gateway′ wrapping every nestable
 ///                  content.
-pub fn covering_shapes() -> Vec<Shape> {
+fn covering_shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
     for a in ALL_ARCHETYPES {
         shapes.push(Shape {
@@ -368,7 +368,7 @@ pub fn covering_shapes() -> Vec<Shape> {
 /// exactly this shape — mirrors `gen_block`'s byte reads move for move,
 /// cement-locked by the round-trip test. Panics on shapes the grammar
 /// cannot express (a covering shape outside the grammar is a corpus bug).
-pub fn encode_shape(shape: &Shape) -> Vec<u8> {
+fn encode_shape(shape: &Shape) -> Vec<u8> {
     let mut bytes = Vec::new();
     assert!(
         (1..=3).contains(&shape.blocks.len()),

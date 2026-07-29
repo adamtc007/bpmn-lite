@@ -24,7 +24,7 @@
 
 pub mod demo;
 pub mod engine;
-pub mod runtime_context;
+pub(crate) mod runtime_context;
 
 pub use engine::*;
 pub use runtime_context::*;

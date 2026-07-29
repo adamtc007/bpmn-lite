@@ -32,7 +32,7 @@ pub struct Allowlist {
 }
 
 impl Allowlist {
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
+    fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let text = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("read allowlist at {}", path.as_ref().display()))?;
         let allow: Allowlist = serde_yaml::from_str(&text).context("parse allowlist")?;
@@ -103,7 +103,7 @@ fn naive_utc_from_unix(mut secs: i64) -> (i64, u32, u32, u32, u32, u32) {
 /// Read every `*.dmn-lite` file under `dir`, parse each into a single
 /// decision (Profile v0.1 enforces one decision per file), and return
 /// the decisions keyed by decision name.
-pub(crate) fn load_source_catalogue(dir: &Path) -> Result<BTreeMap<String, DecisionAst>> {
+fn load_source_catalogue(dir: &Path) -> Result<BTreeMap<String, DecisionAst>> {
     let mut out = BTreeMap::new();
     let read_dir =
         std::fs::read_dir(dir).with_context(|| format!("read decisions dir {}", dir.display()))?;
@@ -275,7 +275,7 @@ fn extend_values(acc: &mut BTreeMap<String, TypeEntry>, domain: &str, mut values
 }
 
 /// Convert a pre-parsed map of decisions through the allowlist.
-pub(crate) fn export_from_sources(
+fn export_from_sources(
     config: &ExporterConfig,
     sources: BTreeMap<String, DecisionAst>,
     allowlist: &Allowlist,

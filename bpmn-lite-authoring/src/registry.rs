@@ -11,7 +11,7 @@ use std::sync::RwLock;
 
 /// State of a workflow template.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TemplateState {
+pub(crate) enum TemplateState {
     Draft,
     Published,
     Retired,
@@ -19,7 +19,7 @@ pub enum TemplateState {
 
 /// How the template was authored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SourceFormat {
+pub(crate) enum SourceFormat {
     Yaml,
     BpmnImport,
     Agent,
@@ -27,7 +27,7 @@ pub enum SourceFormat {
 
 /// A versioned workflow template — the publish artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowTemplate {
+pub(crate) struct WorkflowTemplate {
     pub template_key: String,
     pub template_version: u32,
     pub process_key: String,
@@ -45,7 +45,7 @@ pub struct WorkflowTemplate {
 
 /// Persistence trait for workflow templates.
 #[async_trait]
-pub trait TemplateStore: Send + Sync {
+pub(crate) trait TemplateStore: Send + Sync {
     async fn save(&self, tpl: &WorkflowTemplate) -> Result<()>;
     async fn load(&self, key: &str, version: u32) -> Result<Option<WorkflowTemplate>>;
     async fn list(
@@ -67,12 +67,12 @@ type StoreKey = (String, u32);
 /// - Published content cannot be modified (only state → Retired)
 /// - Retired cannot transition back to Draft or Published
 /// - Valid transitions: Draft→Published, Published→Retired
-pub struct MemoryTemplateStore {
+pub(crate) struct MemoryTemplateStore {
     inner: RwLock<HashMap<StoreKey, WorkflowTemplate>>,
 }
 
 impl MemoryTemplateStore {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: RwLock::new(HashMap::new()),
         }

@@ -71,7 +71,7 @@ impl PendingInvocation {
         }
     }
 
-    pub fn with_timeout(mut self, deadline: DateTime<Utc>) -> Self {
+    fn with_timeout(mut self, deadline: DateTime<Utc>) -> Self {
         self.timeout_at = Some(deadline);
         self
     }

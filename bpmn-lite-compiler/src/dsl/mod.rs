@@ -9,7 +9,7 @@ pub mod ast;
 pub mod closure;
 pub mod dag;
 pub mod frontend;
-pub mod ir_plan;
+pub(crate) mod ir_plan;
 pub mod lexer;
 pub mod linter;
 pub mod macros;

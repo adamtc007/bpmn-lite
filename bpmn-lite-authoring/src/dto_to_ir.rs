@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// RaceWait is not supported in Phase A — returns an error if encountered.
 /// Error edge retries are deferred; on_error edges create BoundaryError IR nodes
 /// which provide routing without retry counters.
-pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
+pub(crate) fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
     // 1. Validate
     let errors = validate_dto(dto);
     if !errors.is_empty() {

@@ -403,7 +403,7 @@ fn collect_touched_fields(pred: &TypedPredicate, out: &mut BTreeSet<usize>) {
 // ── Field region operations ───────────────────────────────────────────────────
 
 /// In-place intersection: `*dst = dst ∩ other`.
-pub(crate) fn intersect_field(dst: &mut FieldRegion, other: FieldRegion) {
+fn intersect_field(dst: &mut FieldRegion, other: FieldRegion) {
     let new = intersect(dst, &other);
     *dst = new;
 }

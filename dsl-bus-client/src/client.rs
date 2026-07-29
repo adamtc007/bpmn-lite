@@ -351,7 +351,7 @@ impl BusClientBuilder {
         self
     }
 
-    pub fn sender_batch_size(mut self, batch_size: i64) -> Self {
+    fn sender_batch_size(mut self, batch_size: i64) -> Self {
         self.config.sender_batch_size = batch_size;
         self
     }

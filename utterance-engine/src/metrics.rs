@@ -16,7 +16,7 @@ use crate::retrieval::Tier0Retriever;
 /// (canonical id), or `None` when the board should not contain an
 /// answer (the abstention cases §10.7 requires).
 #[derive(Clone, Debug)]
-pub struct LabeledCase {
+pub(crate) struct LabeledCase {
     pub utterance: String,
     pub oracle: Option<String>,
 }
@@ -25,7 +25,7 @@ pub struct LabeledCase {
 /// verdicts — rates derived on read so zero-denominator cases stay
 /// visible instead of collapsing to fake 100%s.
 #[derive(Clone, Debug, Default)]
-pub struct MetricsReport {
+pub(crate) struct MetricsReport {
     pub cases: usize,
     /// Oracle candidate present on the board at all (board completeness).
     pub oracle_on_board: usize,
@@ -45,21 +45,21 @@ pub struct MetricsReport {
 }
 
 impl MetricsReport {
-    pub fn board_completeness(&self) -> Option<f64> {
+    fn board_completeness(&self) -> Option<f64> {
         let denom = self.cases - self.absent_cases;
         (denom > 0).then(|| self.oracle_on_board as f64 / denom as f64)
     }
-    pub fn recall_at_k(&self) -> Option<f64> {
+    pub(crate) fn recall_at_k(&self) -> Option<f64> {
         (self.oracle_on_board > 0).then(|| self.oracle_in_top_k as f64 / self.oracle_on_board as f64)
     }
-    pub fn ranking_given_inclusion(&self) -> Option<f64> {
+    fn ranking_given_inclusion(&self) -> Option<f64> {
         (self.oracle_in_top_k > 0).then(|| self.top1_correct as f64 / self.oracle_in_top_k as f64)
     }
-    pub fn end_to_end(&self) -> Option<f64> {
+    pub(crate) fn end_to_end(&self) -> Option<f64> {
         let denom = self.cases - self.absent_cases;
         (denom > 0).then(|| self.end_to_end_correct as f64 / denom as f64)
     }
-    pub fn abstention_coverage(&self) -> Option<f64> {
+    fn abstention_coverage(&self) -> Option<f64> {
         (self.absent_cases > 0).then(|| self.absent_handled as f64 / self.absent_cases as f64)
     }
 }
@@ -67,7 +67,7 @@ impl MetricsReport {
 /// Run the decomposition: one fixed board, one producer, one config.
 /// (Per-position boards ride the same shape later — the harness takes
 /// the board the session would have built.)
-pub fn evaluate<T: Tier0Retriever>(
+pub(crate) fn evaluate<T: Tier0Retriever>(
     retriever: &T,
     board: &Board,
     config: &DispositionConfig,
@@ -125,7 +125,7 @@ pub fn evaluate<T: Tier0Retriever>(
 /// permuted (same content, same hash). Order-sensitivity is a
 /// batching/model defect, not something canonical ordering "prevents"
 /// (R2-r2). Returns Err naming the first divergence.
-pub fn assert_position_invariant<T: Tier0Retriever>(
+fn assert_position_invariant<T: Tier0Retriever>(
     retriever: &T,
     utterance: &str,
     board: &Board,

@@ -1139,7 +1139,7 @@ fn resolve_workflow_dependencies<'a>(
 }
 
 /// `InvocationDispatcher` impl that rejects everything — fallback when not initialized with engine.
-pub struct RejectInvocationDispatcher;
+pub(crate) struct RejectInvocationDispatcher;
 
 #[async_trait]
 impl InvocationDispatcher for RejectInvocationDispatcher {

@@ -66,7 +66,7 @@ enum Fault {
 /// wrapping the same run. `rate` in [0,16]: injection probability
 /// rate/16 per store call; 0 disables injection (the recovery-phase
 /// oracles require a quiet store).
-pub struct FaultPlan {
+struct FaultPlan {
     state: AtomicU64,
     rate: AtomicU64,
 }
@@ -79,7 +79,7 @@ impl FaultPlan {
         }
     }
 
-    pub fn set_rate(&self, rate: u64) {
+    fn set_rate(&self, rate: u64) {
         self.rate.store(rate.min(16), Ordering::SeqCst);
     }
 
@@ -114,7 +114,7 @@ impl FaultPlan {
 
 /// WorkflowStore wrapper injecting Unavailable faults around a real
 /// MemoryStore per the shared FaultPlan.
-pub struct FaultStore {
+pub(crate) struct FaultStore {
     inner: Arc<MemoryStore>,
     plan: Arc<FaultPlan>,
 }

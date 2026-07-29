@@ -26,10 +26,10 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer};
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
 use crate::corpus_schema::Example;
 
-pub const MAX_LENGTH: usize = 256; // must match train_slm.py's MAX_LENGTH
+const MAX_LENGTH: usize = 256; // must match train_slm.py's MAX_LENGTH
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Base {
+pub(crate) enum Base {
     GteModernbert,
     MsMarco,
     ModernbertBase,
@@ -37,9 +37,9 @@ pub enum Base {
 }
 
 impl Base {
-    pub const ALL: [Base; 4] = [Base::GteModernbert, Base::MsMarco, Base::ModernbertBase, Base::BgeReranker];
+    pub(crate) const ALL: [Base; 4] = [Base::GteModernbert, Base::MsMarco, Base::ModernbertBase, Base::BgeReranker];
 
-    pub fn key(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Base::GteModernbert => "gte-modernbert",
             Base::MsMarco => "ms-marco",
@@ -48,14 +48,14 @@ impl Base {
         }
     }
 
-    pub fn from_key(k: &str) -> Option<Base> {
+    pub(crate) fn from_key(k: &str) -> Option<Base> {
         Base::ALL.into_iter().find(|b| b.key() == k)
     }
 
     /// Same HF pins as candle_loadability_probe.rs -- architecture
     /// hyperparameters only (config.json). Weights come from the local
     /// trained bundle, never from this download.
-    pub fn repo_and_revision(self) -> (&'static str, &'static str) {
+    pub(crate) fn repo_and_revision(self) -> (&'static str, &'static str) {
         match self {
             Base::GteModernbert => (
                 "Alibaba-NLP/gte-reranker-modernbert-base",
@@ -123,7 +123,7 @@ impl Encoder {
     }
 }
 
-pub struct TrainedRanker {
+pub(crate) struct TrainedRanker {
     encoder: Encoder,
     head: Linear,
     pooling: String, // "cls" | "mean", read from the bundle's training_card.json
@@ -145,7 +145,7 @@ fn pool(hidden: &Tensor, mask: &Tensor, pooling: &str) -> Result<Tensor> {
 }
 
 impl TrainedRanker {
-    pub fn load(base: Base, bundle_dir: &std::path::Path, device: &Device) -> Result<Self> {
+    pub(crate) fn load(base: Base, bundle_dir: &std::path::Path, device: &Device) -> Result<Self> {
         let card: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
                 .context("training_card.json")?;
@@ -196,14 +196,14 @@ impl TrainedRanker {
         })
     }
 
-    pub fn bundle_identity(&self) -> &str {
+    pub(crate) fn bundle_identity(&self) -> &str {
         &self.bundle_identity
     }
 
     /// Scores every candidate in `record.tier1_list` -- the SAME list
     /// shape training/serving share (Adam's finding-5 ruling) -- never
     /// the full board.
-    pub fn score(&self, record: &Example, device: &Device) -> Result<SlmResult> {
+    pub(crate) fn score(&self, record: &Example, device: &Device) -> Result<SlmResult> {
         self.score_list(record, &record.tier1_list, device)
     }
 
@@ -211,7 +211,7 @@ impl TrainedRanker {
     /// tier1_list; this exists for the latency-vs-K probe (timing the
     /// same forward pass at widened list sizes, e.g. the full board) and
     /// for scoring constructed candidate pairs (ambiguity-set suite).
-    pub fn score_list(&self, record: &Example, cand_ids: &[String], device: &Device) -> Result<SlmResult> {
+    pub(crate) fn score_list(&self, record: &Example, cand_ids: &[String], device: &Device) -> Result<SlmResult> {
         let query_text = format!("{}\n\n{}", record.utterance, record.context_projection);
         let desc: HashMap<&str, &str> = record
             .board

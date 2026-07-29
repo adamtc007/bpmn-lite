@@ -24,7 +24,7 @@ use dsl_manifest::Manifest;
 /// Initial caller data (client name, client type) is passed as
 /// `initial_variables` to the engine's start path and forwarded to each
 /// callout automatically via `placeholder_values`.
-pub const DEMO_SOURCE: &str = r#"(workflow custody-cbu-onboarding
+pub(crate) const DEMO_SOURCE: &str = r#"(workflow custody-cbu-onboarding
   (start-event :id start :next create-cbu)
   (service-task :id create-cbu :verb ob-poc:cbu.create :next type-decision)
   (business-rule-task :id type-decision :decision dmn-lite:cbu_type_routing :next type-gateway)

@@ -142,7 +142,7 @@ impl FfiCatalogue {
 /// An immutable snapshot of the catalogue's content at the moment
 /// `FfiCatalogue::snapshot()` was called. Implements `FfiCatalogueSnapshot`
 /// so the compiler verifier (A6) can use it directly.
-pub struct CatalogueSnapshot {
+struct CatalogueSnapshot {
     map: Arc<HashMap<[u8; 32], FfiTemplate>>,
 }
 

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 ///   edges (not collapsed back to `on_error` EdgeDto fields) for simplicity.
 /// - Gateway join pairing: parallel/inclusive converging gateways get `join: None`
 ///   (pairing is a higher-level concern handled by the verifier).
-pub fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto> {
+pub(crate) fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto> {
     let mut nodes = Vec::new();
     let mut node_id_map: HashMap<petgraph::graph::NodeIndex, String> = HashMap::new();
 

@@ -60,7 +60,7 @@ impl SenderStats {
     pub fn retried(&self) -> u64 {
         self.retried.load(Ordering::Relaxed)
     }
-    pub fn rows_seen(&self) -> u64 {
+    fn rows_seen(&self) -> u64 {
         self.rows_seen.load(Ordering::Relaxed)
     }
 

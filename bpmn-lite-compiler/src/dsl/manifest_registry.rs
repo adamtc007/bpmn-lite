@@ -43,7 +43,7 @@ impl<R: PlaceholderRegistry> ManifestPlaceholderRegistry<R> {
     }
 
     /// True if `domain` has been imported.
-    pub fn has_domain(&self, domain: &str) -> bool {
+    fn has_domain(&self, domain: &str) -> bool {
         self.manifests.contains_key(domain)
     }
 }

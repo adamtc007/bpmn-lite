@@ -31,7 +31,7 @@ use bpmn_lite_compiler::ir::IRNode;
 /// `anchor`. Composed from `InsertAfter` x2 — the send node becomes the
 /// wait node's anchor, so the two land in send-then-wait order on the
 /// normal path.
-pub struct RequestAndWaitBindings {
+pub(crate) struct RequestAndWaitBindings {
     pub anchor: NodeKey,
     pub send_key: NodeKey,
     /// Must be `IRNode::ServiceTask` (or another send-shaped kind); not
@@ -65,7 +65,7 @@ pub fn request_and_wait(b: RequestAndWaitBindings) -> Vec<Operation> {
 /// N `ServiceTask` branches after `anchor`. A single-op production —
 /// `CreateParallelRegion` already constructs the region CLOSED (slice 3),
 /// so there is nothing else to compose.
-pub struct ParallelChecksAndJoinBindings {
+struct ParallelChecksAndJoinBindings {
     pub anchor: NodeKey,
     pub fork_key: NodeKey,
     pub fork_node_id: String,
@@ -77,7 +77,7 @@ pub struct ParallelChecksAndJoinBindings {
     pub branches: Vec<RegionBranch>,
 }
 
-pub fn parallel_checks_and_join(b: ParallelChecksAndJoinBindings) -> Vec<Operation> {
+pub(crate) fn parallel_checks_and_join(b: ParallelChecksAndJoinBindings) -> Vec<Operation> {
     vec![Operation::CreateParallelRegion {
         anchor: b.anchor,
         fork_key: b.fork_key,
@@ -95,7 +95,7 @@ pub fn parallel_checks_and_join(b: ParallelChecksAndJoinBindings) -> Vec<Operati
 /// supplies (I24 — the mandatory declaration arrives in the bindings,
 /// never defaulted here). A single-op production: the MI node IS the
 /// region (ruling K), nothing else to compose.
-pub struct ForEachWithCeilingBindings {
+struct ForEachWithCeilingBindings {
     pub anchor: NodeKey,
     pub key: NodeKey,
     /// Must be `IRNode::MultiInstance`; `CreateMultiInstanceRegion`
@@ -104,7 +104,7 @@ pub struct ForEachWithCeilingBindings {
     pub edge_id: String,
 }
 
-pub fn for_each_with_ceiling(b: ForEachWithCeilingBindings) -> Vec<Operation> {
+pub(crate) fn for_each_with_ceiling(b: ForEachWithCeilingBindings) -> Vec<Operation> {
     vec![Operation::CreateMultiInstanceRegion {
         anchor: b.anchor,
         key: b.key,
@@ -121,7 +121,7 @@ pub fn for_each_with_ceiling(b: ForEachWithCeilingBindings) -> Vec<Operation> {
 /// `AttachRearmingGuard` only wires the boundary attachment); the
 /// escalation node is a plain continuation edit on the host, independent
 /// of the guard's attachment.
-pub struct ReminderThenEscalateBindings {
+struct ReminderThenEscalateBindings {
     pub anchor: NodeKey,
     pub guard_key: NodeKey,
     pub guard_id: String,
@@ -140,7 +140,7 @@ pub struct ReminderThenEscalateBindings {
     pub escalation_end_edge_id: String,
 }
 
-pub fn reminder_then_escalate(b: ReminderThenEscalateBindings) -> Vec<Operation> {
+pub(crate) fn reminder_then_escalate(b: ReminderThenEscalateBindings) -> Vec<Operation> {
     // §12.2: "GUARD-N> + bounded cycle + escalation continuation" — the
     // escalation IS the guard's escape flow (brief-defect remediation,
     // slice-4 review): the production alone must admit; nothing is left
@@ -188,7 +188,7 @@ pub fn reminder_then_escalate(b: ReminderThenEscalateBindings) -> Vec<Operation>
 /// instead hand-builds the illegal `Vec<Operation>` directly — bypassing
 /// this production's bindings entirely — to prove the gate `ops::apply`
 /// itself enforces is still live.)
-pub struct InterruptingTimeoutBindings {
+struct InterruptingTimeoutBindings {
     pub anchor: NodeKey,
     pub guard_key: NodeKey,
     pub guard_id: String,
@@ -204,7 +204,7 @@ pub struct InterruptingTimeoutBindings {
     pub continuation_end_edge_id: String,
 }
 
-pub fn interrupting_timeout(b: InterruptingTimeoutBindings) -> Vec<Operation> {
+pub(crate) fn interrupting_timeout(b: InterruptingTimeoutBindings) -> Vec<Operation> {
     vec![
         Operation::AttachGuard {
             host: b.anchor,
@@ -241,7 +241,7 @@ pub fn interrupting_timeout(b: InterruptingTimeoutBindings) -> Vec<Operation> {
 /// same discipline as `interrupting_timeout`'s `duration_ms` (F4: no new
 /// identity or ambiguity is introduced by exposing the raw `TimerSpec`
 /// enum on the bindings surface).
-pub struct NonInterruptingNotificationBindings {
+struct NonInterruptingNotificationBindings {
     pub anchor: NodeKey,
     pub guard_key: NodeKey,
     pub guard_id: String,
@@ -256,7 +256,7 @@ pub struct NonInterruptingNotificationBindings {
     pub notification_end_edge_id: String,
 }
 
-pub fn non_interrupting_notification(b: NonInterruptingNotificationBindings) -> Vec<Operation> {
+pub(crate) fn non_interrupting_notification(b: NonInterruptingNotificationBindings) -> Vec<Operation> {
     vec![
         Operation::AttachRearmingGuard {
             host: b.anchor,

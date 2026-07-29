@@ -922,7 +922,7 @@ pub fn verify_or_err(graph: &IRGraph) -> Result<()> {
 ///
 /// The verifier for FFI schema compatibility against the FFI catalogue is
 /// `verify_ffi_schemas` (A6 — not yet implemented; requires catalogue access).
-pub fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
+fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
     let mut errors = Vec::new();
 
     // Collect declared data objects (id → node).

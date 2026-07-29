@@ -24,7 +24,7 @@ use serde_json::Value;
 /// Empty path returns a clone of the root.
 /// Missing intermediate field, missing terminal field, or non-object
 /// intermediate → `Err`.
-pub fn read(root: &Value, path: &[String]) -> Result<Value> {
+pub(crate) fn read(root: &Value, path: &[String]) -> Result<Value> {
     if path.is_empty() {
         return Ok(root.clone());
     }
@@ -57,7 +57,7 @@ pub fn read(root: &Value, path: &[String]) -> Result<Value> {
 ///
 /// Empty path replaces the entire root value.
 /// Existing non-object intermediate → `Err`.
-pub fn write_at_path(root: &mut Value, path: &[String], new_value: Value) -> Result<()> {
+pub(crate) fn write_at_path(root: &mut Value, path: &[String], new_value: Value) -> Result<()> {
     if path.is_empty() {
         *root = new_value;
         return Ok(());
@@ -105,7 +105,7 @@ pub fn write_at_path(root: &mut Value, path: &[String], new_value: Value) -> Res
 }
 
 /// Parse a JSON string into a `Value`.
-pub fn parse_json(s: &str) -> Result<Value> {
+fn parse_json(s: &str) -> Result<Value> {
     serde_json::from_str(s).map_err(|e| anyhow!("invalid JSON: {}", e))
 }
 
@@ -116,7 +116,7 @@ pub fn parse_json(s: &str) -> Result<Value> {
 /// Round-trip property: `parse_json(s).and_then(|v| Ok(canonicalise_json(&v)))`
 /// produces the same string for any pair of inputs that differ only in
 /// key order or whitespace.
-pub fn canonicalise_json(v: &Value) -> String {
+fn canonicalise_json(v: &Value) -> String {
     // `serde_json::to_string` cannot fail for a well-formed `Value`.
     serde_json::to_string(v).expect("Value always serialises")
 }

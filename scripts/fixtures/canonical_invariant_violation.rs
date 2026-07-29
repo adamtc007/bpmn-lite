@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-pub struct Fiber {
+pub(crate) struct Fiber {
     pub fiber_id: Uuid,
     pub pc: Addr,
     pub stack: Vec<Value>,

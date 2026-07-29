@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 /// in `IntervalSet`).  Inclusive/exclusive bounds are explicit on each side; an
 /// `Unbounded` bound represents `-∞` (lower) or `+∞` (upper).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Interval {
+pub(crate) struct Interval {
     /// Lower bound.
     pub lower: Bound,
     /// Upper bound.
@@ -24,7 +24,7 @@ pub struct Interval {
 
 /// Bound of an interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bound {
+pub(crate) enum Bound {
     /// Inclusive bound at this integer value.
     Inclusive(i64),
     /// Exclusive bound at this integer value.
@@ -40,21 +40,21 @@ pub enum Bound {
 /// - Adjacent intervals are merged (no two intervals share or touch a boundary).
 /// - Empty intervals are not stored.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct IntervalSet {
+pub(crate) struct IntervalSet {
     /// The intervals, in ascending order with no overlap or adjacency.
     pub intervals: Vec<Interval>,
 }
 
 impl IntervalSet {
     /// The empty set.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             intervals: Vec::new(),
         }
     }
 
     /// The full set `(-∞, +∞)`.
-    pub fn full() -> Self {
+    pub(crate) fn full() -> Self {
         Self {
             intervals: vec![Interval {
                 lower: Bound::Unbounded,
@@ -64,7 +64,7 @@ impl IntervalSet {
     }
 
     /// A set containing exactly one integer value.
-    pub fn singleton(v: i64) -> Self {
+    pub(crate) fn singleton(v: i64) -> Self {
         Self {
             intervals: vec![Interval {
                 lower: Bound::Inclusive(v),
@@ -74,7 +74,7 @@ impl IntervalSet {
     }
 
     /// A set containing one closed/open-ended interval.
-    pub fn from_range(
+    pub(crate) fn from_range(
         lower: Option<i64>,
         upper: Option<i64>,
         lower_inclusive: bool,
@@ -102,17 +102,17 @@ impl IntervalSet {
     }
 
     /// True when the set has no values.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.intervals.is_empty()
     }
 
     /// True when `value` falls within any interval.
-    pub fn contains(&self, value: i64) -> bool {
+    pub(crate) fn contains(&self, value: i64) -> bool {
         self.intervals.iter().any(|i| interval_contains(i, value))
     }
 
     /// Union of two interval sets.
-    pub fn union(&self, other: &Self) -> Self {
+    pub(crate) fn union(&self, other: &Self) -> Self {
         let mut all: Vec<Interval> = self
             .intervals
             .iter()
@@ -137,7 +137,7 @@ impl IntervalSet {
     }
 
     /// Intersection of two interval sets.
-    pub fn intersect(&self, other: &Self) -> Self {
+    pub(crate) fn intersect(&self, other: &Self) -> Self {
         let mut out: Vec<Interval> = Vec::new();
         for a in &self.intervals {
             for b in &other.intervals {
@@ -165,7 +165,7 @@ impl IntervalSet {
     }
 
     /// Complement (over the universe `i64`).
-    pub fn complement(&self) -> Self {
+    pub(crate) fn complement(&self) -> Self {
         if self.intervals.is_empty() {
             return Self::full();
         }
@@ -340,7 +340,7 @@ fn flip_lower_to_upper(b: Bound) -> Bound {
 impl IntervalSet {
     /// Pick a representative integer from the set, or `None` if empty.
     /// Used as a gap witness when integer fields have uncovered regions.
-    pub fn pick_witness(&self) -> Option<i64> {
+    pub(crate) fn pick_witness(&self) -> Option<i64> {
         for iv in &self.intervals {
             if let Some(v) = interval_witness(iv) {
                 return Some(v);

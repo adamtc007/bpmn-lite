@@ -65,7 +65,7 @@ pub(crate) fn analyse(
 
 /// Intersect two `RuleRegion`s field by field.  Returns the per-field summary
 /// when every field intersection is non-empty.
-pub(crate) fn intersect_regions(a: &RuleRegion, b: &RuleRegion) -> Option<OverlapSummary> {
+fn intersect_regions(a: &RuleRegion, b: &RuleRegion) -> Option<OverlapSummary> {
     let mut per_field: Vec<FieldOverlap> = Vec::with_capacity(a.fields.len());
     for (fa, fb) in a.fields.iter().zip(b.fields.iter()) {
         let merged = intersect(fa, fb);

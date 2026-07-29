@@ -147,7 +147,7 @@ impl OutboxEntry {
 
     /// Attach a bpmn-lite caller-side `callout_id` (§8.3) so the sender
     /// loop can correlate a process-instance callout with the row.
-    pub fn with_callout_id(mut self, callout_id: Uuid) -> Self {
+    fn with_callout_id(mut self, callout_id: Uuid) -> Self {
         self.callout_id = Some(callout_id);
         self
     }

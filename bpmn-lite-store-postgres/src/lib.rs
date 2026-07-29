@@ -13,9 +13,9 @@
 //! macro-expansion time, the same way it resolved to
 //! `bpmn-lite-core/migrations/` before the move.
 
-pub mod ffi_template_store;
+pub(crate) mod ffi_template_store;
 pub mod pending_store;
-pub mod store_postgres;
+pub(crate) mod store_postgres;
 
 pub use ffi_template_store::PostgresFfiTemplateStore;
 pub use pending_store::PostgresPendingInvocationStore;

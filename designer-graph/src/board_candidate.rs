@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever any canonical id or model-facing description changes.
 /// Rides every `BoardCandidate` so recorded board hashes stay
 /// interpretable across schema evolution (I28).
-pub const CANDIDATE_SCHEMA_VERSION: u32 = 2;
+const CANDIDATE_SCHEMA_VERSION: u32 = 2;
 
 /// The §12.1 atomic graph-operation set. Variant set mirrors the V&S
 /// verbatim; the three guard operations mirror the opcode trichotomy.

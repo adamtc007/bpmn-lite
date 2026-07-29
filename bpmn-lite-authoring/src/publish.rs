@@ -121,7 +121,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 ///
 /// Steps 1-10 are pure/sync (no persistence). The caller (`compile_and_publish`)
 /// persists: (a) program to WorkflowStore, (b) template to TemplateStore.
-pub fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<PublishResult> {
+pub(crate) fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<PublishResult> {
     // 1. Parse YAML → DTO
     let dto = yaml::parse_workflow_yaml(yaml_str)?;
 
@@ -229,7 +229,7 @@ fn compute_bytecode_hash(program: &bpmn_lite_types::CompiledProgram) -> String {
 
 /// Helper: shorthand for compile_and_publish without the DTO.
 /// Returns the DTO for callers that need it.
-pub fn parse_and_validate_yaml(yaml_str: &str) -> Result<WorkflowGraphDto> {
+fn parse_and_validate_yaml(yaml_str: &str) -> Result<WorkflowGraphDto> {
     let dto = yaml::parse_workflow_yaml(yaml_str)?;
     let errors = validate::validate_dto(&dto);
     if !errors.is_empty() {

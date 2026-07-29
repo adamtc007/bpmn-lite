@@ -5,12 +5,12 @@ use async_trait::async_trait;
 /// PostgreSQL-backed TemplateStore.
 ///
 /// Relies on migration 013_create_workflow_templates.sql for schema + immutability triggers.
-pub struct PostgresTemplateStore {
+struct PostgresTemplateStore {
     pool: sqlx::PgPool,
 }
 
 impl PostgresTemplateStore {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub(crate) fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 }

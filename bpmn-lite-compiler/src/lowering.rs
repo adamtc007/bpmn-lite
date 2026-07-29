@@ -2230,7 +2230,7 @@ fn lower_multi_instance_v2(
 
 /// Intern a flag name into the flag_intern map. Returns the assigned FlagKey.
 /// If the name is already interned, returns the existing key.
-pub(crate) fn intern_flag(map: &mut HashMap<String, FlagKey>, name: &str) -> FlagKey {
+fn intern_flag(map: &mut HashMap<String, FlagKey>, name: &str) -> FlagKey {
     if let Some(&key) = map.get(name) {
         return key;
     }
@@ -2242,7 +2242,7 @@ pub(crate) fn intern_flag(map: &mut HashMap<String, FlagKey>, name: &str) -> Fla
 /// Assign a storage location to a data object based on its type declaration.
 /// For Bool and I64 primitives: intern a FlagKey using the data object id.
 /// For everything else: top-level DomainPayload path equal to the data object id.
-pub(crate) fn assign_storage(
+fn assign_storage(
     type_decl: &bpmn_lite_types::ffi_bindings::DataObjectType,
     id: &str,
     flag_intern: &mut HashMap<String, FlagKey>,
@@ -2262,7 +2262,7 @@ pub(crate) fn assign_storage(
 }
 
 /// Convert an IR-level literal to a compiled-artifact literal.
-pub(crate) fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_bindings::Literal {
+fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_bindings::Literal {
     use crate::ir::IrLiteral;
     use bpmn_lite_types::ffi_bindings::Literal;
     match lit {
@@ -2275,7 +2275,7 @@ pub(crate) fn lower_literal(lit: &crate::ir::IrLiteral) -> bpmn_lite_types::ffi_
 
 /// Resolve an IR-level expression to a `BindingSource`, using the resolved
 /// data-object map to translate variable references to storage locations.
-pub(crate) fn resolve_expression(
+fn resolve_expression(
     expr: &crate::ir::Expression,
     data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
 ) -> Result<bpmn_lite_types::ffi_bindings::BindingSource> {
@@ -2314,7 +2314,7 @@ pub(crate) fn resolve_expression(
 }
 
 /// Resolve an output target variable name to a `BindingTarget`.
-pub(crate) fn resolve_output_target(
+fn resolve_output_target(
     target_variable: &str,
     data_objects: &BTreeMap<String, bpmn_lite_types::ffi_bindings::DataObjectDecl>,
 ) -> Result<bpmn_lite_types::ffi_bindings::BindingTarget> {

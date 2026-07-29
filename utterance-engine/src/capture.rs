@@ -37,7 +37,7 @@ use crate::policy::DecisionRecord;
 
 /// Charter-mandated dataset separation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum DatasetClass {
+pub(crate) enum DatasetClass {
     Evaluation,
     Training,
     Audit,
@@ -47,7 +47,7 @@ pub enum DatasetClass {
 /// utterance (permitted-fields/redaction rules are charter deliverables
 /// applied at the sink when capture goes live).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CaptureEvent {
+pub(crate) struct CaptureEvent {
     pub raw_utterance: String,
     pub record: DecisionRecord,
     pub dataset: DatasetClass,
@@ -56,7 +56,7 @@ pub struct CaptureEvent {
 /// What happened to a capture call — the caller always learns the
 /// truth; suppression is visible, never silent success.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CaptureOutcome {
+pub(crate) enum CaptureOutcome {
     /// Switch OFF (no ratified charter): event DROPPED by design.
     SuppressedNoCharter,
     /// Stored under the named dataset class.
@@ -68,7 +68,7 @@ pub enum CaptureOutcome {
 /// gate, not a boolean. Note: even under `q9-capture`, this type alone
 /// does not make capture live anywhere — no callsite in this workspace
 /// calls `on_under_charter` (grep before assuming otherwise).
-pub struct CapturePipeline {
+pub(crate) struct CapturePipeline {
     /// `None` = switch OFF. `Some(charter_ref)` = ON under that charter.
     charter: Option<String>,
     /// Physically separate sinks (in-memory v1; durable impls land with
@@ -78,7 +78,7 @@ pub struct CapturePipeline {
 
 impl CapturePipeline {
     /// The default and only pre-charter state.
-    pub fn off() -> Self {
+    pub(crate) fn off() -> Self {
         CapturePipeline {
             charter: None,
             sinks: BTreeMap::new(),
@@ -88,7 +88,7 @@ impl CapturePipeline {
     /// Turning capture on REQUIRES the ratified charter reference
     /// (D17). Empty/whitespace refs are refused — the gate cannot be
     /// satisfied by a placeholder.
-    pub fn on_under_charter(charter_ref: &str) -> anyhow::Result<Self> {
+    pub(crate) fn on_under_charter(charter_ref: &str) -> anyhow::Result<Self> {
         let r = charter_ref.trim();
         if r.is_empty() {
             return Err(anyhow::anyhow!(
@@ -101,13 +101,13 @@ impl CapturePipeline {
         })
     }
 
-    pub fn charter_ref(&self) -> Option<&str> {
+    pub(crate) fn charter_ref(&self) -> Option<&str> {
         self.charter.as_deref()
     }
 
     /// Capture one interaction. OFF → the event is dropped and the
     /// caller told so. ON → stored under exactly one dataset class.
-    pub fn capture(&mut self, event: CaptureEvent) -> CaptureOutcome {
+    pub(crate) fn capture(&mut self, event: CaptureEvent) -> CaptureOutcome {
         match &self.charter {
             None => CaptureOutcome::SuppressedNoCharter,
             Some(_) => {
@@ -120,7 +120,7 @@ impl CapturePipeline {
 
     /// Read one dataset — the separation surface (a Training reader can
     /// never see Evaluation events and vice versa).
-    pub fn dataset(&self, class: DatasetClass) -> &[CaptureEvent] {
+    pub(crate) fn dataset(&self, class: DatasetClass) -> &[CaptureEvent] {
         self.sinks.get(&class).map(Vec::as_slice).unwrap_or(&[])
     }
 }

@@ -217,7 +217,7 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
 }
 
 /// Produce a summary string suitable for a log line or diagnostic message.
-pub fn summarise(report: &AnalysisReport) -> String {
+fn summarise(report: &AnalysisReport) -> String {
     let warnings = report.warning_count();
     let infos = report.findings.len() - warnings;
     format!("{} warning(s), {} info(s)", warnings, infos)

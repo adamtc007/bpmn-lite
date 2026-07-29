@@ -106,7 +106,7 @@ impl<'a> Tape<'a> {
 
 /// Tape-driven clock + deterministic ID source — the fuzz exec's only
 /// time/identity boundary. Wall time never enters an exec.
-pub struct FuzzClock {
+pub(crate) struct FuzzClock {
     now_ms: AtomicI64,
     next_id: AtomicU64,
 }
@@ -114,7 +114,7 @@ pub struct FuzzClock {
 impl FuzzClock {
     /// Deterministic epoch (mid-2025 in ms), far from 0 and from the
     /// timestamp range edge even after a full tape of maximal jumps.
-    pub const GENESIS_MS: i64 = 1_750_000_000_000;
+    const GENESIS_MS: i64 = 1_750_000_000_000;
 
     pub fn new() -> Self {
         Self {
@@ -156,7 +156,7 @@ const MAX_DEPTH: u8 = 3;
 const BLOCK_BUDGET: u32 = 24;
 
 #[derive(Debug, Clone)]
-pub enum Block {
+pub(crate) enum Block {
     /// One plain service task.
     Task,
     /// Parallel fork/join; each branch is a nested SESE region (≥1 block).
@@ -210,7 +210,7 @@ pub struct Shape {
     pub blocks: Vec<Block>,
 }
 
-pub fn gen_shape(tape: &mut Tape) -> Shape {
+pub(crate) fn gen_shape(tape: &mut Tape) -> Shape {
     let mut budget = BLOCK_BUDGET;
     Shape {
         blocks: gen_blocks(tape, MAX_DEPTH, false, &mut budget),
@@ -297,7 +297,7 @@ fn gen_block(tape: &mut Tape, depth: u8, under_barrier: bool, budget: &mut u32) 
 
 // ─── Emission: shape → (XML, per-task bounds, start payload) ─────────
 
-pub struct GeneratedProcess {
+struct GeneratedProcess {
     pub xml: String,
     /// task_type → max distinct job keys this shape can legally produce.
     pub bounds: BTreeMap<String, u32>,
@@ -323,7 +323,7 @@ pub struct GeneratedProcess {
 /// unblocks it; `key_field` is the domain-payload field its subscription
 /// resolves the expected key from.
 #[derive(Debug, Clone)]
-pub struct MsgWaitDecl {
+struct MsgWaitDecl {
     pub msg_name: String,
     pub key_field: String,
     pub corr_value: String,
@@ -614,7 +614,7 @@ fn emit_region(
     ctx.flow(&prev_exit, exit, None);
 }
 
-pub fn emit_process(shape: &Shape) -> GeneratedProcess {
+pub(crate) fn emit_process(shape: &Shape) -> GeneratedProcess {
     let mut ctx = EmitCtx::default();
     // Routing flags are deliverable only via a job completion's
     // `orch_flags`, so every graph opens with an `init` task: its
@@ -651,7 +651,7 @@ pub fn emit_process(shape: &Shape) -> GeneratedProcess {
 // ─── G-T conservation tracker ────────────────────────────────────────
 
 #[derive(Default)]
-pub struct ConservationTracker {
+pub(crate) struct ConservationTracker {
     seen: BTreeMap<String, BTreeSet<String>>,
 }
 

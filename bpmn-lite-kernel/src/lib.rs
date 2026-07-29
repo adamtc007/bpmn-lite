@@ -37,11 +37,11 @@ impl DeterministicContext {
     pub fn command_id(&self) -> Uuid {
         self.command_id
     }
-    pub fn next_revision(&self) -> u64 {
+    fn next_revision(&self) -> u64 {
         self.next_revision
     }
 
-    pub fn derived_id(&self, ordinal: u32) -> Uuid {
+    fn derived_id(&self, ordinal: u32) -> Uuid {
         EffectId::for_command(self.command_id, self.next_revision, ordinal).as_uuid()
     }
 
@@ -245,7 +245,7 @@ pub fn replay(
 /// from this would make every downstream oracle (K-invariants, limits
 /// conformance, replay determinism) meaningless. Pure function, no
 /// fuzz-only semantics.
-pub fn materialize_snapshot(
+pub(crate) fn materialize_snapshot(
     prior: &PersistedSnapshotState,
     transition: &Transition,
     artifact_abi: u32,
@@ -342,7 +342,7 @@ pub fn materialize_snapshot(
 /// off the vector while parked. `v2_cancel_guard_scope`'s tree walk already
 /// treats this construction as canonical (`chain = control_stack.clone()`
 /// + wait-derived handle); this function reuses the same one.
-pub fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
+pub(crate) fn effective_control_stack(fiber: &Fiber) -> Vec<RecordId> {
     let mut chain = fiber.control_stack.clone();
     match &fiber.wait {
         WaitState::V2Barrier { record_id } | WaitState::V2Race { record_id, .. } => {

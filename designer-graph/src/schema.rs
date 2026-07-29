@@ -58,7 +58,7 @@ pub struct Provenance {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DesignerNode {
+pub(crate) struct DesignerNode {
     pub key: NodeKey,
     /// The compiler vocabulary IS the node kind — see module docs.
     pub ir: IRNode,
@@ -72,7 +72,7 @@ pub struct DesignerNode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DesignerEdge {
+pub(crate) struct DesignerEdge {
     /// Sequence-flow id — uniqueness enforced at insertion (review F3).
     pub id: String,
     pub condition: Option<bpmn_lite_compiler::ir::ConditionExpr>,

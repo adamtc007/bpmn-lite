@@ -35,7 +35,7 @@ pub type VerifiedWorkflow = ExecutableWorkflow;
 
 pub struct Compiler;
 
-pub struct XmlFrontend;
+struct XmlFrontend;
 
 impl WorkflowFrontend for XmlFrontend {
     type Source = str;

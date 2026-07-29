@@ -13,7 +13,7 @@ pub trait ValueResolver: Send + Sync {
 }
 
 /// A no-op resolver that always returns `None` (falls back to Str).
-pub struct NoopResolver;
+struct NoopResolver;
 
 impl ValueResolver for NoopResolver {
     fn resolve(&self, _domain_id: &DomainId, _symbol: &str) -> Option<TypedValue> {

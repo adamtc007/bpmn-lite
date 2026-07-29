@@ -37,7 +37,7 @@ mod oracle_boundary_tests;
 pub mod publish;
 pub mod registry;
 #[cfg(feature = "postgres")]
-pub mod store_postgres_templates;
+pub(crate) mod store_postgres_templates;
 pub mod validate;
 pub mod yaml;
 

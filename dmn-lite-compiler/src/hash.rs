@@ -54,7 +54,7 @@ pub(crate) fn compute_artifact_hash(
 /// 1. Remove `;` line comments (`;` to end of line).
 /// 2. Replace every run of whitespace (spaces, tabs, newlines) with a single space.
 /// 3. Trim leading and trailing whitespace.
-pub(crate) fn normalise_source(source: &str) -> String {
+fn normalise_source(source: &str) -> String {
     // Strip comments
     let mut stripped = String::with_capacity(source.len());
     for line in source.lines() {

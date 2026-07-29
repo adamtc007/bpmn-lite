@@ -20,7 +20,7 @@ pub mod concurrency;
 pub mod events;
 pub mod ffi_bindings;
 pub mod integrity;
-pub mod integrity_rings;
+pub(crate) mod integrity_rings;
 pub mod persistence;
 pub mod session_stack;
 pub mod transition;
