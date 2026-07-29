@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use bpmn_lite_compiler::dsl::{ExecutionNode, WorkflowExecutionPlan};
-use bpmn_lite_engine::demo::{build_demo_plan, demo_initial_vars};
+use bpmn_lite_engine::{build_demo_plan, demo_initial_vars};
 use bpmn_lite_store::store::{
     AdminProjectionStore, ArtifactRepository, DesignSessionEventKind, RuntimeStore,
 };

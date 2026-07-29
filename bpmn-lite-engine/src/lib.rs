@@ -22,10 +22,11 @@
 //!
 //! …and the runtime API plus scheduler.
 
-pub mod demo;
-pub mod engine;
+mod demo;
+mod engine;
 pub(crate) mod runtime_context;
 
+pub use demo::{build_demo_plan, demo_initial_vars};
 pub use engine::*;
 pub use runtime_context::*;
 
