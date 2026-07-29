@@ -12,8 +12,8 @@
 
 #![forbid(unsafe_code)]
 
-pub mod catalogue;
-pub mod store;
+mod catalogue;
+mod store;
 
 pub use catalogue::FfiCatalogue;
 pub use store::{

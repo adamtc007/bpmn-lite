@@ -7,8 +7,7 @@
 use std::time::SystemTime;
 
 use dmn_lite_compiler::{
-    CompiledDecision, compile_and_verify, load_catalogue_from_str,
-    verify::{VerifierError, verify},
+    CompiledDecision, VerifierError, compile_and_verify, load_catalogue_from_str, verify,
 };
 use dmn_lite_parser::parse;
 use dmn_lite_types::{

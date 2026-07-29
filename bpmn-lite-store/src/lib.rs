@@ -10,7 +10,7 @@
 //! module-qualified access; the prelude re-exports the user-facing
 //! types flat.
 
-pub mod error;
+mod error;
 pub mod pending;
 pub mod store;
 pub mod store_memory;

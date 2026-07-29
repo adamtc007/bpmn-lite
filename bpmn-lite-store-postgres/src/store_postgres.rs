@@ -167,9 +167,9 @@ async fn persist_payload_ref(
 }
 
 pub struct TenantTx<'c> {
-    pub tx: sqlx::Transaction<'c, sqlx::Postgres>,
-    pub tenant_id: String,
-    pub lease_owner: String,
+    pub(crate) tx: sqlx::Transaction<'c, sqlx::Postgres>,
+    pub(crate) tenant_id: String,
+    pub(crate) lease_owner: String,
 }
 
 impl<'c> TenantTx<'c> {

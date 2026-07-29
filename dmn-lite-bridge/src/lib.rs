@@ -29,8 +29,8 @@
 
 #![forbid(unsafe_code)]
 
-pub mod owner;
-pub mod resolver;
+mod owner;
+mod resolver;
 
 pub use owner::DmnLiteOwner;
 pub use resolver::ValueResolver;

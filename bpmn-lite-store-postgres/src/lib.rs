@@ -14,7 +14,7 @@
 //! `bpmn-lite-core/migrations/` before the move.
 
 pub(crate) mod ffi_template_store;
-pub mod pending_store;
+mod pending_store;
 pub(crate) mod store_postgres;
 
 pub use ffi_template_store::PostgresFfiTemplateStore;

@@ -91,7 +91,7 @@ enum MemoryEffectState {
 /// In-memory implementation of `WorkflowStore` for POC/testing.
 pub struct MemoryStore {
     inner: RwLock<Inner>,
-    pub pending_store: crate::pending::MemoryPendingInvocationStore,
+    pending_store: crate::pending::MemoryPendingInvocationStore,
 }
 
 impl MemoryStore {

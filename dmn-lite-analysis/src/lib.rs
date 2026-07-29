@@ -25,7 +25,8 @@
 //!
 //! # Scope notes (Profile v0.1)
 //!
-//! - Integer ranges are analysed exactly via `intervals::IntervalSet`.
+//! - Integer ranges are analysed exactly via an internal interval-set
+//!   representation (not part of this crate's public API).
 //! - Decimal (`f64`) ranges are deferred to Profile v0.3; decimal fields are
 //!   marked opaque.
 //! - String fields are treated as opaque in overlap/gap (Profile v0.1 has no
@@ -43,7 +44,7 @@
 mod cost;
 mod gap;
 mod hit_policy;
-pub mod intervals;
+mod intervals;
 mod overlap;
 mod region;
 mod unreachable;

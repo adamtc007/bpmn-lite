@@ -17,11 +17,11 @@
 #![warn(missing_docs)]
 #![deny(unreachable_pub)]
 
-pub mod catalogue_loader;
+mod catalogue_loader;
 mod emit;
 mod hash;
 mod lower;
-pub mod verify;
+mod verify;
 
 pub use catalogue_loader::{load_catalogue_from_path, load_catalogue_from_str};
 pub use dmn_lite_types::ir::TypedDecision;
@@ -29,7 +29,7 @@ pub use dmn_lite_types::{
     ArtifactHash, Catalogue, CatalogueError, CompileError, CompileWarning, CompiledDecision,
     VerifiedDecision,
 };
-pub use verify::VerifierError;
+pub use verify::{verify, VerifierError};
 
 use dmn_lite_parser::Source;
 use std::fmt;
