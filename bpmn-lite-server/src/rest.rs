@@ -2682,6 +2682,7 @@ async fn session_utterance_endpoint(
     Json(body): Json<SessionUtteranceBody>,
 ) -> impl IntoResponse {
     use utterance_engine::board::{build_board, EmptyUniverse, PolicyFilter};
+    #[cfg(feature = "q9-capture")]
     use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
     use utterance_engine::policy::{decide, DispositionConfig};
     use utterance_engine::retrieval::{LexicalTier0, Tier0Retriever};
@@ -2851,7 +2852,12 @@ async fn session_utterance_endpoint(
 
     // Corpus capture: switch OFF until GOV.1 ratifies (D17) — evaluated
     // per interaction so the suppression is a recorded fact, not an
-    // assumed one.
+    // assumed one. DIR-004 Phase 1.2: outside `q9-capture`, there is no
+    // module to call here at all — `"not_compiled"` reports that as
+    // plainly as `"suppressed_no_charter"` reported the old always-off
+    // runtime state, but it is now also a build-time fact, not just a
+    // runtime one.
+    #[cfg(feature = "q9-capture")]
     let capture_state = match CapturePipeline::off().capture(
         utterance_engine::capture::CaptureEvent {
             raw_utterance: body.text.clone(),
@@ -2862,6 +2868,8 @@ async fn session_utterance_endpoint(
         CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
         CaptureOutcome::Stored(_) => "stored",
     };
+    #[cfg(not(feature = "q9-capture"))]
+    let capture_state = "not_compiled";
 
     match demo
         .store
@@ -3969,6 +3977,13 @@ mod tests {
             "actual message: {}",
             r1["message"]
         );
+        // DIR-004 Phase 1.2: outside `q9-capture` (default), the module
+        // isn't even compiled in -- "not_compiled" reports that build-time
+        // fact; under `q9-capture` the old runtime-suppressed state still
+        // applies (no charter ref is ever supplied in this workspace).
+        #[cfg(not(feature = "q9-capture"))]
+        assert_eq!(r1["capture"], "not_compiled");
+        #[cfg(feature = "q9-capture")]
         assert_eq!(r1["capture"], "suppressed_no_charter");
         let h1 = r1["board_hash"].as_str().unwrap().to_owned();
         assert_eq!(h1.len(), 64);

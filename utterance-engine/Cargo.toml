@@ -16,6 +16,13 @@ embed = ["dep:ob-semantic-matcher"]
 # involvement (that crate only ever loads BGE). Off by default: pulls each base's
 # weights via hf-hub on first use.
 candle-probe = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
+# DIR-004 Phase 1 ruling (Option B, structural separation, 2026-07-29):
+# the Q9-gated user-capture module. Off by default and absent from every
+# release/CI build command in this repo, so a pre-charter build cannot
+# even compile a live user-capture path -- enforced mechanically by
+# scripts/check-q9-capture-gate.sh, not left to convention. No deps of
+# its own; gates utterance-engine::capture's module declaration itself.
+q9-capture = []
 
 [dependencies]
 # GOV.2 pattern: exact rev pin, never path/[patch]; Candle-only slice.

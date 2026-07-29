@@ -40,5 +40,9 @@ jobs:
             cargo test -p bpmn-lite-store-postgres \
               store_postgres::tests::test_concurrent_claim_and_recovery -- --exact --test-threads=1
           done
+      - name: Q9 capture-gate guard
+        run: bash scripts/check-q9-capture-gate.sh
       - name: Full recovery matrix
-        run: cargo test --workspace --all-features -- --test-threads=1
+        # DIR-004 Phase 1.2: named features, not --all-features -- see
+        # production-gates.yml's identical note.
+        run: cargo test --workspace --features postgres,database,embed,candle-probe -- --test-threads=1

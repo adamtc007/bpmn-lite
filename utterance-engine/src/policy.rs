@@ -211,6 +211,31 @@ pub fn decide(
     Ok((disposition, record))
 }
 
+/// Config-by-hash registry (blind-review N3 rider): an I28 record is
+/// reproducible only if `disposition_policy_hash` resolves to the config
+/// it named — a supplied hash is an unverifiable claim, so registration
+/// derives it. General I28 reproducibility machinery, not tied to any
+/// one capture path — moved here from `capture.rs` (2026-07-29,
+/// DIR-004 Phase 1) so a Q9-gated capture path can be feature-gated out
+/// entirely without taking this with it; dev-session capture needs the
+/// same resolution and must not depend on the Q9-gated module to get it.
+#[derive(Default)]
+pub struct ConfigRegistry {
+    configs: std::collections::BTreeMap<String, DispositionConfig>,
+}
+
+impl ConfigRegistry {
+    pub fn register(&mut self, config: DispositionConfig) -> String {
+        let hash = config.policy_hash();
+        self.configs.insert(hash.clone(), config);
+        hash
+    }
+
+    pub fn resolve(&self, policy_hash: &str) -> Option<&DispositionConfig> {
+        self.configs.get(policy_hash)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +394,17 @@ mod tests {
         assert_eq!(a.policy_hash(), b.policy_hash());
         b.separation_margin = 0.20;
         assert_ne!(a.policy_hash(), b.policy_hash());
+    }
+
+    /// N3 rider: a recorded policy hash resolves back to its config.
+    #[test]
+    fn config_registry_makes_records_reproducible() {
+        let mut reg = ConfigRegistry::default();
+        let cfg = DispositionConfig::shadow_v1();
+        let hash = reg.register(cfg.clone());
+        assert_eq!(hash, cfg.policy_hash(), "hash is derived, not supplied");
+        let resolved = reg.resolve(&hash).expect("resolvable");
+        assert_eq!(resolved.policy_hash(), hash);
+        assert!(reg.resolve("unknown").is_none());
     }
 }

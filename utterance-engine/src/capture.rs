@@ -1,5 +1,22 @@
-//! Capture pipeline — BUILT WITH THE SWITCH OFF (WS-C C-now item 6;
-//! D17/GOV.1).
+//! Q9-GATED USER CAPTURE — feature `q9-capture` only. This entire module
+//! is compiled ONLY when that feature is enabled at build time (see
+//! `lib.rs`'s `#[cfg(feature = "q9-capture")] pub mod capture;`), which
+//! is off by default and absent from every documented build/release
+//! command in this repo (`scripts/check-q9-capture-gate.sh` enforces
+//! that mechanically — DIR-004 Phase 1.2).
+//!
+//! DIR-004 Phase 1 ruling (structural separation, Option B): a
+//! pre-charter build must not be ABLE to contain a live user-capture
+//! path, not merely configured to leave it off at runtime. Before this
+//! split, `CapturePipeline::off()` was reachable in every build — a
+//! single application-code edit (swap `off()` for `on_under_charter()`)
+//! would have silently activated real capture with no build-system
+//! signal. Now that edit additionally requires `--features q9-capture`,
+//! a visible, CI-checked build flag — the gate is a compile-time fact,
+//! not a runtime convention. `utterance_engine::dev_capture` (always
+//! compiled, unconditionally available to Adam's own testing) is the
+//! deliberately DISTINCT module this split produces — no shared record
+//! type, no shared store, per Adam's ruling.
 //!
 //! Two record streams exist and must not be conflated:
 //! - The SESSION event log (T1 store) is operational data — the
@@ -11,18 +28,12 @@
 //!
 //! Dataset separation (charter deliverable): evaluation, training, and
 //! audit are PHYSICALLY distinct sinks — one event goes to exactly one.
-//!
-//! Config-by-hash registry (blind-review N3 rider): an I28 record is
-//! reproducible only if `disposition_policy_hash` resolves to the
-//! config it named. `ConfigRegistry` is that resolution; the durable
-//! impl rides the store when capture goes live.
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::{DecisionRecord, DispositionConfig};
+use crate::policy::DecisionRecord;
 
 /// Charter-mandated dataset separation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -54,7 +65,9 @@ pub enum CaptureOutcome {
 
 /// The pipeline. `off()` is the only zero-argument constructor; turning
 /// capture ON requires the ratified charter's reference — a mechanism
-/// gate, not a boolean.
+/// gate, not a boolean. Note: even under `q9-capture`, this type alone
+/// does not make capture live anywhere — no callsite in this workspace
+/// calls `on_under_charter` (grep before assuming otherwise).
 pub struct CapturePipeline {
     /// `None` = switch OFF. `Some(charter_ref)` = ON under that charter.
     charter: Option<String>,
@@ -75,10 +88,10 @@ impl CapturePipeline {
     /// Turning capture on REQUIRES the ratified charter reference
     /// (D17). Empty/whitespace refs are refused — the gate cannot be
     /// satisfied by a placeholder.
-    pub fn on_under_charter(charter_ref: &str) -> Result<Self> {
+    pub fn on_under_charter(charter_ref: &str) -> anyhow::Result<Self> {
         let r = charter_ref.trim();
         if r.is_empty() {
-            return Err(anyhow!(
+            return Err(anyhow::anyhow!(
                 "capture cannot be enabled without a ratified Q9 charter reference (D17)"
             ));
         }
@@ -112,31 +125,12 @@ impl CapturePipeline {
     }
 }
 
-/// Config-by-hash registry: `disposition_policy_hash` → config, so
-/// recorded decisions are reproducible (I28). Registration is
-/// content-addressed — the hash is DERIVED, never caller-supplied.
-#[derive(Default)]
-pub struct ConfigRegistry {
-    configs: BTreeMap<String, DispositionConfig>,
-}
-
-impl ConfigRegistry {
-    pub fn register(&mut self, config: DispositionConfig) -> String {
-        let hash = config.policy_hash();
-        self.configs.insert(hash.clone(), config);
-        hash
-    }
-
-    pub fn resolve(&self, policy_hash: &str) -> Option<&DispositionConfig> {
-        self.configs.get(policy_hash)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::board::{build_board, EmptyUniverse, PolicyFilter};
     use crate::policy::decide;
+    use crate::policy::DispositionConfig;
     use crate::retrieval::{LexicalTier0, Tier0Retriever};
     use designer_graph::board_candidate::{LegalityOracle, OperationKind, ProductionId};
 
@@ -185,17 +179,5 @@ mod tests {
         assert_eq!(p.dataset(DatasetClass::Evaluation).len(), 1);
         assert_eq!(p.dataset(DatasetClass::Training).len(), 1);
         assert!(p.dataset(DatasetClass::Audit).is_empty());
-    }
-
-    /// N3 rider: a recorded policy hash resolves back to its config.
-    #[test]
-    fn config_registry_makes_records_reproducible() {
-        let mut reg = ConfigRegistry::default();
-        let cfg = DispositionConfig::shadow_v1();
-        let hash = reg.register(cfg.clone());
-        assert_eq!(hash, cfg.policy_hash(), "hash is derived, not supplied");
-        let resolved = reg.resolve(&hash).expect("resolvable");
-        assert_eq!(resolved.policy_hash(), hash);
-        assert!(reg.resolve("unknown").is_none());
     }
 }

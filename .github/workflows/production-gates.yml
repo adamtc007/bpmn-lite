@@ -36,10 +36,21 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Layering and deterministic capability gate
         run: bash scripts/check-layering.sh
+      - name: Q9 capture-gate guard self-test
+        run: bash scripts/check-q9-capture-gate.sh --self-test
+      - name: Q9 capture-gate guard
+        run: bash scripts/check-q9-capture-gate.sh
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        # DIR-004 Phase 1.2: NOT --all-features -- that would silently
+        # compile the Q9-gated capture module into every clippy/build/
+        # test/doc pass this job runs, including the "production and demo
+        # startup" step below that RUNS the built binary. Named features
+        # only (every opt-in feature that exists workspace-wide today,
+        # deliberately excluding q9-capture) -- check-q9-capture-gate.sh
+        # (above) fails this job if a future --all-features creeps back in.
+        run: cargo clippy --workspace --all-targets --features postgres,database,embed,candle-probe -- -D warnings
       - name: Workspace build
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --features postgres,database,embed,candle-probe
       - name: Production and demo startup fail-closed checks
         run: |
           if BPMN_LITE_ENV=production target/debug/bpmn-lite-server; then
@@ -51,7 +62,7 @@ jobs:
             exit 1
           fi
       - name: Migrations, RLS, recovery, integration, and property tests
-        run: cargo test --workspace --all-features -- --test-threads=1
+        run: cargo test --workspace --features postgres,database,embed,candle-probe -- --test-threads=1
       - name: Kernel WASI Preview 2 build
         run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
       - name: Fiber persistence codec benchmark
@@ -61,7 +72,7 @@ jobs:
       - name: Public API documentation surface
         env:
           RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --workspace --features postgres,database,embed,candle-probe --no-deps
       - name: Production gRPC wire smoke
         run: |
           BPMN_LITE_STORE=memory BPMN_LITE_BIND=127.0.0.1:50051 \

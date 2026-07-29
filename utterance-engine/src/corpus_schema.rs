@@ -20,7 +20,7 @@ pub struct BankEntry {
     pub paraphrase_seq: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoardDump {
     pub candidates: Vec<CandDump>,
     pub anchor: Option<String>,
@@ -29,11 +29,36 @@ pub struct BoardDump {
     pub policy_denied: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CandDump {
     pub canonical_id: String,
     pub description: String,
     pub schema_version: u32,
+}
+
+impl BoardDump {
+    /// The one board→dump conversion (2026-07-29, DIR-004 Phase 1): lifted
+    /// out of `eval_enrich.rs`/`starter_seed_eval.rs`'s identical inline
+    /// mappings, now a third caller (`dev_capture.rs`) exists — same "one
+    /// fixture set" rule this module's header already applies to record
+    /// shape, extended to this conversion.
+    pub fn from_board(board: &crate::board::Board) -> Self {
+        BoardDump {
+            candidates: board
+                .candidates
+                .iter()
+                .map(|c| CandDump {
+                    canonical_id: c.canonical_id.to_owned(),
+                    description: c.description.to_owned(),
+                    schema_version: c.schema_version,
+                })
+                .collect(),
+            anchor: board.context.anchor.clone(),
+            graph_identity: board.context.graph_identity.clone().unwrap_or_default(),
+            pack_identity: board.context.pack_identity.clone(),
+            policy_denied: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]

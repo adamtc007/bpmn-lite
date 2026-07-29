@@ -7,6 +7,11 @@ edition = "2021"
 default = ["postgres"]
 database = ["postgres"]
 postgres = ["dep:bpmn-lite-store-postgres", "dep:sqlx"]
+# DIR-004 Phase 1.2: forwards to utterance-engine's Q9-gated capture
+# module. NOT in `default` -- deliberately absent from every documented
+# build/release command in this repo (scripts/check-q9-capture-gate.sh
+# enforces that). A default server build has no live user-capture path.
+q9-capture = ["utterance-engine/q9-capture"]
 
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }

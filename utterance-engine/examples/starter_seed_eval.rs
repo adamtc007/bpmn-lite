@@ -34,7 +34,7 @@ use designer_graph::positional::PositionalLegality;
 use utterance_engine::board::{build_board, Board, EmptyUniverse, PolicyFilter};
 use utterance_engine::context::{project_ir, ContextProjection};
 use utterance_engine::contract::NONE_OF_THE_ABOVE;
-use utterance_engine::corpus_schema::{BoardDump, CandDump, Example};
+use utterance_engine::corpus_schema::{BoardDump, Example};
 use utterance_engine::fixtures::{enumeration_classes, ClassState};
 #[cfg(not(feature = "embed"))]
 use utterance_engine::retrieval::LexicalTier0;
@@ -47,7 +47,6 @@ const CANONICAL_BASE: Base = Base::ModernbertBase; // Adam's ratification, EOP-D
 
 #[derive(serde::Deserialize)]
 struct StarterItem {
-    #[allow(dead_code)]
     seq: u32,
     category: String,
     class_id: String,
@@ -55,6 +54,16 @@ struct StarterItem {
     text: String,
     disputed: bool,
     dispute_note: String,
+}
+
+/// DIR-004 Phase 1.4: written only by `examples/adjudicate_starter_seed.rs`
+/// (a real human verdict, never fabricated). Merged in here at run time so
+/// the original authored bank stays untouched and this suite automatically
+/// reflects adjudication as it accrues.
+#[derive(serde::Deserialize)]
+struct Adjudication {
+    seq: u32,
+    adjudicated_label: String,
 }
 
 fn main() -> Result<()> {
@@ -65,6 +74,15 @@ fn main() -> Result<()> {
 
     let items: Vec<StarterItem> = serde_json::from_str(&std::fs::read_to_string(&bank_path)?)
         .with_context(|| format!("{bank_path:?}"))?;
+
+    let adj_path = root.join("seed/banks/starter_seed_v1_adjudications.json");
+    let adjudications: BTreeMap<u32, String> = if adj_path.exists() {
+        let list: Vec<Adjudication> = serde_json::from_str(&std::fs::read_to_string(&adj_path)?)
+            .with_context(|| format!("{adj_path:?}"))?;
+        list.into_iter().map(|a| (a.seq, a.adjudicated_label)).collect()
+    } else {
+        BTreeMap::new()
+    };
 
     let classes = enumeration_classes()?;
     let mut boards: BTreeMap<&str, (Board, ContextProjection, &ClassState)> = BTreeMap::new();
@@ -105,50 +123,45 @@ fn main() -> Result<()> {
             .get(item.class_id.as_str())
             .ok_or_else(|| anyhow!("starter item names unknown class '{}'", item.class_id))?;
 
-        if item.label != NONE_OF_THE_ABOVE && !board.contains(&item.label) {
+        let adjudicated_label = adjudications.get(&item.seq);
+        let label: &str = adjudicated_label.map(String::as_str).unwrap_or(item.label.as_str());
+        let disputed = item.disputed && adjudicated_label.is_none();
+        let provenance = if adjudicated_label.is_some() {
+            "adam-adjudicated".to_string()
+        } else {
+            format!("{SUITE}.enriched")
+        };
+
+        if label != NONE_OF_THE_ABOVE && !board.contains(label) {
             let legal: Vec<&str> = board.candidates.iter().map(|c| c.canonical_id.as_str()).collect();
             bad_labels.push(format!(
                 "seq {} '{}': label '{}' not proposed by board '{}' -- legal candidates: {:?}",
-                item.seq, item.text, item.label, item.class_id, legal
+                item.seq, item.text, label, item.class_id, legal
             ));
             continue;
         }
 
         let result = retriever.retrieve(&item.text, board)?;
         let list = tier1_list(&result, K);
-        let tier0_top1_hit = list.first().map(|s| s.as_str()) == Some(item.label.as_str());
+        let tier0_top1_hit = list.first().map(|s| s.as_str()) == Some(label);
 
-        let family_id = format!("{}::{}", item.class_id, item.label);
+        let family_id = format!("{}::{}", item.class_id, label);
         let mut pre = Vec::new();
         pre.extend_from_slice(board.board_hash.as_bytes());
-        pre.extend_from_slice(item.label.as_bytes());
+        pre.extend_from_slice(label.as_bytes());
         pre.extend_from_slice(blake3::hash(item.text.as_bytes()).to_hex().as_bytes());
         pre.extend_from_slice(&item.seq.to_le_bytes());
 
         let example = Example {
             example_id: blake3::hash(&pre).to_hex().to_string(),
-            provenance: format!("{SUITE}.enriched"),
+            provenance,
             board_hash: board.board_hash.clone(),
             context_projection: proj.serialize_canonical(),
             context_projection_hash: proj.hash(),
-            board: BoardDump {
-                candidates: board
-                    .candidates
-                    .iter()
-                    .map(|c| CandDump {
-                        canonical_id: c.canonical_id.to_owned(),
-                        description: c.description.to_owned(),
-                        schema_version: c.schema_version,
-                    })
-                    .collect(),
-                anchor: board.context.anchor.clone(),
-                graph_identity: board.context.graph_identity.clone().unwrap_or_default(),
-                pack_identity: board.context.pack_identity.clone(),
-                policy_denied: Vec::new(),
-            },
+            board: BoardDump::from_board(board),
             tier1_list: list,
             retrieved_subset_hash: result.retrieved_subset_hash.clone(),
-            label: item.label.clone(),
+            label: label.to_string(),
             family_id,
             pair_group_id: None,
             style_regime: SUITE.to_string(),
@@ -161,7 +174,7 @@ fn main() -> Result<()> {
             .ranking
             .first()
             .map(|rc| rc.candidate_id.as_str())
-            == Some(item.label.as_str());
+            == Some(label);
 
         let slot = per_category.entry(item.category.clone()).or_insert((0, 0, 0));
         slot.0 += 1;
@@ -177,15 +190,17 @@ fn main() -> Result<()> {
             "category": item.category,
             "class_id": item.class_id,
             "text": item.text,
-            "hypothesis_label": item.label,
-            "disputed": item.disputed,
+            "hypothesis_label": label,
+            "original_hypothesis": item.label,
+            "adjudicated": adjudicated_label.is_some(),
+            "disputed": disputed,
             "dispute_note": item.dispute_note,
             "tier0_top1": example.tier1_list.first().cloned().unwrap_or_default(),
             "tier0_top1_matches_hypothesis": tier0_top1_hit,
             "tier1_top1": tier1_result.ranking.first().map(|rc| rc.candidate_id.clone()).unwrap_or_default(),
             "tier1_top1_matches_hypothesis": tier1_top1_hit,
         });
-        if item.disputed {
+        if disputed {
             disputed_rows.push(row.clone());
         }
         rows.push(row);
@@ -217,7 +232,8 @@ fn main() -> Result<()> {
     let report = serde_json::json!({
         "suite": SUITE,
         "provenance": format!("{SUITE}.enriched"),
-        "note": "Evidence, not pass/fail (directive 3.1): every label here is a PROVISIONAL HYPOTHESIS authored outside the generation pipeline, not gold-by-construction. Disputed entries are pending Adam's adjudication at first live testing -- a 'miss' against a disputed hypothesis is not necessarily a model error. This slice is kept out of training entirely and is marked for supersession by real developer-session data.",
+        "note": "Evidence, not pass/fail (directive 3.1): every label here is a PROVISIONAL HYPOTHESIS authored outside the generation pipeline, not gold-by-construction. Disputed entries are pending Adam's adjudication at first live testing -- a 'miss' against a disputed hypothesis is not necessarily a model error. Adjudicated items (via examples/adjudicate_starter_seed.rs, DIR-004 Phase 1.4) are merged in from seed/banks/starter_seed_v1_adjudications.json automatically -- see each row's 'adjudicated'/'original_hypothesis' fields. This slice is kept out of training entirely and is marked for supersession by real developer-session data.",
+        "adjudications_applied": adjudications.len(),
         "canonical_base_scored": CANONICAL_BASE.key(),
         "k": K,
         "totals": {
