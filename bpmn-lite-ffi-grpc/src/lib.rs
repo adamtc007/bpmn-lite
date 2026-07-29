@@ -2,8 +2,8 @@
 
 #![forbid(unsafe_code)]
 
-pub mod owner;
-pub mod template;
+mod owner;
+mod template;
 
 /// Generated FfiBridge proto types (client + server).
 pub mod proto {
