@@ -136,7 +136,8 @@ TO_VALUE_SCAN_DIRS=(
   bpmn-lite-store-postgres/src
   bpmn-lite-engine/src
   bpmn-lite-vm/src
-  bpmn-lite-server/src
+  bpmn-lite-server-runner/src
+  bpmn-lite-server-designer/src
   bpmn-lite-authoring/src
   bpmn-lite-bus-handler/src
 )

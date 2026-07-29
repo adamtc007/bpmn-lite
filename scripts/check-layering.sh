@@ -14,7 +14,8 @@ note() { printf '  \033[31mFORBIDDEN EDGE\033[0m  %s\n' "$1"; fail=1; }
 echo "== bpmn-lite layering guard =="
 
 for src in bpmn-lite-types/src bpmn-lite-engine/src bpmn-lite-store/src \
-           bpmn-lite-store-postgres/src bpmn-lite-server/src bpmn-lite-vm/src \
+           bpmn-lite-store-postgres/src bpmn-lite-server-runner/src bpmn-lite-server-designer/src \
+           bpmn-lite-vm/src \
            bpmn-lite-compiler/src bpmn-lite-authoring/src bpmn-lite-kernel/src; do
   [ -d "$src" ] || continue
   hits="$(grep -rnE '\bob_poc_types\b' "$src" 2>/dev/null \

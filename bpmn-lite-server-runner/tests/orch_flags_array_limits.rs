@@ -19,12 +19,12 @@ use std::time::Duration;
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_ffi_grpc::GrpcFfiOwner;
 use bpmn_lite_ffi_http::HttpFfiOwner;
-use bpmn_lite_server::event_fanout::EventFanout;
-use bpmn_lite_server::grpc::proto::bpmn_lite_server::BpmnLite;
-use bpmn_lite_server::grpc::proto::{
+use bpmn_lite_server_runner::event_fanout::EventFanout;
+use bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite;
+use bpmn_lite_server_runner::grpc::proto::{
     proto_value, CompleteJobRequest, ProtoValue, ProtoValueArray, StartRequest,
 };
-use bpmn_lite_server::grpc::{BpmnLiteService, RequestLimits, ServerMetrics};
+use bpmn_lite_server_runner::grpc::{BpmnLiteService, RequestLimits, ServerMetrics};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::{MAX_VALUE_ARRAY_DEPTH, MAX_VALUE_ARRAY_LEN};
 use dmn_lite_bridge::DmnLiteOwner;

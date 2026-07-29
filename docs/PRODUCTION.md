@@ -1,10 +1,13 @@
 # Production operation
 
-The production binary is `bpmn-lite-server`. The unauthenticated in-memory REST
-walkthrough is a separate binary, `bpmn-lite-demo`, and refuses to run when
-`BPMN_LITE_ENV=production`. Its default bind is `127.0.0.1:0`; a non-loopback
-bind requires the explicit acknowledgement documented by `--help`/startup
-errors.
+The production binary is `bpmn-lite-server`, built from the `bpmn-lite-server-runner`
+crate. The unauthenticated in-memory REST walkthroughs are two separate
+binaries — `bpmn-lite-demo-runner` (instance runner) and
+`bpmn-lite-demo-designer` (DSL/graph authoring), built from the
+`bpmn-lite-server-runner` and `bpmn-lite-server-designer` crates respectively —
+and both refuse to run when `BPMN_LITE_ENV=production`. Their default bind is
+`127.0.0.1:0`; a non-loopback bind requires the explicit acknowledgement
+documented by `--help`/startup errors.
 
 Production startup is fail-closed. It requires the PostgreSQL feature and
 store, `DATABASE_URL`, configured authentication, TLS (native or explicitly

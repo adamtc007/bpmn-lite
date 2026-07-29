@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use bpmn_lite_server::rest::{demo_router, DemoState};
+use bpmn_lite_server_designer::rest::{designer_router, DesignerState};
 use std::net::{IpAddr, SocketAddr};
 
 #[tokio::main]
@@ -19,8 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = tokio::net::TcpListener::bind(address).await?;
     let actual = listener.local_addr()?;
-    eprintln!("bpmn-lite demo listening on {actual}");
-    axum::serve(listener, demo_router(DemoState::try_new()?)).await?;
+    eprintln!("bpmn-lite designer listening on {actual}");
+    axum::serve(listener, designer_router(DesignerState::try_new()?)).await?;
     Ok(())
 }
 

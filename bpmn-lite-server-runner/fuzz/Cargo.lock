@@ -212,25 +212,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bpmn-lite-authoring"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake3",
- "bpmn-lite-compiler",
- "bpmn-lite-store",
- "bpmn-lite-types",
- "dsl-manifest",
- "petgraph 0.6.5",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "bpmn-lite-bus-handler"
 version = "0.1.0"
 dependencies = [
@@ -265,6 +246,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "thiserror",
  "uuid",
 ]
 
@@ -334,7 +316,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "bpmn-lite-server"
+name = "bpmn-lite-server-fuzz"
+version = "0.0.0"
+dependencies = [
+ "bpmn-lite-server-runner",
+ "bpmn-lite-types",
+ "libfuzzer-sys",
+ "prost",
+ "tokio",
+]
+
+[[package]]
+name = "bpmn-lite-server-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -342,7 +335,6 @@ dependencies = [
  "axum",
  "blake3",
  "bpmn-lite-analysis",
- "bpmn-lite-authoring",
  "bpmn-lite-bus-handler",
  "bpmn-lite-compiler",
  "bpmn-lite-engine",
@@ -353,7 +345,6 @@ dependencies = [
  "bpmn-lite-types",
  "bpmn-lite-vm",
  "chrono",
- "designer-graph",
  "dmn-lite-bridge",
  "dmn-lite-compiler",
  "dmn-lite-parser",
@@ -379,19 +370,7 @@ dependencies = [
  "tonic-health",
  "tracing",
  "tracing-subscriber",
- "utterance-engine",
  "uuid",
-]
-
-[[package]]
-name = "bpmn-lite-server-fuzz"
-version = "0.0.0"
-dependencies = [
- "bpmn-lite-server",
- "bpmn-lite-types",
- "libfuzzer-sys",
- "prost",
- "tokio",
 ]
 
 [[package]]
@@ -610,19 +589,6 @@ dependencies = [
  "const-oid",
  "pem-rfc7468",
  "zeroize",
-]
-
-[[package]]
-name = "designer-graph"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bpmn-lite-compiler",
- "bpmn-lite-types",
- "petgraph 0.6.5",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -2281,6 +2247,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3068,18 +3040,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
-name = "utterance-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "designer-graph",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "uuid"
 version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3088,6 +3048,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -3586,4 +3547,8 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "sem_os_types"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "bpmn-lite-server-designer"
 version = "0.1.0"

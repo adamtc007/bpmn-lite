@@ -17,7 +17,7 @@ prost = "0.13"
 # bpmn-lite-engine/fuzz). Caps this fuzz workspace's unified resolution.
 tokio = { version = ">=1.38, <1.53", features = ["rt", "time", "macros"] }
 
-[dependencies.bpmn-lite-server]
+[dependencies.bpmn-lite-server-runner]
 path = ".."
 
 [dependencies.bpmn-lite-types]

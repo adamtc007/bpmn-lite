@@ -10,8 +10,8 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::time::sleep;
 use tonic::transport::Channel;
 
-use bpmn_lite_server::grpc::proto::bpmn_lite_client::BpmnLiteClient;
-use bpmn_lite_server::grpc::proto::{
+use bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient;
+use bpmn_lite_server_runner::grpc::proto::{
     ActivateJobsRequest, CancelRequest, CompileRequest, CompleteJobRequest, FailJobRequest,
     HealthRequest, InspectRequest, JobActivationMsg, MetricsRequest, ProtoValue, SignalRequest,
     StartRequest, SubscribeRequest,
@@ -867,7 +867,7 @@ fn next_orch_flags(job: &JobActivationMsg, turn: usize) -> HashMap<String, Proto
         flags.insert(
             "approved".to_string(),
             ProtoValue {
-                kind: Some(bpmn_lite_server::grpc::proto::proto_value::Kind::BoolValue(
+                kind: Some(bpmn_lite_server_runner::grpc::proto::proto_value::Kind::BoolValue(
                     (turn & 1) == 0,
                 )),
             },

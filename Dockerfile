@@ -27,13 +27,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /build/recipe.json recipe.json
-# bpmn-lite-server/build.rs runs tonic_build to compile proto files.
+# bpmn-lite-server-runner/build.rs runs tonic_build to compile proto files.
 # Copy the proto directory before `cook` so the build script can find them.
-COPY bpmn-lite-server/proto bpmn-lite-server/proto
-RUN cargo chef cook --release --features postgres -p bpmn-lite-server --recipe-path recipe.json
+COPY bpmn-lite-server-runner/proto bpmn-lite-server-runner/proto
+RUN cargo chef cook --release --features postgres -p bpmn-lite-server-runner --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --features postgres -p bpmn-lite-server \
+RUN cargo build --release --features postgres -p bpmn-lite-server-runner \
     && mkdir -p /build/out \
     && cp target/release/bpmn-lite-server /build/out/bpmn-lite-server \
     && strip /build/out/bpmn-lite-server

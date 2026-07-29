@@ -57,8 +57,12 @@ jobs:
             echo "production server started without mandatory configuration" >&2
             exit 1
           fi
-          if BPMN_LITE_ENV=production target/debug/bpmn-lite-demo; then
-            echo "demo server started in production mode" >&2
+          if BPMN_LITE_ENV=production target/debug/bpmn-lite-demo-runner; then
+            echo "demo runner started in production mode" >&2
+            exit 1
+          fi
+          if BPMN_LITE_ENV=production target/debug/bpmn-lite-demo-designer; then
+            echo "demo designer started in production mode" >&2
             exit 1
           fi
       - name: Migrations, RLS, recovery, integration, and property tests
@@ -76,7 +80,7 @@ jobs:
       - name: Production gRPC wire smoke
         run: |
           BPMN_LITE_STORE=memory BPMN_LITE_BIND=127.0.0.1:50051 \
-            cargo run -p bpmn-lite-server --bin bpmn-lite-server > server.log 2>&1 &
+            cargo run -p bpmn-lite-server-runner --bin bpmn-lite-server > server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           for attempt in $(seq 1 60); do
@@ -84,7 +88,7 @@ jobs:
             sleep 1
           done
           BPMN_LITE_URL=http://127.0.0.1:50051 \
-            cargo test -p bpmn-lite-server --test integration test_grpc_smoke -- --exact
+            cargo test -p bpmn-lite-server-runner --test integration test_grpc_smoke -- --exact
 
   native-wasm-replay:
     runs-on: ubuntu-latest

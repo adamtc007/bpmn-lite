@@ -83,7 +83,7 @@ fn run_profile(profile: &str, extra_args: &[String]) -> Result<()> {
     let status = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("load_harness")
         .arg("--")
@@ -168,7 +168,7 @@ fn docker_http_smoke_command(extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("http_proof")
         .arg("--")
@@ -237,7 +237,7 @@ fn docker_grpc_smoke_command(extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("grpc_proof")
         .arg("--")
@@ -272,7 +272,7 @@ fn build_grpc_target_image(workspace_root: &Path) -> Result<()> {
 RUN apt-get update && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY . .
-RUN cargo build --release -p bpmn-lite-server --bin grpc_test_target && strip target/release/grpc_test_target
+RUN cargo build --release -p bpmn-lite-server-runner --bin grpc_test_target && strip target/release/grpc_test_target
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/grpc_test_target /usr/local/bin/
@@ -371,7 +371,7 @@ fn docker_heterogeneous_smoke_command(extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("heterogeneous_proof")
         .arg("--")
@@ -415,7 +415,7 @@ fn build_http_target_image(workspace_root: &Path) -> Result<()> {
 RUN apt-get update && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY . .
-RUN cargo build --release -p bpmn-lite-server --bin http_test_target && strip target/release/http_test_target
+RUN cargo build --release -p bpmn-lite-server-runner --bin http_test_target && strip target/release/http_test_target
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/http_test_target /usr/local/bin/
@@ -468,7 +468,7 @@ fn docker_ffi_smoke_command(extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("ffi_proof")
         .arg("--")
@@ -502,7 +502,7 @@ fn run_docker_profile(profile: &str, extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("load_harness")
         .arg("--")
@@ -598,7 +598,7 @@ fn run_docker_ha_profile(profile: &str, extra_args: &[String]) -> Result<()> {
     let result = Command::new("cargo")
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .arg("--bin")
         .arg("load_harness")
         .arg("--")
@@ -655,7 +655,7 @@ fn spawn_server(
     command
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .current_dir(workspace_root)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1370,7 +1370,7 @@ fn spawn_server_for_run_pack(workspace_root: &Path, _server_url: &str) -> Result
     command
         .arg("run")
         .arg("-p")
-        .arg("bpmn-lite-server")
+        .arg("bpmn-lite-server-runner")
         .current_dir(workspace_root)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

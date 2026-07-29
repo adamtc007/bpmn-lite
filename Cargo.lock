@@ -468,7 +468,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "bpmn-lite-server"
+name = "bpmn-lite-server-designer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "blake3",
+ "bpmn-lite-authoring",
+ "bpmn-lite-compiler",
+ "bpmn-lite-store",
+ "bpmn-lite-types",
+ "chrono",
+ "designer-graph",
+ "dmn-lite-parser",
+ "dsl-manifest",
+ "futures",
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
+ "utterance-engine",
+ "uuid",
+]
+
+[[package]]
+name = "bpmn-lite-server-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -476,7 +504,6 @@ dependencies = [
  "axum",
  "blake3",
  "bpmn-lite-analysis",
- "bpmn-lite-authoring",
  "bpmn-lite-bus-handler",
  "bpmn-lite-compiler",
  "bpmn-lite-engine",
@@ -487,7 +514,6 @@ dependencies = [
  "bpmn-lite-types",
  "bpmn-lite-vm",
  "chrono",
- "designer-graph",
  "dmn-lite-bridge",
  "dmn-lite-compiler",
  "dmn-lite-parser",
@@ -514,7 +540,6 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
- "utterance-engine",
  "uuid",
 ]
 

@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use tonic::transport::Channel;
 
-use bpmn_lite_server::grpc::proto::bpmn_lite_client::BpmnLiteClient;
-use bpmn_lite_server::grpc::proto::{
+use bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient;
+use bpmn_lite_server_runner::grpc::proto::{
     proto_value, ActivateJobsRequest, CompileRequest, CompleteJobRequest, FfiFieldSchemaProto,
     HealthRequest, InspectRequest, ProtoValue, RegisterDmnDecisionRequest, StartRequest,
 };

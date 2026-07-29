@@ -303,8 +303,8 @@ async fn test_compile_invalid_bpmn() {
 /// CI supplies `BPMN_LITE_URL` after starting the production binary.
 #[tokio::test]
 async fn test_grpc_smoke() {
-    use ::bpmn_lite_server::grpc::proto::bpmn_lite_client::BpmnLiteClient;
-    use ::bpmn_lite_server::grpc::proto::*;
+    use ::bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient;
+    use ::bpmn_lite_server_runner::grpc::proto::*;
 
     let Ok(url) = std::env::var("BPMN_LITE_URL") else {
         eprintln!("BPMN_LITE_URL is unset; the dedicated CI server-smoke job exercises this test");

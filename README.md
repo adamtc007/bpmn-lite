@@ -44,7 +44,7 @@ Start the standalone server with Postgres enabled:
 cd bpmn-lite
 DATABASE_URL=postgresql:///bpmn_lite_test \
 RUST_LOG=info \
-cargo run -p bpmn-lite-server --features postgres --bin bpmn-lite-server
+cargo run -p bpmn-lite-server-runner --features postgres --bin bpmn-lite-server
 ```
 
 On startup the server will:
@@ -59,7 +59,7 @@ Override the bind address if needed:
 cd bpmn-lite
 DATABASE_URL=postgresql:///bpmn_lite_test \
 BPMN_LITE_BIND=127.0.0.1:50061 \
-cargo run -p bpmn-lite-server --features postgres --bin bpmn-lite-server
+cargo run -p bpmn-lite-server-runner --features postgres --bin bpmn-lite-server
 ```
 
 ## Standalone Test Paths
@@ -69,7 +69,7 @@ Compile-only checks:
 ```bash
 cd bpmn-lite
 env RUSTC_WRAPPER= cargo check
-env RUSTC_WRAPPER= cargo check -p bpmn-lite-server --features postgres
+env RUSTC_WRAPPER= cargo check -p bpmn-lite-server-runner --features postgres
 ```
 
 Schema independence guard:

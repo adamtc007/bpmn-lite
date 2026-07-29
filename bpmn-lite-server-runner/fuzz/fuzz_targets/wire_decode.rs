@@ -18,8 +18,8 @@
 //                        backstop would reject is the drift this oracle
 //                        exists to catch.
 
-use bpmn_lite_server::grpc::proto;
-use bpmn_lite_server::grpc::{
+use bpmn_lite_server_runner::grpc::proto;
+use bpmn_lite_server_runner::grpc::{
     check_proto_value_array_limits, parse_bytecode_version, parse_hash, parse_uuid,
     proto_to_correlation_value, proto_to_value, RequestLimits,
 };
