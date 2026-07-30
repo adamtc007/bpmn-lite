@@ -92,7 +92,12 @@ pub enum RecordState {
 }
 
 /// Barrier arrival counters (K-3: `0 <= count <= arity`, retirement exactly
-/// at zero). Unused by non-barrier record kinds.
+/// at zero). `Race`-kind records also carry a non-default value here
+/// (`arity = count = arm_count` at open, per `V2RaceOpen`) — K-3's literal
+/// bound is stated for `Barrier` specifically, but the same 0-at-birth-
+/// would-be-a-bug shape holds for `Race` by construction (kernel comment on
+/// `Instr::V2RaceOpen`). `Guard`- and `Compensation`-kind records leave this
+/// at `RecordCounters::default()` — no v2 word ever sets it for them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize)]
 pub struct RecordCounters {
     pub arity: u32,
@@ -199,6 +204,126 @@ impl ConcurrencyRecord {
     }
 }
 
+/// Rejects a `ConcurrencyRecord` that violates a shape invariant this module
+/// documents for its `kind` (pub-scope audit, 2026-07-29). Narrower than
+/// K-1/K-2 (checked by `bpmn-lite-kernel::check_k_invariants`, which needs
+/// the fibre map alongside the table and so cannot run at single-record
+/// insert time) — this checks only what a lone record can prove about
+/// itself:
+///
+/// - `Barrier`/`Race`: `counters.count <= counters.arity` (K-3's bound;
+///   `Race` is included because the same shape holds for it by
+///   construction — see `RecordCounters`'s doc comment), and `opened_at`/
+///   the five `rollback_*` fields must all be unset (no v2 word sets them
+///   for these kinds).
+/// - `Guard`: `counters` must be `RecordCounters::default()` (unused for
+///   this kind), `opened_at` must be set (every v2 guard opener sets it),
+///   the five `rollback_*` fields must be all-set-together or all-unset-
+///   together (never partial — a half-populated rollback snapshot is
+///   unusable), and a non-interrupting guard (`interrupting: false`, i.e.
+///   `V2GuardN`) must have them all unset (A18: `V2GuardN` is never
+///   rollback-eligible).
+/// - `Compensation`: rejected outright — uninhabited in v2, no v2 word
+///   constructs it (see `RecordKind`'s doc comment), so an insert
+///   attempting one is definitionally not legitimate kernel output.
+///
+/// Called at the store-commit boundary (`bpmn-lite-store`,
+/// `bpmn-lite-store-postgres`), the one place a `ConcurrencyMutation::Insert`
+/// can reach persistence without having passed through `kernel::apply`'s own
+/// Ring 3 shadow check first — confirmed via `bpmn-lite-store-postgres`'s own
+/// test suite, which hand-crafts `Transition`s with directly-constructed
+/// `ConcurrencyRecord`s and commits them without going through the kernel at
+/// all.
+pub fn validate_concurrency_record_shape(
+    record: &ConcurrencyRecord,
+) -> Result<(), ConcurrencyValidationError> {
+    let id = record.id;
+    let rollback_fields_present = [
+        record.rollback_domain_payload.is_some(),
+        record.rollback_domain_payload_hash.is_some(),
+        record.rollback_flags.is_some(),
+        record.rollback_join_expected.is_some(),
+        record.rollback_session_stack.is_some(),
+    ];
+    let any_rollback_set = rollback_fields_present.contains(&true);
+    let all_rollback_set = rollback_fields_present.iter().all(|&set| set);
+
+    match record.kind {
+        RecordKind::Compensation => Err(ConcurrencyValidationError::CompensationUninhabited { id }),
+        RecordKind::Barrier | RecordKind::Race => {
+            let RecordCounters { arity, count } = record.counters;
+            if count > arity {
+                Err(ConcurrencyValidationError::CountersOutOfBounds {
+                    id,
+                    kind: record.kind,
+                    count,
+                    arity,
+                })
+            } else if record.opened_at.is_some() {
+                Err(ConcurrencyValidationError::UnexpectedOpenedAt { id, kind: record.kind })
+            } else if any_rollback_set {
+                Err(ConcurrencyValidationError::RollbackFieldsOnNonGuard { id, kind: record.kind })
+            } else {
+                Ok(())
+            }
+        }
+        RecordKind::Guard { interrupting } => {
+            if record.counters != RecordCounters::default() {
+                Err(ConcurrencyValidationError::UnexpectedCounters {
+                    id,
+                    kind: record.kind,
+                    arity: record.counters.arity,
+                    count: record.counters.count,
+                })
+            } else if record.opened_at.is_none() {
+                Err(ConcurrencyValidationError::GuardMissingOpenedAt { id })
+            } else if any_rollback_set && !all_rollback_set {
+                Err(ConcurrencyValidationError::PartialRollbackSnapshot { id })
+            } else if !interrupting && any_rollback_set {
+                Err(ConcurrencyValidationError::RollbackFieldsOnGuardN { id })
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Errors from [`validate_concurrency_record_shape`] and the store-layer
+/// `Retire`/`Remove`-on-missing-id checks that accompany it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum ConcurrencyValidationError {
+    #[error("record {id}: {kind:?} counters out of bounds (count={count} > arity={arity})")]
+    CountersOutOfBounds {
+        id: RecordId,
+        kind: RecordKind,
+        count: u32,
+        arity: u32,
+    },
+    #[error("record {id}: kind {kind:?} must not carry non-default counters (arity={arity}, count={count})")]
+    UnexpectedCounters {
+        id: RecordId,
+        kind: RecordKind,
+        arity: u32,
+        count: u32,
+    },
+    #[error("record {id}: kind {kind:?} must not carry opened_at (Guard-only field)")]
+    UnexpectedOpenedAt { id: RecordId, kind: RecordKind },
+    #[error("record {id}: kind {kind:?} must not carry rollback_* fields (Guard-only, A18)")]
+    RollbackFieldsOnNonGuard { id: RecordId, kind: RecordKind },
+    #[error("record {id}: rollback_* fields must be populated all-together or not at all")]
+    PartialRollbackSnapshot { id: RecordId },
+    #[error("record {id}: rollback_* fields set on a non-interrupting Guard (V2GuardN is never rollback-eligible, A18)")]
+    RollbackFieldsOnGuardN { id: RecordId },
+    #[error("record {id}: Guard-kind record missing opened_at")]
+    GuardMissingOpenedAt { id: RecordId },
+    #[error("record {id}: RecordKind::Compensation is uninhabited in v2 -- no v2 word constructs it, rejecting insert")]
+    CompensationUninhabited { id: RecordId },
+    #[error("cannot retire record {0}: not present in the concurrency table")]
+    RetireMissing(RecordId),
+    #[error("cannot remove record {0}: not present in the concurrency table")]
+    RemoveMissing(RecordId),
+}
+
 /// The snapshot-resident table of concurrency records, keyed by record ID
 /// (V&S §2, "Concurrency table"). `BTreeMap` for the same canonical-form
 /// reason as `members` above.
@@ -236,6 +361,44 @@ impl ConcurrencyTable {
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&RecordId, &ConcurrencyRecord)> {
         self.0.iter()
+    }
+
+    /// Dry-run validate a sequence of mutations against this table without
+    /// mutating it: every `Insert` must pass
+    /// [`validate_concurrency_record_shape`], and every `Retire`/`Remove`
+    /// must target a record present as of its position in the sequence — so
+    /// an `Insert` followed later, in the same batch, by a `Retire`/`Remove`
+    /// for that same id is valid (mirrors e.g. a nested-guard close staged
+    /// within one transition). Store commit paths call this against the
+    /// currently-persisted table, before applying the identical mutations
+    /// for real, so a validation failure surfaces before any state is
+    /// persisted — see `validate_concurrency_record_shape`'s doc comment for
+    /// why this check needs to live at the store boundary at all.
+    pub fn validate_mutations(
+        &self,
+        mutations: &[ConcurrencyMutation],
+    ) -> Result<(), ConcurrencyValidationError> {
+        let mut scratch = self.clone();
+        for mutation in mutations {
+            match mutation {
+                ConcurrencyMutation::Insert(record) => {
+                    validate_concurrency_record_shape(record)?;
+                    scratch.insert((**record).clone());
+                }
+                ConcurrencyMutation::Retire(id) => {
+                    scratch
+                        .get_mut(*id)
+                        .ok_or(ConcurrencyValidationError::RetireMissing(*id))?
+                        .state = RecordState::Retired;
+                }
+                ConcurrencyMutation::Remove(id) => {
+                    scratch
+                        .remove(*id)
+                        .ok_or(ConcurrencyValidationError::RemoveMissing(*id))?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -293,4 +456,200 @@ mod tests {
     /// `#[cfg(test)]` modules, since rustdoc builds without `--cfg test`).
     #[test]
     fn addr_to_record_id_conversion_is_a_compile_error() {}
+
+    // ── validate_concurrency_record_shape (pub-scope audit, 2026-07-29) ──
+
+    fn v2fork_style_barrier(id: RecordId, arity: u32, count: u32) -> ConcurrencyRecord {
+        let mut record = ConcurrencyRecord::new(id, RecordKind::Barrier);
+        record.counters = RecordCounters { arity, count };
+        record
+    }
+
+    fn v2race_open_style_race(id: RecordId, arity: u32, count: u32) -> ConcurrencyRecord {
+        let mut record = ConcurrencyRecord::new(id, RecordKind::Race);
+        record.counters = RecordCounters { arity, count };
+        record
+    }
+
+    fn v2guard_style_guard(id: RecordId, interrupting: bool) -> ConcurrencyRecord {
+        ConcurrencyRecord {
+            opened_at: Some(crate::types::Addr::new(1)),
+            ..ConcurrencyRecord::new(id, RecordKind::Guard { interrupting })
+        }
+    }
+
+    fn v2guard_r_style_guard(id: RecordId) -> ConcurrencyRecord {
+        ConcurrencyRecord {
+            rollback_domain_payload: Some("{}".into()),
+            rollback_domain_payload_hash: Some([0u8; 32]),
+            rollback_flags: Some(BTreeMap::new()),
+            rollback_join_expected: Some(BTreeMap::new()),
+            rollback_session_stack: Some("[]".into()),
+            opened_at: Some(crate::types::Addr::new(1)),
+            ..ConcurrencyRecord::new(id, RecordKind::Guard { interrupting: true })
+        }
+    }
+
+    #[test]
+    fn validate_accepts_every_real_kernel_construction_shape() {
+        let id = RecordId::new(Uuid::from_u128(10));
+        assert!(validate_concurrency_record_shape(&v2fork_style_barrier(id, 3, 3)).is_ok());
+        assert!(validate_concurrency_record_shape(&v2fork_style_barrier(id, 3, 0)).is_ok());
+        assert!(validate_concurrency_record_shape(&v2race_open_style_race(id, 2, 2)).is_ok());
+        assert!(validate_concurrency_record_shape(&v2guard_style_guard(id, true)).is_ok());
+        assert!(validate_concurrency_record_shape(&v2guard_style_guard(id, false)).is_ok());
+        assert!(validate_concurrency_record_shape(&v2guard_r_style_guard(id)).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_compensation_outright() {
+        let id = RecordId::new(Uuid::from_u128(11));
+        let record = ConcurrencyRecord::new(id, RecordKind::Compensation);
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::CompensationUninhabited { id })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_barrier_count_over_arity() {
+        let id = RecordId::new(Uuid::from_u128(12));
+        let record = v2fork_style_barrier(id, 2, 3);
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::CountersOutOfBounds {
+                id,
+                kind: RecordKind::Barrier,
+                count: 3,
+                arity: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_race_count_over_arity() {
+        let id = RecordId::new(Uuid::from_u128(13));
+        let record = v2race_open_style_race(id, 1, 2);
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::CountersOutOfBounds {
+                id,
+                kind: RecordKind::Race,
+                count: 2,
+                arity: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_guard_missing_opened_at() {
+        let id = RecordId::new(Uuid::from_u128(14));
+        let record = ConcurrencyRecord::new(id, RecordKind::Guard { interrupting: true });
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::GuardMissingOpenedAt { id })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_guard_with_partial_rollback_snapshot() {
+        let id = RecordId::new(Uuid::from_u128(15));
+        let mut record = v2guard_style_guard(id, true);
+        record.rollback_domain_payload = Some("{}".into()); // only one of five set
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::PartialRollbackSnapshot { id })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_guard_n_carrying_a_rollback_snapshot() {
+        let id = RecordId::new(Uuid::from_u128(16));
+        let mut record = v2guard_style_guard(id, false);
+        record.rollback_domain_payload = Some("{}".into());
+        record.rollback_domain_payload_hash = Some([0u8; 32]);
+        record.rollback_flags = Some(BTreeMap::new());
+        record.rollback_join_expected = Some(BTreeMap::new());
+        record.rollback_session_stack = Some("[]".into());
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::RollbackFieldsOnGuardN { id })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_barrier_carrying_rollback_fields() {
+        let id = RecordId::new(Uuid::from_u128(17));
+        let mut record = v2fork_style_barrier(id, 1, 1);
+        record.rollback_domain_payload = Some("{}".into());
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::RollbackFieldsOnNonGuard {
+                id,
+                kind: RecordKind::Barrier,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_guard_with_nonzero_counters() {
+        let id = RecordId::new(Uuid::from_u128(18));
+        let mut record = v2guard_style_guard(id, true);
+        record.counters = RecordCounters { arity: 1, count: 1 };
+        assert_eq!(
+            validate_concurrency_record_shape(&record),
+            Err(ConcurrencyValidationError::UnexpectedCounters {
+                id,
+                kind: RecordKind::Guard { interrupting: true },
+                arity: 1,
+                count: 1,
+            })
+        );
+    }
+
+    // ── ConcurrencyTable::validate_mutations ──────────────────────────────
+
+    #[test]
+    fn validate_mutations_rejects_retire_of_a_missing_id() {
+        let table = ConcurrencyTable::new();
+        let id = RecordId::new(Uuid::from_u128(20));
+        assert_eq!(
+            table.validate_mutations(&[ConcurrencyMutation::Retire(id)]),
+            Err(ConcurrencyValidationError::RetireMissing(id))
+        );
+    }
+
+    #[test]
+    fn validate_mutations_rejects_remove_of_a_missing_id() {
+        let table = ConcurrencyTable::new();
+        let id = RecordId::new(Uuid::from_u128(21));
+        assert_eq!(
+            table.validate_mutations(&[ConcurrencyMutation::Remove(id)]),
+            Err(ConcurrencyValidationError::RemoveMissing(id))
+        );
+    }
+
+    #[test]
+    fn validate_mutations_accepts_insert_then_retire_in_the_same_batch() {
+        let table = ConcurrencyTable::new();
+        let id = RecordId::new(Uuid::from_u128(22));
+        let record = v2guard_style_guard(id, true);
+        let mutations = vec![
+            ConcurrencyMutation::Insert(Box::new(record)),
+            ConcurrencyMutation::Retire(id),
+        ];
+        assert!(table.validate_mutations(&mutations).is_ok());
+    }
+
+    #[test]
+    fn validate_mutations_rejects_a_malformed_insert() {
+        let table = ConcurrencyTable::new();
+        let id = RecordId::new(Uuid::from_u128(23));
+        let record = ConcurrencyRecord::new(id, RecordKind::Compensation);
+        let mutations = vec![ConcurrencyMutation::Insert(Box::new(record))];
+        assert_eq!(
+            table.validate_mutations(&mutations),
+            Err(ConcurrencyValidationError::CompensationUninhabited { id })
+        );
+    }
 }

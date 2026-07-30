@@ -2813,6 +2813,17 @@ impl RuntimeStore for PostgresWorkflowStore {
             .as_ref()
             .map(|envelope| envelope.state().concurrency_table().clone())
             .unwrap_or_default();
+        // Raw-field fix (pub-scope audit, 2026-07-29): validate before
+        // folding, not after -- see bpmn-lite-types::validate_concurrency_
+        // record_shape's doc comment for why this check has to live at the
+        // store boundary at all (kernel::apply's own Ring 3 shadow check
+        // never covers a hand-crafted Transition committed directly, which
+        // this crate's own test suite does). A rejection here rolls back
+        // the whole `tx` on drop -- the UPDATE issued earlier in this
+        // function never survives to be visible.
+        concurrency_table
+            .validate_mutations(transition.concurrency_mutations())
+            .map_err(|error| CommitError::Integrity(error.to_string()))?;
         for mutation in transition.concurrency_mutations() {
             match mutation {
                 ConcurrencyMutation::Insert(record) => concurrency_table.insert((**record).clone()),
@@ -6058,6 +6069,65 @@ mod tests {
         assert!(
             matches!(result, Err(CommitError::Integrity(_))),
             "a guard cancellation with no pinned artifact must fail closed, got {result:?}"
+        );
+    }
+
+    /// Raw-field fix (pub-scope audit, 2026-07-29): this crate's own test
+    /// suite (the two tests above, and others in this module) already
+    /// demonstrates that `ConcurrencyMutation::Insert` reaches
+    /// `commit_transition` without ever going through `kernel::apply`'s Ring
+    /// 3 shadow check -- that's the gap `validate_concurrency_record_shape`
+    /// closes. Proves the store boundary now actually rejects a
+    /// `RecordKind::Compensation` insert (uninhabited in v2 -- no v2 word
+    /// constructs one) rather than silently persisting it, and that the
+    /// rejection rolls back cleanly: the instance's revision does not
+    /// advance.
+    #[tokio::test]
+    async fn test_commit_transition_rejects_malformed_concurrency_insert() {
+        let (pool, store, _lock) = setup().await;
+        let instance_id = Uuid::now_v7();
+        let instance = make_instance(instance_id);
+        store
+            .save_instance("bad-insert-fixture", &instance)
+            .await
+            .unwrap();
+        let revision_before: i64 =
+            sqlx::query_scalar("SELECT revision FROM workflow_instances WHERE instance_id = $1")
+                .bind(instance_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(
+                &TenantId::new("default").unwrap(),
+                instance_id,
+                "apply",
+                30_000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let bad_record_id = RecordId::new(Uuid::now_v7());
+        let bad_record = ConcurrencyRecord::new(bad_record_id, RecordKind::Compensation);
+        let transition = TransitionBuilder::new(instance)
+            .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(bad_record)))
+            .build();
+        let result = store.commit_transition(&claim, &transition).await;
+        assert!(
+            matches!(result, Err(CommitError::Integrity(_))),
+            "a RecordKind::Compensation insert must be rejected, got {result:?}"
+        );
+
+        let revision_after: i64 =
+            sqlx::query_scalar("SELECT revision FROM workflow_instances WHERE instance_id = $1")
+                .bind(instance_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            revision_before, revision_after,
+            "a rejected commit must not advance the instance's revision"
         );
     }
 

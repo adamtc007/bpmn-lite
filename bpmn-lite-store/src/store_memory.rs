@@ -701,6 +701,25 @@ impl RuntimeStore for MemoryStore {
                 "claim and transition aggregate identity differ".to_string(),
             ));
         }
+        // Raw-field fix (pub-scope audit, 2026-07-29): ConcurrencyMutation::
+        // Insert previously reached the fold below with zero shape checking
+        // -- confirmed reachable without going through kernel::apply's own
+        // Ring 3 shadow check (bpmn-lite-store-postgres's own test suite
+        // hand-crafts Transitions with malformed records and commits them
+        // directly). Validate against the currently-persisted table before
+        // this function makes ANY state mutation, so a rejection here never
+        // leaves w partially committed -- the real fold below (further down
+        // this function) is left unconditional, since these are the exact
+        // same mutations just proven to succeed against the exact same
+        // starting table (no other code can mutate w.concurrency_tables for
+        // this instance between here and there; this whole function holds
+        // w's write lock throughout).
+        w.concurrency_tables
+            .get(&instance_id)
+            .cloned()
+            .unwrap_or_default()
+            .validate_mutations(transition.concurrency_mutations())
+            .map_err(|error| CommitError::Integrity(error.to_string()))?;
         if let Some(start) = transition.start_dedupe() {
             let command = start.command();
             if command.tenant_id() != claim.tenant_id()
@@ -2356,6 +2375,45 @@ mod tests {
         assert!(
             !running.contains(&quarantined_id),
             "a quarantined instance must not be schedulable"
+        );
+    }
+
+    /// Raw-field fix (pub-scope audit, 2026-07-29): `ConcurrencyMutation::
+    /// Insert` used to reach `w.concurrency_tables` with zero shape
+    /// checking -- this is the exact bypass the research for that fix
+    /// found already demonstrated in bpmn-lite-store-postgres's own test
+    /// suite (a hand-crafted `Transition` committed directly, never
+    /// passing through `kernel::apply`'s Ring 3 shadow check). Proves two
+    /// things at once: the malformed insert is now rejected, and -- since
+    /// the validation runs before this function makes any state mutation
+    /// -- the instance's revision does not advance on that rejection
+    /// (no partial commit).
+    #[tokio::test]
+    async fn test_commit_transition_rejects_malformed_concurrency_insert() {
+        let store = MemoryStore::new();
+        let id = Uuid::now_v7();
+        store
+            .save_instance("default", &make_instance(id))
+            .await
+            .unwrap();
+        let revision_before = store.inner.read().await.revisions.get(&id).copied();
+
+        let bad_record_id = RecordId::new(Uuid::now_v7());
+        let bad_record = ConcurrencyRecord::new(bad_record_id, RecordKind::Compensation);
+        let result = store
+            .fixture_transition(id, |builder| {
+                builder.concurrency_mutation(ConcurrencyMutation::Insert(Box::new(bad_record)))
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a RecordKind::Compensation insert must be rejected -- no v2 word constructs one"
+        );
+        let revision_after = store.inner.read().await.revisions.get(&id).copied();
+        assert_eq!(
+            revision_before, revision_after,
+            "a rejected commit must not advance the instance's revision"
         );
     }
 
