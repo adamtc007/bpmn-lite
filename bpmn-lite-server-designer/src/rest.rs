@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
@@ -291,6 +291,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
         .route(
             "/bpmn/templates/:name/spawn",
             post(spawn_template_instance_endpoint),
+        )
+        .route(
+            "/bpmn/templates/published",
+            get(list_published_templates_endpoint),
         )
         .with_state(state)
 }
@@ -1472,6 +1476,63 @@ async fn get_template_version_endpoint(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         ).into_response()
+    }
+}
+
+// ── Published-template catalogue listing (Phase B, 2026-07-30) ───────────
+
+#[derive(Serialize)]
+struct PublishedTemplateDto {
+    template_key: String,
+    template_version: u32,
+    process_key: String,
+    task_manifest: Vec<String>,
+    created_at: i64,
+    published_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct ListPublishedTemplatesQuery {
+    key: Option<String>,
+}
+
+/// Lists templates from the lifecycle-bearing `workflow_templates` registry
+/// (`bpmn_lite_authoring::TemplateStore`), Published-only — for the
+/// catalogue UI to browse and spawn from. Distinct from
+/// `list_templates_endpoint`, which still reads the legacy
+/// `workflow_template_catalog` (no lifecycle) that Phase A's dual-write
+/// feeds.
+async fn list_published_templates_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Query(query): Query<ListPublishedTemplatesQuery>,
+) -> impl IntoResponse {
+    match demo
+        .template_store
+        .list(
+            query.key.as_deref(),
+            Some(bpmn_lite_authoring::TemplateState::Published),
+        )
+        .await
+    {
+        Ok(list) => {
+            let dtos: Vec<PublishedTemplateDto> = list
+                .into_iter()
+                .map(|t| PublishedTemplateDto {
+                    template_key: t.template_key,
+                    template_version: t.template_version,
+                    process_key: t.process_key,
+                    task_manifest: t.task_manifest,
+                    created_at: t.created_at,
+                    published_at: t.published_at,
+                })
+                .collect();
+            (StatusCode::OK, Json(dtos)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -4732,6 +4793,83 @@ mod tests {
         assert_eq!(
             body["template_version"], 1,
             "must resolve the Published version, not the stacked Draft v2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_published_templates_excludes_draft_and_retired() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_admittable_template(&app, "catalogue-template").await;
+        state
+            .template_store
+            .save(&draft_template("catalogue-template", 2))
+            .await
+            .unwrap();
+        state
+            .template_store
+            .save(&draft_template("retired-sibling", 1))
+            .await
+            .unwrap();
+        state
+            .template_store
+            .set_state(
+                "retired-sibling",
+                1,
+                bpmn_lite_authoring::TemplateState::Published,
+            )
+            .await
+            .unwrap();
+        state
+            .template_store
+            .set_state(
+                "retired-sibling",
+                1,
+                bpmn_lite_authoring::TemplateState::Retired,
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates/published")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        let list = body.as_array().unwrap();
+        assert_eq!(
+            list.len(),
+            1,
+            "only catalogue-template v1 (Published) should be listed: {list:?}"
+        );
+        assert_eq!(list[0]["template_key"], "catalogue-template");
+        assert_eq!(list[0]["template_version"], 1);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/bpmn/templates/published?key=retired-sibling")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert!(
+            body.as_array().unwrap().is_empty(),
+            "retired-sibling has no Published version: {body:?}"
         );
     }
 }
