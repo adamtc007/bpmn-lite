@@ -1,12 +1,8 @@
 use crate::dto::WorkflowGraphDto;
-use anyhow::Result;
-#[cfg(test)]
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use std::collections::HashMap;
-#[cfg(test)]
 use std::sync::RwLock;
 
 // ── Template State Machine ──
@@ -27,6 +23,10 @@ pub enum SourceFormat {
     Yaml,
     BpmnImport,
     Agent,
+    /// Designer graph session (`DesignerDag`, structured ops / AST-mutator
+    /// authoring) — the save-as-template path added 2026-07-30. Distinct
+    /// from `Agent`, which stays reserved for utterance-authored sources.
+    Graph,
 }
 
 /// A versioned workflow template — the publish artifact.
@@ -62,45 +62,37 @@ pub trait TemplateStore: Send + Sync {
 }
 
 // ── MemoryTemplateStore ──
-// Test/POC-only (own doc comment): no production caller constructs a
-// TemplateStore via this in-memory backend -- compile_and_publish's real
-// backend is PostgresTemplateStore (store_postgres_templates.rs). Both
-// backends' full CRUD surface (load/list/set_state/load_latest_published,
-// not just save) is validated here and in that file's own tests; neither
-// has a live caller yet since compile_and_publish itself isn't wired to a
-// REST/gRPC endpoint (tracked as a follow-up, not part of this pass).
 
-#[cfg(test)]
 type StoreKey = (String, u32);
 
-/// In-memory TemplateStore for testing and POC.
+/// In-memory TemplateStore for testing and POC — and the designer server's
+/// demo-mode backend (save-as-template wiring, 2026-07-30: the designer's
+/// composition root is memory-only, exactly the POC case this store was
+/// written for). `PostgresTemplateStore` (behind the `postgres` feature)
+/// is the durable backend for when the designer gets a Postgres config.
 ///
 /// Enforces immutability rules:
 /// - Published content cannot be modified (only state → Retired)
 /// - Retired cannot transition back to Draft or Published
 /// - Valid transitions: Draft→Published, Published→Retired
-#[cfg(test)]
-pub(crate) struct MemoryTemplateStore {
+pub struct MemoryTemplateStore {
     inner: RwLock<HashMap<StoreKey, WorkflowTemplate>>,
 }
 
-#[cfg(test)]
 impl MemoryTemplateStore {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: RwLock::new(HashMap::new()),
         }
     }
 }
 
-#[cfg(test)]
 impl Default for MemoryTemplateStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
 #[async_trait]
 impl TemplateStore for MemoryTemplateStore {
     async fn save(&self, tpl: &WorkflowTemplate) -> Result<()> {
@@ -207,7 +199,6 @@ impl TemplateStore for MemoryTemplateStore {
     }
 }
 
-#[cfg(test)]
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

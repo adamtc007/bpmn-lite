@@ -19,10 +19,9 @@
 //!
 //! Phase 2.6 (2026-05-14) migrated all eleven sub-modules
 //! (contracts, dto, dto_to_ir, export_bpmn, ir_to_dto, lints,
-//! publish, registry, store_postgres_templates, validate, yaml)
-//! from `bpmn-lite-core/src/authoring/`. `store_postgres_templates`
-//! is not actually feature-gated despite this doc comment's stale
-//! claim (2026-07-30 clean-build audit) -- it compiles unconditionally.
+//! publish, registry, store_postgres_templates (behind the
+//! non-default `postgres` feature), validate, yaml) from
+//! `bpmn-lite-core/src/authoring/`.
 //!
 //! All submodules are private — every external consumer reaches the
 //! curated vocabulary flat (`bpmn_lite_authoring::Foo`) via the
@@ -56,5 +55,11 @@ pub use dto::{
     TemplateMeta, WorkflowGraphDto,
 };
 pub use importer::import_zeebe_bpmn;
-pub use publish::{compile_and_publish, compile_program_from_dto, PublishOptions, PublishResult};
+pub use publish::{
+    compile_and_publish, compile_and_publish_from_dto, compile_program_from_dto, PublishOptions,
+    PublishResult,
+};
+pub use registry::{
+    MemoryTemplateStore, SourceFormat, TemplateState, TemplateStore, WorkflowTemplate,
+};
 pub use yaml::parse_workflow_yaml;

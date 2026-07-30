@@ -68,7 +68,35 @@ pub async fn compile_and_publish(
     process_store: &dyn WorkflowStore,
 ) -> Result<PublishResult> {
     let result = publish_workflow(yaml_str, options)?;
+    persist_publish_result(result, template_store, process_store).await
+}
 
+/// DTO-shaped sibling of [`compile_and_publish`] (save-as-template wiring,
+/// 2026-07-30): the designer's graph-authored sessions already hold a
+/// `WorkflowGraphDto` (via `ir_to_dto` over `DesignerDag::to_ir()`) and have
+/// no YAML source to hand over — round-tripping DTO → YAML text → DTO just to
+/// reach the pipeline would be pure waste. Identical pipeline and identical
+/// persistence semantics; the YAML entry point above is a thin
+/// parse-then-pipeline front over the same [`publish_workflow_from_dto`],
+/// so there is exactly one publish pipeline, not two.
+pub async fn compile_and_publish_from_dto(
+    dto: WorkflowGraphDto,
+    options: PublishOptions,
+    template_store: &dyn TemplateStore,
+    process_store: &dyn WorkflowStore,
+) -> Result<PublishResult> {
+    let result = publish_workflow_from_dto(dto, options)?;
+    persist_publish_result(result, template_store, process_store).await
+}
+
+/// Shared persistence tail: program first (idempotent, keyed by bytecode
+/// hash, so retries are safe), then template — if the template write fails,
+/// no Draft row is left behind.
+async fn persist_publish_result(
+    result: PublishResult,
+    template_store: &dyn TemplateStore,
+    process_store: &dyn WorkflowStore,
+) -> Result<PublishResult> {
     process_store
         .store_program(result.program.bytecode_version(), &result.program)
         .await?;
@@ -105,10 +133,20 @@ fn hex_encode(bytes: &[u8]) -> String {
     })
 }
 
+/// Single-step publish pipeline over YAML text: `parse_workflow_yaml()` →
+/// [`publish_workflow_from_dto`]. Kept as a distinct function (rather than
+/// inlining the parse at each call site) so the existing YAML-path tests
+/// keep pinning the parse+pipeline composition.
+pub(crate) fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<PublishResult> {
+    let dto = yaml::parse_workflow_yaml(yaml_str)?;
+    publish_workflow_from_dto(dto, options)
+}
+
 /// Single-step publish pipeline. Truly atomic — no intermediate Draft artifact.
 ///
-/// Pipeline:
-/// 1. `parse_workflow_yaml()` → DTO
+/// Pipeline (numbering matches the original YAML-fronted pipeline; step 1,
+/// YAML parse, now lives in the callers — `publish_workflow` /
+/// `compile_and_publish`):
 /// 2. `validate_dto()` → reject if errors
 /// 3. `lint_contracts()` → collect diagnostics, reject if any Error-level
 /// 4. `dto_to_ir()` → IRGraph
@@ -119,12 +157,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// 9. Optional: `dto_to_bpmn_xml()` if `generate_bpmn=true`
 /// 10. Build WorkflowTemplate with `state=Published, published_at=now`
 ///
-/// Steps 1-10 are pure/sync (no persistence). The caller (`compile_and_publish`)
-/// persists: (a) program to WorkflowStore, (b) template to TemplateStore.
-pub(crate) fn publish_workflow(yaml_str: &str, options: PublishOptions) -> Result<PublishResult> {
-    // 1. Parse YAML → DTO
-    let dto = yaml::parse_workflow_yaml(yaml_str)?;
-
+/// All steps are pure/sync (no persistence). The callers
+/// (`compile_and_publish` / `compile_and_publish_from_dto`) persist:
+/// (a) program to WorkflowStore, (b) template to TemplateStore.
+pub(crate) fn publish_workflow_from_dto(
+    dto: WorkflowGraphDto,
+    options: PublishOptions,
+) -> Result<PublishResult> {
     // 2. Validate DTO
     let validation_errors = validate::validate_dto(&dto);
     if !validation_errors.is_empty() {
@@ -343,6 +382,78 @@ edges:
         let result = publish_workflow(yaml, options);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Lint errors"));
+    }
+
+    /// Save-as-template Step 1 cement: the DTO-shaped entry point and the
+    /// YAML entry point are the SAME pipeline, not a fork — identical
+    /// bytecode hash and template fields whichever door you come in
+    /// through. Guards the publish_workflow split from ever diverging.
+    #[test]
+    fn dto_and_yaml_entry_points_share_one_pipeline() {
+        let via_yaml = publish_workflow(MINIMAL_YAML, default_options()).unwrap();
+
+        let dto = crate::yaml::parse_workflow_yaml(MINIMAL_YAML).unwrap();
+        let via_dto = publish_workflow_from_dto(dto, default_options()).unwrap();
+
+        assert_eq!(
+            via_yaml.template.bytecode_version, via_dto.template.bytecode_version,
+            "DTO and YAML entry points must produce identical bytecode"
+        );
+        assert_eq!(via_yaml.template.template_key, via_dto.template.template_key);
+        assert_eq!(via_yaml.template.state, via_dto.template.state);
+        assert_eq!(
+            via_yaml.template.task_manifest,
+            via_dto.template.task_manifest
+        );
+        assert_eq!(
+            serde_json::to_value(&via_yaml.template.dto_snapshot).unwrap(),
+            serde_json::to_value(&via_dto.template.dto_snapshot).unwrap(),
+            "dto_snapshot must be identical through both doors"
+        );
+    }
+
+    /// Save-as-template Step 1: compile_and_publish_from_dto persists both
+    /// halves — template retrievable from the TemplateStore (Published),
+    /// program retrievable from the WorkflowStore under the bytecode hash.
+    #[tokio::test]
+    async fn compile_and_publish_from_dto_persists_template_and_program() {
+        use crate::registry::MemoryTemplateStore;
+        use bpmn_lite_store::store_memory::MemoryStore;
+
+        let template_store = MemoryTemplateStore::new();
+        let process_store = MemoryStore::new();
+        let dto = crate::yaml::parse_workflow_yaml(MINIMAL_YAML).unwrap();
+
+        let result = compile_and_publish_from_dto(
+            dto,
+            PublishOptions {
+                source_format: SourceFormat::Graph,
+                ..default_options()
+            },
+            &template_store,
+            &process_store,
+        )
+        .await
+        .unwrap();
+
+        let loaded = template_store
+            .load("test_wf", 1)
+            .await
+            .unwrap()
+            .expect("template must be persisted");
+        assert_eq!(loaded.state, TemplateState::Published);
+        assert_eq!(loaded.source_format, SourceFormat::Graph);
+        assert_eq!(loaded.bytecode_version, result.template.bytecode_version);
+
+        use bpmn_lite_store::store::ArtifactRepository;
+        let program = process_store
+            .load_program(result.program.bytecode_version())
+            .await
+            .unwrap();
+        assert!(
+            program.is_some(),
+            "compiled program must be persisted under its bytecode hash"
+        );
     }
 
     /// T-PUB-8: Same YAML → identical bytecode_version (deterministic).
