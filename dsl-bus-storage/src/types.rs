@@ -158,13 +158,6 @@ impl OutboxEntry {
         }
     }
 
-    /// Attach a bpmn-lite caller-side `callout_id` (§8.3) so the sender
-    /// loop can correlate a process-instance callout with the row.
-    fn with_callout_id(mut self, callout_id: Uuid) -> Self {
-        self.callout_id = Some(callout_id);
-        self
-    }
-
     /// Current retry count. Read by the sender to compute exponential
     /// backoff before calling [`crate::mark_outbox_retry`].
     pub fn attempt_count(&self) -> i32 {

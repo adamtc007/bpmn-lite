@@ -106,7 +106,10 @@ impl IntervalSet {
         self.intervals.is_empty()
     }
 
-    /// True when `value` falls within any interval.
+    /// True when `value` falls within any interval. Not consumed by
+    /// production gap-analysis logic today (that only needs `union`/
+    /// `complement`/`is_empty`) -- validated by this module's own tests.
+    #[cfg(test)]
     pub(crate) fn contains(&self, value: i64) -> bool {
         self.intervals.iter().any(|i| interval_contains(i, value))
     }
@@ -214,6 +217,7 @@ impl IntervalSet {
 
 // ── Single-interval helpers ───────────────────────────────────────────────────
 
+#[cfg(test)]
 fn interval_contains(iv: &Interval, v: i64) -> bool {
     let lower_ok = match iv.lower {
         Bound::Unbounded => true,

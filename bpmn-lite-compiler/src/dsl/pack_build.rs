@@ -18,7 +18,7 @@ pub struct WorkflowPackDAG {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-enum PackNode {
+pub enum PackNode {
     VerbLocal {
         id: String,
         inputs: Vec<PortSpec>,
@@ -37,7 +37,7 @@ enum PackNode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-struct PortSpec {
+pub struct PortSpec {
     pub name: String,
     pub type_name: String,
     pub required: bool,

@@ -216,13 +216,6 @@ pub fn analyse(program: &CompiledProgram) -> AnalysisReport {
     AnalysisReport { findings }
 }
 
-/// Produce a summary string suitable for a log line or diagnostic message.
-fn summarise(report: &AnalysisReport) -> String {
-    let warnings = report.warning_count();
-    let infos = report.findings.len() - warnings;
-    format!("{} warning(s), {} info(s)", warnings, infos)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

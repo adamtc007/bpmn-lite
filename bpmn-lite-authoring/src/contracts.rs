@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Contract describing what a verb (service task) reads, writes, and may raise.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct VerbContract {
+pub struct VerbContract {
     pub task_type: String,
     pub reads_flags: HashSet<String>,
     pub writes_flags: HashSet<String>,
@@ -14,7 +14,7 @@ pub(crate) struct VerbContract {
 
 /// Declares a correlation key that a verb produces.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct CorrelationContract {
+pub struct CorrelationContract {
     pub key_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -26,16 +26,16 @@ pub(crate) struct CorrelationContract {
 /// inputs (e.g., flags set by the caller before the workflow starts). When L1 (flag
 /// provenance) encounters a flag in this set, it emits a Warning instead of an Error.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ContractRegistry {
+pub struct ContractRegistry {
     contracts: HashMap<String, VerbContract>,
     known_workflow_inputs: HashSet<String>,
 }
 impl ContractRegistry {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn from_manifest(m: &dsl_manifest::Manifest) -> Self {
+    pub fn from_manifest(m: &dsl_manifest::Manifest) -> Self {
         let mut registry = ContractRegistry::default();
         for verb in m.verbs() {
             let mut reads_flags = HashSet::new();
@@ -66,7 +66,7 @@ impl ContractRegistry {
     }
 
     /// Register a contract for a task type. Replaces any existing contract.
-    pub(crate) fn register(&mut self, contract: VerbContract) {
+    pub fn register(&mut self, contract: VerbContract) {
         self.contracts.insert(contract.task_type.clone(), contract);
     }
 
@@ -86,7 +86,7 @@ impl ContractRegistry {
     }
 
     /// Add a flag to the known workflow inputs allow-list.
-    pub(crate) fn add_known_input(&mut self, flag: impl Into<String>) {
+    pub fn add_known_input(&mut self, flag: impl Into<String>) {
         self.known_workflow_inputs.insert(flag.into());
     }
 

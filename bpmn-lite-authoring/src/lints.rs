@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Severity level for a lint diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LintLevel {
+pub enum LintLevel {
     Error,
     Warning,
     Info,
@@ -12,7 +12,7 @@ pub(crate) enum LintLevel {
 
 /// A single lint diagnostic emitted by the contract linter.
 #[derive(Debug, Clone)]
-pub(crate) struct LintDiagnostic {
+pub struct LintDiagnostic {
     /// Rule identifier: "L1", "L2", etc.
     pub rule: String,
     pub level: LintLevel,

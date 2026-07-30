@@ -71,10 +71,6 @@ impl PendingInvocation {
         }
     }
 
-    fn with_timeout(mut self, deadline: DateTime<Utc>) -> Self {
-        self.timeout_at = Some(deadline);
-        self
-    }
 }
 
 /// Persistence boundary for `bpmn_pending_invocation`. The Postgres

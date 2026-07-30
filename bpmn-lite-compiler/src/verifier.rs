@@ -982,19 +982,6 @@ fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
     errors
 }
 
-/// Verify FFI task schema bindings against the FFI catalogue.
-///
-/// Per A2 §11. Called by the compiler after `verify_bytecode` succeeds, when
-/// a catalogue snapshot is available. Can also be called independently in
-/// tooling contexts (LSP, CI lint).
-///
-/// Produces structured `VerifyError` items for:
-/// - Unknown template id
-/// - Unknown input/output field names
-/// - Type-incompatible input bindings
-/// - Required inputs that are not bound
-/// - Output bindings that target a `FlagWrite` with a kind that doesn't fit
-///   in `bpmn_lite_types::Value` (non-Bool, non-I64)
 #[cfg(test)]
 mod tests {
     /// F-DSGN-2 cement: verify() now RUNS verify_data_objects — an

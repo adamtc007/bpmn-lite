@@ -54,10 +54,3 @@ pub enum SchemaKind {
     },
 }
 
-impl SchemaKind {
-    /// Returns true if a value of this kind fits inside `bpmn_lite_types::Value`.
-    /// Used by the verifier (A6) to reject FlagWrite targets for incompatible kinds.
-    fn fits_in_flag(&self) -> bool {
-        matches!(self, SchemaKind::Bool | SchemaKind::I64)
-    }
-}

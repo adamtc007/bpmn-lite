@@ -17,6 +17,7 @@ use std::collections::HashMap;
 ///   edges (not collapsed back to `on_error` EdgeDto fields) for simplicity.
 /// - Gateway join pairing: parallel/inclusive converging gateways get `join: None`
 ///   (pairing is a higher-level concern handled by the verifier).
+#[cfg(test)]
 pub(crate) fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto> {
     let mut nodes = Vec::new();
     let mut node_id_map: HashMap<petgraph::graph::NodeIndex, String> = HashMap::new();
@@ -94,6 +95,7 @@ pub(crate) fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGr
 }
 
 /// Convert an IR ConditionExpr back to a DTO FlagCondition.
+#[cfg(test)]
 fn condition_to_flag(cond: &ConditionExpr) -> FlagCondition {
     let op = match cond.op {
         ConditionOp::Eq => FlagOp::Eq,
@@ -113,6 +115,7 @@ fn condition_to_flag(cond: &ConditionExpr) -> FlagCondition {
 }
 
 /// Convert a single IRNode to a NodeDto.
+#[cfg(test)]
 fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
     let dto = match ir_node {
         IRNode::Start { id } => NodeDto::Start { id: id.clone() },
@@ -256,6 +259,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
 }
 
 /// Convert a TimerSpec back to the DTO optional fields.
+#[cfg(test)]
 fn timer_spec_to_fields(spec: &TimerSpec) -> (Option<u64>, Option<u64>, Option<u64>, Option<u32>) {
     match spec {
         TimerSpec::Duration { ms } => (Some(*ms), None, None, None),

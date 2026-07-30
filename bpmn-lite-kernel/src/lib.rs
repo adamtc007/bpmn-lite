@@ -37,9 +37,6 @@ impl DeterministicContext {
     pub fn command_id(&self) -> Uuid {
         self.command_id
     }
-    fn next_revision(&self) -> u64 {
-        self.next_revision
-    }
 
     fn derived_id(&self, ordinal: u32) -> Uuid {
         EffectId::for_command(self.command_id, self.next_revision, ordinal).as_uuid()

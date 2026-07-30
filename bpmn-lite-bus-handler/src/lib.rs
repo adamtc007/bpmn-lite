@@ -8,9 +8,14 @@
 //! caller-supplied [`ProcessAdvancer`] port. T2B.9 / T3 wires the real
 //! runtime against this port.
 //!
-//! The [`RejectInvocationDispatcher`] fills the bus server's other
-//! dispatcher slot: bpmn-lite doesn't accept invocations from peers in
-//! the v0.6 demo flow, so every Submit gets rejected as `UnknownVerb`.
+//! `BpmnLiteBusHandler` also implements
+//! [`dsl_bus_server::InvocationDispatcher`] itself (T2B.9/T3) — bpmn-lite
+//! now accepts invocations from peers via the engine-backed handler,
+//! superseding the v0.6 demo-era `RejectInvocationDispatcher` fallback
+//! (removed 2026-07-30: no live caller ever passed it to the bus server,
+//! confirmed via `bpmn-lite-server-runner/src/bus_runtime.rs`, which wires
+//! `BpmnLiteBusHandler::new_with_engine(...)` as the real invocation
+//! dispatcher).
 
 #![forbid(unsafe_code)]
 
@@ -1126,23 +1131,6 @@ fn resolve_workflow_dependencies<'a>(
         }
         Ok(())
     })
-}
-
-/// `InvocationDispatcher` impl that rejects everything — fallback when not initialized with engine.
-pub(crate) struct RejectInvocationDispatcher;
-
-#[async_trait]
-impl InvocationDispatcher for RejectInvocationDispatcher {
-    async fn dispatch(
-        &self,
-        ctx: InvocationContext,
-        _inputs: Vec<ResolvedBinding>,
-    ) -> Result<InvocationOutcome, BusServerError> {
-        Err(BusServerError::UnknownVerb(format!(
-            "bpmn-lite does not accept invocations (rejected '{}')",
-            ctx.local_verb_id
-        )))
-    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,12 @@
 use crate::dto::WorkflowGraphDto;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::anyhow;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::RwLock;
 
 // ── Template State Machine ──
@@ -11,7 +15,7 @@ use std::sync::RwLock;
 
 /// State of a workflow template.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum TemplateState {
+pub enum TemplateState {
     Draft,
     Published,
     Retired,
@@ -19,7 +23,7 @@ pub(crate) enum TemplateState {
 
 /// How the template was authored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum SourceFormat {
+pub enum SourceFormat {
     Yaml,
     BpmnImport,
     Agent,
@@ -27,7 +31,7 @@ pub(crate) enum SourceFormat {
 
 /// A versioned workflow template — the publish artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WorkflowTemplate {
+pub struct WorkflowTemplate {
     pub template_key: String,
     pub template_version: u32,
     pub process_key: String,
@@ -45,7 +49,7 @@ pub(crate) struct WorkflowTemplate {
 
 /// Persistence trait for workflow templates.
 #[async_trait]
-pub(crate) trait TemplateStore: Send + Sync {
+pub trait TemplateStore: Send + Sync {
     async fn save(&self, tpl: &WorkflowTemplate) -> Result<()>;
     async fn load(&self, key: &str, version: u32) -> Result<Option<WorkflowTemplate>>;
     async fn list(
@@ -58,7 +62,15 @@ pub(crate) trait TemplateStore: Send + Sync {
 }
 
 // ── MemoryTemplateStore ──
+// Test/POC-only (own doc comment): no production caller constructs a
+// TemplateStore via this in-memory backend -- compile_and_publish's real
+// backend is PostgresTemplateStore (store_postgres_templates.rs). Both
+// backends' full CRUD surface (load/list/set_state/load_latest_published,
+// not just save) is validated here and in that file's own tests; neither
+// has a live caller yet since compile_and_publish itself isn't wired to a
+// REST/gRPC endpoint (tracked as a follow-up, not part of this pass).
 
+#[cfg(test)]
 type StoreKey = (String, u32);
 
 /// In-memory TemplateStore for testing and POC.
@@ -67,10 +79,12 @@ type StoreKey = (String, u32);
 /// - Published content cannot be modified (only state → Retired)
 /// - Retired cannot transition back to Draft or Published
 /// - Valid transitions: Draft→Published, Published→Retired
+#[cfg(test)]
 pub(crate) struct MemoryTemplateStore {
     inner: RwLock<HashMap<StoreKey, WorkflowTemplate>>,
 }
 
+#[cfg(test)]
 impl MemoryTemplateStore {
     pub(crate) fn new() -> Self {
         Self {
@@ -79,12 +93,14 @@ impl MemoryTemplateStore {
     }
 }
 
+#[cfg(test)]
 impl Default for MemoryTemplateStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl TemplateStore for MemoryTemplateStore {
     async fn save(&self, tpl: &WorkflowTemplate) -> Result<()> {
@@ -191,6 +207,7 @@ impl TemplateStore for MemoryTemplateStore {
     }
 }
 
+#[cfg(test)]
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

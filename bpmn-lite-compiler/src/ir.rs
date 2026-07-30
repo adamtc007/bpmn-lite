@@ -194,7 +194,7 @@ pub enum IRNode {
 /// Maps 1:1 to `bpmn_lite_types::Literal` after lowering.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum IrLiteral {
+pub enum IrLiteral {
     Bool(bool),
     I64(i64),
     F64(f64),
@@ -215,7 +215,7 @@ pub enum Expression {
 
 /// One `<bpmn:input>` element inside a `FfiServiceTask` extension.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct FfiInputBinding {
+pub struct FfiInputBinding {
     /// FFI template input field name (`target=` attribute).
     pub target_field: String,
     pub expression: Expression,
@@ -223,7 +223,7 @@ pub(crate) struct FfiInputBinding {
 
 /// One `<bpmn:output>` element inside a `FfiServiceTask` extension.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct FfiOutputBinding {
+pub struct FfiOutputBinding {
     /// FFI template output field name (`source=` attribute).
     pub source_field: String,
     /// Process variable name (`target=` attribute) — resolved to a
@@ -263,7 +263,10 @@ pub struct IREdge {
 /// The intermediate representation — a directed graph of BPMN elements.
 pub type IRGraph = DiGraph<IRNode, IREdge>;
 
-/// Helper to find a node by its BPMN element id.
+/// Helper to find a node by its BPMN element id. Test-only today — no
+/// production call site needs a by-id lookup (real callers already hold a
+/// `NodeIndex` from traversal).
+#[cfg(test)]
 pub(crate) fn find_node_by_id(graph: &IRGraph, element_id: &str) -> Option<NodeIndex> {
     graph
         .node_indices()

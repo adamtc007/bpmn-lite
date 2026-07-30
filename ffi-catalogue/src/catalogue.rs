@@ -130,8 +130,10 @@ impl FfiCatalogue {
     }
 
     /// Borrow the catalogue as a snapshot for the compiler verifier.
-    /// Returns an owned `CatalogueSnapshot` that wraps an Arc<HashMap>.
-    pub fn snapshot(&self) -> CatalogueSnapshot {
+    /// Returns an owned snapshot (opaque type, wraps an `Arc<HashMap>`) that
+    /// implements `FfiCatalogueSnapshot` -- the concrete type stays private
+    /// since no caller needs to name it, only the trait interface.
+    pub fn snapshot(&self) -> impl FfiCatalogueSnapshot {
         let guard = self.snapshot_view.read().expect("snapshot lock poisoned");
         CatalogueSnapshot {
             map: Arc::clone(&*guard),

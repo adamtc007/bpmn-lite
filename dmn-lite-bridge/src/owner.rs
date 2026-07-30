@@ -32,7 +32,7 @@ impl DmnLiteOwner {
     }
 
     /// Attach a Sem OS symbol resolver for enum-domain input fields.
-    fn with_resolver(mut self, resolver: Arc<dyn ValueResolver>) -> Self {
+    pub fn with_resolver(mut self, resolver: Arc<dyn ValueResolver>) -> Self {
         self.resolver = Some(resolver);
         self
     }

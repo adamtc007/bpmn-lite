@@ -19,8 +19,10 @@
 //!
 //! Phase 2.6 (2026-05-14) migrated all eleven sub-modules
 //! (contracts, dto, dto_to_ir, export_bpmn, ir_to_dto, lints,
-//! publish, registry, store_postgres_templates (feature-gated),
-//! validate, yaml) from `bpmn-lite-core/src/authoring/`.
+//! publish, registry, store_postgres_templates, validate, yaml)
+//! from `bpmn-lite-core/src/authoring/`. `store_postgres_templates`
+//! is not actually feature-gated despite this doc comment's stale
+//! claim (2026-07-30 clean-build audit) -- it compiles unconditionally.
 //!
 //! All submodules are private — every external consumer reaches the
 //! curated vocabulary flat (`bpmn_lite_authoring::Foo`) via the
@@ -32,6 +34,11 @@ mod dto;
 mod dto_to_ir;
 mod export_bpmn;
 mod importer;
+// Test-only (2026-07-30 clean-build pass): every item in this module is
+// #[cfg(test)] -- it's a validated IR->DTO round-trip (documented use case:
+// BPMN import -> IR -> DTO for editing) exercised by this crate's own tests
+// and export_bpmn.rs's, but nothing calls it from a production path yet.
+#[cfg(test)]
 mod ir_to_dto;
 mod lints;
 #[cfg(test)]

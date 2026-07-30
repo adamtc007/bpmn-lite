@@ -202,7 +202,7 @@ impl DesignerDag {
         }
     }
 
-    pub fn node(&self, key: NodeKey) -> Option<&DesignerNode> {
+    pub(crate) fn node(&self, key: NodeKey) -> Option<&DesignerNode> {
         self.key_index.get(&key).map(|idx| &self.graph[*idx])
     }
 

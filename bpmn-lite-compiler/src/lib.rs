@@ -26,26 +26,13 @@ pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
 use anyhow::{anyhow, Result};
 use bpmn_lite_types::{ArtifactEnvelope, ExecutableWorkflow};
-use dsl::{FrontendError, WorkflowFrontend};
+use dsl::FrontendError;
 
 /// Marker name used at compiler/runtime boundaries: only verifier-admitted
 /// artifacts can be returned by the compiler.
 pub type VerifiedWorkflow = ExecutableWorkflow;
 
 pub struct Compiler;
-
-struct XmlFrontend;
-
-impl WorkflowFrontend for XmlFrontend {
-    type Source = str;
-
-    fn lower(source: &str) -> Result<VerifiedWorkflow, FrontendError> {
-        let (graph, meta) = parser::parse_bpmn_with_meta(source)
-            .map_err(|error| FrontendError::Artifact(error.to_string()))?;
-        Compiler::lower_with_default(&graph, meta.default_failure_budget)
-            .map_err(|error| FrontendError::Artifact(error.to_string()))
-    }
-}
 
 impl Compiler {
     pub fn lower(graph: &IRGraph) -> Result<VerifiedWorkflow> {

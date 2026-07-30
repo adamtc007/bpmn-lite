@@ -11,12 +11,3 @@ use dmn_lite_types::TypedValue;
 pub trait ValueResolver: Send + Sync {
     fn resolve(&self, domain_id: &DomainId, symbol: &str) -> Option<TypedValue>;
 }
-
-/// A no-op resolver that always returns `None` (falls back to Str).
-struct NoopResolver;
-
-impl ValueResolver for NoopResolver {
-    fn resolve(&self, _domain_id: &DomainId, _symbol: &str) -> Option<TypedValue> {
-        None
-    }
-}

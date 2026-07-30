@@ -34,14 +34,6 @@ pub enum FixAction {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct DiagnosticResolution {
-    pub error_id: String,
-    pub title: String,
-    pub description: String,
-    pub action: FixAction,
-}
-
 /// Helper to locate a manifest file for a given domain in the manifests directory.
 fn find_manifest_path(manifests_dir: &Path, domain: &str) -> Option<PathBuf> {
     if let Ok(entries) = fs::read_dir(manifests_dir) {

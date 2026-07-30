@@ -42,10 +42,6 @@ impl<R: PlaceholderRegistry> ManifestPlaceholderRegistry<R> {
             .insert(manifest.domain.clone(), Arc::new(manifest));
     }
 
-    /// True if `domain` has been imported.
-    fn has_domain(&self, domain: &str) -> bool {
-        self.manifests.contains_key(domain)
-    }
 }
 
 impl<R: PlaceholderRegistry> PlaceholderRegistry for ManifestPlaceholderRegistry<R> {

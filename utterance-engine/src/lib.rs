@@ -44,6 +44,13 @@ pub mod corpus_schema;
 // Option B ruling). See `dev_capture.rs`'s module doc.
 pub mod dev_capture;
 pub mod fixtures;
+// Gate-time evaluation harness (WS-C C-now item 5; V&S §10.7): measures
+// recall/precision decomposition over a labeled case set for a human to
+// judge at gate time ("this module measures, it never judges" -- its own
+// doc comment). No production code path calls it and nothing outside this
+// crate references it -- it's exercised entirely from its own #[cfg(test)]
+// submodules, so it's test-only scaffolding, not a runtime dependency.
+#[cfg(test)]
 pub mod metrics;
 pub mod policy;
 pub mod retrieval;

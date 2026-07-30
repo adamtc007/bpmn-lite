@@ -227,21 +227,6 @@ fn compute_bytecode_hash(program: &bpmn_lite_types::CompiledProgram) -> String {
     hex_encode(hasher.finalize().as_bytes())
 }
 
-/// Helper: shorthand for compile_and_publish without the DTO.
-/// Returns the DTO for callers that need it.
-fn parse_and_validate_yaml(yaml_str: &str) -> Result<WorkflowGraphDto> {
-    let dto = yaml::parse_workflow_yaml(yaml_str)?;
-    let errors = validate::validate_dto(&dto);
-    if !errors.is_empty() {
-        let msgs: Vec<String> = errors
-            .iter()
-            .map(|e| format!("[{}] {}", e.rule, e.message))
-            .collect();
-        return Err(anyhow!("Validation failed:\n{}", msgs.join("\n")));
-    }
-    Ok(dto)
-}
-
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
