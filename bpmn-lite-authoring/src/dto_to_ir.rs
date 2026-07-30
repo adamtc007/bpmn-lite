@@ -150,6 +150,18 @@ pub(crate) fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 collection_flag_name: collection_flag.clone(),
                 declared_max: *declared_max,
             },
+
+            NodeDto::DataObject {
+                id,
+                name,
+                type_decl,
+                role,
+            } => IRNode::DataObject {
+                id: id.clone(),
+                name: name.clone(),
+                type_decl: type_decl.clone(),
+                role: role.clone(),
+            },
         };
 
         let idx = graph.add_node(ir_node);

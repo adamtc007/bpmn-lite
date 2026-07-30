@@ -180,4 +180,85 @@ edges:
         assert_eq!(on_err.error_code, "BIZ_001");
         assert_eq!(on_err.retries, 0);
     }
+
+    // ── Save-as-template Step 2 (2026-07-30) ──────────────────────────
+
+    /// GREEN: a DataObject declaration parses from YAML and passes
+    /// validate_dto; RED (V16): wiring a sequence flow into it is
+    /// rejected; RED (V1): a duplicate data-object id is rejected.
+    #[test]
+    fn data_object_parses_validates_and_rejects_misuse() {
+        use crate::validate::validate_dto;
+        use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+
+        let yaml = r#"
+id: dobj_yaml
+nodes:
+  - kind: Start
+    id: start
+  - kind: ServiceTask
+    id: task_a
+    task_type: do_work
+  - kind: End
+    id: end
+  - kind: DataObject
+    id: corr_flag
+    name: corr_flag
+    type_decl:
+      kind: primitive
+      data: string
+edges:
+  - from: start
+    to: task_a
+  - from: task_a
+    to: end
+"#;
+        let dto = parse_workflow_yaml(yaml).unwrap();
+        let dobj = dto
+            .nodes
+            .iter()
+            .find_map(|n| match n {
+                crate::dto::NodeDto::DataObject {
+                    id,
+                    type_decl,
+                    role,
+                    ..
+                } if id == "corr_flag" => Some((type_decl.clone(), role.clone())),
+                _ => None,
+            })
+            .expect("DataObject must parse from YAML");
+        assert_eq!(dobj.0, DataObjectType::Primitive(PrimitiveType::String));
+        // role omitted in YAML → defaults to Internal.
+        assert_eq!(dobj.1, DataObjectRole::Internal);
+        assert!(validate_dto(&dto).is_empty(), "clean graph must validate");
+
+        // RED (V16): a sequence flow into a DataObject is rejected.
+        let mut bad_edge = dto.clone();
+        bad_edge.edges.push(crate::dto::EdgeDto {
+            from: "task_a".to_string(),
+            to: "corr_flag".to_string(),
+            condition: None,
+            is_default: false,
+            on_error: None,
+        });
+        let errors = validate_dto(&bad_edge);
+        assert!(
+            errors.iter().any(|e| e.rule == "V16"),
+            "edge into a DataObject must trip V16: {errors:?}"
+        );
+
+        // RED (V1): duplicate data-object id is rejected.
+        let mut dup = dto.clone();
+        dup.nodes.push(crate::dto::NodeDto::DataObject {
+            id: "corr_flag".to_string(),
+            name: "corr_flag_again".to_string(),
+            type_decl: DataObjectType::Primitive(PrimitiveType::Bool),
+            role: DataObjectRole::Internal,
+        });
+        let errors = validate_dto(&dup);
+        assert!(
+            errors.iter().any(|e| e.rule == "V1"),
+            "duplicate DataObject id must trip V1: {errors:?}"
+        );
+    }
 }

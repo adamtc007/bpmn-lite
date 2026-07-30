@@ -299,6 +299,19 @@ pub(crate) fn dto_to_bpmn_xml(dto: &WorkflowGraphDto) -> Result<String> {
                     bid, name_attr, task_type, collection_flag, declared_max
                 )?;
             }
+            NodeDto::DataObject { name, .. } => {
+                // Structural declaration only — no sequence flows, no task
+                // semantics. Emitted as a plain BPMN data object so the
+                // exported XML stays well-formed; the typed declaration
+                // (type_decl/role) has no standard BPMN-XML home and rides
+                // the dto_snapshot, not this export.
+                writeln!(
+                    xml,
+                    r#"    <bpmn:dataObject id="{}" name="{}" />"#,
+                    bid,
+                    xml_escape(name)
+                )?;
+            }
         }
     }
 

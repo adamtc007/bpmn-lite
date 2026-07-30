@@ -17,8 +17,7 @@ use std::collections::HashMap;
 ///   edges (not collapsed back to `on_error` EdgeDto fields) for simplicity.
 /// - Gateway join pairing: parallel/inclusive converging gateways get `join: None`
 ///   (pairing is a higher-level concern handled by the verifier).
-#[cfg(test)]
-pub(crate) fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto> {
+pub fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto> {
     let mut nodes = Vec::new();
     let mut node_id_map: HashMap<petgraph::graph::NodeIndex, String> = HashMap::new();
 
@@ -95,7 +94,6 @@ pub(crate) fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGr
 }
 
 /// Convert an IR ConditionExpr back to a DTO FlagCondition.
-#[cfg(test)]
 fn condition_to_flag(cond: &ConditionExpr) -> FlagCondition {
     let op = match cond.op {
         ConditionOp::Eq => FlagOp::Eq,
@@ -115,7 +113,6 @@ fn condition_to_flag(cond: &ConditionExpr) -> FlagCondition {
 }
 
 /// Convert a single IRNode to a NodeDto.
-#[cfg(test)]
 fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
     let dto = match ir_node {
         IRNode::Start { id } => NodeDto::Start { id: id.clone() },
@@ -232,14 +229,26 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             }
         }
 
-        // DataObject and FfiServiceTask are not represented in the DTO/YAML
-        // authoring layer (they are FFI-specific constructs). If encountered,
-        // omit them by returning a minimal placeholder that the DTO round-trip
-        // can skip. A future authoring-layer pass will handle these properly.
-        IRNode::DataObject { id, .. } | IRNode::FfiServiceTask { id, .. } => {
+        IRNode::DataObject {
+            id,
+            name,
+            type_decl,
+            role,
+        } => NodeDto::DataObject {
+            id: id.clone(),
+            name: name.clone(),
+            type_decl: type_decl.clone(),
+            role: role.clone(),
+        },
+
+        // FfiServiceTask is not represented in the DTO/YAML authoring
+        // layer. Explicit named-diagnostic rejection, never a silent skip
+        // (fail closed) -- a graph carrying one cannot be snapshotted as a
+        // template until a NodeDto variant + dto_to_ir arm exist for it.
+        IRNode::FfiServiceTask { id, .. } => {
             return Err(anyhow::anyhow!(
-                "ir_to_dto: unsupported node type at id '{}' (DataObject / FfiServiceTask \
-                 are not part of the YAML authoring DTO format)",
+                "ir_to_dto: unsupported node type at id '{}' (FfiServiceTask \
+                 is not part of the DTO authoring format)",
                 id
             ))
         }
@@ -259,7 +268,6 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
 }
 
 /// Convert a TimerSpec back to the DTO optional fields.
-#[cfg(test)]
 fn timer_spec_to_fields(spec: &TimerSpec) -> (Option<u64>, Option<u64>, Option<u64>, Option<u32>) {
     match spec {
         TimerSpec::Duration { ms } => (Some(*ms), None, None, None),
@@ -534,5 +542,179 @@ mod tests {
         } else {
             panic!("Expected BoundaryError");
         }
+    }
+
+    // ── Save-as-template Step 2 (2026-07-30) ──────────────────────────────
+
+    /// GREEN: a DataObject declaration survives DTO → IR → DTO intact
+    /// (the new NodeDto::DataObject variant + both conversion arms).
+    #[test]
+    fn data_object_round_trips_through_ir() {
+        use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+
+        let dto = WorkflowGraphDto {
+            id: "dobj_rt".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::ServiceTask {
+                    id: "task_a".to_string(),
+                    task_type: "do_work".to_string(),
+                    bpmn_id: None,
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+                NodeDto::DataObject {
+                    id: "corr_flag".to_string(),
+                    name: "corr_flag".to_string(),
+                    type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                    role: DataObjectRole::Internal,
+                },
+            ],
+            edges: vec![
+                EdgeDto {
+                    from: "start".to_string(),
+                    to: "task_a".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+                EdgeDto {
+                    from: "task_a".to_string(),
+                    to: "end".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+            ],
+        };
+
+        let ir = dto_to_ir(&dto).unwrap();
+        let dto2 = ir_to_dto(&ir, "dobj_rt").unwrap();
+
+        let round_tripped = dto2
+            .nodes
+            .iter()
+            .find_map(|n| match n {
+                NodeDto::DataObject {
+                    id,
+                    name,
+                    type_decl,
+                    role,
+                } if id == "corr_flag" => Some((name.clone(), type_decl.clone(), role.clone())),
+                _ => None,
+            })
+            .expect("DataObject must survive the round trip");
+        assert_eq!(round_tripped.0, "corr_flag");
+        assert_eq!(
+            round_tripped.1,
+            DataObjectType::Primitive(PrimitiveType::String)
+        );
+        assert_eq!(round_tripped.2, DataObjectRole::Internal);
+
+        // And the graph as a whole still round-trips a second time.
+        let ir2 = dto_to_ir(&dto2).unwrap();
+        assert_eq!(ir.node_count(), ir2.node_count());
+        assert_eq!(ir.edge_count(), ir2.edge_count());
+    }
+
+    /// GREEN: the graph-session shape that motivated the DataObject
+    /// variant — a MessageWait whose corr_key_source names a declared
+    /// data object (the `request_and_wait` production fixture shape) —
+    /// survives IR → DTO → IR and still passes the IR verifier, which
+    /// resolves corr_key_source against declared data objects.
+    #[test]
+    fn message_wait_with_correlation_data_object_round_trips_and_reverifies() {
+        use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+
+        let dto = WorkflowGraphDto {
+            id: "raw_shape".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::ServiceTask {
+                    id: "send1".to_string(),
+                    task_type: "send_request".to_string(),
+                    bpmn_id: None,
+                },
+                NodeDto::MessageWait {
+                    id: "wait1".to_string(),
+                    name: "reply".to_string(),
+                    corr_key_source: "corr_flag".to_string(),
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+                NodeDto::DataObject {
+                    id: "corr_flag".to_string(),
+                    name: "corr_flag".to_string(),
+                    type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                    role: DataObjectRole::Internal,
+                },
+            ],
+            edges: vec![
+                EdgeDto {
+                    from: "start".to_string(),
+                    to: "send1".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+                EdgeDto {
+                    from: "send1".to_string(),
+                    to: "wait1".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+                EdgeDto {
+                    from: "wait1".to_string(),
+                    to: "end".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+            ],
+        };
+
+        let ir = dto_to_ir(&dto).unwrap();
+        let dto2 = ir_to_dto(&ir, "raw_shape").unwrap();
+        let ir2 = dto_to_ir(&dto2).unwrap();
+
+        let verify_errors = bpmn_lite_compiler::verify(&ir2);
+        assert!(
+            verify_errors.is_empty(),
+            "round-tripped MessageWait+DataObject graph must re-verify: {verify_errors:?}"
+        );
+    }
+
+    /// RED: FfiServiceTask stays an explicit named-diagnostic rejection
+    /// (fail closed) — never a silent skip.
+    #[test]
+    fn ffi_service_task_is_rejected_by_name() {
+        let mut ir = IRGraph::new();
+        ir.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        ir.add_node(IRNode::FfiServiceTask {
+            id: "ffi_node_7".to_string(),
+            name: "ffi_node_7".to_string(),
+            template_id: [0u8; 32],
+            inputs: vec![],
+            outputs: vec![],
+        });
+
+        let err = ir_to_dto(&ir, "ffi_reject").unwrap_err();
+        assert!(
+            err.to_string().contains("ffi_node_7"),
+            "rejection must name the offending node: {err}"
+        );
     }
 }

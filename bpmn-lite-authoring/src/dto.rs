@@ -177,6 +177,24 @@ pub enum NodeDto {
         collection_flag: String,
         declared_max: u32,
     },
+    /// A BPMN data-object declaration (save-as-template wiring,
+    /// 2026-07-30): structural, no sequence-flow edges — see
+    /// `bpmn_lite_compiler::IRNode::DataObject`. Added so graph-authored
+    /// sessions (whose `DesignerDag`s carry data objects, e.g. a
+    /// `MessageWait`'s correlation source) can round-trip through the
+    /// DTO on the `ir_to_dto` path. Reuses `bpmn_lite_types`'
+    /// serde-ready `DataObjectType`/`DataObjectRole` verbatim.
+    DataObject {
+        id: String,
+        name: String,
+        type_decl: bpmn_lite_types::DataObjectType,
+        #[serde(default = "default_internal_role")]
+        role: bpmn_lite_types::DataObjectRole,
+    },
+}
+
+fn default_internal_role() -> bpmn_lite_types::DataObjectRole {
+    bpmn_lite_types::DataObjectRole::Internal
 }
 
 // ── RaceArm ──
@@ -221,6 +239,7 @@ impl NodeDto {
             NodeDto::BoundaryTimer { id, .. } => id,
             NodeDto::BoundaryError { id, .. } => id,
             NodeDto::MultiInstance { id, .. } => id,
+            NodeDto::DataObject { id, .. } => id,
         }
     }
 }

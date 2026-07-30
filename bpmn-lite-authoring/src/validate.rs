@@ -269,6 +269,29 @@ pub(crate) fn validate_dto(dto: &WorkflowGraphDto) -> Vec<ValidationError> {
         }
     }
 
+    // V16: DataObject nodes are structural declarations — no sequence-flow
+    // edges may attach to them (mirrors `IRNode::DataObject`'s "no
+    // sequence-flow edges" contract at the DTO layer, failing fast before
+    // lowering).
+    for edge in &dto.edges {
+        for (endpoint, field) in [(&edge.from, "from"), (&edge.to, "to")] {
+            let base_id = endpoint.split('.').next().unwrap_or(endpoint);
+            if node_map
+                .get(base_id)
+                .is_some_and(|n| matches!(n, NodeDto::DataObject { .. }))
+            {
+                errors.push(ValidationError {
+                    rule: "V16".to_string(),
+                    message: format!(
+                        "Edge {}→{}: {} endpoint '{}' is a DataObject — data objects \
+                         carry no sequence flows",
+                        edge.from, edge.to, field, endpoint
+                    ),
+                });
+            }
+        }
+    }
+
     errors
 }
 

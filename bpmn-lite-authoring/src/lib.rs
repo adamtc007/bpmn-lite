@@ -33,11 +33,10 @@ mod dto;
 mod dto_to_ir;
 mod export_bpmn;
 mod importer;
-// Test-only (2026-07-30 clean-build pass): every item in this module is
-// #[cfg(test)] -- it's a validated IR->DTO round-trip (documented use case:
-// BPMN import -> IR -> DTO for editing) exercised by this crate's own tests
-// and export_bpmn.rs's, but nothing calls it from a production path yet.
-#[cfg(test)]
+// Promoted out of #[cfg(test)] (save-as-template Step 2, 2026-07-30): the
+// designer's graph sessions reach the publish pipeline via
+// DesignerDag::to_ir() -> ir_to_dto -> compile_and_publish_from_dto, so
+// the IR->DTO bridge is now a live production path, not a test fixture.
 mod ir_to_dto;
 mod lints;
 #[cfg(test)]
@@ -55,6 +54,7 @@ pub use dto::{
     TemplateMeta, WorkflowGraphDto,
 };
 pub use importer::import_zeebe_bpmn;
+pub use ir_to_dto::ir_to_dto;
 pub use publish::{
     compile_and_publish, compile_and_publish_from_dto, compile_program_from_dto, PublishOptions,
     PublishResult,
