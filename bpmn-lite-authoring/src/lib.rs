@@ -53,6 +53,7 @@ pub use dto::{
     EdgeDto, ErrorEdge, FlagCondition, FlagOp, FlagValue, NodeDto, RaceArm, RaceArmKind,
     TemplateMeta, WorkflowGraphDto,
 };
+pub use dto_to_ir::dto_to_ir;
 pub use importer::import_zeebe_bpmn;
 pub use ir_to_dto::ir_to_dto;
 pub use publish::{
