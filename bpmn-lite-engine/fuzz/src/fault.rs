@@ -46,9 +46,9 @@ use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use uuid::Uuid;
 
-use crate::{
-    emit_process, gen_shape, ConservationTracker, FuzzClock, Shape, Tape,
-};
+use crate::{emit_process, gen_shape, ConservationTracker, FuzzClock, Tape};
+#[cfg(test)]
+use crate::Shape;
 
 // ─── Fault plan ──────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ enum Fault {
 /// wrapping the same run. `rate` in [0,16]: injection probability
 /// rate/16 per store call; 0 disables injection (the recovery-phase
 /// oracles require a quiet store).
-struct FaultPlan {
+pub(crate) struct FaultPlan {
     state: AtomicU64,
     rate: AtomicU64,
 }
@@ -120,7 +120,7 @@ pub(crate) struct FaultStore {
 }
 
 impl FaultStore {
-    pub fn new(inner: Arc<MemoryStore>, plan: Arc<FaultPlan>) -> Self {
+    pub(crate) fn new(inner: Arc<MemoryStore>, plan: Arc<FaultPlan>) -> Self {
         Self { inner, plan }
     }
 }

@@ -76,6 +76,13 @@ use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::WorkflowStore;
 use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid, Value};
 
+// Test-only (2026-07-30 clean-build pass): the F7 covering-array corpus
+// generator's only consumer is its own #[cfg(test)]+#[ignore] seed-writer
+// test, invoked via `cargo xtask fuzz seed` (which shells out to `cargo
+// test ... write_covering_seeds -- --ignored` -- already compiles under
+// --cfg test regardless of this attribute). Real, validated, actively-used
+// tooling; just not reachable from a plain `cargo build`.
+#[cfg(test)]
 pub mod covering;
 pub mod fault;
 
@@ -206,8 +213,8 @@ pub(crate) enum Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Shape {
-    pub blocks: Vec<Block>,
+pub(crate) struct Shape {
+    pub(crate) blocks: Vec<Block>,
 }
 
 pub(crate) fn gen_shape(tape: &mut Tape) -> Shape {
@@ -693,7 +700,7 @@ pub async fn drive_graph(data: &[u8]) {
 /// Drive one shape with the remaining tape as runtime dynamics — split
 /// from `drive_graph` so the covering corpus (F7) can drive an ENUMERATED
 /// shape directly, without round-tripping through tape decoding.
-pub async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
+pub(crate) async fn drive_shape(shape: &Shape, tape: &mut Tape<'_>) {
     let generated = emit_process(shape);
 
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());

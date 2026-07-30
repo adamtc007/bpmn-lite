@@ -42,7 +42,7 @@ use crate::{gen_shape, Block, Shape, Tape};
 /// The local logic alphabet: canonical instantiations of every block
 /// family × switch outcome. One entry = one letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Archetype {
+pub(crate) enum Archetype {
     Task,
     /// Parallel, 2 branches × single task.
     And2,
@@ -254,7 +254,7 @@ impl Gateway {
     /// Wrap a region in this gateway. AND/OR pair the region with a plain
     /// second branch so the join is a real synchronizer; the region rides
     /// the FIRST branch (activated per the OR outcome letter).
-    pub fn wrap(self, region: Vec<Block>) -> Block {
+    pub(crate) fn wrap(self, region: Vec<Block>) -> Block {
         match self {
             Gateway::And => Block::And {
                 branches: vec![region, vec![Block::Task]],
@@ -283,7 +283,7 @@ impl Gateway {
 
     /// Classify the outermost gateway of a block and return its nested
     /// region (the FIRST branch, matching `wrap`).
-    pub fn unwrap(block: &Block) -> Option<(Gateway, &[Block])> {
+    pub(crate) fn unwrap(block: &Block) -> Option<(Gateway, &[Block])> {
         match block {
             Block::And { branches } if branches.len() == 2 => {
                 Some((Gateway::And, &branches[0]))
