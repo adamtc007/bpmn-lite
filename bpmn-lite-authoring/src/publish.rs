@@ -217,9 +217,15 @@ pub(crate) fn publish_workflow_from_dto(
         ));
     }
 
-    // 8. Compute bytecode_version hash from program bytecode only
-    //    (debug_map and manifest excluded from hash for stability)
-    let bytecode_version = compute_bytecode_hash(&program);
+    // 8. Template bytecode_version = hex of the program's OWN canonical
+    //    identity (BLAKE3 of the serialized program, computed at lower()
+    //    time — B14, unified with FFI template ids). This is the exact key
+    //    persist_publish_result stores the program under, so a template
+    //    row can always locate its compiled program. (Save-as-template
+    //    Step 3 fix: this used to be a second, divergent Debug-format
+    //    hash — compute_bytecode_hash — leaving templates unable to find
+    //    their programs in the WorkflowStore.)
+    let bytecode_version = hex_encode(&program.bytecode_version());
 
     // 9. Extract task_manifest
     let task_manifest = program.task_manifest().clone();
@@ -254,16 +260,6 @@ pub(crate) fn publish_workflow_from_dto(
         program,
         lint_diagnostics,
     })
-}
-
-/// Compute a deterministic hex BLAKE3 hash of the program bytecode.
-/// Excludes debug_map and task_manifest from the hash for stability.
-fn compute_bytecode_hash(program: &bpmn_lite_types::CompiledProgram) -> String {
-    let mut hasher = blake3::Hasher::new();
-    for instr in program.program() {
-        hasher.update(format!("{:?}", instr).as_bytes());
-    }
-    hex_encode(hasher.finalize().as_bytes())
 }
 
 fn now_ms() -> i64 {
@@ -445,6 +441,13 @@ edges:
         assert_eq!(loaded.source_format, SourceFormat::Graph);
         assert_eq!(loaded.bytecode_version, result.template.bytecode_version);
 
+        // Cement: the template's bytecode_version IS the hex form of the
+        // program-store key — a template row can always locate its program.
+        assert_eq!(
+            loaded.bytecode_version,
+            hex_encode(&result.program.bytecode_version())
+        );
+
         use bpmn_lite_store::store::ArtifactRepository;
         let program = process_store
             .load_program(result.program.bytecode_version())
@@ -452,7 +455,7 @@ edges:
             .unwrap();
         assert!(
             program.is_some(),
-            "compiled program must be persisted under its bytecode hash"
+            "compiled program must be persisted under the template's bytecode_version"
         );
     }
 

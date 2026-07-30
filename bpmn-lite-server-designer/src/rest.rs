@@ -32,6 +32,16 @@ use bpmn_lite_types::TenantId;
 
 pub struct DesignerState {
     store: Arc<MemoryStore>,
+    /// Save-as-template registry (2026-07-30): the lifecycle-bearing
+    /// `workflow_templates` system (`bpmn_lite_authoring::TemplateStore` —
+    /// Draft/Published/Retired, immutability enforced by the store), fed by
+    /// `compile_and_publish_from_dto`. Demo mode uses the in-memory
+    /// backend; `PostgresTemplateStore` (authoring's `postgres` feature)
+    /// slots in when the designer gets a durable config. Distinct from
+    /// `store`'s `workflow_template_catalog` (plan_hash + dsl_body, no
+    /// lifecycle), which the runtime instantiation path still reads —
+    /// see the dual-write note in `save_design_session_endpoint`.
+    template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
     tenant_id: TenantId,
     /// Serializes each session's load→reconstruct→stage→append sequence
     /// (graph-edit and save-as-template) so two concurrent requests against
@@ -54,6 +64,7 @@ impl DesignerState {
     pub fn try_new() -> Result<Arc<Self>, anyhow::Error> {
         Ok(Arc::new(Self {
             store: Arc::new(MemoryStore::new()),
+            template_store: Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
             tenant_id: TenantId::new("demo")?,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
@@ -2183,113 +2194,151 @@ async fn save_design_session_endpoint(
                 .into_response();
         }
     };
-    // Rider 2 (G2 BLOCKER-2 ruling): two stores, two roles. The DAG stays
-    // authoritative in the SESSION store (already true — GraphEdit events,
-    // untouched by this endpoint); this endpoint only decides what goes
-    // into the PLAN store, which must hold a compiled artifact regardless
-    // of which path authored it (P5).
-    let (plan_json, source_for_template) = if record.is_graph_backed() {
-        let dag = match reconstruct_designer_dag(&record) {
-            Ok(d) => d,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
-                )
-                    .into_response();
-            }
-        };
-        // Same admission discipline as the graph-edit endpoint — the
-        // full to_ir/verify/lower theorem chain must pass before this
-        // session's graph is eligible to become a stored artifact at all.
-        if let Err(errs) = dag.admit() {
-            let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+    // Save-as-template (2026-07-30 rewire): graph-backed sessions publish
+    // through the lifecycle-bearing registry (`compile_and_publish_from_dto`
+    // → `workflow_templates`); text-backed sessions are a legacy authoring
+    // path (raw dsl.bpmn text, superseded by the utterance→AstMutator→
+    // DesignerDag pipeline) and are blocked outright — see the else branch.
+    if !record.is_graph_backed() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "legacy_authoring_path",
+                "detail": "text (dsl.bpmn) sessions are superseded by the \
+                           utterance/graph pipeline and cannot be saved as \
+                           templates",
+            })),
+        )
+            .into_response();
+    }
+
+    let dag = match reconstruct_designer_dag(&record) {
+        Ok(d) => d,
+        Err(e) => {
             return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
             )
                 .into_response();
         }
-        let ir = match dag.to_ir() {
-            Ok(ir) => ir,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("to_ir: {e}") })),
-                )
-                    .into_response();
-            }
-        };
-        let plan = match bpmn_lite_compiler::dsl::project_ir(&ir, record.name.clone()) {
-            Ok(plan) => plan,
-            Err(e) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": "graph cannot be saved as a template yet",
-                        "diagnostics": [e.to_string()],
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        let plan_json = match serde_json::to_string(&plan) {
-            Ok(json) => json,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
-                )
-                    .into_response();
-            }
-        };
-        let source_for_template = format!(
-            "<graph-authored session {id}; edit via the graph-edit endpoint, not DSL text>"
-        );
-        (plan_json, source_for_template)
-    } else {
-        let Some(source) = record.current_source().map(str::to_owned) else {
+    };
+    // Same admission discipline as the graph-edit endpoint — the
+    // full to_ir/verify/lower theorem chain must pass before this
+    // session's graph is eligible to become a stored artifact at all.
+    // Nothing below runs (and nothing is persisted anywhere) unless
+    // this gate passes.
+    if let Err(errs) = dag.admit() {
+        let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+        )
+            .into_response();
+    }
+    let ir = match dag.to_ir() {
+        Ok(ir) => ir,
+        Err(e) => {
             return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "session has no revision to save" })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("to_ir: {e}") })),
             )
                 .into_response();
-        };
-        let registry = get_preview_registry();
-        let plan = match bpmn_lite_compiler::dsl::compile(&source, &registry) {
-            Ok(plan) => plan,
-            Err(e) => {
-                let diagnostics: Vec<String> = match e {
-                    bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
-                    bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
-                        errs.iter().map(|e| format!("{e}")).collect()
-                    }
-                    bpmn_lite_compiler::dsl::CompileError::Dag(errs) => {
-                        errs.iter().map(|e| format!("{e}")).collect()
-                    }
-                };
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": "current revision does not compile",
-                        "diagnostics": diagnostics
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        let plan_json = match serde_json::to_string(&plan) {
-            Ok(json) => json,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
-                )
-                    .into_response();
-            }
-        };
-        (plan_json, source)
+        }
     };
+    let dto = match bpmn_lite_authoring::ir_to_dto(&ir, &record.name) {
+        Ok(dto) => dto,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "graph cannot be snapshotted as a template",
+                    "diagnostics": [e.to_string()],
+                })),
+            )
+                .into_response();
+        }
+    };
+    // Rider 2 (G2 BLOCKER-2 ruling): two stores, two roles. The DAG stays
+    // authoritative in the SESSION store (GraphEdit events, untouched by
+    // this endpoint); the PLAN store must hold a compiled artifact
+    // regardless of which path authored it (P5). Still produced here
+    // because the runtime instantiation path (bus-handler + the designer's
+    // own instantiate/list/get endpoints) reads the plan catalog — the
+    // Phase-B migration moves those readers onto the template registry and
+    // then this projection + the catalog dual-write below go away.
+    let plan = match bpmn_lite_compiler::dsl::project_ir(&ir, record.name.clone()) {
+        Ok(plan) => plan,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "graph cannot be saved as a template yet",
+                    "diagnostics": [e.to_string()],
+                })),
+            )
+                .into_response();
+        }
+    };
+    let plan_json = match serde_json::to_string(&plan) {
+        Ok(json) => json,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("serialize plan: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Registry version: next after the highest existing version for this
+    // key in ANY state — Draft/Retired rows still reserve their numbers
+    // (the store's immutability rules refuse overwrites).
+    let template_version = match demo.template_store.list(Some(&body.template_name), None).await {
+        Ok(existing) => existing
+            .iter()
+            .map(|t| t.template_version)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("template registry list: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let publish_result = match bpmn_lite_authoring::compile_and_publish_from_dto(
+        dto,
+        bpmn_lite_authoring::PublishOptions {
+            template_key: body.template_name.clone(),
+            template_version,
+            process_key: record.name.clone(),
+            source_format: bpmn_lite_authoring::SourceFormat::Graph,
+            contract_registry: None,
+            generate_bpmn: true,
+            verb_registry_hash: None,
+        },
+        &*demo.template_store,
+        &*demo.store,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template publish failed",
+                    "diagnostics": [e.to_string()],
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // TEMPORARY dual-write (Phase B removes it): the plan catalog is still
+    // the runtime's template source for instantiation, so keep it fed.
     let hash = *blake3::hash(plan_json.as_bytes()).as_bytes();
     if let Err(e) = demo.store.store_plan(hash, &plan_json).await {
         return (
@@ -2298,7 +2347,7 @@ async fn save_design_session_endpoint(
         )
             .into_response();
     }
-    let version = match demo
+    let catalog_version = match demo
         .store
         .load_latest_template_version(&body.template_name)
         .await
@@ -2306,9 +2355,11 @@ async fn save_design_session_endpoint(
         Ok(Some((v, _, _))) => v + 1,
         _ => 1,
     };
+    let source_for_template =
+        format!("<graph-authored session {id}; edit via the graph-edit endpoint, not DSL text>");
     if let Err(e) = demo
         .store
-        .store_template(&body.template_name, version, hash, &source_for_template)
+        .store_template(&body.template_name, catalog_version, hash, &source_for_template)
         .await
     {
         return (
@@ -2319,7 +2370,7 @@ async fn save_design_session_endpoint(
     }
     if let Err(e) = demo
         .store
-        .mark_design_session_saved(&demo.tenant_id, id, &body.template_name, version, hash)
+        .mark_design_session_saved(&demo.tenant_id, id, &body.template_name, catalog_version, hash)
         .await
     {
         return (
@@ -2330,8 +2381,11 @@ async fn save_design_session_endpoint(
     }
     Json(serde_json::json!({
         "template_name": body.template_name,
-        "version": version,
-        "plan_hash": hex::encode(hash)
+        "version": catalog_version,
+        "plan_hash": hex::encode(hash),
+        "template_version": template_version,
+        "bytecode_version": publish_result.template.bytecode_version,
+        "state": "published",
     }))
     .into_response()
 }
@@ -2986,7 +3040,10 @@ mod tests {
         assert!(utter["seq"].as_u64().is_some());
         assert!(utter["message"].is_string());
 
-        // Save-as-template: pins ref, persists template v1
+        // Save-as-template (save-as-template rewire, 2026-07-30): a
+        // text-backed session is a LEGACY authoring path — the save is
+        // blocked with a structured error, and NOTHING is persisted in
+        // either template store (RED receipt for the legacy-path gate).
         let response = app
             .clone()
             .oneshot(post_json(
@@ -2995,14 +3052,31 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let saved = body_json(response).await;
-        assert_eq!(saved["template_name"], "session-template");
-        assert_eq!(saved["version"], 1);
-        let plan_hash = saved["plan_hash"].as_str().unwrap().to_owned();
-        assert_eq!(plan_hash.len(), 64);
+        assert_eq!(saved["error"], "legacy_authoring_path");
 
-        // Get: full record shows Saved status, template pin, and the event log
+        // Neither template system saw a write for this key.
+        assert!(
+            state
+                .store
+                .load_latest_template_version("session-template")
+                .await
+                .unwrap()
+                .is_none(),
+            "blocked legacy save must not write the plan catalog"
+        );
+        assert!(
+            state
+                .template_store
+                .list(Some("session-template"), None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "blocked legacy save must not write the template registry"
+        );
+
+        // Get: full record still shows the session UNSAVED, event log intact
         let response = app
             .clone()
             .oneshot(
@@ -3016,8 +3090,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let record = body_json(response).await;
-        assert_eq!(record["status"], "Saved");
-        assert!(record["template_ref"].is_array());
+        assert_ne!(record["status"], "Saved");
         let events = record["events"].as_array().unwrap();
         assert!(events.len() >= 4); // seed + broken rev + good rev + utterance
     }
@@ -3329,6 +3402,10 @@ mod tests {
             .unwrap()
             .to_owned();
 
+        // Save-as-template rewire (2026-07-30): a text-backed session is
+        // blocked as a legacy authoring path BEFORE any compile attempt —
+        // the "does the draft compile" question no longer even arises on
+        // the save path (it still applies at revision-append time).
         let response = app
             .clone()
             .oneshot(post_json(
@@ -3337,9 +3414,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let err = body_json(response).await;
-        assert!(!err["diagnostics"].as_array().unwrap().is_empty());
+        assert_eq!(err["error"], "legacy_authoring_path");
 
         // Nothing leaked into the template catalog
         let response = app
@@ -3929,6 +4006,90 @@ mod tests {
         let body = body_json(response).await;
         assert_eq!(status, StatusCode::OK, "{body:?}");
         assert_eq!(body["plan_hash"].as_str().unwrap().len(), 64);
+
+        // ── Save-as-template rewire receipts (2026-07-30) ──────────────
+
+        // (a) Template registry: v1 exists, Published, graph-sourced, with
+        // a real dto_snapshot and task_manifest.
+        assert_eq!(body["template_version"], 1);
+        assert_eq!(body["state"], "published");
+        let bytecode_hex = body["bytecode_version"].as_str().unwrap().to_owned();
+        assert_eq!(bytecode_hex.len(), 64);
+        let template = state
+            .template_store
+            .load("graph-authored-template", 1)
+            .await
+            .unwrap()
+            .expect("template registry must hold v1");
+        assert_eq!(
+            template.state,
+            bpmn_lite_authoring::TemplateState::Published
+        );
+        assert_eq!(
+            template.source_format,
+            bpmn_lite_authoring::SourceFormat::Graph
+        );
+        assert_eq!(template.bytecode_version, bytecode_hex);
+        assert!(!template.dto_snapshot.nodes.is_empty());
+        assert!(
+            template.task_manifest.contains(&"noop".to_string()),
+            "task_manifest must carry the graph's task types (the task_ir \
+             fixture's task_type is \"noop\"): {:?}",
+            template.task_manifest
+        );
+
+        // (b) Compiled program persisted in the WorkflowStore under the
+        // bytecode hash the response reported.
+        {
+            use bpmn_lite_store::store::ArtifactRepository;
+            let mut hash = [0u8; 32];
+            hex::decode_to_slice(&bytecode_hex, &mut hash).unwrap();
+            let program = state.store.load_program(hash).await.unwrap();
+            assert!(
+                program.is_some(),
+                "compiled program must be persisted under its bytecode hash"
+            );
+        }
+
+        // (c) Catalog dual-write still feeds the runtime instantiation
+        // path: the plan is retrievable by name→hash and deserializes.
+        let (catalog_version, _, plan_hash) = state
+            .store
+            .load_latest_template_version("graph-authored-template")
+            .await
+            .unwrap()
+            .expect("catalog dual-write must be present");
+        assert_eq!(catalog_version, 1);
+        let plan_json = state
+            .store
+            .load_plan(plan_hash)
+            .await
+            .unwrap()
+            .expect("plan must be stored");
+        let _plan: WorkflowExecutionPlan =
+            serde_json::from_str(&plan_json).expect("stored plan must deserialize");
+
+        // (d) Second save of the same session/key auto-bumps to v2 in the
+        // registry; v1 is untouched (immutability).
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "graph-authored-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body2 = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body2:?}");
+        assert_eq!(body2["template_version"], 2);
+        let v1_after = state
+            .template_store
+            .load("graph-authored-template", 1)
+            .await
+            .unwrap()
+            .expect("v1 must still exist after v2 save");
+        assert_eq!(v1_after.bytecode_version, template.bytecode_version);
     }
 
     /// RED: a save on a graph-backed session that doesn't admit (unmatched
@@ -3998,10 +4159,14 @@ mod tests {
             ))
             .await
             .unwrap();
-        // No GraphEdit ever landed, so this is a legacy (non-graph-backed,
-        // no-revision) session — the pre-existing "no revision to save"
-        // refusal, not a new code path.
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        // No GraphEdit ever landed, so this is a non-graph-backed session —
+        // refused by the legacy-authoring-path gate (save-as-template
+        // rewire, 2026-07-30; previously the "no revision to save" 400).
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body_json(response).await["error"],
+            "legacy_authoring_path"
+        );
     }
 
     /// G2 BLOCKER-2 ruling, receipt (ii): saving a graph-backed session as
