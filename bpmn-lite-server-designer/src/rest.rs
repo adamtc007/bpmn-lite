@@ -42,6 +42,15 @@ pub struct DesignerState {
     /// lifecycle), which the runtime instantiation path still reads —
     /// see the dual-write note in `save_design_session_endpoint`.
     template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
+    /// Phase B (2026-07-30): compile+start capability for spawning a
+    /// runnable instance directly from a Published template, in-process
+    /// against `store`. The demo designer and demo runner are two
+    /// independent processes with independent `MemoryStore`s (confirmed —
+    /// no sharing exists), so spawning here — where the template and its
+    /// compiled program already live — avoids inventing cross-process
+    /// transport. Blurs the authoring/runtime crate split on purpose, for
+    /// demo mode only; not a precedent for merging the crates generally.
+    engine: bpmn_lite_engine::BpmnLiteEngine,
     tenant_id: TenantId,
     /// Serializes each session's load→reconstruct→stage→append sequence
     /// (graph-edit and save-as-template) so two concurrent requests against
@@ -62,10 +71,15 @@ pub struct DesignerState {
 
 impl DesignerState {
     pub fn try_new() -> Result<Arc<Self>, anyhow::Error> {
+        let store = Arc::new(MemoryStore::new());
+        let tenant_id = TenantId::new("demo")?;
+        let engine =
+            bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(store.clone(), tenant_id.clone());
         Ok(Arc::new(Self {
-            store: Arc::new(MemoryStore::new()),
+            store,
             template_store: Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
-            tenant_id: TenantId::new("demo")?,
+            engine,
+            tenant_id,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
         }))
@@ -273,6 +287,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
         .route(
             "/bpmn/templates/:name/versions/:version",
             get(get_template_version_endpoint),
+        )
+        .route(
+            "/bpmn/templates/:name/spawn",
+            post(spawn_template_instance_endpoint),
         )
         .with_state(state)
 }
@@ -1455,6 +1473,193 @@ async fn get_template_version_endpoint(
             Json(serde_json::json!({ "error": e.to_string() })),
         ).into_response()
     }
+}
+
+// ── Spawn instance from a Published template (Phase B, 2026-07-30) ───────
+
+fn unix_time_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Reconstruct a `WorkflowExecutionPlan` from a template's `dto_snapshot`,
+/// with no YAML/DSL text round-trip: dto_to_ir -> verify -> project_ir.
+/// `project_ir`'s precondition is an already-verified graph, hence the
+/// explicit `verify()` call here.
+fn reconstruct_plan_from_template(
+    tpl: &bpmn_lite_authoring::WorkflowTemplate,
+) -> anyhow::Result<WorkflowExecutionPlan> {
+    let ir = bpmn_lite_authoring::dto_to_ir(&tpl.dto_snapshot)?;
+    let verify_errors = bpmn_lite_compiler::verify(&ir);
+    if !verify_errors.is_empty() {
+        let msgs: Vec<String> = verify_errors.iter().map(|e| e.message.clone()).collect();
+        anyhow::bail!(
+            "template {}:v{} failed re-verification: {}",
+            tpl.template_key,
+            tpl.template_version,
+            msgs.join("; ")
+        );
+    }
+    bpmn_lite_compiler::dsl::project_ir(&ir, tpl.process_key.clone())
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+#[derive(Deserialize, Default)]
+struct SpawnTemplateBody {
+    version: Option<u32>,
+    payload: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct SpawnTemplateResponse {
+    instance_id: Uuid,
+    template_key: String,
+    template_version: u32,
+    bytecode_version: String,
+}
+
+async fn spawn_template_instance_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(name): Path<String>,
+    body: Option<Json<SpawnTemplateBody>>,
+) -> impl IntoResponse {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+
+    let tpl = if let Some(version) = body.version {
+        match demo.template_store.load(&name, version).await {
+            Ok(Some(tpl)) if tpl.state == bpmn_lite_authoring::TemplateState::Published => tpl,
+            Ok(Some(tpl)) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "template_not_published",
+                        "template_key": name,
+                        "template_version": version,
+                        "state": format!("{:?}", tpl.state),
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "template_not_found",
+                        "template_key": name,
+                        "template_version": version,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        match demo.template_store.load_latest_published(&name).await {
+            Ok(Some(tpl)) => tpl,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "no_published_version",
+                        "template_key": name,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let plan = match reconstruct_plan_from_template(&tpl) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let compiled = match demo.engine.compile_dsl(&plan).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("compile_dsl failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let payload_json = body
+        .payload
+        .unwrap_or_else(|| serde_json::json!({}))
+        .to_string();
+    let idempotency_key = Uuid::now_v7();
+    let entry_id = Uuid::now_v7();
+    let runbook_id = Uuid::now_v7();
+    let instance_id = bpmn_lite_types::EffectId::for_command(idempotency_key, 0, 1).as_uuid();
+
+    let start_command = match bpmn_lite_types::StartCommand::builder(
+        demo.tenant_id.clone(),
+        instance_id,
+        compiled.bytecode_version,
+    )
+    .process_key(plan.workflow_id().to_string())
+    .lineage(entry_id, runbook_id)
+    .correlation_id(idempotency_key.to_string())
+    .idempotency_key(idempotency_key)
+    .initial_payload(payload_json)
+    .session_stack(bpmn_lite_types::session_stack::SessionStackState::default())
+    .logical_time(unix_time_ms())
+    .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let iid = match demo.engine.start_command(start_command).await {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(SpawnTemplateResponse {
+            instance_id: iid,
+            template_key: tpl.template_key,
+            template_version: tpl.template_version,
+            bytecode_version: hex::encode(compiled.bytecode_version),
+        }),
+    )
+        .into_response()
 }
 
 
@@ -4297,6 +4502,236 @@ mod tests {
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
             "post-save reconstruction must still run real staging logic, not 500"
+        );
+    }
+
+    // ── Phase B: spawn instance from a Published template (2026-07-30) ──
+
+    /// Publishes a minimal admittable graph-backed template through the
+    /// real save flow (same shape as
+    /// `test_save_design_session_projects_graph_backed_session`), returning
+    /// the save endpoint's response body. Produces a `Published` v1 under
+    /// `template_name`.
+    async fn publish_admittable_template(app: &Router, template_name: &str) -> Value {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": format!("{template_name}-session") }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": template_name }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        body
+    }
+
+    fn minimal_dto(id: &str) -> bpmn_lite_authoring::WorkflowGraphDto {
+        bpmn_lite_authoring::WorkflowGraphDto {
+            id: id.to_string(),
+            meta: None,
+            nodes: vec![
+                bpmn_lite_authoring::NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                bpmn_lite_authoring::NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+            ],
+            edges: vec![bpmn_lite_authoring::EdgeDto {
+                from: "start".to_string(),
+                to: "end".to_string(),
+                condition: None,
+                is_default: false,
+                on_error: None,
+            }],
+        }
+    }
+
+    fn draft_template(key: &str, version: u32) -> bpmn_lite_authoring::WorkflowTemplate {
+        bpmn_lite_authoring::WorkflowTemplate {
+            template_key: key.to_string(),
+            template_version: version,
+            process_key: key.to_string(),
+            bytecode_version: "deadbeef".to_string(),
+            state: bpmn_lite_authoring::TemplateState::Draft,
+            source_format: bpmn_lite_authoring::SourceFormat::Graph,
+            dto_snapshot: minimal_dto(key),
+            task_manifest: vec![],
+            bpmn_xml: None,
+            summary_md: None,
+            verb_registry_hash: None,
+            created_at: 0,
+            published_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_published_template_creates_instance() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_admittable_template(&app, "spawn-green-template").await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/bpmn/templates/spawn-green-template/spawn",
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["template_key"], "spawn-green-template");
+        assert_eq!(body["template_version"], 1);
+        assert_eq!(body["bytecode_version"].as_str().unwrap().len(), 64);
+
+        let instance_id: Uuid = body["instance_id"].as_str().unwrap().parse().unwrap();
+        use bpmn_lite_store::store::RuntimeStore;
+        let instance = state
+            .store
+            .load_instance(&state.tenant_id, instance_id)
+            .await
+            .unwrap();
+        assert!(
+            instance.is_some(),
+            "spawned instance must be persisted in the store the template was published into"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_draft_template_rejected() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        state
+            .template_store
+            .save(&draft_template("draft-only-template", 1))
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/bpmn/templates/draft-only-template/spawn",
+                serde_json::json!({ "version": 1 }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body:?}");
+        assert_eq!(body["error"], "template_not_published");
+        assert_eq!(body["template_key"], "draft-only-template");
+        assert_eq!(body["template_version"], 1);
+        assert_eq!(body["state"], "Draft");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_nonexistent_template_not_found() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/bpmn/templates/does-not-exist/spawn",
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body["error"], "no_published_version");
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/bpmn/templates/does-not-exist/spawn",
+                serde_json::json!({ "version": 1 }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body["error"], "template_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_resolves_latest_published_not_latest_draft() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_admittable_template(&app, "layered-template").await;
+
+        // Stack a Draft v2 on top — spawn with no version must still
+        // resolve v1 (Published), not "latest version regardless of state".
+        state
+            .template_store
+            .save(&draft_template("layered-template", 2))
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/bpmn/templates/layered-template/spawn",
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(
+            body["template_version"], 1,
+            "must resolve the Published version, not the stacked Draft v2"
         );
     }
 }

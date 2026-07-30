@@ -18,6 +18,7 @@ designer-graph = { path = "../designer-graph" }
 utterance-engine = { path = "../utterance-engine" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+bpmn-lite-engine = { path = "../bpmn-lite-engine" }
 dmn-lite-parser = { path = "../dmn-lite-parser" }
 dsl-manifest = { path = "../dsl-manifest" }
 async-trait = { workspace = true }
