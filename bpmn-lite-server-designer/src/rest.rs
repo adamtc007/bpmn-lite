@@ -296,6 +296,14 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/bpmn/templates/published",
             get(list_published_templates_endpoint),
         )
+        .route(
+            "/bpmn/instances/:id/status",
+            get(instance_status_endpoint),
+        )
+        .route(
+            "/bpmn/instances/:id/advance",
+            post(advance_instance_endpoint),
+        )
         .with_state(state)
 }
 
@@ -1711,6 +1719,19 @@ async fn spawn_template_instance_endpoint(
         }
     };
 
+    // Phase C: run the fiber up to its first wait point so a freshly
+    // spawned instance is immediately observable (parked on its first
+    // job) via `GET /bpmn/instances/:id/status`. One synchronous tick —
+    // NOT a background loop; all further progress is request-driven
+    // through `POST /bpmn/instances/:id/advance`.
+    if let Err(e) = demo.engine.tick_instance(iid).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     (
         StatusCode::OK,
         Json(SpawnTemplateResponse {
@@ -1723,6 +1744,230 @@ async fn spawn_template_instance_endpoint(
         .into_response()
 }
 
+
+// ── Phase C: observe + advance a spawned instance (2026-08-01) ─────────
+//
+// Request-driven execution for the demo browser UI: no background tick
+// loop. `GET .../status` is a pure read over `engine.inspect`;
+// `POST .../advance` performs one real VM advance round — tick, dequeue
+// queued jobs, `complete_job` each with the instance's own current
+// payload (hash-verified by the kernel), tick again. This is genuine
+// engine execution, not the runner's plan-walking simulation.
+
+/// FIXED wire contract — a React page is built against these exact
+/// field names. Do not rename.
+#[derive(Serialize)]
+struct InstanceStatusResponse {
+    instance_id: Uuid,
+    state: String,
+    /// Present only when the state variant carries a completion/terminal
+    /// timestamp (`Completed`/`Cancelled`/`Terminated`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<i64>,
+    waiting_jobs: Vec<WaitingJobDto>,
+    fiber_count: usize,
+    wait_count: usize,
+}
+
+#[derive(Serialize)]
+struct WaitingJobDto {
+    job_key: String,
+    /// BPMN node id from the program debug map when resolvable
+    /// (single-fiber case); empty string otherwise.
+    node_id: String,
+}
+
+fn instance_status_response(
+    inspection: &bpmn_lite_engine::ProcessInspection,
+) -> InstanceStatusResponse {
+    use bpmn_lite_types::ProcessState;
+    let (state, completed_at) = match &inspection.state {
+        ProcessState::Running => ("Running".to_string(), None),
+        ProcessState::Completed { at } => ("Completed".to_string(), Some(*at)),
+        ProcessState::Cancelled { at, .. } => ("Cancelled".to_string(), Some(*at)),
+        ProcessState::Terminated { at } => ("Terminated".to_string(), Some(*at)),
+        ProcessState::Failed { .. } => ("Failed".to_string(), None),
+        ProcessState::Incidented { .. } => ("Incidented".to_string(), None),
+        ProcessState::WaitingOnSubmission { .. } => ("WaitingOnSubmission".to_string(), None),
+        ProcessState::WaitingOnInvocation { .. } => ("WaitingOnInvocation".to_string(), None),
+    };
+    let single_fiber = inspection.fibers.len() == 1;
+    let waiting_jobs = inspection
+        .fibers
+        .iter()
+        .filter_map(|f| match &f.wait_state {
+            bpmn_lite_types::WaitState::Job { job_key } => Some(WaitingJobDto {
+                job_key: job_key.clone(),
+                node_id: if single_fiber {
+                    inspection.current_node_id.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                },
+            }),
+            _ => None,
+        })
+        .collect();
+    let wait_count = inspection
+        .fibers
+        .iter()
+        .filter(|f| !matches!(f.wait_state, bpmn_lite_types::WaitState::Running))
+        .count();
+    InstanceStatusResponse {
+        instance_id: inspection.instance_id,
+        state,
+        completed_at,
+        waiting_jobs,
+        fiber_count: inspection.fibers.len(),
+        wait_count,
+    }
+}
+
+/// 404-or-instance guard shared by status/advance: distinguishes
+/// "unknown id" (404) from engine/store failures (500) structurally —
+/// via `load_instance`'s `Option` — not by matching error strings.
+async fn load_designer_instance(
+    demo: &DesignerState,
+    instance_id: Uuid,
+) -> Result<bpmn_lite_types::ProcessInstance, axum::response::Response> {
+    use bpmn_lite_store::store::RuntimeStore;
+    match demo.store.load_instance(&demo.tenant_id, instance_id).await {
+        Ok(Some(instance)) => Ok(instance),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "instance_not_found",
+                "instance_id": instance_id,
+            })),
+        )
+            .into_response()),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response()),
+    }
+}
+
+async fn instance_status_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(instance_id): Path<Uuid>,
+) -> impl IntoResponse {
+    if let Err(resp) = load_designer_instance(&demo, instance_id).await {
+        return resp;
+    }
+    match demo.engine.inspect(instance_id).await {
+        Ok(inspection) => {
+            (StatusCode::OK, Json(instance_status_response(&inspection))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn advance_instance_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(instance_id): Path<Uuid>,
+) -> impl IntoResponse {
+    use bpmn_lite_store::store::RuntimeStore;
+
+    let instance = match load_designer_instance(&demo, instance_id).await {
+        Ok(instance) => instance,
+        Err(resp) => return resp,
+    };
+
+    // Idempotent no-op on any non-Running instance (Completed etc.):
+    // report current status unchanged.
+    if !matches!(instance.state, bpmn_lite_types::ProcessState::Running) {
+        return match demo.engine.inspect(instance_id).await {
+            Ok(inspection) => {
+                (StatusCode::OK, Json(instance_status_response(&inspection))).into_response()
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        };
+    }
+
+    // One advance round: tick + dequeue (run_instance), complete each
+    // dequeued job, tick again so fibers move past the completed steps.
+    let jobs = match demo.engine.run_instance(instance_id).await {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    for job in &jobs {
+        // The kernel verifies `expected_instance_payload_hash` against
+        // the instance's CURRENT payload hash, and a completion may
+        // rewrite the payload — so re-read per job rather than trusting
+        // the activation-time snapshot. Echoing the instance's own
+        // payload back keeps the hash chain stable across the loop.
+        let current = match demo.store.load_instance(&demo.tenant_id, instance_id).await {
+            Ok(Some(instance)) => instance,
+            Ok(None) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("instance {instance_id} vanished mid-advance"),
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
+        if let Err(e) = demo
+            .engine
+            .complete_job(
+                &job.job_key,
+                current.domain_payload.as_ref(),
+                current.domain_payload_hash,
+                std::collections::BTreeMap::new(),
+            )
+            .await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    }
+
+    if let Err(e) = demo.engine.tick_instance(instance_id).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    match demo.engine.inspect(instance_id).await {
+        Ok(inspection) => {
+            (StatusCode::OK, Json(instance_status_response(&inspection))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
 
 // ── Designer sessions (EOP-SAGE-REPL-BPMN-001 T1) ────────────────────────
 
@@ -4631,6 +4876,78 @@ mod tests {
         body
     }
 
+    /// Phase C helper: like `publish_admittable_template` but the graph is
+    /// start → four ServiceTasks (task_type "noop", ids t1..t4) → end, so
+    /// the spawned instance genuinely parks on jobs the advance endpoint
+    /// must complete through the real VM.
+    async fn publish_four_task_template(app: &Router, template_name: &str) -> Value {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": format!("{template_name}-session") }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let mut anchor = seed_start_key(sid);
+        let mut ops = Vec::new();
+        for (i, task_id) in ["t1", "t2", "t3", "t4"].iter().enumerate() {
+            let key = new_key();
+            ops.push(designer_graph::ops::Operation::AppendNode {
+                anchor,
+                key,
+                node: task_ir(task_id),
+                edge_id: format!("f{}", i + 1),
+            });
+            anchor = key;
+        }
+        ops.push(designer_graph::ops::Operation::AppendNode {
+            anchor,
+            key: new_key(),
+            node: bpmn_lite_compiler::IRNode::End {
+                id: "end".into(),
+                terminate: false,
+            },
+            edge_id: "f5".into(),
+        });
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": template_name }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        body
+    }
+
+    fn get_req(uri: &str) -> Request<axum::body::Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
     fn minimal_dto(id: &str) -> bpmn_lite_authoring::WorkflowGraphDto {
         bpmn_lite_authoring::WorkflowGraphDto {
             id: id.to_string(),
@@ -4704,6 +5021,168 @@ mod tests {
             instance.is_some(),
             "spawned instance must be persisted in the store the template was published into"
         );
+    }
+
+    // ── Phase C: instance status + advance round trip (2026-08-01) ────
+
+    /// GREEN cement: the first true engine-execution round trip in the
+    /// repo — spawn from a Published 4-ServiceTask template, observe it
+    /// Running with a waiting job, then advance (real tick + complete_job
+    /// against the VM, not the runner's plan-walker) until Completed.
+    #[tokio::test]
+    async fn test_instance_round_trip_spawn_advance_to_completed() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_four_task_template(&app, "round-trip-template").await;
+
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/round-trip-template/spawn",
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        // Initial status: Running, parked on the first ServiceTask's job.
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!("/bpmn/instances/{instance_id}/status")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let status = body_json(response).await;
+        assert_eq!(status["state"], "Running", "{status:?}");
+        assert_eq!(status["instance_id"], instance_id);
+        assert!(
+            !status["waiting_jobs"].as_array().unwrap().is_empty(),
+            "spawned instance must be parked on a job: {status:?}"
+        );
+        assert!(status["fiber_count"].as_u64().unwrap() >= 1);
+        assert!(status["wait_count"].as_u64().unwrap() >= 1);
+
+        // Advance until Completed — bounded, no unbounded polling.
+        let mut last = status;
+        for _ in 0..10 {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            last = body_json(response).await;
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(
+            last["state"], "Completed",
+            "instance must complete within 10 advance rounds: {last:?}"
+        );
+        assert!(
+            last["waiting_jobs"].as_array().unwrap().is_empty(),
+            "no jobs may remain after completion: {last:?}"
+        );
+        assert!(
+            last["completed_at"].as_i64().is_some(),
+            "Completed carries a timestamp: {last:?}"
+        );
+    }
+
+    /// RED cement: status of an unknown instance → 404, not a 200 with
+    /// fabricated state.
+    #[tokio::test]
+    async fn test_instance_status_unknown_instance_not_found() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let response = app
+            .oneshot(get_req(&format!(
+                "/bpmn/instances/{}/status",
+                Uuid::new_v4()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = body_json(response).await;
+        assert_eq!(body["error"], "instance_not_found");
+    }
+
+    /// RED cement: advance of an unknown instance → 404.
+    #[tokio::test]
+    async fn test_advance_unknown_instance_not_found() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let response = app
+            .oneshot(post_json(
+                &format!("/bpmn/instances/{}/advance", Uuid::new_v4()),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = body_json(response).await;
+        assert_eq!(body["error"], "instance_not_found");
+    }
+
+    /// GREEN cement: advance on an already-Completed instance is an
+    /// idempotent no-op — 200, state stays "Completed".
+    #[tokio::test]
+    async fn test_advance_completed_instance_idempotent() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_four_task_template(&app, "idempotent-template").await;
+
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/idempotent-template/spawn",
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        let mut last = serde_json::json!({});
+        for _ in 0..10 {
+            last = body_json(
+                app.clone()
+                    .oneshot(post_json(
+                        &format!("/bpmn/instances/{instance_id}/advance"),
+                        serde_json::json!({}),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(last["state"], "Completed", "{last:?}");
+        let completed_at = last["completed_at"].as_i64();
+
+        // Advance again — must be a 200 no-op, state unchanged.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/bpmn/instances/{instance_id}/advance"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["state"], "Completed");
+        assert_eq!(body["completed_at"].as_i64(), completed_at);
+        assert!(body["waiting_jobs"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
