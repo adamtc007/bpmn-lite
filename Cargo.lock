@@ -477,6 +477,7 @@ dependencies = [
  "blake3",
  "bpmn-lite-authoring",
  "bpmn-lite-compiler",
+ "bpmn-lite-engine",
  "bpmn-lite-store",
  "bpmn-lite-types",
  "chrono",
