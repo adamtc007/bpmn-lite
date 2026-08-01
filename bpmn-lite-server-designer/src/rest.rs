@@ -2928,6 +2928,54 @@ async fn session_graph_endpoint(
                 .into_response();
         }
     };
+    // Graph-backed sessions carry no DSL text: the DAG is authoritative.
+    // Serve the COMPILED workflow through the same admitted
+    // DAG -> to_ir -> project_ir chain the save/spawn path trusts, so
+    // what the visualiser shows is exactly what an instance will execute
+    // — never a parallel projection that could drift.
+    if session.is_graph_backed() {
+        let ops_bytes: Vec<u8> = session
+            .graph_edit_payloads()
+            .into_iter()
+            .flat_map(|p| p.as_bytes().to_vec().into_iter())
+            .collect();
+        let source_hash = blake3::hash(&ops_bytes).to_hex().to_string();
+        let fail = |diags: Vec<String>| {
+            Json(serde_json::json!({
+                "compiles": false,
+                "diagnostics": diags,
+                "graph": serde_json::Value::Null,
+                "layout": serde_json::Value::Null,
+                "source_hash": source_hash.clone(),
+            }))
+            .into_response()
+        };
+        let dag = match reconstruct_designer_dag(&session) {
+            Ok(d) => d,
+            Err(e) => return fail(vec![format!("reconstruction: {e}")]),
+        };
+        if let Err(errs) = dag.admit() {
+            return fail(errs.iter().map(|e| e.message.clone()).collect());
+        }
+        let ir = match dag.to_ir() {
+            Ok(ir) => ir,
+            Err(e) => return fail(vec![format!("to_ir: {e}")]),
+        };
+        let plan = match bpmn_lite_compiler::dsl::project_ir(&ir, session.name.clone()) {
+            Ok(plan) => plan,
+            Err(e) => return fail(vec![format!("project_ir: {e}")]),
+        };
+        let graph = plan_to_visual_graph(&plan);
+        let layout = layered_layout(&graph);
+        return Json(serde_json::json!({
+            "compiles": true,
+            "diagnostics": [],
+            "graph": graph,
+            "layout": layout,
+            "source_hash": source_hash,
+        }))
+        .into_response();
+    }
     let source = session.current_source().unwrap_or_default().to_owned();
     let source_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
     let registry = get_preview_registry();
@@ -5350,5 +5398,101 @@ mod tests {
             body.as_array().unwrap().is_empty(),
             "retired-sibling has no Published version: {body:?}"
         );
+    }
+
+    /// GREEN: the session graph endpoint serves GRAPH-BACKED sessions
+    /// through the same admitted DAG -> to_ir -> project_ir chain the
+    /// save/spawn path uses — the visualiser shows the COMPILED
+    /// workflow, laid out in execution order (x strictly increasing
+    /// along the start -> t1..t4 -> end chain). Before this branch
+    /// existed, a graph session fell through to the text path and
+    /// returned compiles:false on its empty source.
+    #[tokio::test]
+    async fn test_session_graph_endpoint_serves_compiled_graph_for_graph_session() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "graph viz session" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+
+        let mut anchor = seed_start_key(sid);
+        let mut ops = Vec::new();
+        for (i, task) in ["t1", "t2", "t3", "t4"].iter().enumerate() {
+            let key = new_key();
+            ops.push(designer_graph::ops::Operation::AppendNode {
+                anchor,
+                key,
+                node: task_ir(task),
+                edge_id: format!("f{}", i + 1),
+            });
+            anchor = key;
+        }
+        ops.push(designer_graph::ops::Operation::AppendNode {
+            anchor,
+            key: new_key(),
+            node: bpmn_lite_compiler::IRNode::End {
+                id: "end".into(),
+                terminate: false,
+            },
+            edge_id: "f5".into(),
+        });
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "4-step chain" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&format!("/api/dsl/sessions/{session_id}/graph"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["compiles"], true, "{body:?}");
+        let nodes = body["graph"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 6, "start + 4 tasks + end: {body:?}");
+        let x_of = |id: &str| -> f64 {
+            body["layout"][id]["x"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("layout missing {id}: {body:?}"))
+        };
+        // Execution order left-to-right: each hop strictly to the right.
+        let chain: Vec<&str> = nodes
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(chain.iter().any(|id| id.contains("t1")), "{chain:?}");
+        let mut ordered: Vec<(&str, f64)> =
+            chain.iter().map(|id| (*id, x_of(id))).collect();
+        ordered.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let xs: Vec<f64> = ordered.iter().map(|(_, x)| *x).collect();
+        for w in xs.windows(2) {
+            assert!(w[0] < w[1], "layout is a strict left-to-right chain: {ordered:?}");
+        }
+        assert_eq!(ordered.first().unwrap().1, 0.0, "start at x=0: {ordered:?}");
     }
 }

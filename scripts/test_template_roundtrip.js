@@ -107,6 +107,30 @@ async function main() {
   assert(afterCreate.includes('session:'), 'session id shown');
   console.log('PASS 1: session created, graph ops admitted');
 
+  // Step 1b: the compiled-workflow visualiser renders the DAG in
+  // execution order — the user's check that their intention is correct.
+  await waitForText('Workflow graph (compiled', 15000, 'graph section rendered');
+  const graphCheck = await evalInPage(`() => {
+    const svg = document.querySelector('[data-testid="workflow-graph"]');
+    if (!svg) return 'NO_SVG';
+    // Execution order left-to-right: x position of each shape center.
+    const centers = [...svg.querySelectorAll('[data-node-id]')].map(g => {
+      const shape = g.querySelector('rect, circle');
+      const x = shape.tagName === 'circle'
+        ? parseFloat(shape.getAttribute('cx'))
+        : parseFloat(shape.getAttribute('x')) + parseFloat(shape.getAttribute('width')) / 2;
+      return { id: g.getAttribute('data-node-id'), x };
+    }).sort((a, b) => a.x - b.x);
+    return 'ORDER:' + centers.map(c => c.id).join('|');
+  }`);
+  const orderMatch = graphCheck.match(/ORDER:([\w|-]+)/);
+  assert(orderMatch, `graph order probe returned: ${graphCheck}`);
+  const order = orderMatch[1].split('|');
+  assert(order.length === 6, `6 nodes rendered (start + t1..t4 + end), got ${graphCheck}`);
+  const tIdx = ['t1', 't2', 't3', 't4'].map((t) => order.findIndex((id) => id === t));
+  assert(tIdx.every((v, i) => v > 0 && (i === 0 || v > tIdx[i - 1])), `t1..t4 left-to-right in execution order: ${graphCheck}`);
+  console.log('PASS 1b: compiled graph rendered in execution order');
+
   // Step 2: publish as template.
   assert((await clickByText('Save as template')).includes('CLICKED'), 'save button present');
   const afterSave = await waitForText('published', 15000, 'template published');
@@ -118,7 +142,8 @@ async function main() {
   const afterSpawn = await waitForText('waiting jobs:', 15000, 'instance spawned');
   assert(afterSpawn.includes('Running'), 'instance is Running after spawn');
   assert(afterSpawn.includes('t1 ('), 'VM parked on t1 job wait');
-  console.log('PASS 3: instance spawned, Running, waiting on t1');
+  assert(afterSpawn.includes('token at t1'), 'graph overlay shows the token at t1');
+  console.log('PASS 3: instance spawned, Running, token overlay at t1');
 
   // Step 4: run to completion through the real engine.
   assert((await clickByText('Run to completion')).includes('CLICKED'), 'run button present');
@@ -126,7 +151,8 @@ async function main() {
   assert(finalText.includes('Completed'), 'state is Completed');
   assert(finalText.includes('completed after 4 advance(s)'), 'exactly 4 advances for 4 tasks');
   assert(/waiting jobs:\s*\n?\s*none/.test(finalText), 'no waiting jobs remain');
-  console.log('PASS 4: instance ran to Completed in 4 advances');
+  assert(finalText.includes('✓ completed'), 'graph overlay shows completed');
+  console.log('PASS 4: instance ran to Completed in 4 advances, graph shows ✓');
 
   console.log('ROUND TRIP: ALL PASS');
 }
