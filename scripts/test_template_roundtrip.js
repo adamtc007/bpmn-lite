@@ -101,8 +101,9 @@ async function main() {
   await callTool('new_page', { url: `${targetUrl}/bpmn-templates` });
   await sleep(1200);
 
-  // Step 1: author the 4-step workflow (session + graph-edit).
-  assert((await clickByText('Create 4-step workflow')).includes('CLICKED'), 'create button present');
+  // Step 1: author the branched workflow (session + graph-edit):
+  // start → t1 → split ⇉ (t2a→t3a | t2b→t3b) ⇉ join → t4 → t5 → end.
+  assert((await clickByText('Create branched workflow')).includes('CLICKED'), 'create button present');
   const afterCreate = await waitForText('ops result:', 15000, 'graph ops admitted');
   assert(afterCreate.includes('session:'), 'session id shown');
   console.log('PASS 1: session created, graph ops admitted');
@@ -115,10 +116,18 @@ async function main() {
     if (!svg) return 'NO_SVG';
     // Execution order left-to-right: x position of each shape center.
     const centers = [...svg.querySelectorAll('[data-node-id]')].map(g => {
-      const shape = g.querySelector('rect, circle');
-      const x = shape.tagName === 'circle'
-        ? parseFloat(shape.getAttribute('cx'))
-        : parseFloat(shape.getAttribute('x')) + parseFloat(shape.getAttribute('width')) / 2;
+      const shape = g.querySelector('rect, circle, path');
+      let x;
+      if (shape.tagName === 'circle') {
+        x = parseFloat(shape.getAttribute('cx'));
+      } else if (shape.tagName === 'rect') {
+        x = parseFloat(shape.getAttribute('x')) + parseFloat(shape.getAttribute('width')) / 2;
+      } else {
+        // Gateway diamond path: "M cx cy-R L ..." — first M x is the center
+        // x. NOTE: plain space split — a regex \s inside this template
+        // literal would collapse to "s" (invalid-escape rule) and break.
+        x = parseFloat(shape.getAttribute('d').trim().split(' ')[1]);
+      }
       return { id: g.getAttribute('data-node-id'), x };
     }).sort((a, b) => a.x - b.x);
     return 'ORDER:' + centers.map(c => c.id).join('|');
@@ -126,10 +135,15 @@ async function main() {
   const orderMatch = graphCheck.match(/ORDER:([\w|-]+)/);
   assert(orderMatch, `graph order probe returned: ${graphCheck}`);
   const order = orderMatch[1].split('|');
-  assert(order.length === 6, `6 nodes rendered (start + t1..t4 + end), got ${graphCheck}`);
-  const tIdx = ['t1', 't2', 't3', 't4'].map((t) => order.findIndex((id) => id === t));
-  assert(tIdx.every((v, i) => v > 0 && (i === 0 || v > tIdx[i - 1])), `t1..t4 left-to-right in execution order: ${graphCheck}`);
-  console.log('PASS 1b: compiled graph rendered in execution order');
+  assert(order.length === 11, `11 nodes (start,t1,split,t2a,t2b,t3a,t3b,join,t4,t5,end), got ${graphCheck}`);
+  const idx = (id) => order.findIndex((n) => n === id);
+  // Execution order: t1 < split < {t2a,t2b} < {t3a,t3b} < join < t4 < t5.
+  assert(idx('t1') < idx('split'), `t1 before split: ${graphCheck}`);
+  assert(idx('split') < idx('t2a') && idx('split') < idx('t2b'), `split before branches: ${graphCheck}`);
+  assert(idx('t2a') < idx('t3a') && idx('t2b') < idx('t3b'), `branch order: ${graphCheck}`);
+  assert(idx('t3a') < idx('join') && idx('t3b') < idx('join'), `join after both branches: ${graphCheck}`);
+  assert(idx('join') < idx('t4') && idx('t4') < idx('t5'), `tail after join: ${graphCheck}`);
+  console.log('PASS 1b: branched compiled graph rendered in execution order');
 
   // Step 2: publish as template.
   assert((await clickByText('Save as template')).includes('CLICKED'), 'save button present');
@@ -149,10 +163,13 @@ async function main() {
   assert((await clickByText('Run to completion')).includes('CLICKED'), 'run button present');
   const finalText = await waitForText('completed after', 30000, 'run to completion');
   assert(finalText.includes('Completed'), 'state is Completed');
-  assert(finalText.includes('completed after 4 advance(s)'), 'exactly 4 advances for 4 tasks');
+  const advMatch = finalText.match(/completed after (\d+) advance/);
+  assert(advMatch, `completion banner present: ${finalText.slice(0, 400)}`);
+  // Branched shape: t1 / (t2a,t2b) / (t3a,t3b) / join+t4 / t5 ≈ 5 rounds.
+  assert(Number(advMatch[1]) >= 4 && Number(advMatch[1]) <= 8, `plausible advance count, got ${advMatch[1]}`);
   assert(/waiting jobs:\s*\n?\s*none/.test(finalText), 'no waiting jobs remain');
   assert(finalText.includes('✓ completed'), 'graph overlay shows completed');
-  console.log('PASS 4: instance ran to Completed in 4 advances, graph shows ✓');
+  console.log(`PASS 4: branched instance ran to Completed in ${advMatch[1]} advances, graph shows ✓`);
 
   console.log('ROUND TRIP: ALL PASS');
 }

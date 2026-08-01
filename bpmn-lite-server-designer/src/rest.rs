@@ -5495,4 +5495,260 @@ mod tests {
         }
         assert_eq!(ordered.first().unwrap().1, 0.0, "start at x=0: {ordered:?}");
     }
+
+    /// Build the branched SESE session over the wire and return its id:
+    ///
+    /// start -> t1 -> split -> t2a -> t3a -> join -> t4 -> t5 -> end
+    ///                     \-> t2b -> t3b ->/
+    ///
+    /// ONE graph-edit call: `CreateParallelRegion` inserts the fork/join
+    /// block CLOSED (there is no open-region staging state), the two
+    /// `InsertAfter`s extend each branch to two tasks, and the tail
+    /// `AppendNode`s finish the chain — admit() runs once over the whole
+    /// staged sequence, so nothing partial is ever persisted.
+    async fn build_branched_session(app: &Router, name: &str) -> String {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": name }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let fork = new_key();
+        let join = new_key();
+        let t2a = new_key();
+        let t2b = new_key();
+        let t4 = new_key();
+        let t5 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::CreateParallelRegion {
+                anchor: t1,
+                fork_key: fork,
+                fork_node_id: "split".into(),
+                join_key: join,
+                join_node_id: "join".into(),
+                entry_edge_id: "f2".into(),
+                branches: vec![
+                    designer_graph::ops::RegionBranch {
+                        key: t2a,
+                        node: task_ir("t2a"),
+                        in_edge_id: "f3a".into(),
+                        out_edge_id: "f4a".into(),
+                        condition: None,
+                    },
+                    designer_graph::ops::RegionBranch {
+                        key: t2b,
+                        node: task_ir("t2b"),
+                        in_edge_id: "f3b".into(),
+                        out_edge_id: "f4b".into(),
+                        condition: None,
+                    },
+                ],
+            },
+            // Extend each branch to two tasks: InsertAfter re-points the
+            // branch's out-edge (f4a/f4b) so it now leaves from t3a/t3b
+            // into the join, preserving the flow ids.
+            designer_graph::ops::Operation::InsertAfter {
+                anchor: t2a,
+                key: new_key(),
+                node: task_ir("t3a"),
+                edge_id: "f5a".into(),
+            },
+            designer_graph::ops::Operation::InsertAfter {
+                anchor: t2b,
+                key: new_key(),
+                node: task_ir("t3b"),
+                edge_id: "f5b".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: join,
+                key: t4,
+                node: task_ir("t4"),
+                edge_id: "f6".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t4,
+                key: t5,
+                node: task_ir("t5"),
+                edge_id: "f7".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t5,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f8".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "branched build" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "branched graph-edit must admit: {body:?}");
+        session_id
+    }
+
+    /// GREEN cement: a 2-way parallel BRANCH + MERGE session (6 tasks,
+    /// matched GatewayAnd pair) admits over the wire, and the graph
+    /// endpoint serves the COMPILED branched graph with a sane layered
+    /// layout — same depth for the branch heads (one x, two lanes), the
+    /// join right of both branches, the tail right of the join.
+    #[tokio::test]
+    async fn test_session_graph_endpoint_serves_branched_graph() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let session_id = build_branched_session(&app, "branched viz session").await;
+
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/graph")))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["compiles"], true, "{body:?}");
+        let nodes = body["graph"]["nodes"].as_array().unwrap();
+        assert_eq!(
+            nodes.len(),
+            11,
+            "start + t1 + split + (t2a,t3a,t2b,t3b) + join + t4 + t5 + end: {body:?}"
+        );
+        let coord = |id: &str, axis: &str| -> f64 {
+            body["layout"][id][axis]
+                .as_f64()
+                .unwrap_or_else(|| panic!("layout missing {id}.{axis}: {body:?}"))
+        };
+        // Branch heads share a depth (same x) but occupy two lanes
+        // (different y).
+        assert_eq!(coord("t2a", "x"), coord("t2b", "x"), "{body:?}");
+        assert_ne!(coord("t2a", "y"), coord("t2b", "y"), "{body:?}");
+        assert_eq!(coord("t3a", "x"), coord("t3b", "x"), "{body:?}");
+        assert_ne!(coord("t3a", "y"), coord("t3b", "y"), "{body:?}");
+        // The join sits strictly right of every branch node; the tail
+        // strictly right of the join, in chain order.
+        for branch_node in ["t2a", "t2b", "t3a", "t3b"] {
+            assert!(
+                coord("join", "x") > coord(branch_node, "x"),
+                "join must be right of {branch_node}: {body:?}"
+            );
+        }
+        assert!(coord("split", "x") > coord("t1", "x"), "{body:?}");
+        assert!(coord("t4", "x") > coord("join", "x"), "{body:?}");
+        assert!(coord("t5", "x") > coord("t4", "x"), "{body:?}");
+        assert!(coord("end", "x") > coord("t5", "x"), "{body:?}");
+    }
+
+    /// GREEN cement: the branched template publishes, spawns, and runs to
+    /// Completed through the REAL engine — and mid-flight the parallel
+    /// region is observable as 2 fibers parked on 2 waiting jobs
+    /// simultaneously (both branches in flight at once, not a
+    /// sequentialized walk).
+    #[tokio::test]
+    async fn test_branched_instance_runs_to_completion() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let session_id = build_branched_session(&app, "branched run session").await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "branched-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "branched save must publish: {body:?}");
+
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/branched-template/spawn",
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        // Spawn parks on t1's job first: single fiber, single wait.
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!("/bpmn/instances/{instance_id}/status")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let status = body_json(response).await;
+        assert_eq!(status["state"], "Running", "{status:?}");
+
+        // Advance until Completed — bounded — and require the parallel
+        // region to be OBSERVED mid-flight: at least one round must report
+        // 2 waiting jobs across >= 2 fibers.
+        let mut saw_parallel_midflight = false;
+        let mut last = status;
+        for _ in 0..12 {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            last = body_json(response).await;
+            if last["waiting_jobs"].as_array().unwrap().len() == 2
+                && last["fiber_count"].as_u64().unwrap() >= 2
+            {
+                saw_parallel_midflight = true;
+            }
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert!(
+            saw_parallel_midflight,
+            "the parallel region must be observable mid-flight as 2 waiting \
+             jobs on >= 2 fibers — a sequentialized walk would never show it"
+        );
+        assert_eq!(
+            last["state"], "Completed",
+            "branched instance must complete within 12 advance rounds: {last:?}"
+        );
+        assert!(
+            last["waiting_jobs"].as_array().unwrap().is_empty(),
+            "no jobs may remain after completion: {last:?}"
+        );
+        assert!(
+            last["completed_at"].as_i64().is_some(),
+            "Completed carries a timestamp: {last:?}"
+        );
+    }
 }
