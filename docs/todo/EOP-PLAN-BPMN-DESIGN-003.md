@@ -973,6 +973,13 @@ events.
   exists; n=98; nothing promoted; G3 thresholds and base ratification
   are Adam's. Human-authored eval utterances remain outstanding —
   re-requested in the report.
+- **2026-08-01: Adam ratified `modernbert-base`; K widened 8→12.
+  Serving integration follows.** Both open rulings above are closed:
+  `modernbert-base` is the canonical tier-1 base (provenance tiebreak at
+  the tied top-1; hash retained in its bundle card) and
+  `retrieval::TIER1_K = 12` is the ONE standing K (spec §S5's recorded
+  K=8 stays as the historical trained configuration — this receipt, not
+  the spec, is the record of the change).
 
 ## D. Delta table — v0.1 → v0.2 (per EOP-DIR-BPMN-DESIGN-003-001 Phase 3)
 

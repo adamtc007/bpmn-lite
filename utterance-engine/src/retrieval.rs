@@ -20,6 +20,18 @@ use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult}
 /// the prefix cut it). One function for the corpus generator today and
 /// the serving path in Phase C — training-list shape = serving-list
 /// shape by construction, not by discipline.
+/// THE standing K for `tier1_list` — ONE definition, shared by the
+/// corpus generator, the eval tools, and the serving path.
+///
+/// History: spec EOP-SPEC-SLM-TRAIN-001 §S5 ruled K=8 and the four
+/// canonical bundles were TRAINED on K=8+NOTA lists; Adam widened K
+/// 8→12 (EOP-DIR-BPMN-DESIGN-003-003, ratified 2026-08-01 in the plan
+/// receipt) after the recall curve showed K=8's 4% miss floor was all
+/// gold at ranks 9–11 (recall@12 = 100% on the eval set). The spec's
+/// recorded K=8 is the historical trained configuration and is not
+/// edited; THIS constant is the live configuration.
+pub const TIER1_K: usize = 12;
+
 pub fn tier1_list(result: &SlmResult, k: usize) -> Vec<String> {
     let mut ids: Vec<String> = result
         .ranking
@@ -159,6 +171,36 @@ mod tests {
         assert_eq!(rec.model_bundle_hash, "tier0.lexical.v1");
         assert!(!rec.disposition_policy_hash.is_empty());
         assert_eq!(rec.ranking.len(), board.candidates.len());
+    }
+
+    /// K-widening receipt (Adam's 2026-08-01 ruling, 8→12): at the ONE
+    /// standing constant, `tier1_list` yields exactly K entries plus
+    /// NOTA appended when the prefix cut it — 13 served candidates.
+    #[test]
+    fn tier1_list_at_standing_k12_serves_13_with_nota() {
+        assert_eq!(TIER1_K, 12, "standing K is the ratified 12 (8→12, 2026-08-01)");
+        // 20 on-ranking candidates, NOTA ranked dead last (cut by any prefix).
+        let mut ranking: Vec<RankedCandidate> = (0..20)
+            .map(|i| RankedCandidate {
+                candidate_id: format!("op.cand_{i:02}"),
+                score: FiniteScore::new(1.0 - i as f64 / 100.0).unwrap(),
+            })
+            .collect();
+        ranking.push(RankedCandidate {
+            candidate_id: crate::contract::NONE_OF_THE_ABOVE.to_owned(),
+            score: FiniteScore::new(0.0).unwrap(),
+        });
+        rank_canonically(&mut ranking);
+        let result = SlmResult {
+            ranking,
+            retrieved_subset_hash: "h".into(),
+            board_hash: "b".into(),
+            model_bundle_hash: "m".into(),
+        };
+        let list = tier1_list(&result, TIER1_K);
+        assert_eq!(list.len(), TIER1_K + 1, "K-prefix + appended NOTA");
+        assert_eq!(&list[..TIER1_K], (0..TIER1_K).map(|i| format!("op.cand_{i:02}")).collect::<Vec<_>>().as_slice());
+        assert_eq!(list[TIER1_K], crate::contract::NONE_OF_THE_ABOVE);
     }
 
     /// Evidence stays on the board (I15 upheld by construction) and the

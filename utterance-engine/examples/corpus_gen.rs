@@ -29,7 +29,10 @@ use utterance_engine::fixtures::{enumeration_classes, ClassState};
 use utterance_engine::retrieval::LexicalTier0;
 use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 
-const K: usize = 8; // spec S5 ruling-implementation; recorded in the card
+// Spec S5 recorded K=8 as the trained configuration (historical, not edited);
+// Adam widened K 8->12 (ratified 2026-08-01) -- next corpus (corpus-v2 retrain)
+// generates at the ONE standing constant. Recorded in the card.
+const K: usize = utterance_engine::retrieval::TIER1_K;
 const OVERLAP_CAP: f64 = 0.5; // spec S4 A3.1
 const CORPUS_VERSION: &str = "synthetic-v2-beta";
 

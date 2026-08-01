@@ -41,7 +41,7 @@ use utterance_engine::retrieval::LexicalTier0;
 use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
 use utterance_engine::trained_ranker::{Base, TrainedRanker};
 
-const K: usize = 12; // same standing K as the rest of DIR-003 Phase 1
+const K: usize = utterance_engine::retrieval::TIER1_K; // the ONE standing K (12; ratified 2026-08-01)
 const SUITE: &str = "starter-seed-v1";
 const CANONICAL_BASE: Base = Base::ModernbertBase; // Adam's ratification, EOP-DIR-BPMN-DESIGN-003-003
 

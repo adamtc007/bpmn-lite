@@ -61,7 +61,7 @@ fn main() -> Result<()> {
 
     // Latency-vs-K probe (close-out suite): `<base-key> latency` times
     // the identical scoring path at three served-list sizes — the ruled
-    // K=8+NOTA (9), the proposed K=12+NOTA (13), and the full board
+    // legacy trained K=8+NOTA (9), the ruled K=12+NOTA (13), and the full board
     // (upper bound) — over the whole eval set. Widened lists take the
     // tier-0 ranking's next candidates in rank order (exactly what a
     // widened tier1_list would contain); the full-board list is the
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
         let base = bases[0];
         let bundle_dir = root.join("train_py/bundles").join(base.key());
         let ranker = TrainedRanker::load(base, &bundle_dir, &device)?;
-        for &(label, k) in &[("K=8+NOTA (ruled)", 9usize), ("K=12+NOTA (proposed)", 13), ("full board", usize::MAX)] {
+        for &(label, k) in &[("K=8+NOTA (legacy trained)", 9usize), ("K=12+NOTA (ruled 2026-08-01)", 13), ("full board", usize::MAX)] {
             let mut times_ms: Vec<f64> = Vec::with_capacity(eval_records.len());
             for record in &eval_records {
                 // Widen from the board's candidate list in board order —

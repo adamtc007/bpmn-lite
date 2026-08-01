@@ -15,6 +15,15 @@ q9-capture = ["utterance-engine/q9-capture"]
 # PostgresTemplateStore when DATABASE_URL is set. See
 # DesignerState::try_new_from_env for the selection semantics.
 postgres = ["bpmn-lite-authoring/postgres", "dep:bpmn-lite-store-postgres", "dep:sqlx"]
+# Tier-1 serving integration (DIR-002, ruled 2026-08-01): forwards to
+# utterance-engine's feature-gated producers. Off by default -- a default
+# designer build has NO heavyweight model deps and serves LexicalTier0
+# exactly as before. With `candle-probe` compiled, SLM_BUNDLE_DIR selects
+# the trained bundle at startup; load failure degrades to tier-0 (never a
+# refusal to start). `embed` supplies the BGE tier-0 that feeds tier-1
+# (and serves alone when no bundle is loaded).
+embed = ["utterance-engine/embed"]
+candle-probe = ["utterance-engine/candle-probe"]
 
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }

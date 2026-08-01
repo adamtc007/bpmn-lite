@@ -29,7 +29,7 @@ use crate::corpus_schema::Example;
 const MAX_LENGTH: usize = 256; // must match train_slm.py's MAX_LENGTH
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Base {
+pub enum Base {
     GteModernbert,
     MsMarco,
     ModernbertBase,
@@ -37,9 +37,9 @@ pub(crate) enum Base {
 }
 
 impl Base {
-    pub(crate) const ALL: [Base; 4] = [Base::GteModernbert, Base::MsMarco, Base::ModernbertBase, Base::BgeReranker];
+    pub const ALL: [Base; 4] = [Base::GteModernbert, Base::MsMarco, Base::ModernbertBase, Base::BgeReranker];
 
-    pub(crate) fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Base::GteModernbert => "gte-modernbert",
             Base::MsMarco => "ms-marco",
@@ -48,14 +48,14 @@ impl Base {
         }
     }
 
-    pub(crate) fn from_key(k: &str) -> Option<Base> {
+    pub fn from_key(k: &str) -> Option<Base> {
         Base::ALL.into_iter().find(|b| b.key() == k)
     }
 
     /// Same HF pins as candle_loadability_probe.rs -- architecture
     /// hyperparameters only (config.json). Weights come from the local
     /// trained bundle, never from this download.
-    pub(crate) fn repo_and_revision(self) -> (&'static str, &'static str) {
+    pub fn repo_and_revision(self) -> (&'static str, &'static str) {
         match self {
             Base::GteModernbert => (
                 "Alibaba-NLP/gte-reranker-modernbert-base",
@@ -123,7 +123,7 @@ impl Encoder {
     }
 }
 
-pub(crate) struct TrainedRanker {
+pub struct TrainedRanker {
     encoder: Encoder,
     head: Linear,
     pooling: String, // "cls" | "mean", read from the bundle's training_card.json
@@ -145,7 +145,7 @@ fn pool(hidden: &Tensor, mask: &Tensor, pooling: &str) -> Result<Tensor> {
 }
 
 impl TrainedRanker {
-    pub(crate) fn load(base: Base, bundle_dir: &std::path::Path, device: &Device) -> Result<Self> {
+    pub fn load(base: Base, bundle_dir: &std::path::Path, device: &Device) -> Result<Self> {
         let card: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
                 .context("training_card.json")?;
@@ -196,14 +196,14 @@ impl TrainedRanker {
         })
     }
 
-    pub(crate) fn bundle_identity(&self) -> &str {
+    pub fn bundle_identity(&self) -> &str {
         &self.bundle_identity
     }
 
     /// Scores every candidate in `record.tier1_list` -- the SAME list
     /// shape training/serving share (Adam's finding-5 ruling) -- never
     /// the full board.
-    pub(crate) fn score(&self, record: &Example, device: &Device) -> Result<SlmResult> {
+    pub fn score(&self, record: &Example, device: &Device) -> Result<SlmResult> {
         self.score_list(record, &record.tier1_list, device)
     }
 
@@ -211,7 +211,7 @@ impl TrainedRanker {
     /// tier1_list; this exists for the latency-vs-K probe (timing the
     /// same forward pass at widened list sizes, e.g. the full board) and
     /// for scoring constructed candidate pairs (ambiguity-set suite).
-    pub(crate) fn score_list(&self, record: &Example, cand_ids: &[String], device: &Device) -> Result<SlmResult> {
+    pub fn score_list(&self, record: &Example, cand_ids: &[String], device: &Device) -> Result<SlmResult> {
         let query_text = format!("{}\n\n{}", record.utterance, record.context_projection);
         let desc: HashMap<&str, &str> = record
             .board
@@ -219,6 +219,42 @@ impl TrainedRanker {
             .iter()
             .map(|c| (c.canonical_id.as_str(), c.description.as_str()))
             .collect();
+        self.score_query(&query_text, cand_ids, &desc, &record.board_hash, device)
+    }
+
+    /// Serving-side variant (DIR-002 serving integration, 2026-08-01):
+    /// same encoding path as `score_list` — query text is
+    /// `utterance \n\n context_projection`, EXACTLY the corpus records'
+    /// preimage (A1: one textualisation) — but sourced from a live
+    /// `Board` rather than a corpus `Example`.
+    pub fn score_serving(
+        &self,
+        utterance: &str,
+        context_projection: &str,
+        board: &crate::board::Board,
+        cand_ids: &[String],
+        device: &Device,
+    ) -> Result<SlmResult> {
+        let query_text = format!("{utterance}\n\n{context_projection}");
+        let desc: HashMap<&str, &str> = board
+            .candidates
+            .iter()
+            .map(|c| (c.canonical_id.as_str(), c.description.as_str()))
+            .collect();
+        self.score_query(&query_text, cand_ids, &desc, &board.board_hash, device)
+    }
+
+    /// The ONE forward-pass core both `score_list` (corpus/eval) and
+    /// `score_serving` (live endpoint) share — extracted so the serving
+    /// path cannot drift from the mechanics the bake-off measured.
+    fn score_query(
+        &self,
+        query_text: &str,
+        cand_ids: &[String],
+        desc: &HashMap<&str, &str>,
+        board_hash: &str,
+        device: &Device,
+    ) -> Result<SlmResult> {
         let cand_texts: Vec<&str> = cand_ids
             .iter()
             .map(|id| {
@@ -230,7 +266,7 @@ impl TrainedRanker {
 
         let pairs: Vec<(String, String)> = cand_texts
             .iter()
-            .map(|c| (query_text.clone(), c.to_string()))
+            .map(|c| (query_text.to_string(), c.to_string()))
             .collect();
         let encodings = self
             .tokenizer
@@ -279,8 +315,203 @@ impl TrainedRanker {
         Ok(SlmResult {
             ranking,
             retrieved_subset_hash: blake3::hash(&pre).to_hex().to_string(),
-            board_hash: record.board_hash.clone(),
+            board_hash: board_hash.to_owned(),
             model_bundle_hash: self.bundle_identity.clone(),
         })
+    }
+}
+
+/// Temperature-calibrated listwise probabilities (spec §10.8: the
+/// calibration temperature is SEALED in the bundle's training card, never
+/// caller-invented): softmax over `logit / t` across the served list.
+/// Refuses a non-finite or non-positive temperature — a broken card must
+/// fail the load, not silently serve uncalibrated scores.
+pub fn calibrated_probabilities(logits: &[f64], temperature: f64) -> Result<Vec<f64>> {
+    if !temperature.is_finite() || temperature <= 0.0 {
+        return Err(anyhow!("refused calibration temperature {temperature} — must be finite and > 0"));
+    }
+    let scaled: Vec<f64> = logits.iter().map(|l| l / temperature).collect();
+    let max = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let exps: Vec<f64> = scaled.iter().map(|l| (l - max).exp()).collect();
+    let sum: f64 = exps.iter().sum();
+    if !(sum.is_finite() && sum > 0.0) {
+        return Err(anyhow!("calibrated softmax degenerate (sum {sum})"));
+    }
+    Ok(exps.iter().map(|e| e / sum).collect())
+}
+
+/// The tier-1 SERVING producer (DIR-002 serving integration, ruled
+/// 2026-08-01): tier-0 retrieve → `tier1_list` K-subset (+NOTA) →
+/// trained-bundle listwise scoring → calibrated probabilities. Output is
+/// the same `SlmResult` EVIDENCE shape every tier-0 emits; `policy::decide`
+/// stays the only disposition issuer (I27) and accepts the K-subset
+/// ranking unchanged.
+pub struct Tier1Ranker {
+    ranker: TrainedRanker,
+    /// Sealed calibration temperature from the bundle's `training_card.json`.
+    temperature: f64,
+    /// `<identity>#<content hash>` — identity string plus the bundle's own
+    /// recorded `model.safetensors` hash (the card's `ratification.bundle_hash`
+    /// when present, else blake3 of the file bytes), so the I28
+    /// `model_bundle_hash` names the actual weights, not just a label.
+    model_bundle_hash: String,
+    device: Device,
+}
+
+impl Tier1Ranker {
+    /// Loads the ranker, the sealed temperature, and the bundle content
+    /// hash from `bundle_dir`. CPU device (T3.4a: serving latency is the
+    /// CPU story). Fails closed on a missing/unsealed temperature.
+    pub fn load(base: Base, bundle_dir: &std::path::Path) -> Result<Self> {
+        let device = Device::Cpu;
+        let card: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
+                .context("training_card.json")?;
+        let temperature = card["temperature"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("bundle card missing sealed calibration 'temperature' (§10.8)"))?;
+        if !temperature.is_finite() || temperature <= 0.0 {
+            return Err(anyhow!("bundle card temperature {temperature} refused"));
+        }
+        let content_hash = match card["ratification"]["bundle_hash"].as_str() {
+            Some(h) if !h.is_empty() => h.to_owned(),
+            _ => blake3::hash(&std::fs::read(bundle_dir.join("model.safetensors"))?)
+                .to_hex()
+                .to_string(),
+        };
+        let ranker = TrainedRanker::load(base, bundle_dir, &device)?;
+        let model_bundle_hash = format!("{}#{content_hash}", ranker.bundle_identity());
+        Ok(Tier1Ranker { ranker, temperature, model_bundle_hash, device })
+    }
+
+    pub fn model_bundle_hash(&self) -> &str {
+        &self.model_bundle_hash
+    }
+
+    pub fn temperature(&self) -> f64 {
+        self.temperature
+    }
+
+    /// The full tier-0 → tier-1 serving pass. `tier0` supplies the
+    /// high-recall ranking; the served list is `tier1_list` at the ONE
+    /// standing `TIER1_K` (training-list shape = serving-list shape);
+    /// scores are calibrated probabilities over that list.
+    pub fn rank(
+        &self,
+        tier0: &dyn crate::retrieval::Tier0Retriever,
+        utterance: &str,
+        context_projection: &str,
+        board: &crate::board::Board,
+    ) -> Result<SlmResult> {
+        let tier0_evidence = tier0.retrieve(utterance, board)?;
+        let list = crate::retrieval::tier1_list(&tier0_evidence, crate::retrieval::TIER1_K);
+        let raw = self
+            .ranker
+            .score_serving(utterance, context_projection, board, &list, &self.device)?;
+
+        // Calibrate over the ranking as scored (order-preserving: softmax
+        // is monotone, so the canonical rank order is unchanged).
+        let logits: Vec<f64> = raw.ranking.iter().map(|rc| rc.score.get()).collect();
+        let probs = calibrated_probabilities(&logits, self.temperature)?;
+        let mut ranking: Vec<RankedCandidate> = raw
+            .ranking
+            .iter()
+            .zip(probs.iter())
+            .map(|(rc, &p)| {
+                Ok(RankedCandidate { candidate_id: rc.candidate_id.clone(), score: FiniteScore::new(p)? })
+            })
+            .collect::<Result<_>>()?;
+        rank_canonically(&mut ranking);
+
+        Ok(SlmResult {
+            ranking,
+            retrieved_subset_hash: raw.retrieved_subset_hash,
+            board_hash: board.board_hash.clone(),
+            model_bundle_hash: self.model_bundle_hash.clone(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hermetic calibration receipts: temperature actually rescales the
+    /// distribution (T>1 flattens), output is a probability simplex, and
+    /// broken temperatures are refused (red half).
+    #[test]
+    fn calibration_rescales_and_fails_closed() {
+        let logits = [2.0, 0.5, -1.0];
+        let p1 = calibrated_probabilities(&logits, 1.0).unwrap();
+        let p_t = calibrated_probabilities(&logits, 1.4303200528314213).unwrap();
+        assert!((p1.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((p_t.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(p_t[0] < p1[0], "T>1 must FLATTEN the top probability: {} vs {}", p_t[0], p1[0]);
+        assert!(p_t[2] > p1[2], "T>1 must lift the tail");
+        assert!(p_t[0] > p_t[1] && p_t[1] > p_t[2], "monotone: order preserved");
+        assert!(calibrated_probabilities(&logits, 0.0).is_err(), "T=0 refused");
+        assert!(calibrated_probabilities(&logits, f64::NAN).is_err(), "NaN T refused");
+        assert!(calibrated_probabilities(&logits, -1.0).is_err(), "negative T refused");
+    }
+
+    /// Real-bundle serving receipt (K=12 list, sealed temperature, SlmResult
+    /// shape, populated bundle hash). Requires the trained bundle on disk +
+    /// hf-hub cache/network for the base's config.json, so it is #[ignore]d:
+    /// run with
+    ///   SLM_BUNDLE_DIR=utterance-engine/train_py/bundles/modernbert-base \
+    ///   cargo test -p utterance-engine --features candle-probe --release -- --ignored tier1_serving
+    #[test]
+    #[ignore = "needs SLM_BUNDLE_DIR trained bundle + hf-hub config.json cache"]
+    fn tier1_serving_k12_calibrated_evidence_shape() {
+        use crate::board::{build_board, EmptyUniverse, PolicyFilter};
+        use designer_graph::board_candidate::{LegalityOracle, OperationKind, ProductionId};
+
+        struct AllLegal;
+        impl LegalityOracle for AllLegal {
+            type NodeKey = ();
+            fn legal_operations(&self, _: Option<&()>) -> Vec<OperationKind> {
+                OperationKind::ALL.to_vec()
+            }
+            fn legal_productions(&self, _: Option<&()>) -> Vec<ProductionId> {
+                ProductionId::ALL.to_vec()
+            }
+        }
+
+        let bundle_dir = std::path::PathBuf::from(
+            std::env::var("SLM_BUNDLE_DIR").expect("set SLM_BUNDLE_DIR to a trained bundle dir"),
+        );
+        let t1 = Tier1Ranker::load(Base::ModernbertBase, &bundle_dir).expect("bundle load");
+        assert!(
+            t1.model_bundle_hash().starts_with("slm.trained.modernbert-base@") && t1.model_bundle_hash().contains('#'),
+            "bundle hash must carry identity#content-hash: {}",
+            t1.model_bundle_hash()
+        );
+        assert!(t1.temperature() > 0.0);
+
+        let board = build_board(&AllLegal, None, Some("rev0"), &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let ctx = crate::context::minimal("pack.none", "g-test");
+        let ev = t1
+            .rank(&crate::retrieval::LexicalTier0, "chase them again", &ctx.serialize_canonical(), &board)
+            .expect("tier-1 rank");
+
+        // K=12 list construction: the TIER1_K prefix, +1 only when NOTA
+        // was cut by it (tier1_list's contract). The full board is
+        // larger — the subset rule is doing real work here.
+        assert!(
+            ev.ranking.len() == crate::retrieval::TIER1_K
+                || ev.ranking.len() == crate::retrieval::TIER1_K + 1,
+            "K-subset (+NOTA when cut): got {}",
+            ev.ranking.len()
+        );
+        assert!(board.candidates.len() > ev.ranking.len(), "subset, not the board");
+        assert!(ev.ranking.iter().any(|rc| rc.candidate_id == crate::contract::NONE_OF_THE_ABOVE));
+        for rc in &ev.ranking {
+            assert!(board.contains(&rc.candidate_id), "off-board: {}", rc.candidate_id);
+        }
+        // Temperature applied → probability simplex, not raw logits.
+        let sum: f64 = ev.ranking.iter().map(|rc| rc.score.get()).sum();
+        assert!((sum - 1.0).abs() < 1e-9, "calibrated probabilities must sum to 1, got {sum}");
+        assert_eq!(ev.board_hash, board.board_hash);
+        assert_eq!(ev.model_bundle_hash, t1.model_bundle_hash());
     }
 }

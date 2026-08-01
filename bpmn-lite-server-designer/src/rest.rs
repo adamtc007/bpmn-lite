@@ -77,6 +77,21 @@ pub struct DesignerState {
     /// "ratified proposal …" note. Rejection/drift leave only the
     /// utterance record, which is correct: no mutation happened.
     proposals: Mutex<HashMap<Uuid, PendingProposal>>,
+    /// Tier-1 trained ranker (DIR-002 serving integration, ruled
+    /// 2026-08-01): loaded ONCE at startup from `SLM_BUNDLE_DIR` when the
+    /// `candle-probe` feature is compiled. `None` = degraded-to-tier-0
+    /// serving (env unset OR load failure — logged, never a startup
+    /// refusal, never a fabricated bundle identity: the served
+    /// `model_bundle_hash` is whatever producer actually ran).
+    #[cfg(feature = "candle-probe")]
+    tier1: Option<Arc<utterance_engine::trained_ranker::Tier1Ranker>>,
+    /// The BGE embed tier-0 (`embed` feature): feeds tier-1's retrieval
+    /// subset when a bundle is loaded (the corpus was generated on this
+    /// retriever — the lexical tier-0 structurally excludes the
+    /// context-sensitivity pairs tier-1 exists to resolve) and serves
+    /// alone otherwise. `None` = load failure, degraded to lexical.
+    #[cfg(feature = "embed")]
+    embed_tier0: Option<Arc<utterance_engine::retrieval::embed::EmbedTier0>>,
 }
 
 /// One staged-but-unratified proposal. `staged_against_hash` is the
@@ -117,7 +132,98 @@ impl DesignerState {
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
             proposals: Mutex::new(HashMap::new()),
+            #[cfg(feature = "candle-probe")]
+            tier1: Self::load_tier1_from_env(),
+            #[cfg(feature = "embed")]
+            embed_tier0: Self::load_embed_tier0(),
         }))
+    }
+
+    /// Startup bundle load (fail-closed DEGRADATION, not failure): env
+    /// unset → tier-0 serving, honestly; set-but-broken → error logged,
+    /// tier-0 serving. The endpoint never 500s for a missing model.
+    #[cfg(feature = "candle-probe")]
+    fn load_tier1_from_env() -> Option<Arc<utterance_engine::trained_ranker::Tier1Ranker>> {
+        let dir = match std::env::var("SLM_BUNDLE_DIR") {
+            Ok(d) if !d.is_empty() => d,
+            _ => {
+                tracing::info!(
+                    "SLM_BUNDLE_DIR unset — tier-1 ranker not loaded; serving tier-0 only"
+                );
+                return None;
+            }
+        };
+        match utterance_engine::trained_ranker::Tier1Ranker::load(
+            utterance_engine::trained_ranker::Base::ModernbertBase,
+            std::path::Path::new(&dir),
+        ) {
+            Ok(r) => {
+                tracing::info!(
+                    bundle = %r.model_bundle_hash(),
+                    temperature = r.temperature(),
+                    "tier-1 trained ranker loaded from {dir}"
+                );
+                Some(Arc::new(r))
+            }
+            Err(e) => {
+                tracing::error!(
+                    "tier-1 bundle load FAILED from SLM_BUNDLE_DIR={dir}: {e:#} — \
+                     degrading to tier-0 serving (record identity stays honest)"
+                );
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "embed")]
+    fn load_embed_tier0() -> Option<Arc<utterance_engine::retrieval::embed::EmbedTier0>> {
+        match utterance_engine::retrieval::embed::EmbedTier0::new() {
+            Ok(t) => Some(Arc::new(t)),
+            Err(e) => {
+                tracing::error!("embed tier-0 load FAILED: {e:#} — degrading to lexical tier-0");
+                None
+            }
+        }
+    }
+
+    /// THE evidence producer selection for `session_utterance_endpoint`
+    /// (I27: evidence only — `policy::decide` downstream is untouched).
+    /// Priority: tier-1 trained ranker (bundle loaded) → embed tier-0
+    /// (compiled + loaded) → lexical tier-0 (default build's behavior,
+    /// unchanged). The active producer signs the evidence via
+    /// `model_bundle_hash`, so the record is honest on every path.
+    fn retrieve_utterance_evidence(
+        &self,
+        text: &str,
+        board: &utterance_engine::board::Board,
+        context: &utterance_engine::context::ContextProjection,
+    ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
+        #[cfg(not(feature = "candle-probe"))]
+        let _ = context; // context text is a tier-1 encoding input only
+        #[cfg(feature = "candle-probe")]
+        if let Some(t1) = &self.tier1 {
+            // Tier-0 front end for the K-subset: embed when available
+            // (the retriever the corpus was generated on), else lexical.
+            #[cfg(feature = "embed")]
+            if let Some(e0) = &self.embed_tier0 {
+                return t1.rank(e0.as_ref(), text, &context.serialize_canonical(), board);
+            }
+            return t1.rank(
+                &utterance_engine::retrieval::LexicalTier0,
+                text,
+                &context.serialize_canonical(),
+                board,
+            );
+        }
+        #[cfg(feature = "embed")]
+        if let Some(e0) = &self.embed_tier0 {
+            use utterance_engine::retrieval::Tier0Retriever as _;
+            return e0.retrieve(text, board);
+        }
+        {
+            use utterance_engine::retrieval::Tier0Retriever as _;
+            utterance_engine::retrieval::LexicalTier0.retrieve(text, board)
+        }
     }
 
     /// Env-driven store selection for the demo designer binary.
@@ -2695,7 +2801,6 @@ async fn session_utterance_endpoint(
     #[cfg(feature = "q9-capture")]
     use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
     use utterance_engine::policy::{decide, DispositionConfig};
-    use utterance_engine::retrieval::{LexicalTier0, Tier0Retriever};
 
     // Session must exist; its current source is the graph identity the
     // board hashes (C7 obligation: WS-B supplies the revision identity).
@@ -2779,7 +2884,7 @@ async fn session_utterance_endpoint(
                 &board.context.pack_identity,
                 &graph_identity,
             )?;
-            let evidence = LexicalTier0.retrieve(&body.text, &board)?;
+            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
             let (disposition, record) =
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
             Ok((board, disposition, record, context))
@@ -2828,7 +2933,7 @@ async fn session_utterance_endpoint(
                 None,
                 node_kind_counts,
             )?;
-            let evidence = LexicalTier0.retrieve(&body.text, &board)?;
+            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
             let (disposition, record) =
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
             Ok((board, disposition, record, context))
@@ -3032,6 +3137,7 @@ async fn session_utterance_endpoint(
                 "message": message,
                 "disposition": effective_disposition,
                 "board_hash": board.board_hash,
+                "model_bundle_hash": record.model_bundle_hash,
                 "capture": capture_state,
                 "dev_capture": dev_capture_state,
                 "proposal": proposal_json,
@@ -4928,6 +5034,212 @@ mod tests {
             "project_ir must project the REAL anchor, not a census-only fallback: {ctx_text:?}"
         );
         assert!(ctx_text.contains("nodes:\n"), "node census present: {ctx_text:?}");
+    }
+
+    /// Fail-closed DEGRADATION receipt (tier-1 serving integration,
+    /// 2026-08-01): `candle-probe` compiled but SLM_BUNDLE_DIR pointing
+    /// nowhere → the designer starts, serves the utterance at tier-0
+    /// quality, and the record's `model_bundle_hash` names the producer
+    /// that actually ran — never a fake trained identity, never a 500.
+    /// Hermetic: a bad bundle dir fails at the training_card.json read,
+    /// before any network/model machinery.
+    #[cfg(feature = "candle-probe")]
+    #[tokio::test]
+    async fn test_tier1_bad_bundle_degrades_to_tier0_with_honest_record() {
+        std::env::set_var("SLM_BUNDLE_DIR", "/nonexistent/bundle/dir");
+        let state = DesignerState::try_new().unwrap();
+        std::env::remove_var("SLM_BUNDLE_DIR");
+        let app = designer_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "degraded session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "connect the review task to the end" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "degraded path must serve, not error");
+        let body = body_json(response).await;
+        let bundle = body["model_bundle_hash"].as_str().unwrap();
+        assert!(
+            !bundle.contains("slm.trained"),
+            "degraded path must NOT claim a trained bundle: {bundle}"
+        );
+        assert!(
+            bundle.starts_with("tier0."),
+            "active tier must be an honest tier-0 identity: {bundle}"
+        );
+    }
+
+    /// THE money receipt (plan §F context-sensitivity family): the
+    /// CONTEXT PAIR "give up after too many tries" (`pg_d1_too_many_tries`,
+    /// both families in the TRAIN split) — guard-anchor →
+    /// `op.set_guard_budget` vs task-anchor → NOTA — on the guarded-task
+    /// fixture graph. The lexical tier-0 tops NOTA on BOTH anchors (zero
+    /// token overlap: structurally blind, plan §F), so the guard-anchor
+    /// side would be refused OutOfScope without the model; tier-1
+    /// resolves the divergence (measured 2026-08-01: 0.560 vs 0.267
+    /// calibrated on the guard anchor).
+    ///
+    /// The pair the plan NAMES ("chase them again") is a MEASURED MISS
+    /// of the canonical bundle: `guard_node::op.set_guard_trigger` sits
+    /// in the held-out TEST split (split_manifest.json) and the
+    /// best-val-epoch checkpoint does not resolve it (gold ranked 3rd/
+    /// 5th on the exact fixture boards). Recorded in the serving-
+    /// integration report, not silently swapped.
+    ///
+    /// Requires the trained bundle + embed weights, so #[ignore]d; run with
+    ///   SLM_BUNDLE_DIR=$PWD/utterance-engine/train_py/bundles/modernbert-base \
+    ///   cargo test -p bpmn-lite-server-designer --features embed,candle-probe \
+    ///     --release -- --ignored context_pair --nocapture
+    #[cfg(all(feature = "candle-probe", feature = "embed"))]
+    #[tokio::test]
+    #[ignore = "needs SLM_BUNDLE_DIR trained bundle + BGE weights (hf-hub cache)"]
+    async fn test_tier1_resolves_context_pair_lexical_cannot() {
+        assert!(
+            std::env::var("SLM_BUNDLE_DIR").map(|d| !d.is_empty()).unwrap_or(false),
+            "set SLM_BUNDLE_DIR to the modernbert-base bundle dir"
+        );
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        // Build the guarded_task/guard_node fixture graph via the real
+        // REST surface: start → chase_client → end, rearming timer guard
+        // g_reminder on the task (same shape as fixtures.rs).
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "chase pair session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t = new_key();
+        let guard = new_key();
+        let esc = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t,
+                node: task_ir("chase_client"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            designer_graph::ops::Operation::AttachRearmingGuard {
+                host: t,
+                key: guard,
+                guard_id: "g_reminder".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 },
+                ),
+            },
+            // The REST graph-edit path runs the full admit (unlike the
+            // corpus fixture, which never admits): a boundary timer must
+            // have its escalation continuation to be a legal graph.
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard,
+                key: esc,
+                node: task_ir("escalate_case"),
+                edge_id: "f3".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: esc,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end_esc".into(), terminate: false },
+                edge_id: "f4".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+
+        // Same utterance, two anchors — the divergence only context can
+        // resolve. top1() reads the persisted decision record (evidence
+        // as policy saw it), not the rendered message.
+        let utter = |anchor: &str| {
+            let app = app.clone();
+            let session_id = session_id.clone();
+            let anchor = anchor.to_owned();
+            async move {
+                let resp = app
+                    .oneshot(post_json(
+                        &format!("/api/dsl/sessions/{session_id}/utterance"),
+                        serde_json::json!({ "text": "give up after too many tries", "anchor": anchor }),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+                body_json(resp).await
+            }
+        };
+        let guard_resp = utter("g_reminder").await;
+        let task_resp = utter("chase_client").await;
+
+        for (label, resp) in [("guard-anchor", &guard_resp), ("task-anchor", &task_resp)] {
+            let bundle = resp["model_bundle_hash"].as_str().unwrap();
+            assert!(
+                bundle.starts_with("slm.trained.modernbert-base@"),
+                "{label}: tier-1 must have served this: {bundle}"
+            );
+        }
+
+        // Read the persisted records back for the top-1 evidence.
+        let record = body_json(
+            app.clone().oneshot(get_req(&format!("/api/dsl/sessions/{session_id}"))).await.unwrap(),
+        )
+        .await;
+        let rankings: Vec<Vec<serde_json::Value>> = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["kind"].get("Utterance"))
+            .map(|u| {
+                let rec: serde_json::Value =
+                    serde_json::from_str(u["decision_record_json"].as_str().unwrap()).unwrap();
+                rec["ranking"].as_array().unwrap().clone()
+            })
+            .collect();
+        assert_eq!(rankings.len(), 2);
+        let top = |r: &Vec<serde_json::Value>| r[0][0].as_str().unwrap().to_owned();
+        let (guard_top, task_top) = (top(&rankings[0]), top(&rankings[1]));
+        println!("guard-anchor top-1: {guard_top}  task-anchor top-1: {task_top}");
+        assert_eq!(guard_top, "op.set_guard_budget", "guard-anchor gold (context pair)");
+        assert_eq!(
+            task_top, "abstain.none_of_the_above",
+            "task-anchor gold is context-conditioned abstention"
+        );
     }
 
     // ── Utterance → propose → ratify/reject loop cements ────────────────
