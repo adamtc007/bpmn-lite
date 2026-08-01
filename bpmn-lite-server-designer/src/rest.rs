@@ -65,6 +65,30 @@ pub struct DesignerState {
     /// captures the full closure via `utterance_engine::dev_capture`
     /// (always compiled, structurally distinct from the Q9-gated path).
     dev_capture: Mutex<HashMap<Uuid, utterance_engine::dev_capture::DevSessionStore>>,
+    /// Utterance-derived pending proposals awaiting human ratification
+    /// (the propose → preview → ratify → apply loop's middle state).
+    ///
+    /// DESIGN DECISION — deliberately EPHEMERAL, in-memory only: a
+    /// pending proposal is an un-ratified draft; losing it on restart is
+    /// fail-closed (nothing un-ratified may survive a process). The
+    /// audit trail is NOT here — the utterance that produced the
+    /// proposal is already a persisted `Utterance` event, and a ratified
+    /// proposal becomes a persisted `GraphEdit` event carrying a
+    /// "ratified proposal …" note. Rejection/drift leave only the
+    /// utterance record, which is correct: no mutation happened.
+    proposals: Mutex<HashMap<Uuid, PendingProposal>>,
+}
+
+/// One staged-but-unratified proposal. `staged_against_hash` is the
+/// session's graph-identity hash (blake3 over the accumulated edit-log
+/// payloads) at staging time — ratification refuses on any drift.
+pub(crate) struct PendingProposal {
+    session_id: Uuid,
+    ops: Vec<designer_graph::ops::Operation>,
+    description: String,
+    source_utterance_text: String,
+    source_utterance_seq: u64,
+    staged_against_hash: String,
 }
 
 impl DesignerState {
@@ -92,6 +116,7 @@ impl DesignerState {
             tenant_id,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
+            proposals: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -347,6 +372,18 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
         .route(
             "/api/dsl/sessions/:id/graph-edit",
             post(session_graph_edit_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/proposals",
+            get(list_proposals_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/proposals/:pid/ratify",
+            post(ratify_proposal_endpoint),
+        )
+        .route(
+            "/api/dsl/sessions/:id/proposals/:pid/reject",
+            post(reject_proposal_endpoint),
         )
         .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
@@ -2269,6 +2306,18 @@ fn reconstruct_designer_dag(
     Ok(dag)
 }
 
+/// The session's graph-identity hash: blake3 over the accumulated
+/// edit-log payloads (the DAG's sole source of truth). Shared by the
+/// utterance pipeline's board identity and the proposal drift check.
+fn graph_identity_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for payload in record.graph_edit_payloads() {
+        hasher.update(payload.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SessionGraphEditBody {
     /// The `Vec<designer_graph::ops::Operation>` to stage and, on
@@ -2385,6 +2434,214 @@ async fn session_graph_edit_endpoint(
         )
             .into_response(),
     }
+}
+
+// ── Utterance-proposal ratify/reject (the human gate) ───────────────────
+//
+// The ONLY door from an utterance to a persisted GraphEdit. §S7 of
+// EOP-SPEC-SLM-TRAIN-001: model/binding output remains evidence into
+// deterministic policy — no code path auto-applies a proposal.
+
+/// POST /api/dsl/sessions/:id/proposals/:pid/ratify — under the session
+/// lock: re-check graph identity (409 on drift, proposal consumed),
+/// re-stage through EXACTLY the graph-edit validation, append the
+/// GraphEdit event with a "ratified proposal …" note. The pending entry
+/// is removed on success AND on any refusal (fail closed: a proposal
+/// gets one shot against the graph it was staged on).
+async fn ratify_proposal_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path((id, pid)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
+
+    // Peek without consuming: an unknown pid / session mismatch is a
+    // 404 that must not disturb some other session's pending entry.
+    let (ops, description, staged_against_hash, utterance_text, utterance_seq) = {
+        let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+        match proposals.get(&pid) {
+            Some(p) if p.session_id == id => (
+                p.ops.clone(),
+                p.description.clone(),
+                p.staged_against_hash.clone(),
+                p.source_utterance_text.clone(),
+                p.source_utterance_seq,
+            ),
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "proposal not found" })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    let consume = || {
+        demo.proposals
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&pid);
+    };
+
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Drift check: the proposal was dry-staged against a specific graph
+    // identity; any intervening edit invalidates it. Fail closed — the
+    // user re-utters against the current graph.
+    let current_hash = graph_identity_hash(&record);
+    if current_hash != staged_against_hash {
+        consume();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "graph changed since proposal was staged",
+                "staged_against": staged_against_hash,
+                "current": current_hash,
+            })),
+        )
+            .into_response();
+    }
+
+    // Re-stage + admit: the exact graph-edit validation. With the hash
+    // unchanged this must succeed; if it somehow refuses, refuse —
+    // nothing is persisted and the proposal is consumed.
+    let dag = match reconstruct_designer_dag(&record) {
+        Ok(d) => d,
+        Err(e) => {
+            consume();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let staged = match designer_graph::productions::apply_production(
+        &dag,
+        ops.clone(),
+        designer_graph::schema::Provenance::default(),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            consume();
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("staging refused: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(errs) = staged.candidate.admit() {
+        consume();
+        let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+        )
+            .into_response();
+    }
+    let operations_json = match serde_json::to_string(&ops) {
+        Ok(j) => j,
+        Err(e) => {
+            consume();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("serialize: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    // The note marks this edit as utterance-ratified (vs a manual
+    // graph-edit) and anchors it to its source utterance.
+    let note = format!(
+        "ratified proposal {pid} (utterance seq {utterance_seq}): {utterance_text}"
+    );
+    match demo
+        .store
+        .append_design_session_event(
+            &demo.tenant_id,
+            id,
+            &DesignSessionEventKind::GraphEdit { operations_json, note },
+        )
+        .await
+    {
+        Ok(seq) => {
+            consume();
+            Json(serde_json::json!({ "seq": seq, "applied": description })).into_response()
+        }
+        Err(e) => {
+            consume();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /api/dsl/sessions/:id/proposals/:pid/reject — drop the pending
+/// entry. Persists nothing (the utterance record already carries the
+/// full audit trail of what was proposed).
+async fn reject_proposal_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path((id, pid)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
+    let mut proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+    match proposals.get(&pid) {
+        Some(p) if p.session_id == id => {
+            proposals.remove(&pid);
+            Json(serde_json::json!({ "rejected": pid })).into_response()
+        }
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "proposal not found" })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/dsl/sessions/:id/proposals — the session's pending
+/// proposals, oldest first (by source utterance seq).
+async fn list_proposals_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+    let mut out: Vec<serde_json::Value> = proposals
+        .iter()
+        .filter(|(_, p)| p.session_id == id)
+        .map(|(pid, p)| {
+            serde_json::json!({
+                "proposal_id": pid,
+                "description": p.description,
+                "operations": serde_json::to_value(&p.ops).unwrap_or(serde_json::Value::Null),
+                "source_utterance_seq": p.source_utterance_seq,
+                "source_utterance_text": p.source_utterance_text,
+                "staged_against_hash": p.staged_against_hash,
+            })
+        })
+        .collect();
+    out.sort_by_key(|v| v["source_utterance_seq"].as_u64().unwrap_or(0));
+    Json(out).into_response()
 }
 
 /// D19-rider rendering: helpful about the path forward, generic about
@@ -2505,14 +2762,7 @@ async fn session_utterance_endpoint(
         // Same pattern as the DSL-source path: hash the actual revision
         // content (here, the accumulated edit-log payloads — the DAG's
         // sole source of truth) rather than a Debug-formatted derivative.
-        let graph_identity = {
-            let mut hasher = blake3::Hasher::new();
-            for payload in record_session.graph_edit_payloads() {
-                hasher.update(payload.as_bytes());
-                hasher.update(b"\0");
-            }
-            hasher.finalize().to_hex().to_string()
-        };
+        let graph_identity = graph_identity_hash(&record_session);
         let oracle = designer_graph::positional::PositionalLegality { dag: &dag };
         let anchor_pair = anchor_key.as_ref().zip(body.anchor.as_deref());
         build_board(
@@ -2534,6 +2784,9 @@ async fn session_utterance_endpoint(
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
             Ok((board, disposition, record, context))
         })
+        // Carry the reconstruction forward for binding extraction —
+        // the proposal loop is strictly downstream of the disposition.
+        .map(|t| (t.0, t.1, t.2, t.3, Some((dag, anchor_key, graph_identity))))
     } else {
         let graph_identity = blake3::hash(
             record_session.current_source().unwrap_or_default().as_bytes(),
@@ -2580,8 +2833,12 @@ async fn session_utterance_endpoint(
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
             Ok((board, disposition, record, context))
         })
+        // Legacy DSL-source sessions have no DesignerDag — no binding
+        // extraction, no proposals (the graph-edit surface is the only
+        // mutation path they lack anyway).
+        .map(|t| (t.0, t.1, t.2, t.3, None))
     };
-    let (board, disposition, record, context) = match pipeline_result {
+    let (board, disposition, record, context, graph_ctx) = match pipeline_result {
         Ok(t) => t,
         Err(e) => {
             return (
@@ -2591,7 +2848,88 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
-    let message = render_disposition(&disposition, &board);
+    let mut message = render_disposition(&disposition, &board);
+
+    // ── Binding extraction + dry stage (propose half of the loop) ────
+    // Strictly downstream of the disposition: policy already decided
+    // `Candidate`; here the deterministic slot resolver tries to fill
+    // the concrete operation arguments. Three outcomes:
+    // - Bound + dry-stages + admits → a PendingProposal is held in
+    //   memory (NOTHING appended; the graph is untouched until ratify).
+    // - Bound but the dry stage refuses → reported, nothing held.
+    // - Missing bindings → a MissingArguments-shaped response naming
+    //   them (the persisted decision record keeps policy's own
+    //   `Candidate` disposition — the record is policy's truth; the
+    //   missing-arguments shape is the binding layer's).
+    let mut effective_disposition = disposition.clone();
+    let mut staged_proposal: Option<PendingProposal> = None;
+    let mut proposal_refusal: Option<Vec<String>> = None;
+    if let (
+        Some((dag, anchor_key, graph_identity)),
+        utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
+    ) = (&graph_ctx, &disposition)
+    {
+        match crate::proposal::bind_candidate(dag, *anchor_key, candidate_id, &body.text) {
+            Ok(crate::proposal::BindingOutcome::Bound(bound)) => {
+                // Dry stage: exactly the graph-edit endpoint's
+                // validation (apply_production + full admit), with no
+                // append. A refusal persists nothing.
+                let dry = designer_graph::productions::apply_production(
+                    dag,
+                    bound.ops.clone(),
+                    designer_graph::schema::Provenance::default(),
+                );
+                match dry {
+                    Ok(staged) => match staged.candidate.admit() {
+                        Ok(_) => {
+                            message = format!(
+                                "Proposed: {}. Ratify to apply, or reject.",
+                                bound.description
+                            );
+                            staged_proposal = Some(PendingProposal {
+                                session_id: id,
+                                ops: bound.ops,
+                                description: bound.description,
+                                source_utterance_text: body.text.clone(),
+                                source_utterance_seq: 0, // filled after append
+                                staged_against_hash: graph_identity.clone(),
+                            });
+                        }
+                        Err(errs) => {
+                            let diags: Vec<String> =
+                                errs.iter().map(|e| e.message.clone()).collect();
+                            message = format!(
+                                "Proposal for '{candidate_id}' does not admit — nothing staged."
+                            );
+                            proposal_refusal = Some(diags);
+                        }
+                    },
+                    Err(e) => {
+                        message = format!(
+                            "Proposal for '{candidate_id}' refused at staging — nothing staged."
+                        );
+                        proposal_refusal = Some(vec![format!("{e}")]);
+                    }
+                }
+            }
+            Ok(crate::proposal::BindingOutcome::Missing(missing)) => {
+                effective_disposition =
+                    utterance_engine::policy::ProposalDisposition::MissingArguments {
+                        candidate_id: candidate_id.clone(),
+                        missing,
+                    };
+                message = render_disposition(&effective_disposition, &board);
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("binding extraction: {e}") })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let record_json = match serde_json::to_string(&record) {
         Ok(j) => j,
         Err(e) => {
@@ -2667,15 +3005,40 @@ async fn session_utterance_endpoint(
         )
         .await
     {
-        Ok(seq) => Json(serde_json::json!({
-            "seq": seq,
-            "message": message,
-            "disposition": disposition,
-            "board_hash": board.board_hash,
-            "capture": capture_state,
-            "dev_capture": dev_capture_state,
-        }))
-        .into_response(),
+        Ok(seq) => {
+            // The pending proposal is registered only once its source
+            // utterance is durably appended (the audit anchor).
+            let proposal_json = match staged_proposal {
+                Some(mut pending) => {
+                    pending.source_utterance_seq = seq;
+                    let proposal_id = Uuid::new_v4();
+                    let ops_json = serde_json::to_value(&pending.ops)
+                        .unwrap_or(serde_json::Value::Null);
+                    let description = pending.description.clone();
+                    demo.proposals
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(proposal_id, pending);
+                    serde_json::json!({
+                        "proposal_id": proposal_id,
+                        "operations": ops_json,
+                        "description": description,
+                    })
+                }
+                None => serde_json::Value::Null,
+            };
+            Json(serde_json::json!({
+                "seq": seq,
+                "message": message,
+                "disposition": effective_disposition,
+                "board_hash": board.board_hash,
+                "capture": capture_state,
+                "dev_capture": dev_capture_state,
+                "proposal": proposal_json,
+                "proposal_refusal": proposal_refusal,
+            }))
+            .into_response()
+        }
         Err(bpmn_lite_store::StoreError::NotFound(_)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "session not found" })),
@@ -4565,6 +4928,321 @@ mod tests {
             "project_ir must project the REAL anchor, not a census-only fallback: {ctx_text:?}"
         );
         assert!(ctx_text.contains("nodes:\n"), "node census present: {ctx_text:?}");
+    }
+
+    // ── Utterance → propose → ratify/reject loop cements ────────────────
+    // (`get_req` helper is defined later in this module.)
+
+    /// Seed a graph-backed session: start → review_documents → end.
+    /// Returns (session_id, review_documents key).
+    async fn seed_graph_backed_session(
+        app: &axum::Router,
+    ) -> (String, designer_graph::schema::NodeKey) {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "proposal session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        (session_id, t1)
+    }
+
+    /// The utterance whose lexical overlap deterministically resolves to
+    /// `op.insert_after` at a ServiceTask anchor (description tokens +
+    /// a quoted name for the binding layer), through shadow_v1 policy.
+    const BINDABLE_UTTERANCE: &str =
+        "Places a node on an existing route, after the selected node called 'collect_documents'";
+
+    async fn utter_bindable(app: &axum::Router, session_id: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": BINDABLE_UTTERANCE, "anchor": "review_documents" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await
+    }
+
+    async fn graph_body(app: &axum::Router, session_id: &str) -> Value {
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/graph")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await
+    }
+
+    /// GREEN half of the propose step: a bindable candidate yields a
+    /// proposal (id + concrete ops) — and the graph is UNCHANGED (the
+    /// utterance endpoint never mutates; ratify is the only door).
+    #[tokio::test]
+    async fn test_utterance_proposal_stages_without_mutating_graph() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let before = graph_body(&app, &session_id).await;
+        let utter = utter_bindable(&app, &session_id).await;
+        assert!(
+            utter["disposition"].get("Candidate").is_some(),
+            "utterance must resolve to a Candidate disposition: {utter:?}"
+        );
+        let proposal = &utter["proposal"];
+        assert!(proposal["proposal_id"].is_string(), "proposal staged: {utter:?}");
+        assert_eq!(proposal["operations"].as_array().unwrap().len(), 1);
+        assert!(
+            proposal["operations"][0].get("InsertAfter").is_some(),
+            "bound op is InsertAfter: {proposal:?}"
+        );
+        assert!(proposal["description"].as_str().unwrap().contains("collect_documents"));
+
+        let after = graph_body(&app, &session_id).await;
+        assert_eq!(before, after, "proposing must not mutate the graph");
+
+        // Pending list shows it.
+        let list = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/proposals")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    /// Ratify: the graph gains the node, the event log gains a GraphEdit
+    /// carrying the "ratified proposal" note, and the proposal is gone.
+    #[tokio::test]
+    async fn test_ratify_applies_proposal_and_appends_graph_edit() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+
+        // /graph reflects the applied edit (session still compiles).
+        let graph = graph_body(&app, &session_id).await;
+        assert!(
+            graph.to_string().contains("collect_documents"),
+            "ratified node must be in the compiled graph: {graph}"
+        );
+
+        // Event log carries the marked GraphEdit.
+        let record = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let ratified = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["kind"].get("GraphEdit"))
+            .find(|ge| {
+                ge["note"]
+                    .as_str()
+                    .map(|n| n.contains(&format!("ratified proposal {pid}")))
+                    .unwrap_or(false)
+            });
+        assert!(ratified.is_some(), "GraphEdit with ratified-proposal note: {record}");
+
+        // Proposal consumed: second ratify is a 404.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).
+    #[tokio::test]
+    async fn test_reject_drops_proposal_graph_unchanged() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let before = graph_body(&app, &session_id).await;
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/reject"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert_eq!(before, graph_body(&app, &session_id).await, "reject mutates nothing");
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "rejected proposal is gone");
+    }
+
+    /// Drift: a manual graph-edit lands between staging and ratify →
+    /// 409, nothing appended for the proposal, proposal consumed.
+    #[tokio::test]
+    async fn test_ratify_refuses_on_graph_drift() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+
+        // Manual edit shifts the graph identity.
+        let manual = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: task_ir("manual_step"),
+            edge_id: "f3".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": manual }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "drift must refuse");
+
+        // Nothing was appended for the proposal, and it is consumed.
+        let graph = graph_body(&app, &session_id).await;
+        assert!(
+            !graph.to_string().contains("collect_documents"),
+            "refused proposal must not reach the graph: {graph}"
+        );
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "drift consumes the proposal");
+    }
+
+    /// Missing bindings: `op.connect` resolves as the Candidate (exact
+    /// description pin) but its two endpoints have no deterministic
+    /// binding rule → MissingArguments-shaped response naming them, and
+    /// NO proposal staged.
+    #[tokio::test]
+    async fn test_missing_bindings_yield_missing_arguments_and_no_proposal() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let before = graph_body(&app, &session_id).await;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Joins two existing nodes with a typed connector",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let utter = body_json(response).await;
+
+        let ma = utter["disposition"]
+            .get("MissingArguments")
+            .unwrap_or_else(|| panic!("MissingArguments-shaped response: {utter:?}"));
+        assert_eq!(ma["candidate_id"], "op.connect");
+        let missing: Vec<String> = ma["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap().to_owned())
+            .collect();
+        assert!(missing.iter().any(|m| m.contains("from_node")), "{missing:?}");
+        assert!(missing.iter().any(|m| m.contains("to_node")), "{missing:?}");
+        assert!(utter["proposal"].is_null(), "no proposal staged: {utter:?}");
+
+        assert_eq!(before, graph_body(&app, &session_id).await);
+        let list = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/proposals")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(list.as_array().unwrap().is_empty(), "pending list empty: {list}");
     }
 
     /// G2 BLOCKER-2 ruling, receipt (i)'s server-side half: a graph-backed

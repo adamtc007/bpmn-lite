@@ -6,4 +6,5 @@
 //! (graph-backed authoring) endpoints. The workflow instance runner half
 //! lives in the sibling `bpmn-lite-server-runner` crate.
 
+mod proposal;
 pub mod rest;
