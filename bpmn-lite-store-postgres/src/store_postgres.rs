@@ -634,7 +634,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .persistence()?;
 
         let row = sqlx::query(
-            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch, control_stack FROM fibers WHERE tenant_id = $1 AND instance_id = $2 AND fiber_id = $3",
         )
         .bind(tenant_id.as_str())
         .bind(instance_id)
@@ -653,16 +653,16 @@ impl RuntimeStore for PostgresWorkflowStore {
                 let wait_json: serde_json::Value = row.get("wait_state");
                 let loop_epoch: i32 = row.get("loop_epoch");
 
+                let control_json: serde_json::Value = row.get("control_stack");
                 Ok(Some(Fiber {
                     fiber_id: row.get("fiber_id"),
                     pc: Addr::new(pc as u32),
                     stack: serde_json::from_value(stack_json).persistence()?,
                     wait: serde_json::from_value(wait_json).persistence()?,
                     loop_epoch: loop_epoch as u32,
-                    // No control_stack column yet — V2 adds it under the
-                    // SnapshotSchema tripwire (V&S §8). No v2 word exists
-                    // to have populated one before V4, so empty is exact.
-                    control_stack: Vec::new(),
+                    // Migration 060: persisted since V4's words populate it
+                    // (parallel regions break K-2 without the round trip).
+                    control_stack: serde_json::from_value(control_json).persistence()?,
                 }))
             }
         }
@@ -679,7 +679,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .persistence()?;
 
         let rows = sqlx::query(
-            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE tenant_id = $1 AND instance_id = $2",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch, control_stack FROM fibers WHERE tenant_id = $1 AND instance_id = $2",
         )
         .bind(tenant_id.as_str())
         .bind(instance_id)
@@ -696,13 +696,14 @@ impl RuntimeStore for PostgresWorkflowStore {
             let wait_json: serde_json::Value = row.get("wait_state");
             let loop_epoch: i32 = row.get("loop_epoch");
 
+            let control_json: serde_json::Value = row.get("control_stack");
             fibers.push(Fiber {
                 fiber_id: row.get("fiber_id"),
                 pc: Addr::new(pc as u32),
                 stack: serde_json::from_value(stack_json).persistence()?,
                 wait: serde_json::from_value(wait_json).persistence()?,
                 loop_epoch: loop_epoch as u32,
-                control_stack: Vec::new(),
+                control_stack: serde_json::from_value(control_json).persistence()?,
             });
         }
         Ok(fibers)
@@ -1657,13 +1658,16 @@ impl RuntimeStore for PostgresWorkflowStore {
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
+            let control_stack = serde_json::to_value(&fiber.control_stack)
+                .map_err(|error| CommitError::Integrity(error.to_string()))?;
             sqlx::query(
                 r#"
-                INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id, control_stack)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
                     pc = EXCLUDED.pc, stack = EXCLUDED.stack,
-                    wait_state = EXCLUDED.wait_state, loop_epoch = EXCLUDED.loop_epoch
+                    wait_state = EXCLUDED.wait_state, loop_epoch = EXCLUDED.loop_epoch,
+                    control_stack = EXCLUDED.control_stack
                 "#,
             )
             .bind(claim.instance_id())
@@ -1673,6 +1677,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .bind(wait)
             .bind(fiber.loop_epoch as i32)
             .bind(claim.tenant_id().as_str())
+            .bind(control_stack)
             .execute(&mut *tx)
             .await
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
@@ -2494,11 +2499,13 @@ impl RuntimeStore for PostgresWorkflowStore {
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let wait = serde_json::to_value(&fiber.wait)
                 .map_err(|error| CommitError::Integrity(error.to_string()))?;
+            let control_stack = serde_json::to_value(&fiber.control_stack)
+                .map_err(|error| CommitError::Integrity(error.to_string()))?;
             let fiber_insert = sqlx::query(
                 r#"
                 INSERT INTO fibers
-                    (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id, control_stack)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                 "#,
             )
             .bind(instance.instance_id)
@@ -2508,6 +2515,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .bind(wait)
             .bind(fiber.loop_epoch as i32)
             .bind(claim.tenant_id().as_str())
+            .bind(control_stack)
             .execute(&mut *tx)
             .await
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
@@ -2690,7 +2698,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             })?
         };
         let fiber_rows = sqlx::query(
-            "SELECT fiber_id, pc, stack, wait_state, loop_epoch FROM fibers WHERE instance_id = $1 ORDER BY fiber_id",
+            "SELECT fiber_id, pc, stack, wait_state, loop_epoch, control_stack FROM fibers WHERE instance_id = $1 ORDER BY fiber_id",
         )
         .bind(claim.instance_id())
         .fetch_all(&mut *tx)
@@ -2713,7 +2721,8 @@ impl RuntimeStore for PostgresWorkflowStore {
                 loop_epoch: u32::try_from(loop_epoch).map_err(|_| {
                     CommitError::Integrity("negative persisted loop epoch".to_string())
                 })?,
-                control_stack: Vec::new(),
+                control_stack: serde_json::from_value(row.get("control_stack"))
+                    .map_err(|error| CommitError::Integrity(error.to_string()))?,
             });
         }
         let join_rows = sqlx::query(

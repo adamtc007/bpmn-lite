@@ -44,7 +44,7 @@ mod oracle_boundary_tests;
 mod publish;
 mod registry;
 #[cfg(feature = "postgres")]
-pub(crate) mod store_postgres_templates;
+mod store_postgres_templates;
 mod validate;
 mod yaml;
 
@@ -63,4 +63,6 @@ pub use publish::{
 pub use registry::{
     MemoryTemplateStore, SourceFormat, TemplateState, TemplateStore, WorkflowTemplate,
 };
+#[cfg(feature = "postgres")]
+pub use store_postgres_templates::PostgresTemplateStore;
 pub use yaml::parse_workflow_yaml;

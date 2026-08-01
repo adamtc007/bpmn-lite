@@ -10,6 +10,11 @@ default = []
 # build/release command in this repo (scripts/check-q9-capture-gate.sh
 # enforces that). A default server build has no live user-capture path.
 q9-capture = ["utterance-engine/q9-capture"]
+# Opt-in durable backing (memory stays the zero-env default): swaps
+# MemoryStore/MemoryTemplateStore for PostgresWorkflowStore +
+# PostgresTemplateStore when DATABASE_URL is set. See
+# DesignerState::try_new_from_env for the selection semantics.
+postgres = ["bpmn-lite-authoring/postgres", "dep:bpmn-lite-store-postgres", "dep:sqlx"]
 
 [dependencies]
 bpmn-lite-types = { path = "../bpmn-lite-types" }
@@ -17,6 +22,8 @@ bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 designer-graph = { path = "../designer-graph" }
 utterance-engine = { path = "../utterance-engine" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
+bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
+sqlx = { workspace = true, optional = true }
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
 bpmn-lite-engine = { path = "../bpmn-lite-engine" }
 dmn-lite-parser = { path = "../dmn-lite-parser" }

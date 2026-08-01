@@ -1,5 +1,16 @@
 #![forbid(unsafe_code)]
 
+//! Unauthenticated demo designer server.
+//!
+//! Store selection (deliberate: this is a demo binary, so persistence is
+//! **opt-in**, not the default like the runner):
+//! - zero env → in-memory stores (everything lost on restart);
+//! - `DATABASE_URL` set (postgres feature build) → durable
+//!   `PostgresWorkflowStore` + `PostgresTemplateStore`, migrations
+//!   auto-run (via `DATABASE_ADMIN_URL` if set, else the runtime pool);
+//! - `BPMN_LITE_STORE=memory` → memory even if `DATABASE_URL` is set;
+//! - `BPMN_LITE_STORE=postgres` without `DATABASE_URL` → hard error.
+
 use bpmn_lite_server_designer::rest::{designer_router, DesignerState};
 use std::net::{IpAddr, SocketAddr};
 
@@ -20,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     let actual = listener.local_addr()?;
     eprintln!("bpmn-lite designer listening on {actual}");
-    axum::serve(listener, designer_router(DesignerState::try_new()?)).await?;
+    axum::serve(
+        listener,
+        designer_router(DesignerState::try_new_from_env().await?),
+    )
+    .await?;
     Ok(())
 }
 

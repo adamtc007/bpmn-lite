@@ -5,12 +5,12 @@ use async_trait::async_trait;
 /// PostgreSQL-backed TemplateStore.
 ///
 /// Relies on migration 013_create_workflow_templates.sql for schema + immutability triggers.
-struct PostgresTemplateStore {
+pub struct PostgresTemplateStore {
     pool: sqlx::PgPool,
 }
 
 impl PostgresTemplateStore {
-    pub(crate) fn new(pool: sqlx::PgPool) -> Self {
+    pub fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 }
@@ -37,6 +37,7 @@ fn format_to_str(f: &SourceFormat) -> &'static str {
         SourceFormat::Yaml => "yaml",
         SourceFormat::BpmnImport => "bpmn_import",
         SourceFormat::Agent => "agent",
+        SourceFormat::Graph => "graph",
     }
 }
 
@@ -45,8 +46,29 @@ fn str_to_format(s: &str) -> Result<SourceFormat> {
         "yaml" => Ok(SourceFormat::Yaml),
         "bpmn_import" => Ok(SourceFormat::BpmnImport),
         "agent" => Ok(SourceFormat::Agent),
+        "graph" => Ok(SourceFormat::Graph),
         other => Err(anyhow!("Unknown source format: {}", other)),
     }
+}
+
+/// Maps the DB-trigger immutability rejection (migration 013's
+/// `enforce_template_immutability`, surfaced as SQLSTATE P0001 —
+/// `RAISE EXCEPTION`) onto the same error shape `MemoryTemplateStore`
+/// produces ("Cannot modify ..."), so callers see comparable semantics
+/// regardless of backend. Matches on the SQLSTATE (the mechanism), not
+/// on message text.
+fn map_immutability_error(e: sqlx::Error, key: &str, version: u32) -> anyhow::Error {
+    if let Some(db) = e.as_database_error() {
+        if db.code().as_deref() == Some("P0001") {
+            return anyhow!(
+                "Cannot modify published or retired template {}:v{}: {}",
+                key,
+                version,
+                db.message()
+            );
+        }
+    }
+    e.into()
 }
 
 fn epoch_ms_to_datetime(epoch_ms: i64) -> chrono::DateTime<chrono::Utc> {
@@ -105,7 +127,8 @@ impl TemplateStore for PostgresTemplateStore {
         .bind(created)
         .bind(published)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| map_immutability_error(e, &tpl.template_key, tpl.template_version))?;
 
         Ok(())
     }
@@ -174,7 +197,8 @@ impl TemplateStore for PostgresTemplateStore {
         .bind(state_to_str(&new_state))
         .bind(published_at)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| map_immutability_error(e, key, version))?;
 
         if result.rows_affected() == 0 {
             return Err(anyhow!("Template not found: {}:v{}", key, version));
@@ -243,18 +267,63 @@ impl TemplateRow {
 
 #[cfg(test)]
 mod tests {
-    /// T-PUB-10: Postgres save/load/set_state round-trip.
-    /// Requires a running Postgres instance with the migration applied.
-    #[tokio::test]
-    async fn t_pub_10_postgres_round_trip() {
-        use super::*;
-        use crate::dto::{EdgeDto, NodeDto, WorkflowGraphDto};
+    use super::*;
+    use crate::dto::{EdgeDto, NodeDto, WorkflowGraphDto};
 
+    async fn test_store() -> PostgresTemplateStore {
         let db_url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| "postgresql:///bpmn_lite_test".to_string());
         let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
-        let store = PostgresTemplateStore::new(pool);
+        PostgresTemplateStore::new(pool)
+    }
+
+    fn sample_dto() -> WorkflowGraphDto {
+        WorkflowGraphDto {
+            id: "pg_test".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+            ],
+            edges: vec![EdgeDto {
+                from: "start".to_string(),
+                to: "end".to_string(),
+                condition: None,
+                is_default: false,
+                on_error: None,
+            }],
+        }
+    }
+
+    fn sample_template(key: &str, format: SourceFormat) -> WorkflowTemplate {
+        WorkflowTemplate {
+            template_key: key.to_string(),
+            template_version: 1,
+            process_key: "pg_test_proc".to_string(),
+            bytecode_version: "abc123".to_string(),
+            state: TemplateState::Draft,
+            source_format: format,
+            dto_snapshot: sample_dto(),
+            task_manifest: vec!["do_work".to_string()],
+            bpmn_xml: None,
+            summary_md: None,
+            verb_registry_hash: None,
+            created_at: 1000,
+            published_at: None,
+        }
+    }
+
+    /// T-PUB-10: Postgres save/load/set_state round-trip.
+    /// Requires a running Postgres instance with the migration applied.
+    #[tokio::test]
+    async fn t_pub_10_postgres_round_trip() {
+        let store = test_store().await;
         let template_key = format!("pg_test_wf_{}", uuid::Uuid::now_v7());
 
         let dto = WorkflowGraphDto {
@@ -311,9 +380,78 @@ mod tests {
         let published = store.load(&template_key, 1).await.unwrap().unwrap();
         assert_eq!(published.state, TemplateState::Published);
 
-        // Load latest published
-        let latest = store.load_latest_published("pg_test_wf").await.unwrap();
+        // Load latest published (was a latent bug: queried the fixed prefix
+        // "pg_test_wf" instead of the uuid-derived key)
+        let latest = store.load_latest_published(&template_key).await.unwrap();
         assert!(latest.is_some());
         assert_eq!(latest.unwrap().template_version, 1);
+    }
+
+    /// T-PUB-11: Graph-format template round-trip — save published, load,
+    /// list, load_latest_published all preserve `SourceFormat::Graph`.
+    #[tokio::test]
+    async fn t_pub_11_postgres_graph_format_round_trip() {
+        let store = test_store().await;
+        let template_key = format!("pg_test_graph_{}", uuid::Uuid::now_v7());
+
+        let mut tpl = sample_template(&template_key, SourceFormat::Graph);
+        tpl.state = TemplateState::Published;
+        tpl.published_at = Some(2000);
+        store.save(&tpl).await.unwrap();
+
+        let loaded = store.load(&template_key, 1).await.unwrap().unwrap();
+        assert_eq!(loaded.source_format, SourceFormat::Graph);
+        assert_eq!(loaded.state, TemplateState::Published);
+
+        let listed = store
+            .list(Some(&template_key), Some(TemplateState::Published))
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].source_format, SourceFormat::Graph);
+
+        let latest = store.load_latest_published(&template_key).await.unwrap();
+        assert_eq!(latest.unwrap().source_format, SourceFormat::Graph);
+    }
+
+    /// T-PUB-12: DB-trigger immutability — re-saving changed content over a
+    /// published row is rejected by migration 013's trigger, and the error
+    /// is wrapped to match MemoryTemplateStore's "Cannot modify" semantics.
+    #[tokio::test]
+    async fn t_pub_12_postgres_published_immutable_via_trigger() {
+        let store = test_store().await;
+        let template_key = format!("pg_test_immut_{}", uuid::Uuid::now_v7());
+
+        let tpl = sample_template(&template_key, SourceFormat::Graph);
+        store.save(&tpl).await.unwrap();
+        store
+            .set_state(&template_key, 1, TemplateState::Published)
+            .await
+            .unwrap();
+
+        // Re-save with changed content → DB trigger rejects, error is
+        // comparable to MemoryTemplateStore's ("Cannot modify ...").
+        let mut tpl2 = sample_template(&template_key, SourceFormat::Graph);
+        tpl2.bytecode_version = "changed_version".to_string();
+        let err = store.save(&tpl2).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot modify"),
+            "expected wrapped immutability error, got: {err}"
+        );
+
+        // Published → Draft revert is also trigger-rejected and wrapped.
+        let err = store
+            .set_state(&template_key, 1, TemplateState::Draft)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot modify"),
+            "expected wrapped revert rejection, got: {err}"
+        );
+
+        // Content unchanged after the rejected writes.
+        let still = store.load(&template_key, 1).await.unwrap().unwrap();
+        assert_eq!(still.bytecode_version, "abc123");
+        assert_eq!(still.state, TemplateState::Published);
     }
 }

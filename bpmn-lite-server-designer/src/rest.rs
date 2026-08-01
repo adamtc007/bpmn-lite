@@ -22,16 +22,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use bpmn_lite_compiler::dsl::{ExecutionNode, WorkflowExecutionPlan};
-use bpmn_lite_store::store::{
-    AdminProjectionStore, ArtifactRepository, DesignSessionEventKind,
-};
+use bpmn_lite_store::store::{DesignSessionEventKind, WorkflowStore};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::TenantId;
 
 // ── Designer state ─────────────────────────────────────────────────────
 
 pub struct DesignerState {
-    store: Arc<MemoryStore>,
+    store: Arc<dyn WorkflowStore>,
     /// Save-as-template registry (2026-07-30): the lifecycle-bearing
     /// `workflow_templates` system (`bpmn_lite_authoring::TemplateStore` —
     /// Draft/Published/Retired, immutability enforced by the store), fed by
@@ -71,18 +69,91 @@ pub struct DesignerState {
 
 impl DesignerState {
     pub fn try_new() -> Result<Arc<Self>, anyhow::Error> {
-        let store = Arc::new(MemoryStore::new());
+        Self::assemble(
+            Arc::new(MemoryStore::new()),
+            Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
+        )
+    }
+
+    /// Assemble a state over an explicit store pair. Shared by the memory
+    /// default and the Postgres (env-selected) path; also lets the
+    /// restart-survival tests build two states over the same database.
+    pub fn assemble(
+        store: Arc<dyn WorkflowStore>,
+        template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
+    ) -> Result<Arc<Self>, anyhow::Error> {
         let tenant_id = TenantId::new("demo")?;
         let engine =
             bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(store.clone(), tenant_id.clone());
         Ok(Arc::new(Self {
             store,
-            template_store: Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
+            template_store,
             engine,
             tenant_id,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
         }))
+    }
+
+    /// Env-driven store selection for the demo designer binary.
+    ///
+    /// The designer is an **unauthenticated demo** binary, so unlike the
+    /// runner its default is MEMORY and persistence is opt-in:
+    ///
+    /// - `DATABASE_URL` set (and `BPMN_LITE_STORE` not forcing memory) →
+    ///   `PostgresWorkflowStore` + `PostgresTemplateStore` over one pool.
+    ///   Migrations run via `DATABASE_ADMIN_URL` if set (admin pool closed
+    ///   afterwards, mirroring the runner's A18 split), else via the
+    ///   runtime pool.
+    /// - `BPMN_LITE_STORE=memory` → memory, even if `DATABASE_URL` is set.
+    /// - `BPMN_LITE_STORE=postgres` without `DATABASE_URL` → hard error
+    ///   (mirrors the runner: fail closed rather than silently dropping
+    ///   to a volatile store when persistence was explicitly requested).
+    /// - Nothing set → memory (zero-env demo UX unchanged).
+    pub async fn try_new_from_env() -> Result<Arc<Self>, anyhow::Error> {
+        let store_mode = std::env::var("BPMN_LITE_STORE").unwrap_or_default();
+        let force_memory = store_mode.eq_ignore_ascii_case("memory");
+        let force_postgres = store_mode.eq_ignore_ascii_case("postgres");
+        let database_url = std::env::var("DATABASE_URL").ok();
+
+        if force_memory || (database_url.is_none() && !force_postgres) {
+            return Self::try_new();
+        }
+        let Some(url) = database_url else {
+            anyhow::bail!("DATABASE_URL is required unless BPMN_LITE_STORE=memory is set");
+        };
+
+        #[cfg(feature = "postgres")]
+        {
+            if let Ok(admin_url) = std::env::var("DATABASE_ADMIN_URL") {
+                tracing::info!("Running migrations via DATABASE_ADMIN_URL...");
+                let admin_pool = sqlx::PgPool::connect(&admin_url).await?;
+                bpmn_lite_store_postgres::PostgresWorkflowStore::new(admin_pool.clone())
+                    .migrate()
+                    .await?;
+                admin_pool.close().await;
+                tracing::info!("Migrations applied; admin pool closed");
+            }
+            let pool = sqlx::PgPool::connect(&url).await?;
+            let pg = bpmn_lite_store_postgres::PostgresWorkflowStore::new(pool.clone());
+            if std::env::var("DATABASE_ADMIN_URL").is_err() {
+                pg.migrate().await?;
+            }
+            tracing::info!("Designer using PostgresWorkflowStore + PostgresTemplateStore");
+            let store: Arc<dyn WorkflowStore> = Arc::new(pg);
+            // The demo tenant must exist before any FK-bearing write
+            // (design sessions, instances) — fail here, not mid-request.
+            store.ensure_tenant(&TenantId::new("demo")?).await?;
+            Self::assemble(
+                store,
+                Arc::new(bpmn_lite_authoring::PostgresTemplateStore::new(pool)),
+            )
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            let _ = url;
+            anyhow::bail!("DATABASE_URL set but the designer was built without the postgres feature")
+        }
     }
 
     fn session_lock(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
@@ -1829,7 +1900,6 @@ async fn load_designer_instance(
     demo: &DesignerState,
     instance_id: Uuid,
 ) -> Result<bpmn_lite_types::ProcessInstance, axum::response::Response> {
-    use bpmn_lite_store::store::RuntimeStore;
     match demo.store.load_instance(&demo.tenant_id, instance_id).await {
         Ok(Some(instance)) => Ok(instance),
         Ok(None) => Err((
@@ -1871,7 +1941,6 @@ async fn advance_instance_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path(instance_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    use bpmn_lite_store::store::RuntimeStore;
 
     let instance = match load_designer_instance(&demo, instance_id).await {
         Ok(instance) => instance,
@@ -4600,7 +4669,6 @@ mod tests {
         // (b) Compiled program persisted in the WorkflowStore under the
         // bytecode hash the response reported.
         {
-            use bpmn_lite_store::store::ArtifactRepository;
             let mut hash = [0u8; 32];
             hex::decode_to_slice(&bytecode_hex, &mut hash).unwrap();
             let program = state.store.load_program(hash).await.unwrap();
@@ -5059,8 +5127,7 @@ mod tests {
         assert_eq!(body["bytecode_version"].as_str().unwrap().len(), 64);
 
         let instance_id: Uuid = body["instance_id"].as_str().unwrap().parse().unwrap();
-        use bpmn_lite_store::store::RuntimeStore;
-        let instance = state
+            let instance = state
             .store
             .load_instance(&state.tenant_id, instance_id)
             .await
@@ -5749,6 +5816,135 @@ mod tests {
         assert!(
             last["completed_at"].as_i64().is_some(),
             "Completed carries a timestamp: {last:?}"
+        );
+    }
+
+    /// Build a Postgres-backed DesignerState over the shared test database
+    /// (same env convention as the authoring store tests).
+    #[cfg(feature = "postgres")]
+    async fn postgres_state() -> Arc<DesignerState> {
+        let db_url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "postgresql:///bpmn_lite_test".to_string());
+        let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
+        let pg = bpmn_lite_store_postgres::PostgresWorkflowStore::new(pool.clone());
+        pg.migrate().await.unwrap();
+        let store: Arc<dyn WorkflowStore> = Arc::new(pg);
+        store
+            .ensure_tenant(&TenantId::new("demo").unwrap())
+            .await
+            .unwrap();
+        DesignerState::assemble(
+            store,
+            Arc::new(bpmn_lite_authoring::PostgresTemplateStore::new(pool)),
+        )
+        .unwrap()
+    }
+
+    /// RECEIPT — restart survival: publish a branched template through
+    /// DesignerState #1 over Postgres, DROP that state entirely, build
+    /// DesignerState #2 over the same database, and prove the authoring
+    /// round trip survived the "restart": the template is still listed as
+    /// Published, the design session is still loadable, and the template
+    /// spawns + advances to Completed through the fresh state. The
+    /// template key is uuid-derived because the test DB is shared across
+    /// runs and the immutability trigger forbids republishing key+version.
+    #[cfg(feature = "postgres")]
+    #[tokio::test]
+    async fn test_postgres_restart_survival() {
+        let template_name = format!("restart-survival-{}", Uuid::new_v4());
+
+        // ── Designer process #1 ────────────────────────────────────────
+        let state1 = postgres_state().await;
+        let app1 = designer_router(state1.clone());
+        let session_id = build_branched_session(&app1, "restart survival session").await;
+        let response = app1
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": template_name }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "publish must succeed: {body:?}");
+        assert_eq!(body["state"], "published", "{body:?}");
+
+        // "Restart": drop every handle to process #1's state.
+        drop(app1);
+        drop(state1);
+
+        // ── Designer process #2, same database ─────────────────────────
+        let state2 = postgres_state().await;
+        let app2 = designer_router(state2.clone());
+
+        // Template still listed as Published.
+        let response = app2
+            .clone()
+            .oneshot(get_req("/bpmn/templates/published"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let list = body_json(response).await;
+        let listed = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["template_key"] == template_name.as_str());
+        assert!(
+            listed,
+            "published template must survive the restart: {list:?}"
+        );
+
+        // Design session created in state #1 is loadable in state #2.
+        let response = app2
+            .clone()
+            .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+            .await
+            .unwrap();
+        let status = response.status();
+        let session = body_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "design session must survive the restart: {session:?}"
+        );
+
+        // Spawn from the surviving template and run to Completed.
+        let response = app2
+            .clone()
+            .oneshot(post_json(
+                &format!("/bpmn/templates/{template_name}/spawn"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let spawn = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "spawn must succeed: {spawn:?}");
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        let mut last = serde_json::Value::Null;
+        for _ in 0..12 {
+            let response = app2
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            let status = response.status();
+            last = body_json(response).await;
+            assert_eq!(status, StatusCode::OK, "advance must succeed: {last:?}");
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(
+            last["state"], "Completed",
+            "spawned instance must complete within 12 advance rounds: {last:?}"
         );
     }
 }
