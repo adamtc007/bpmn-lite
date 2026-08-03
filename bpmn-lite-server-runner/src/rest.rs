@@ -680,7 +680,33 @@ async fn drive_forward(
                 let _ = commit_demo_instance(store, &inst).await;
                 break;
             }
-            _ => break,
+            // Task: intentional pause — the caller-driven `next_step`
+            // endpoint advances tasks.
+            Some(ExecutionNode::Task(_)) => break,
+            // WS-D D4: this plan-walking SIMULATION has no clock, so it
+            // cannot honour a Wait node or a future unhandled kind — and
+            // a silent `break` here would render as a task-like pause
+            // the caller can never advance past (the fail-open the WS-D
+            // plan forbids). Fail loudly with the node named; real timer
+            // execution lives on the engine path (designer advance /
+            // production runner scheduler).
+            Some(other) => {
+                tracing::error!(
+                    instance = %id,
+                    node = %node_id,
+                    kind = match other {
+                        ExecutionNode::Wait(_) => "Wait",
+                        _ => "unsupported",
+                    },
+                    "demo simulation cannot execute this node — timers/waits require the engine path, not the plan-walker; failing the instance loudly"
+                );
+                inst.state = ProcessState::Failed {
+                    incident_id: Uuid::new_v4(),
+                };
+                let _ = commit_demo_instance(store, &inst).await;
+                break;
+            }
+            None => break,
         }
     }
 }
