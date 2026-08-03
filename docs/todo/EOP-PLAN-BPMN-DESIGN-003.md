@@ -1191,6 +1191,36 @@ additionally grow an opt-in background tick loop (runner-style) for
 long-lived demo instances, or is request-driven-only permanent? D3 is
 written request-driven; the loop would be additive.
 
+### WS-D receipts — D1–D4 CLOSED 2026-08-03 (commits 8008207, 86ffa34, e2d4627, fca5dd0 + ob-poc 49aeafff)
+
+- **D1** plan format + projection: guards as `TaskExecNode.guards`
+  decorations, `ExecutionNode::Wait`; escape-closure proof in
+  `analyze_safety` (`BPMN_GUARD_ESCAPE_DANGLING`/`_OPEN` breach REDs);
+  cement test amended (escape-less guard refuses as
+  `GuardEscapeUnresolved{count:0}`); MessageWait/MI/FFI/XOR stay
+  refused. 114 suites green.
+- **D2** frontend emission: the SAME guarded IR lowered via
+  `Compiler::lower_v2` and via `project_ir`→`DslFrontend::lower` yields
+  the IDENTICAL guard scaffold (cemented literal opcode sequences,
+  budget at guard-open, arm-at-open+1 adjacency, guardn-close ×2), both
+  admitted by the real V-verifier. Zero kernel changes — `ExecDslTask`
+  parks on `WaitState::Job` like `ExecNative`; guard firing/error
+  routing are fibre/record-based. Contradiction REDs (two timers,
+  interrupting Cycle).
+- **D3** designer serving: `advance` fires due timers first
+  (request-driven, optional injected `logical_time_ms`); `/status`
+  surfaces `waiting_timers`. Money receipt through the REAL path
+  (graph-edit `AttachGuard` → save → publish → spawn → advance):
+  injected-clock timeout completes down the ESCAPE flow (round parked
+  on `notify_esc`), pre-deadline control completes the NORMAL flow,
+  standalone Wait holds then resumes. Designer 38/38.
+- **D4** consumer sweep: runner plan-walker fails loudly on Wait
+  (traced diagnostic + `Failed` state — no silent task-like stall);
+  bus-handler walks verified continue-safe; TS kind unions widened.
+
+**Still open:** the request-driven-vs-background-tick sub-fork above,
+and the kernel job-cancel gap below.
+
 **Surfaced kernel gap (found by D3's timeout receipt, 2026-08-03 — NOT
 fixed in this phase, needs its own ruling):** an interrupting guard
 unwind redirects the fiber but emits NO job-cancel mutation — the
