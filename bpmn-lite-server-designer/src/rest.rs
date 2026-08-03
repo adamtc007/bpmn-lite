@@ -2031,7 +2031,8 @@ async fn spawn_template_instance_endpoint(
 // engine execution, not the runner's plan-walking simulation.
 
 /// FIXED wire contract — a React page is built against these exact
-/// field names. Do not rename.
+/// field names. Do not rename. (`waiting_timers` added WS-D D3 —
+/// additive, existing readers unaffected.)
 #[derive(Serialize)]
 struct InstanceStatusResponse {
     instance_id: Uuid,
@@ -2041,6 +2042,13 @@ struct InstanceStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     completed_at: Option<i64>,
     waiting_jobs: Vec<WaitingJobDto>,
+    /// WS-D D3: fibers parked on a durable timer (`WaitState::Timer`,
+    /// i.e. a standalone Wait node), with their deadline — previously
+    /// these were dumped invisibly into `wait_count`. Guard-armed timers
+    /// do NOT appear here by design: arming does not park the fiber (the
+    /// guarded body keeps running); they surface as the scheduled
+    /// durable effect, not a wait state.
+    waiting_timers: Vec<WaitingTimerDto>,
     fiber_count: usize,
     wait_count: usize,
 }
@@ -2050,6 +2058,13 @@ struct WaitingJobDto {
     job_key: String,
     /// BPMN node id from the program debug map when resolvable
     /// (single-fiber case); empty string otherwise.
+    node_id: String,
+}
+
+#[derive(Serialize)]
+struct WaitingTimerDto {
+    deadline_ms: u64,
+    /// Same single-fiber node-id resolution rule as `WaitingJobDto`.
     node_id: String,
 }
 
@@ -2083,6 +2098,21 @@ fn instance_status_response(
             _ => None,
         })
         .collect();
+    let waiting_timers = inspection
+        .fibers
+        .iter()
+        .filter_map(|f| match &f.wait_state {
+            bpmn_lite_types::WaitState::Timer { deadline_ms } => Some(WaitingTimerDto {
+                deadline_ms: *deadline_ms,
+                node_id: if single_fiber {
+                    inspection.current_node_id.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                },
+            }),
+            _ => None,
+        })
+        .collect();
     let wait_count = inspection
         .fibers
         .iter()
@@ -2093,6 +2123,7 @@ fn instance_status_response(
         state,
         completed_at,
         waiting_jobs,
+        waiting_timers,
         fiber_count: inspection.fibers.len(),
         wait_count,
     }
@@ -2142,10 +2173,23 @@ async fn instance_status_endpoint(
     }
 }
 
+/// WS-D D3: optional advance body. `logical_time_ms` injects the timer
+/// clock for this round — durable timers due at or before it fire. Wall
+/// clock when omitted. Injection keeps timeout receipts deterministic
+/// (no sleeping in tests) and lets a demo fast-forward a 3-day wait.
+#[derive(serde::Deserialize, Default)]
+struct AdvanceRequest {
+    logical_time_ms: Option<u64>,
+}
+
 async fn advance_instance_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path(instance_id): Path<Uuid>,
+    body: Option<Json<AdvanceRequest>>,
 ) -> impl IntoResponse {
+    let logical_time = body
+        .and_then(|Json(request)| request.logical_time_ms)
+        .unwrap_or_else(|| unix_time_ms() as u64);
 
     let instance = match load_designer_instance(&demo, instance_id).await {
         Ok(instance) => instance,
@@ -2167,6 +2211,24 @@ async fn advance_instance_endpoint(
         };
     }
 
+    // WS-D D3: fire due durable timers FIRST — an interrupting guard
+    // whose deadline has passed must unwind its host before this round
+    // dequeues (and would otherwise complete) the host's job. This is
+    // the runner's scheduler tick, request-driven: the designer's
+    // no-background-loop doctrine holds, timers advance only when a
+    // request advances them.
+    if let Err(e) = demo
+        .engine
+        .tick_due_timers("designer-advance", logical_time, 128, 5_000)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     // One advance round: tick + dequeue (run_instance), complete each
     // dequeued job, tick again so fibers move past the completed steps.
     let jobs = match demo.engine.run_instance(instance_id).await {
@@ -2180,7 +2242,41 @@ async fn advance_instance_endpoint(
         }
     };
 
-    for job in &jobs {
+    // WS-D D3: complete only jobs a fiber is ACTUALLY parked on. An
+    // interrupting guard that fired above unwinds the host fiber, but no
+    // JobMutation cancels the host's already-queued activation — the
+    // kernel has no job-cancel mutation at all (only RetryClaimed/
+    // DeadLetterClaimed) — so `dequeue_jobs` can hand back a superseded
+    // activation whose completion the engine rightly refuses
+    // ("completion has no parked fiber"). Filter structurally against
+    // the fibers' wait states, never by matching the error string; the
+    // superseded claim simply lease-expires. The missing job-cancel on
+    // interrupting unwind is a surfaced kernel gap (production workers
+    // holding the host's job hit the same ghost), recorded in the WS-D
+    // phase notes — not silently papered over here.
+    let parked_job_keys: std::collections::HashSet<String> = match demo
+        .engine
+        .inspect(instance_id)
+        .await
+    {
+        Ok(inspection) => inspection
+            .fibers
+            .iter()
+            .filter_map(|f| match &f.wait_state {
+                bpmn_lite_types::WaitState::Job { job_key } => Some(job_key.clone()),
+                _ => None,
+            })
+            .collect(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    for job in jobs.iter().filter(|j| parked_job_keys.contains(&j.job_key)) {
         // The kernel verifies `expected_instance_payload_hash` against
         // the instance's CURRENT payload hash, and a completion may
         // rewrite the payload — so re-read per job rather than trusting
@@ -6260,6 +6356,333 @@ mod tests {
             last["completed_at"].as_i64().is_some(),
             "Completed carries a timestamp: {last:?}"
         );
+    }
+
+    // ── WS-D D3: timer semantics through the serving path ─────────────
+
+    /// Session-author a guarded template through the REAL product path:
+    /// graph-edit ops (AppendNode t1 → end; AttachGuard on t1 with a 60s
+    /// interrupting timer; escape flow escalate → its own End) → save →
+    /// publish. Returns nothing extra — the template is spawnable by name.
+    async fn publish_guarded_template(app: &Router, template_name: &str) {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": format!("{template_name}-session") }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start = seed_start_key(sid);
+        let t1 = new_key();
+        let guard = new_key();
+        let esc = new_key();
+        let notify = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            designer_graph::ops::Operation::AttachGuard {
+                host: t1,
+                key: guard,
+                guard_id: "bt".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+                ),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard,
+                key: esc,
+                node: task_ir("escalate"),
+                edge_id: "g1".into(),
+            },
+            // A second escape task gives the timeout round an observable
+            // intermediate state: after the guard fires and `escalate`
+            // completes, the fiber parks on `notify_esc`'s job — the
+            // waiting job's node id NAMES the escape route mid-flight.
+            designer_graph::ops::Operation::AppendNode {
+                anchor: esc,
+                key: notify,
+                node: task_ir("notify_esc"),
+                edge_id: "g2".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: notify,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end_esc".into(), terminate: false },
+                edge_id: "g3".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": template_name }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "guarded template must save: {body:?}");
+    }
+
+    async fn spawn_named(app: &Router, template_name: &str) -> Uuid {
+        body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/templates/{template_name}/spawn"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["instance_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    /// THE WS-D D3 money receipt: a spawned guarded instance whose
+    /// deadline has passed times out THROUGH THE REST SURFACE — the
+    /// advance's leading `tick_due_timers` fires the interrupting guard
+    /// BEFORE the round dequeues the host's job, the host is unwound,
+    /// and the instance completes down the ESCAPE flow (final node
+    /// end_esc), not the normal one.
+    #[tokio::test]
+    async fn test_guarded_instance_times_out_down_escape_flow() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_guarded_template(&app, "timeout-template").await;
+        let instance_id = spawn_named(&app, "timeout-template").await;
+
+        // Armed and parked on the host's job.
+        let status = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/bpmn/instances/{instance_id}/status")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status["state"], "Running", "{status:?}");
+        assert!(!status["waiting_jobs"].as_array().unwrap().is_empty());
+
+        // Advance with the clock injected PAST the 60s deadline: the
+        // guard fires, the host is unwound (its job never completes),
+        // and the escape route runs. The mid-flight round parks on the
+        // SECOND escape task — the waiting job's node id names the
+        // escape route, the observable that proves which path executed.
+        let future = unix_time_ms() as u64 + 120_000;
+        let mut saw_escape_route = false;
+        let mut last = status;
+        for _ in 0..10 {
+            last = body_json(
+                app.clone()
+                    .oneshot(post_json(
+                        &format!("/bpmn/instances/{instance_id}/advance"),
+                        serde_json::json!({ "logical_time_ms": future }),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if last["waiting_jobs"]
+                .as_array()
+                .map(|jobs| jobs.iter().any(|j| j["node_id"] == "notify_esc"))
+                .unwrap_or(false)
+            {
+                saw_escape_route = true;
+            }
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(last["state"], "Completed", "timed-out instance must complete: {last:?}");
+        assert!(
+            saw_escape_route,
+            "completion must be via the guard's ESCAPE flow (a round parked on notify_esc)"
+        );
+        let _ = &state;
+    }
+
+    /// Control receipt: the same guarded template advanced with wall
+    /// clock (deadline NOT due) completes down the NORMAL flow — the
+    /// guard armed, never fired, and did not disturb the host.
+    #[tokio::test]
+    async fn test_guarded_instance_completes_normally_before_deadline() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        publish_guarded_template(&app, "no-timeout-template").await;
+        let instance_id = spawn_named(&app, "no-timeout-template").await;
+
+        let mut last = serde_json::json!({});
+        let mut saw_escape_route = false;
+        for _ in 0..10 {
+            last = body_json(
+                app.clone()
+                    .oneshot(post_json(
+                        &format!("/bpmn/instances/{instance_id}/advance"),
+                        serde_json::json!({}),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if last["waiting_jobs"]
+                .as_array()
+                .map(|jobs| {
+                    jobs.iter()
+                        .any(|j| j["node_id"] == "escalate" || j["node_id"] == "notify_esc")
+                })
+                .unwrap_or(false)
+            {
+                saw_escape_route = true;
+            }
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(last["state"], "Completed", "{last:?}");
+        assert!(
+            !saw_escape_route,
+            "before the deadline the NORMAL flow completes — no round may park on the escape route"
+        );
+        let _ = &state;
+    }
+
+    /// WS-D D3: a standalone Wait node parks the fiber on a real durable
+    /// timer — visible in `waiting_timers` with its deadline; advancing
+    /// before the deadline holds, advancing past it resumes and completes.
+    #[tokio::test]
+    async fn test_wait_node_holds_then_resumes_past_deadline() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "wait-session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let wait = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: wait,
+                node: bpmn_lite_compiler::IRNode::TimerWait {
+                    id: "cooling_off".into(),
+                    spec: bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+                },
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: wait,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "wait-template" }),
+            ))
+            .await
+            .unwrap();
+        let status_code = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status_code, StatusCode::OK, "wait template must save: {body:?}");
+        let instance_id = spawn_named(&app, "wait-template").await;
+
+        // Parked on the timer, surfaced with its deadline.
+        let status = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/bpmn/instances/{instance_id}/status")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status["state"], "Running", "{status:?}");
+        let timers = status["waiting_timers"].as_array().unwrap();
+        assert_eq!(timers.len(), 1, "the Wait fiber must be visible: {status:?}");
+        assert!(timers[0]["deadline_ms"].as_u64().unwrap() > 0);
+
+        // Before the deadline: advance holds.
+        let held = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(held["state"], "Running", "not due yet — must hold: {held:?}");
+        assert_eq!(held["waiting_timers"].as_array().unwrap().len(), 1);
+
+        // Past the deadline: fires, resumes, completes.
+        let future = unix_time_ms() as u64 + 120_000;
+        let mut last = held;
+        for _ in 0..5 {
+            last = body_json(
+                app.clone()
+                    .oneshot(post_json(
+                        &format!("/bpmn/instances/{instance_id}/advance"),
+                        serde_json::json!({ "logical_time_ms": future }),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert_eq!(last["state"], "Completed", "{last:?}");
+        assert!(last["waiting_timers"].as_array().unwrap().is_empty());
     }
 
     /// RED cement: status of an unknown instance → 404, not a 200 with

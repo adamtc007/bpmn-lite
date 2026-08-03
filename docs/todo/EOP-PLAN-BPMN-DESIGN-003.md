@@ -1191,5 +1191,24 @@ additionally grow an opt-in background tick loop (runner-style) for
 long-lived demo instances, or is request-driven-only permanent? D3 is
 written request-driven; the loop would be additive.
 
+**Surfaced kernel gap (found by D3's timeout receipt, 2026-08-03 — NOT
+fixed in this phase, needs its own ruling):** an interrupting guard
+unwind redirects the fiber but emits NO job-cancel mutation — the
+kernel's `JobMutation` enum has only `RetryClaimed`/`DeadLetterClaimed`,
+no `Cancel` — so the host's already-queued job activation stays live in
+the store. Any consumer that dequeues it gets a ghost: completion is
+(correctly) refused with "completion has no parked fiber". The
+designer's advance loop now filters structurally (completes only jobs a
+fiber is parked on; superseded claims lease-expire) — but PRODUCTION
+workers holding the host's job when its guard fires hit the same ghost
+on `complete_job_with_claim`. BPMN semantics say an interrupting
+boundary CANCELS the task; today nothing signals the worker. Options
+when ruled on: (a) `JobMutation::Cancel` emitted by the unwind, store
+drops/tombstones the activation; (b) keep ghost-refusal as the contract
+and make workers treat it as cancellation. Recommendation: (a) — the
+queue claiming to hold executable work that is cancelled is
+structure-consulted-as-state, the same D1-class defect this codebase
+keeps deleting.
+
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*
