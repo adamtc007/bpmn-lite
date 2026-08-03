@@ -1096,5 +1096,100 @@ for a drafting tool. Closed; not revisited absent a new reason.
 still gated on the same "prepared, not run" status — no corpus regeneration
 triggered by this ruling alone, §1/§2/§4's open items are unchanged.
 
+### Fork closure + new phase (2026-08-03)
+
+**BoundaryTimer execution — ratified as its own phase ("own phase", Adam,
+2026-08-03).** Not folded into DIR-002 serving work. Phase spec below.
+
+## WS-D — Timer-semantics projection phase (BoundaryTimer / TimerWait on the plan path)
+
+**Ground truth that scopes this phase (traced 2026-08-03).** The kernel,
+engine, store, and production runner already execute boundary timers end to
+end on the XML/IR path: `lowering.rs` emits `V2GuardArmTimer`/
+`V2GuardTimerCycle`/`V2GuardArmError` inline in the host's lowering
+(`lowering.rs:1676`), the kernel fires them with staleness gating,
+interrupting unwind vs non-interrupting rearm, and budget
+(`kernel/lib.rs:4357-4440`), timers persist via
+`WorkflowStore::claim_due_timers`, and the runner's 500ms scheduler loop
+drains them (`server-runner/main.rs:272-330`). The gap is entirely the
+**plan path** the designer serves: `WorkflowExecutionPlan` has six node
+kinds and no timer/guard/attachment concept (`plan.rs:239-247`);
+`project_ir` fail-closes on `BoundaryTimer`/`BoundaryError`/`TimerWait`
+(`ir_plan.rs:274`, locked by `boundary_timer_is_refused_not_shoehorned`);
+`dsl/frontend.rs` lowers every Task to `ExecDslTask` with no `V2Guard*`/
+`V2Wait*` emission; and the designer has no `tick_due_timers` call, so
+even a lowered timer would never fire there. This is a
+projection-and-serving phase, not an engine phase.
+
+**Architecture fork, resolved by recommendation pending Adam's veto:
+extend the plan format (Option A), do NOT route the designer around it to
+IR-direct lowering (Option B).** B is cheaper (the IR path's lowering
+already works) but forks the compile provenance: plan-consuming code
+(bus-handler `plan.nodes()` walks, `analyze_safety` proofs, status DTOs)
+would be blind to guard-bearing instances, and the plan — the typed
+provable artifact that is the product's value claim — would become a
+format that cannot express a timeout. `ir_plan.rs`'s own error text says
+"no representation **yet**"; A is the honest completion. The plan format
+gains:
+
+- `TaskExecNode.guards: Vec<GuardExecSpec>` — decoration, not a node:
+  `{ guard_id, trigger: Timer(TimerSpec) | Error{code}, interrupting,
+  failure_budget, escape_entry: NodeId }`. Mirrors the kernel's model
+  (arming is inline in host lowering; the escape flow is ordinary nodes).
+- `ExecutionNode::Wait(WaitExecNode { spec: TimerSpec })` for standalone
+  `TimerWait` — replaces the dead `bpmn:timer-wait` Task-plug shoehorn in
+  `importer.rs:126-151` (no consumer of that plug exists; delete it).
+- `analyze_safety` learns real guard awareness: the string-plug
+  `BPMN_BOUNDARY_EVENT_BYPASS` breach detector stays (it catches
+  shoehorns) but genuinely-represented guards must NOT trip it, and the
+  proof obligations extend to escape-route closure (every `escape_entry`
+  reaches End — same shape as verifier §3's alternative-root DFS).
+
+**Steps (each with red→green receipts, one commit per step):**
+
+- **D1 — plan format + projection.** Add `GuardExecSpec`/`Wait` to
+  `plan.rs`; `project_ir` projects `BoundaryTimer`/`BoundaryError` onto
+  the host's guard list, projects the escape subgraph as ordinary plan
+  nodes (verifier §3 already admits them as alternative roots), projects
+  `TimerWait` → `Wait`. `validate_dag` admits escape subgraphs.
+  `MessageWait`/`HumanWait`/`SendTask`/`MultiInstance`/`FfiServiceTask`/
+  `GatewayXor` stay refused — amend the cement test, don't delete it.
+  RED: a plan whose `escape_entry` dangles or whose escape subgraph
+  doesn't close must reject with a named diagnostic.
+- **D2 — frontend lowering.** `dsl/frontend.rs` emits the same opcode
+  sequence the IR path emits for guarded hosts (reuse/mirror
+  `lower_boundary_guarded_task_v2`; do not re-derive semantics) and
+  `V2WaitFor`/`V2WaitUntil` for `Wait` (Cycle on standalone wait follows
+  `lowering.rs:565`'s existing first-interval rule). Receipt: bytecode
+  diff — the same guarded graph lowered via XML path vs plan path
+  produces equivalent guard opcodes (arming instr + timer kind + budget).
+- **D3 — designer serving.** `advance` ticks due timers
+  (`engine.tick_due_timers`) before and after its job-drain pass —
+  request-driven, preserving the designer's "no background loop"
+  doctrine; `advance` accepts optional `logical_time_ms` (defaults wall
+  clock) so receipts are deterministic; `/status` surfaces
+  `WaitState::Timer` fibers with their deadline instead of dumping them
+  into `wait_count`. Receipt: spawn a guarded template, advance past the
+  deadline with injected time → interrupting guard unwinds the host and
+  the escape path runs to its End; non-interrupting variant rearms;
+  budget exhausts.
+- **D4 — consumer sweep.** Bus-handler `plan.nodes()` walks already
+  `continue` on non-Task and the guards field is additive — verify, don't
+  assume. The runner demo simulation's `_ => break` (`server-runner/
+  rest.rs:683`) will hit `Wait`: teach it or make it reject loudly; a
+  silent break is the exact fail-open this plan forbids. Designer/runner
+  node-DTO builders learn the new shapes.
+
+**In scope:** interrupting + non-interrupting BoundaryTimer, TimerWait,
+and BoundaryError (same projection shape, kernel routing already built —
+excluding it would be artificial). **Out of scope:** MessageWait/HumanWait
+plan projection (guarded waits stay XML-path-only for now), MultiInstance,
+FFI, compensation, any engine/kernel change.
+
+**Open sub-fork for Adam (does not block D1/D2):** should the designer
+additionally grow an opt-in background tick loop (runner-style) for
+long-lived demo instances, or is request-driven-only permanent? D3 is
+written request-driven; the loop would be additive.
+
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*
