@@ -443,8 +443,34 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
 
 // ── Router ──────────────────────────────────────────────────────────────
 
+/// GET /bpmn/health — service-identity health contract. The runner and
+/// the designer both answer `/bpmn/health` with `{status, service}`; the
+/// UI dispatches on `service` to pick its surface (runner demo vs
+/// designer workspace) instead of treating a 404 as "something is
+/// wrong". Before this endpoint existed, the NORMAL designer deployment
+/// permanently showed an alarming "runner unreachable" banner — mode
+/// detection by absence, exactly the kind of negative-space check the
+/// working contract's "enforce the mechanism" rule forbids. `tier1_bundle`
+/// is the served SLM bundle identity (null = tier-0 degradation), so one
+/// curl answers "which service, which model".
+async fn designer_health(State(state): State<Arc<DesignerState>>) -> impl IntoResponse {
+    #[cfg(feature = "candle-probe")]
+    let tier1_bundle = state.tier1.as_ref().map(|r| r.model_bundle_hash().to_string());
+    #[cfg(not(feature = "candle-probe"))]
+    let tier1_bundle: Option<String> = {
+        let _ = &state; // state unused in the tier-0-only build
+        None
+    };
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "bpmn-lite-designer",
+        "tier1_bundle": tier1_bundle,
+    }))
+}
+
 pub fn designer_router(state: Arc<DesignerState>) -> Router {
     Router::new()
+        .route("/bpmn/health", get(designer_health))
         .route("/bpmn/compile/preview", post(compile_bpmn_preview))
         .route("/dmn/compile/preview", post(compile_dmn_preview))
         .route("/dmn/decisions/:id", get(get_dmn_decision))
