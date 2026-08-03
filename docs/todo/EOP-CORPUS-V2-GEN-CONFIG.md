@@ -58,6 +58,24 @@ xor_gateway eval items is not enough signal to have moved either intervention).
 Target: at minimum triple `xor_gateway`'s current per-family paraphrase count
 relative to other classes.
 
+**Seed phrase set — ratified (Adam, "your suggestions seem sensible - lets go
+with them"):** starter examples for the paraphrase generator to expand from,
+contrastive by construction (same surface vocabulary, different gold target),
+leaning on the routing consequence per the audited descriptions:
+
+| candidate | routing consequence | example utterances |
+|---|---|---|
+| `create_branch` | new outgoing route, own outcome key | "if it's rejected, branch off to a different path"; "add another route out of here for the escalated case"; "split this so a declined application goes its own way"; "give this a new outcome for 'high risk'" |
+| `insert_after` | extends the current route | "after this step, add a review before it continues"; "put a validation check right after the current one, same path"; "insert a step here, staying on this route"; "add one more task before it reaches the end" |
+| `connect` | wires two existing nodes | "wire the review step straight to the approval step"; "connect this back to the earlier check"; "join these two steps directly, skip what's between them"; "route this node's output into that existing task" |
+
+Anchoring triples (same anchor, adjacent phrasing, forces the three-way split):
+at a gateway anchor — "branch to a new outcome here" (`create_branch`) vs.
+"add a step here before it moves on" (`insert_after`) vs. "hook this up to the
+existing approval step" (`connect`). These are prose seeds for the generator,
+not literal corpus records — `corpus_gen.rs`'s paraphrase expansion (and
+A3.1's Jaccard cap) still governs the actual generated set.
+
 ## 4. starter-seed-v1 lessons folded in (open items, not yet decided)
 
 From `starter-seed-v1`'s 34-item slice (§10.3), three patterns recurred enough

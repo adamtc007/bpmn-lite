@@ -1079,5 +1079,22 @@ Verified: `cargo build`/`cargo test` clean under default features AND `--feature
 
 **Reporting Phase 1 done and stopping at Phase 2 (Adam's first live session — a human gate, not this executor's work) per the directive.**
 
+### Fork closures (2026-08-01)
+
+**R4 `task_type = "noop"` default — ratified as-is.** Surfaced in 432cef3 as the
+one deterministic-binding exception to "underivable = MISSING, not defaulted"
+(`proposal.rs`'s module doc, R4). Adam's ruling: no change — a `noop`-typed
+task is a valid, inspectable graph node (visible, admits, refined by a later
+manual edit), and forcing `task_type` to MISSING would make "create a task"
+alone impossible to ratify from an utterance at all, the wrong failure mode
+for a drafting tool. Closed; not revisited absent a new reason.
+
+**xor-anchored paraphrase-pair seed phrases — ratified.** The
+`create_branch`/`insert_after`/`connect` seed utterance set proposed for
+`EOP-CORPUS-V2-GEN-CONFIG.md` §3's reinforcement regime is adopted as drafted
+("your suggestions seem sensible - lets go with them"). Recorded in that file;
+still gated on the same "prepared, not run" status — no corpus regeneration
+triggered by this ruling alone, §1/§2/§4's open items are unchanged.
+
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*
