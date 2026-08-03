@@ -1659,7 +1659,10 @@ fn instr_count_for(
 /// representable by `GUARD-TIMER>` as ratified — flagged here rather than
 /// silently narrowed, since deciding what (if anything) replaces it is a
 /// design question this step doesn't own.
-fn timer_spec_duration_ms(spec: &TimerSpec) -> u64 {
+// `pub(crate)`, WS-D D2: the DSL frontend's guard/wait lowering reuses
+// this exact conversion rather than re-deriving it — one formula, never
+// two divergent implementations of the same rule.
+pub(crate) fn timer_spec_duration_ms(spec: &TimerSpec) -> u64 {
     match spec {
         TimerSpec::Duration { ms } => *ms,
         TimerSpec::Date { deadline_ms } => {

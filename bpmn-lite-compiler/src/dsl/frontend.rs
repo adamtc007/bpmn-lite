@@ -1,7 +1,13 @@
-use super::plan::{ExecutionNode, JoinMode, SplitMode, WorkflowExecutionPlan};
+use super::plan::{
+    ExecutionNode, GuardExecSpec, GuardTriggerExec, JoinMode, SplitMode, TaskExecNode,
+    WorkflowExecutionPlan,
+};
+use crate::ir::TimerSpec;
+use crate::lowering::timer_spec_duration_ms;
 use crate::VerifiedWorkflow;
 use bpmn_lite_types::{
     legacy_program, Addr, ArtifactEnvelope, ExecutableWorkflow, Instr, PayloadRouteBranch,
+    ScopeFailureBudget,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -11,11 +17,10 @@ pub enum FrontendError {
     InvalidRoute(String),
     CyclicOrUnreachable(Vec<String>),
     UnsupportedLoop(String),
-    /// WS-D D1: the plan FORMAT can now express guards and timer waits,
-    /// but this frontend's opcode emission for them lands in WS-D D2 —
-    /// until then a guard-bearing plan is refused by name, never lowered
-    /// with its guards silently dropped (that would be exactly the
-    /// BPMN_BOUNDARY_EVENT_BYPASS `analyze_safety` exists to catch).
+    /// WS-D: a plan construct the frontend cannot faithfully lower —
+    /// contradictory guard shapes (two timers on one host, an
+    /// interrupting cycle timer) refuse by name, never lowered with the
+    /// contradiction silently resolved.
     UnsupportedPlanConstruct(String),
     Artifact(String),
 }
@@ -63,25 +68,50 @@ impl WorkflowFrontend for DslFrontend {
 }
 
 pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, FrontendError> {
-    // WS-D D1 gate: guards and waits are representable in the plan but
-    // their opcode emission is D2's step. Refuse up front with the node
-    // named — a silent drop here would un-guard a task the author guarded.
+    // WS-D D2: validate every guard set before sizing runs, so a
+    // contradictory shape refuses by name instead of mis-sizing.
     for node in plan.nodes.values() {
-        match node {
-            ExecutionNode::Wait(w) => {
-                return Err(FrontendError::UnsupportedPlanConstruct(format!(
-                    "wait node '{}' — plan-path timer lowering lands in WS-D D2",
-                    w.id
-                )));
+        if let ExecutionNode::Task(task) = node {
+            validate_guards(task)?;
+        }
+    }
+
+    // WS-D D2, mirror of `lowering.rs`'s `guardn_close_before_end` walk:
+    // a NON-interrupting guard's handler fibre inherits the guard's
+    // scope token, so the escape flow's own terminal End must emit
+    // `V2GuardNEnd` before `End` to keep V-1 (control-stack balance).
+    // Same recorded narrowness as the XML side: only a linear escape
+    // chain is resolved; a branching escape finds no terminal to mark
+    // and `verify_v2_control_stack` then rejects the program with a
+    // precise V-1 diagnostic rather than this walk mis-lowering it.
+    let mut guardn_close_ends: HashSet<String> = HashSet::new();
+    for node in plan.nodes.values() {
+        let ExecutionNode::Task(task) = node else {
+            continue;
+        };
+        if task.guards.is_empty() || effective_interrupting(task) {
+            continue;
+        }
+        for guard in &task.guards {
+            let mut cursor = Some(guard.escape_entry.as_str());
+            let mut steps = 0usize;
+            while let Some(id) = cursor {
+                steps += 1;
+                if steps > plan.nodes.len() {
+                    break; // cycle guard — must not hang regardless.
+                }
+                match plan.nodes.get(id) {
+                    Some(ExecutionNode::End(e)) => {
+                        guardn_close_ends.insert(e.id.clone());
+                        break;
+                    }
+                    Some(next_node) => {
+                        let succs = next_node.flow_successors();
+                        cursor = if succs.len() == 1 { Some(succs[0]) } else { None };
+                    }
+                    None => break,
+                }
             }
-            ExecutionNode::Task(t) if !t.guards.is_empty() => {
-                return Err(FrontendError::UnsupportedPlanConstruct(format!(
-                    "task '{}' carries {} boundary guard(s) — plan-path guard lowering lands in WS-D D2",
-                    t.id,
-                    t.guards.len()
-                )));
-            }
-            _ => {}
         }
     }
 
@@ -94,7 +124,7 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
             .get(node_id)
             .ok_or_else(|| FrontendError::MissingNode(node_id.clone()))?;
         addresses.insert(node_id.clone(), address);
-        address = address.saturating_add(instruction_count(node)?);
+        address = address.saturating_add(instruction_count(node, &guardn_close_ends)?);
     }
 
     let mut instructions = Vec::new();
@@ -103,6 +133,7 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     let mut task_ids = BTreeMap::new();
     let join_plan = BTreeMap::new();
     let mut fork_pairing: BTreeMap<String, Addr> = BTreeMap::new();
+    let mut v2_guard_budgets: BTreeMap<Addr, ScopeFailureBudget> = BTreeMap::new();
 
     for node_id in &order {
         let node = &plan.nodes[node_id];
@@ -115,6 +146,80 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                 });
             }
             ExecutionNode::Task(node) => {
+                // WS-D D2: guarded emission mirrors `lowering.rs`'s
+                // `lower_boundary_guarded_task_v2` shape exactly —
+                // [PushI64 duration] (BEFORE guard-open, so the
+                // verifier-enforced `V2GuardArmTimer`-at-open+1 adjacency
+                // holds), guard-open, arming words, body, guard-close,
+                // Jump. The body is `ExecDslTask` instead of the XML
+                // path's `ExecNative` — both park on `WaitState::Job`, and
+                // the kernel's guard firing + error routing are
+                // fibre/record-based, body-agnostic (traced 2026-08-03).
+                let timer = timer_guard(node);
+                let errors = error_guards(node);
+                let interrupting = effective_interrupting(node);
+
+                if let Some(guard) = timer {
+                    let GuardTriggerExec::Timer { spec, .. } = &guard.trigger else {
+                        unreachable!("timer_guard returns Timer triggers only");
+                    };
+                    instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+                }
+                if !node.guards.is_empty() {
+                    let guard_open_addr = Addr::new(instructions.len() as u32);
+                    // Budget precedence mirrors the XML path: the timer
+                    // guard's own budget, else the first error guard's.
+                    let budget_max = timer
+                        .and_then(|g| g.failure_budget)
+                        .or_else(|| errors.first().and_then(|g| g.failure_budget));
+                    if let Some(max_failures) = budget_max {
+                        let budget = ScopeFailureBudget::new(1, max_failures).map_err(|error| {
+                            FrontendError::Artifact(format!(
+                                "guard on '{}' has invalid failure budget {max_failures}: {error}",
+                                node.id
+                            ))
+                        })?;
+                        v2_guard_budgets.insert(guard_open_addr, budget);
+                    }
+                    // Guard-open handler: the timer's escape entry when a
+                    // timer is attached (the only case anything fires
+                    // through `record.handler`); otherwise the first
+                    // error route's own handler as an inert placeholder —
+                    // same rule, same rationale as the XML lowering.
+                    let handler_entry = timer
+                        .map(|g| g.escape_entry.as_str())
+                        .or_else(|| errors.first().map(|g| g.escape_entry.as_str()))
+                        .expect("guards non-empty");
+                    let handler = target(&addresses, handler_entry)?;
+                    instructions.push(if interrupting {
+                        Instr::V2Guard { handler }
+                    } else {
+                        Instr::V2GuardN { handler }
+                    });
+                    if let Some(guard) = timer {
+                        instructions.push(Instr::V2GuardArmTimer);
+                        if let GuardTriggerExec::Timer {
+                            spec: TimerSpec::Cycle { max_fires, .. },
+                            ..
+                        } = &guard.trigger
+                        {
+                            debug_assert!(!interrupting, "validate_guards refused this");
+                            instructions.push(Instr::V2GuardTimerCycle {
+                                max_fires: *max_fires,
+                            });
+                        }
+                    }
+                    for guard in &errors {
+                        let GuardTriggerExec::Error { error_code } = &guard.trigger else {
+                            unreachable!("error_guards returns Error triggers only");
+                        };
+                        instructions.push(Instr::V2GuardArmError {
+                            error_code: error_code.clone().map(String::into_boxed_str),
+                            handler: target(&addresses, &guard.escape_entry)?,
+                        });
+                    }
+                }
+
                 let task_type = intern_task(&node.plug, &mut task_ids, &mut task_manifest);
                 instructions.push(Instr::ExecDslTask {
                     task_type,
@@ -125,6 +230,37 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                         .collect(),
                     produces_placeholder: node.produces_placeholder.clone(),
                 });
+                if !node.guards.is_empty() {
+                    instructions.push(if interrupting {
+                        Instr::V2GuardEnd
+                    } else {
+                        Instr::V2GuardNEnd
+                    });
+                }
+                instructions.push(Instr::Jump {
+                    target: target(&addresses, &node.next)?,
+                });
+            }
+            ExecutionNode::Wait(node) => {
+                // WS-D D2: same shape as the XML path's `TimerWait` arm —
+                // operand push + wait word + trailing Jump (the wait words
+                // carry no `next`; continuation is PC+1 on resume). Cycle
+                // degrades to a single first-interval wait, the same
+                // recorded simplification the XML lowering makes.
+                match &node.spec {
+                    TimerSpec::Duration { ms } => {
+                        instructions.push(Instr::PushI64(*ms as i64));
+                        instructions.push(Instr::V2WaitFor);
+                    }
+                    TimerSpec::Date { deadline_ms } => {
+                        instructions.push(Instr::PushI64(*deadline_ms as i64));
+                        instructions.push(Instr::V2WaitUntil);
+                    }
+                    TimerSpec::Cycle { interval_ms, .. } => {
+                        instructions.push(Instr::PushI64(*interval_ms as i64));
+                        instructions.push(Instr::V2WaitFor);
+                    }
+                }
                 instructions.push(Instr::Jump {
                     target: target(&addresses, &node.next)?,
                 });
@@ -237,15 +373,14 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     target: target(&addresses, &node.next)?,
                 });
             }
-            ExecutionNode::End(_) => instructions.push(Instr::End),
-            // Unreachable behind the D1 gate at the top of this function;
-            // kept as a hard refusal (not `unreachable!`) so a future
-            // caller path that skips the gate still fails closed.
-            ExecutionNode::Wait(w) => {
-                return Err(FrontendError::UnsupportedPlanConstruct(format!(
-                    "wait node '{}' — plan-path timer lowering lands in WS-D D2",
-                    w.id
-                )));
+            ExecutionNode::End(node) => {
+                // WS-D D2: an End reached by a non-interrupting guard's
+                // linear escape chain closes the inherited scope first —
+                // see the `guardn_close_ends` pre-pass above.
+                if guardn_close_ends.contains(&node.id) {
+                    instructions.push(Instr::V2GuardNEnd);
+                }
+                instructions.push(Instr::End);
             }
         }
     }
@@ -265,16 +400,105 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         flag_symbol_table: BTreeMap::new(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
-    };
+    }
+    // WS-D D2: same budget side-table attachment as the XML path; the
+    // plan format has no workflow-level default-budget annotation, so the
+    // conservative default applies to guards without an explicit budget.
+    .with_v2_guard_budgets(v2_guard_budgets, ScopeFailureBudget::conservative_default());
     let envelope = ArtifactEnvelope::from_legacy_program(legacy, env!("CARGO_PKG_VERSION"))
         .map_err(|error| FrontendError::Artifact(error.to_string()))?;
     ExecutableWorkflow::from_verified_envelope(envelope)
         .map_err(|error| FrontendError::Artifact(error.to_string()))
 }
 
-fn instruction_count(node: &ExecutionNode) -> Result<u32, FrontendError> {
+/// The single timer guard on a task, if any (`validate_guards` refuses >1).
+fn timer_guard(task: &TaskExecNode) -> Option<&GuardExecSpec> {
+    task.guards
+        .iter()
+        .find(|g| matches!(g.trigger, GuardTriggerExec::Timer { .. }))
+}
+
+/// Error guards in arming order: specific codes first, catch-all last —
+/// the kernel's `error_routes` `.find()` precedence, same sort the XML
+/// path's `push_error_guard_arms` applies.
+fn error_guards(task: &TaskExecNode) -> Vec<&GuardExecSpec> {
+    let mut errors: Vec<&GuardExecSpec> = task
+        .guards
+        .iter()
+        .filter(|g| matches!(g.trigger, GuardTriggerExec::Error { .. }))
+        .collect();
+    errors.sort_by_key(|g| matches!(&g.trigger, GuardTriggerExec::Error { error_code: None }));
+    errors
+}
+
+/// Combined guard interrupting-ness: any error guard forces interrupting
+/// (BPMN has no non-interrupting error boundary), else the timer's own
+/// flag — identical to the XML lowering's rule.
+fn effective_interrupting(task: &TaskExecNode) -> bool {
+    let has_errors = task
+        .guards
+        .iter()
+        .any(|g| matches!(g.trigger, GuardTriggerExec::Error { .. }));
+    let timer_interrupting = timer_guard(task).map(|g| {
+        matches!(g.trigger, GuardTriggerExec::Timer { interrupting: true, .. })
+    });
+    has_errors || timer_interrupting.unwrap_or(true)
+}
+
+/// WS-D D2: refuse contradictory guard sets by name. Projected plans
+/// can't produce these (the verifier admits max one timer per host, §7d,
+/// and rejects interrupting cycles, §7b) — but the frontend also lowers
+/// caller-submitted plans, which get no such construction guarantee.
+fn validate_guards(task: &TaskExecNode) -> Result<(), FrontendError> {
+    let timer_count = task
+        .guards
+        .iter()
+        .filter(|g| matches!(g.trigger, GuardTriggerExec::Timer { .. }))
+        .count();
+    if timer_count > 1 {
+        return Err(FrontendError::UnsupportedPlanConstruct(format!(
+            "task '{}' carries {timer_count} timer guards — one V2Guard scope arms one timer (verifier §7d allows max one per host)",
+            task.id
+        )));
+    }
+    let is_cycle = matches!(
+        timer_guard(task).map(|g| &g.trigger),
+        Some(GuardTriggerExec::Timer { spec: TimerSpec::Cycle { .. }, .. })
+    );
+    if is_cycle && effective_interrupting(task) {
+        return Err(FrontendError::UnsupportedPlanConstruct(format!(
+            "task '{}' has a Cycle timer guard on an interrupting scope (own flag or a co-attached error guard) — cycle timers must be non-interrupting (verifier §7b); refused rather than silently narrowed to fire-once",
+            task.id
+        )));
+    }
+    Ok(())
+}
+
+fn instruction_count(
+    node: &ExecutionNode,
+    guardn_close_ends: &HashSet<String>,
+) -> Result<u32, FrontendError> {
     match node {
+        // WS-D D2 guarded-task block: base ExecDslTask+Jump (2), plus
+        // guard open+close (2), plus PushI64+V2GuardArmTimer (2) when a
+        // timer is armed, plus V2GuardTimerCycle (1) for a cycle, plus
+        // one V2GuardArmError per error route.
+        ExecutionNode::Task(node) if !node.guards.is_empty() => {
+            let timer = timer_guard(node);
+            let cycle: u32 = matches!(
+                timer.map(|g| &g.trigger),
+                Some(GuardTriggerExec::Timer { spec: TimerSpec::Cycle { .. }, .. })
+            ) as u32;
+            let timer_len: u32 = if timer.is_some() { 2 } else { 0 };
+            let error_len = error_guards(node).len() as u32;
+            Ok(4 + timer_len + cycle + error_len)
+        }
         ExecutionNode::Task(_) => Ok(2),
+        // WS-D D2: PushI64 + V2WaitFor/V2WaitUntil + Jump.
+        ExecutionNode::Wait(_) => Ok(3),
+        // WS-D D2: +1 for the V2GuardNEnd a non-interrupting guard's
+        // escape terminal emits before its own End.
+        ExecutionNode::End(node) if guardn_close_ends.contains(&node.id) => Ok(2),
         // V5 (§18 ruling H): an inclusive split's own v2 block (zero-match
         // precheck + `V2Fork` + per-branch headers — see
         // `dsl_inclusive_diverging_len`) is variable-length, unlike every
@@ -469,7 +693,13 @@ fn routes(
 fn outgoing(node: &ExecutionNode) -> Vec<&str> {
     match node {
         ExecutionNode::Start(node) => vec![&node.next],
-        ExecutionNode::Task(node) => vec![&node.next],
+        // WS-D D2: guard escape entries are ordering-successors of their
+        // host — V-8 requires guard handler edges to be FORWARD, so the
+        // escape subgraph must be addressed after the guarded task, the
+        // same order the XML lowering produces.
+        ExecutionNode::Task(node) => std::iter::once(node.next.as_str())
+            .chain(node.guards.iter().map(|g| g.escape_entry.as_str()))
+            .collect(),
         ExecutionNode::Split(node) => node.flows.iter().map(|flow| flow.next.as_str()).collect(),
         ExecutionNode::Join(node) => vec![&node.next],
         ExecutionNode::Loop(node) => node
@@ -478,9 +708,6 @@ fn outgoing(node: &ExecutionNode) -> Vec<&str> {
             .map(String::as_str)
             .chain(std::iter::once(node.next.as_str()))
             .collect(),
-        // D2 will extend this with guard escape entries when the guard
-        // emission lands; until then the D1 gate refuses guard-bearing
-        // plans before ordering runs.
         ExecutionNode::Wait(node) => vec![&node.next],
         ExecutionNode::End(_) => Vec::new(),
     }
@@ -1020,40 +1247,296 @@ mod tests {
         // construct) and are removed rather than kept as dead code.
     }
 
-    /// RED (WS-D D1 gate): the plan format can now CARRY guards and
-    /// waits, but this frontend's emission for them is D2's step — until
-    /// it lands, lowering a guard-bearing plan must refuse by name, never
-    /// silently drop the guard (an un-guarded lowering of a guarded plan
-    /// is the exact bypass analyze_safety flags on the Task-plug side).
+    // ═══════════════════════════════════════════════════════════
+    //  WS-D D2 — guard/wait opcode emission. (Replaces the D1 gate test
+    //  `guard_bearing_plan_is_refused_until_d2_not_silently_unguarded` —
+    //  that test cemented a temporary scaffold explicitly labelled
+    //  "until D2"; these receipts are what it was holding the door for.)
+    // ═══════════════════════════════════════════════════════════
+
+    use crate::ir::{IREdge, IRGraph, IRNode};
+
+    fn ir_task(id: &str) -> IRNode {
+        IRNode::ServiceTask { id: id.into(), name: id.into(), task_type: "noop".into() }
+    }
+
+    /// start → t1 → end with a boundary timer guard on t1 whose escape
+    /// flow is escalate → end_esc (the productions.rs shape).
+    fn guarded_ir(interrupting: bool, spec: crate::ir::TimerSpec, budget: Option<u32>) -> IRGraph {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(ir_task("t1"));
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        let bt = g.add_node(IRNode::BoundaryTimer {
+            id: "bt".into(),
+            attached_to: "t1".into(),
+            spec,
+            interrupting,
+            failure_budget: budget,
+        });
+        let esc = g.add_node(ir_task("escalate"));
+        let esc_end = g.add_node(IRNode::End { id: "end_esc".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, end, IREdge { id: "e2".into(), condition: None });
+        g.add_edge(bt, esc, IREdge { id: "g1".into(), condition: None });
+        g.add_edge(esc, esc_end, IREdge { id: "g2".into(), condition: None });
+        g
+    }
+
+    /// Structural tag for scaffold comparison: the guard scaffold must be
+    /// identical between the XML path and the plan path; only the body
+    /// word differs by design (`ExecNative` vs `ExecDslTask` — both park
+    /// on `WaitState::Job`, and guard firing is fibre/record-based).
+    fn scaffold_tag(instr: &Instr) -> &'static str {
+        match instr {
+            Instr::PushI64(_) => "PushI64",
+            Instr::V2Guard { .. } => "V2Guard",
+            Instr::V2GuardN { .. } => "V2GuardN",
+            Instr::V2GuardArmTimer => "V2GuardArmTimer",
+            Instr::V2GuardTimerCycle { .. } => "V2GuardTimerCycle",
+            Instr::V2GuardArmError { .. } => "V2GuardArmError",
+            Instr::V2GuardEnd => "V2GuardEnd",
+            Instr::V2GuardNEnd => "V2GuardNEnd",
+            Instr::ExecNative { .. } | Instr::ExecDslTask { .. } => "BODY",
+            Instr::Jump { .. } => "Jump",
+            Instr::End => "End",
+            _ => "other",
+        }
+    }
+
+    /// Extract the guarded block: from the PushI64 preceding guard-open
+    /// through the trailing Jump after guard-close.
+    fn guard_block(instrs: &[Instr]) -> Vec<&'static str> {
+        let open = instrs
+            .iter()
+            .position(|i| matches!(i, Instr::V2Guard { .. } | Instr::V2GuardN { .. }))
+            .expect("a guard must open");
+        let close = instrs
+            .iter()
+            .position(|i| matches!(i, Instr::V2GuardEnd | Instr::V2GuardNEnd))
+            .expect("a guard must close");
+        let start = open.saturating_sub(1);
+        instrs[start..=close + 1].iter().map(scaffold_tag).collect()
+    }
+
+    /// GREEN (WS-D D2, the phase's core receipt): the SAME guarded IR
+    /// graph lowered via the XML path (`Compiler::lower_v2`) and via the
+    /// plan path (`project_ir` → `DslFrontend::lower`) produces the
+    /// IDENTICAL guard scaffold — same opcodes in the same order, same
+    /// budget at the guard-open address, same verifier-enforced
+    /// `V2GuardArmTimer`-at-open+1 adjacency — with only the body word
+    /// differing. Both artifacts pass the real V-verifier
+    /// (`from_verified_envelope`), not a mock.
     #[test]
-    fn guard_bearing_plan_is_refused_until_d2_not_silently_unguarded() {
+    fn plan_path_guard_scaffold_matches_xml_path() {
+        let g = guarded_ir(true, crate::ir::TimerSpec::Duration { ms: 60_000 }, Some(3));
+
+        let xml_program = crate::lowering::lower_v2(&g).expect("XML path must lower");
+        let plan = crate::dsl::ir_plan::project_ir(&g, "wf".into()).expect("must project");
+        let workflow = DslFrontend::lower(&plan).expect("plan path must lower and verify");
+        let plan_instrs = workflow.envelope().instructions();
+
+        assert_eq!(
+            guard_block(xml_program.program()),
+            guard_block(plan_instrs),
+            "guard scaffold must be identical across the two lowering front-ends"
+        );
+        // Expected literal shape, cemented:
+        assert_eq!(
+            guard_block(plan_instrs),
+            vec!["PushI64", "V2Guard", "V2GuardArmTimer", "BODY", "V2GuardEnd", "Jump"]
+        );
+
+        // Budget lands at the guard-open address on BOTH paths.
+        for (label, instrs, budgets) in [
+            (
+                "xml",
+                xml_program.program().as_slice(),
+                xml_program.v2_guard_budgets(),
+            ),
+            (
+                "plan",
+                plan_instrs,
+                workflow.envelope().metadata().v2_guard_budgets(),
+            ),
+        ] {
+            let open = instrs
+                .iter()
+                .position(|i| matches!(i, Instr::V2Guard { .. }))
+                .unwrap();
+            let budget = budgets
+                .get(&Addr::new(open as u32))
+                .unwrap_or_else(|| panic!("{label}: budget must sit at guard-open"));
+            assert_eq!(budget.max_failures(), 3, "{label}: declared budget lowered");
+            // Verifier-enforced adjacency: arm at open+1.
+            assert!(
+                matches!(instrs[open + 1], Instr::V2GuardArmTimer),
+                "{label}: V2GuardArmTimer must sit at guard-open + 1"
+            );
+        }
+    }
+
+    /// GREEN (WS-D D2): a rearming (non-interrupting) Cycle guard lowers
+    /// to V2GuardN + V2GuardArmTimer + V2GuardTimerCycle, and the escape
+    /// flow's own terminal End closes the inherited scope with
+    /// V2GuardNEnd — identical scaffold to the XML path for the same IR.
+    #[test]
+    fn rearming_cycle_guard_scaffold_matches_xml_path() {
+        let g = guarded_ir(
+            false,
+            crate::ir::TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 },
+            None,
+        );
+
+        let xml_program = crate::lowering::lower_v2(&g).expect("XML path must lower");
+        let plan = crate::dsl::ir_plan::project_ir(&g, "wf".into()).expect("must project");
+        let workflow = DslFrontend::lower(&plan).expect("plan path must lower and verify");
+        let plan_instrs = workflow.envelope().instructions();
+
+        assert_eq!(guard_block(xml_program.program()), guard_block(plan_instrs));
+        assert_eq!(
+            guard_block(plan_instrs),
+            vec![
+                "PushI64",
+                "V2GuardN",
+                "V2GuardArmTimer",
+                "V2GuardTimerCycle",
+                "BODY",
+                "V2GuardNEnd",
+                "Jump"
+            ]
+        );
+        assert!(
+            plan_instrs.iter().any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
+            "max_fires must survive"
+        );
+        // The escape terminal emits V2GuardNEnd before its End on both paths.
+        let count_guardn_ends = |instrs: &[Instr]| {
+            instrs.iter().filter(|i| matches!(i, Instr::V2GuardNEnd)).count()
+        };
+        assert_eq!(count_guardn_ends(plan_instrs), 2, "body close + escape-terminal close");
+        assert_eq!(count_guardn_ends(xml_program.program()), 2);
+    }
+
+    /// GREEN (WS-D D2): error guards arm specific-code-first, catch-all
+    /// last (kernel `error_routes` precedence) regardless of the order
+    /// they appear on the plan node, and any error guard forces the
+    /// combined scope interrupting.
+    #[test]
+    fn error_guards_arm_specific_first_catch_all_last() {
         let mut plan = routing_plan();
         if let Some(ExecutionNode::Task(t)) = plan.nodes.get_mut("decide") {
+            // Deliberately catch-all FIRST on the node — emission must sort.
             t.guards.push(crate::dsl::plan::GuardExecSpec {
-                guard_id: "bt".into(),
-                trigger: crate::dsl::plan::GuardTriggerExec::Timer {
-                    spec: crate::ir::TimerSpec::Duration { ms: 1000 },
-                    interrupting: true,
+                guard_id: "be_all".into(),
+                trigger: crate::dsl::plan::GuardTriggerExec::Error { error_code: None },
+                failure_budget: None,
+                escape_entry: "end".into(),
+            });
+            t.guards.push(crate::dsl::plan::GuardExecSpec {
+                guard_id: "be_rej".into(),
+                trigger: crate::dsl::plan::GuardTriggerExec::Error {
+                    error_code: Some("FILING_REJECTED".into()),
                 },
                 failure_budget: None,
                 escape_entry: "end".into(),
             });
         }
-        let err = DslFrontend::lower(&plan).expect_err("guarded plan must refuse until D2");
-        assert!(matches!(err, FrontendError::UnsupportedPlanConstruct(ref m) if m.contains("decide")));
+        let workflow = DslFrontend::lower(&plan).expect("error-guarded plan must lower");
+        let instrs = workflow.envelope().instructions();
+        let arms: Vec<Option<String>> = instrs
+            .iter()
+            .filter_map(|i| match i {
+                Instr::V2GuardArmError { error_code, .. } => {
+                    Some(error_code.as_ref().map(|c| c.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            arms,
+            vec![Some("FILING_REJECTED".to_string()), None],
+            "specific code first, catch-all last"
+        );
+        assert!(
+            instrs.iter().any(|i| matches!(i, Instr::V2Guard { .. })),
+            "error guards force an interrupting V2Guard scope"
+        );
+    }
+
+    /// GREEN (WS-D D2): Wait nodes lower to operand push + wait word +
+    /// Jump — real durable timers, not the dead `bpmn:timer-wait` plug.
+    #[test]
+    fn wait_nodes_lower_to_v2_wait_words() {
+        for (spec, expect_until) in [
+            (crate::ir::TimerSpec::Duration { ms: 5000 }, false),
+            (crate::ir::TimerSpec::Date { deadline_ms: 1_900_000_000_000 }, true),
+        ] {
+            let mut plan = routing_plan();
+            if let Some(ExecutionNode::Task(t)) = plan.nodes.get_mut("decide") {
+                t.next = "w".into();
+            }
+            plan.nodes.insert(
+                "w".into(),
+                ExecutionNode::Wait(crate::dsl::plan::WaitExecNode {
+                    id: "w".into(),
+                    spec: spec.clone(),
+                    next: "route".into(),
+                    span: None,
+                }),
+            );
+            let workflow = DslFrontend::lower(&plan).expect("wait-bearing plan must lower");
+            let instrs = workflow.envelope().instructions();
+            let wait_pos = instrs
+                .iter()
+                .position(|i| matches!(i, Instr::V2WaitFor | Instr::V2WaitUntil))
+                .expect("a wait word must be emitted");
+            assert!(matches!(instrs[wait_pos - 1], Instr::PushI64(_)));
+            assert_eq!(
+                matches!(instrs[wait_pos], Instr::V2WaitUntil),
+                expect_until,
+                "Duration→V2WaitFor, Date→V2WaitUntil"
+            );
+            assert!(matches!(instrs[wait_pos + 1], Instr::Jump { .. }));
+        }
+    }
+
+    /// RED (WS-D D2): contradictory guard sets refuse by name — two
+    /// timers on one host, and an interrupting Cycle (own flag or forced
+    /// by a co-attached error guard).
+    #[test]
+    fn contradictory_guard_sets_are_refused() {
+        let timer = |id: &str, spec: crate::ir::TimerSpec, interrupting: bool| {
+            crate::dsl::plan::GuardExecSpec {
+                guard_id: id.into(),
+                trigger: crate::dsl::plan::GuardTriggerExec::Timer { spec, interrupting },
+                failure_budget: None,
+                escape_entry: "end".into(),
+            }
+        };
 
         let mut plan = routing_plan();
-        plan.nodes.insert(
-            "w".into(),
-            ExecutionNode::Wait(crate::dsl::plan::WaitExecNode {
-                id: "w".into(),
-                spec: crate::ir::TimerSpec::Duration { ms: 1000 },
-                next: "end".into(),
-                span: None,
-            }),
-        );
-        let err = DslFrontend::lower(&plan).expect_err("wait-bearing plan must refuse until D2");
-        assert!(matches!(err, FrontendError::UnsupportedPlanConstruct(ref m) if m.contains("'w'")));
+        if let Some(ExecutionNode::Task(t)) = plan.nodes.get_mut("decide") {
+            t.guards.push(timer("bt1", crate::ir::TimerSpec::Duration { ms: 1 }, true));
+            t.guards.push(timer("bt2", crate::ir::TimerSpec::Duration { ms: 2 }, true));
+        }
+        assert!(matches!(
+            DslFrontend::lower(&plan),
+            Err(FrontendError::UnsupportedPlanConstruct(ref m)) if m.contains("timer guards")
+        ));
+
+        let mut plan = routing_plan();
+        if let Some(ExecutionNode::Task(t)) = plan.nodes.get_mut("decide") {
+            t.guards.push(timer(
+                "bt",
+                crate::ir::TimerSpec::Cycle { interval_ms: 1000, max_fires: 2 },
+                true,
+            ));
+        }
+        assert!(matches!(
+            DslFrontend::lower(&plan),
+            Err(FrontendError::UnsupportedPlanConstruct(ref m)) if m.contains("Cycle")
+        ));
     }
 
     /// An always-live (default) flow makes the DSL inclusive split's fork
