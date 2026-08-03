@@ -16,6 +16,18 @@
 //! are structural-only (zero bytecode, per their own IR doc comment) and
 //! are simply omitted from the projected plan.
 //!
+//! **WS-D D1 (Adam's "own phase" ruling, 2026-08-03)** widened the scope
+//! with timer semantics: `BoundaryTimer`/`BoundaryError` project onto
+//! their HOST task as [`GuardExecSpec`] decorations (mirroring the
+//! kernel's model — guard arming is inline in the host's lowering, the
+//! escape flow is ordinary downstream nodes) and `TimerWait` projects to
+//! [`ExecutionNode::Wait`]. A guard's `escape_entry` is its node's single
+//! outgoing successor, exactly how `lowering.rs` resolves the guard
+//! `handler` address; a guard with zero or multiple outgoing edges is
+//! refused by name ([`IrPlanError::GuardEscapeUnresolved`]) — verifier
+//! §7c admits ≥1 edge on a timer guard, but the lowering only ever
+//! resolves ONE handler, so projecting >1 would first-edge-guess.
+//!
 //! Explicitly OUT of scope, refused with a named [`IrPlanError`] rather
 //! than guessed at:
 //! - `GatewayXor` — has no `direction` field (unlike `GatewayAnd`/
@@ -23,12 +35,11 @@
 //!   DSL counterpart's `join` id is an explicit AST annotation
 //!   (`linter.rs`'s `NodeAst::Split.join`) with no IR equivalent. Adding
 //!   XOR support needs its own traced join-inference design, not a guess.
-//! - `BoundaryTimer`, `BoundaryError`, `MessageWait`, `HumanWait`,
-//!   `SendTask`, `MultiInstance`, `TimerWait`, `FfiServiceTask` — none has
-//!   an `ExecutionNode` representation in `WorkflowExecutionPlan` at all;
-//!   confirmed by trace that `lint()` never constructs one for any of
-//!   these kinds (they are XML/IR-authoring-only constructs the plan
-//!   format has never had to represent).
+//! - `MessageWait`, `HumanWait`, `SendTask`, `MultiInstance`,
+//!   `FfiServiceTask` — still no `ExecutionNode` representation in
+//!   `WorkflowExecutionPlan` (XML/IR-authoring-only constructs). A guard
+//!   ATTACHED to a wait host therefore also cannot project — the host
+//!   itself is refused first.
 //!
 //! Placeholder inference is also out of scope for graph-authored
 //! `ServiceTask` nodes: DSL's `Task.plug` is a catalogue-registered
@@ -74,6 +85,19 @@ pub enum IrPlanError {
     UnsupportedConditionOperator { gateway_id: String, op: ConditionOp },
     #[error("edge from '{id}' carries a condition, but {kind} has no field to represent one — only diverging GatewayAnd/GatewayInclusive edges can be conditioned")]
     UnrepresentableCondition { id: String, kind: &'static str },
+    #[error("boundary guard '{guard_id}' on host '{host}' has {count} outgoing escape edge(s) — GuardExecSpec carries exactly one escape_entry (mirroring the lowering's single-successor handler resolution); 0 means the escape flow is missing, >1 would be first-edge-guessed rather than represented")]
+    GuardEscapeUnresolved {
+        guard_id: String,
+        host: String,
+        count: usize,
+    },
+    #[error("boundary guard '{guard_id}' is attached to '{host}', which did not project to a plan Task — a guard on an unprojected host would be silently dropped, which is the exact fail-open this projection refuses")]
+    GuardHostUnprojected { guard_id: String, host: String },
+    #[error("boundary guard '{guard_id}' escape flow enters '{escape_entry}', which has no plan representation (structural-only or unprojected node) — the guard's handler would dangle")]
+    GuardEscapeDangling {
+        guard_id: String,
+        escape_entry: String,
+    },
 }
 
 fn node_kind_name(node: &IRNode) -> &'static str {
@@ -140,6 +164,55 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
     let join_to_split: BTreeMap<petgraph::graph::NodeIndex, petgraph::graph::NodeIndex> =
         pairs.iter().map(|(&div, &join)| (join, div)).collect();
 
+    // WS-D D1 pre-pass: collect boundary guards keyed by host id. Guard
+    // nodes are decorations, not plan nodes — the node loop below skips
+    // them, the host's ServiceTask arm consumes this map, and anything
+    // left unconsumed afterwards is a hard error (never a silent drop).
+    let mut guards_by_host: BTreeMap<String, Vec<GuardExecSpec>> = BTreeMap::new();
+    for idx in ir.node_indices() {
+        let (guard_id, host, trigger, failure_budget) = match &ir[idx] {
+            IRNode::BoundaryTimer {
+                id,
+                attached_to,
+                spec,
+                interrupting,
+                failure_budget,
+            } => (
+                id,
+                attached_to,
+                GuardTriggerExec::Timer {
+                    spec: spec.clone(),
+                    interrupting: *interrupting,
+                },
+                *failure_budget,
+            ),
+            IRNode::BoundaryError {
+                id,
+                attached_to,
+                error_code,
+                failure_budget,
+            } => (
+                id,
+                attached_to,
+                GuardTriggerExec::Error {
+                    error_code: error_code.clone(),
+                },
+                *failure_budget,
+            ),
+            _ => continue,
+        };
+        let escape_entry = guard_escape_entry(ir, idx, guard_id, host)?;
+        guards_by_host
+            .entry(host.clone())
+            .or_default()
+            .push(GuardExecSpec {
+                guard_id: guard_id.clone(),
+                trigger,
+                failure_budget,
+                escape_entry,
+            });
+    }
+
     let mut nodes: BTreeMap<String, ExecutionNode> = BTreeMap::new();
 
     for idx in ir.node_indices() {
@@ -176,6 +249,26 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                         next,
                         produces_placeholder: None,
                         consumes_placeholders: Vec::new(),
+                        guards: guards_by_host.remove(id).unwrap_or_default(),
+                        span: None,
+                    }),
+                );
+            }
+
+            // WS-D D1: guard nodes were consumed by the pre-pass above —
+            // they decorate their host, they are not plan nodes. The
+            // escape SUBGRAPH's own nodes still project normally on their
+            // own loop iterations.
+            IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. } => {}
+
+            IRNode::TimerWait { id, spec } => {
+                let next = single_successor(ir, idx)?;
+                nodes.insert(
+                    id.clone(),
+                    ExecutionNode::Wait(WaitExecNode {
+                        id: id.clone(),
+                        spec: spec.clone(),
+                        next,
                         span: None,
                     }),
                 );
@@ -277,6 +370,38 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
         }
     }
 
+    // WS-D D1 fail-closed sweep: a guard whose host never became a plan
+    // Task (unverified graph, dangling attached_to) must refuse, not
+    // evaporate.
+    if let Some((host, specs)) = guards_by_host.iter().next() {
+        return Err(IrPlanError::GuardHostUnprojected {
+            guard_id: specs[0].guard_id.clone(),
+            host: host.clone(),
+        });
+    }
+
+    // And every escape_entry must reference a node that actually
+    // projected — an escape flow entering e.g. a DataObject (omitted from
+    // the plan) would leave the guard's handler dangling. Escape CLOSURE
+    // (reaching an End) needs no separate check here: every projected
+    // non-End node has exactly one successor by construction
+    // (`single_successor`) and `validate_dag` below rejects cycles, so a
+    // projected escape path always terminates in an End. Hand-built plans
+    // don't get that construction guarantee, which is why
+    // `analyze_safety` re-proves closure as a breach check.
+    for node in nodes.values() {
+        if let ExecutionNode::Task(task) = node {
+            for guard in &task.guards {
+                if !nodes.contains_key(&guard.escape_entry) {
+                    return Err(IrPlanError::GuardEscapeDangling {
+                        guard_id: guard.guard_id.clone(),
+                        escape_entry: guard.escape_entry.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     let plan = WorkflowExecutionPlan::new(
         workflow_id,
         nodes,
@@ -289,6 +414,38 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
     validate_dag(&plan).map_err(IrPlanError::DagInvalid)?;
 
     Ok(plan)
+}
+
+/// Resolve a boundary guard's escape-flow entry: the guard node's single
+/// outgoing successor, exactly how `lowering.rs` resolves the guard's
+/// `handler` address (`push_error_guard_arms` and the timer arm both take
+/// the sole successor). Zero edges = missing escape flow; multiple edges
+/// = refused rather than first-edge-guessed (verifier §7c admits ≥1 on a
+/// timer guard, but one `handler` address can't represent two routes). A
+/// condition on the escape edge has no `GuardExecSpec` field to carry it.
+fn guard_escape_entry(
+    ir: &IRGraph,
+    idx: petgraph::graph::NodeIndex,
+    guard_id: &str,
+    host: &str,
+) -> Result<String, IrPlanError> {
+    let edges: Vec<_> = ir.edges_directed(idx, Direction::Outgoing).collect();
+    match edges.as_slice() {
+        [edge] => {
+            if edge.weight().condition.is_some() {
+                return Err(IrPlanError::UnrepresentableCondition {
+                    id: guard_id.to_owned(),
+                    kind: node_kind_name(&ir[idx]),
+                });
+            }
+            Ok(ir[edge.target()].id().to_owned())
+        }
+        _ => Err(IrPlanError::GuardEscapeUnresolved {
+            guard_id: guard_id.to_owned(),
+            host: host.to_owned(),
+            count: edges.len(),
+        }),
+    }
 }
 
 fn condition_literal_to_expected(literal: &ConditionLiteral) -> String {
@@ -397,9 +554,14 @@ mod tests {
         ));
     }
 
-    /// RED: v2-only node kinds (guards/waits/MI/FFI) have no
-    /// WorkflowExecutionPlan representation — must fail closed, never a
-    /// lossy shoehorn.
+    /// RED (amended for WS-D D1, Adam's "own phase" ruling 2026-08-03):
+    /// this cement test originally asserted that ANY BoundaryTimer was
+    /// refused (`UnsupportedNode`) — that behaviour was deliberately
+    /// replaced by guard projection. What remains cemented is the
+    /// fail-closed core the original test actually exercised: this
+    /// graph's guard has NO escape flow, and an escape-less guard still
+    /// refuses — now by its precise name — rather than projecting a
+    /// guard whose handler leads nowhere.
     #[test]
     fn boundary_timer_is_refused_not_shoehorned() {
         let mut g: IRGraph = IRGraph::new();
@@ -416,10 +578,230 @@ mod tests {
         g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
         g.add_edge(t, end, IREdge { id: "e2".into(), condition: None });
 
-        let err = project_ir(&g, "wf".into()).expect_err("BoundaryTimer must be refused");
+        let err = project_ir(&g, "wf".into()).expect_err("an escape-less guard must be refused");
         assert!(matches!(
             err,
-            IrPlanError::UnsupportedNode { kind: "BoundaryTimer", .. }
+            IrPlanError::GuardEscapeUnresolved { count: 0, .. }
+        ));
+    }
+
+    /// Build the canonical guarded shape (`productions.rs`'s
+    /// interrupting_timeout): start → t1 → end, guard on t1 whose escape
+    /// flow is its own task → own End.
+    fn guarded_graph(interrupting: bool, budget: Option<u32>) -> IRGraph {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(task("t1"));
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        let bt = g.add_node(IRNode::BoundaryTimer {
+            id: "bt".into(),
+            attached_to: "t1".into(),
+            spec: crate::ir::TimerSpec::Duration { ms: 60_000 },
+            interrupting,
+            failure_budget: budget,
+        });
+        let esc = g.add_node(task("escalate"));
+        let esc_end = g.add_node(IRNode::End { id: "end_esc".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, end, IREdge { id: "e2".into(), condition: None });
+        g.add_edge(bt, esc, IREdge { id: "g1".into(), condition: None });
+        g.add_edge(esc, esc_end, IREdge { id: "g2".into(), condition: None });
+        g
+    }
+
+    /// GREEN (WS-D D1): a well-formed interrupting boundary timer
+    /// projects as a guard DECORATION on its host — trigger, budget, and
+    /// escape entry intact, escape subgraph present as ordinary plan
+    /// nodes, and the plan's own proof holds (no breaches).
+    #[test]
+    fn guarded_task_projects_guard_decoration_with_escape_subgraph() {
+        let g = guarded_graph(true, Some(3));
+        let plan = project_ir(&g, "wf".into()).expect("guarded task must project");
+
+        let ExecutionNode::Task(t1) = plan.nodes.get("t1").unwrap() else {
+            panic!("t1 must be a Task");
+        };
+        assert_eq!(t1.guards.len(), 1);
+        let guard = &t1.guards[0];
+        assert_eq!(guard.guard_id, "bt");
+        assert_eq!(guard.failure_budget, Some(3));
+        assert_eq!(guard.escape_entry, "escalate");
+        assert!(matches!(
+            guard.trigger,
+            GuardTriggerExec::Timer { interrupting: true, spec: crate::ir::TimerSpec::Duration { ms: 60_000 } }
+        ));
+        // The guard node itself is NOT a plan node; its escape subgraph is.
+        assert!(!plan.nodes.contains_key("bt"));
+        assert!(plan.nodes.contains_key("escalate"));
+        assert!(plan.nodes.contains_key("end_esc"));
+        // The proof holds: escape subgraph reachable + closed, SESE intact.
+        assert!(
+            plan.mathematically_proved(),
+            "breaches: {:?}",
+            plan.unsafe_breeches()
+        );
+    }
+
+    /// GREEN (WS-D D1): non-interrupting (rearming) cycle guard projects
+    /// with its trigger shape intact.
+    #[test]
+    fn rearming_cycle_guard_projects() {
+        let mut g = guarded_graph(false, None);
+        for idx in g.node_indices() {
+            if let IRNode::BoundaryTimer { spec, .. } = &mut g[idx] {
+                *spec = crate::ir::TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 };
+            }
+        }
+        let plan = project_ir(&g, "wf".into()).expect("rearming guard must project");
+        let ExecutionNode::Task(t1) = plan.nodes.get("t1").unwrap() else {
+            panic!("t1 must be a Task");
+        };
+        assert!(matches!(
+            t1.guards[0].trigger,
+            GuardTriggerExec::Timer {
+                interrupting: false,
+                spec: crate::ir::TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 }
+            }
+        ));
+    }
+
+    /// GREEN (WS-D D1): a boundary error projects as an Error-triggered
+    /// guard (no `interrupting` flag to carry — the type makes
+    /// non-interrupting error unrepresentable).
+    #[test]
+    fn boundary_error_projects_as_error_guard() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(task("t1"));
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        let be = g.add_node(IRNode::BoundaryError {
+            id: "be".into(),
+            attached_to: "t1".into(),
+            error_code: Some("FILING_REJECTED".into()),
+            failure_budget: None,
+        });
+        let esc_end = g.add_node(IRNode::End { id: "end_err".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, end, IREdge { id: "e2".into(), condition: None });
+        g.add_edge(be, esc_end, IREdge { id: "g1".into(), condition: None });
+
+        let plan = project_ir(&g, "wf".into()).expect("boundary error must project");
+        let ExecutionNode::Task(t1) = plan.nodes.get("t1").unwrap() else {
+            panic!("t1 must be a Task");
+        };
+        assert_eq!(t1.guards.len(), 1);
+        assert!(matches!(
+            &t1.guards[0].trigger,
+            GuardTriggerExec::Error { error_code: Some(code) } if code == "FILING_REJECTED"
+        ));
+        assert_eq!(t1.guards[0].escape_entry, "end_err");
+        assert!(plan.mathematically_proved());
+    }
+
+    /// GREEN (WS-D D1): standalone TimerWait projects to a first-class
+    /// Wait node, not a Task-plug shoehorn.
+    #[test]
+    fn timer_wait_projects_to_wait_node() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let w = g.add_node(IRNode::TimerWait {
+            id: "cooling_off".into(),
+            spec: crate::ir::TimerSpec::Duration { ms: 259_200_000 },
+        });
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, w, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(w, end, IREdge { id: "e2".into(), condition: None });
+
+        let plan = project_ir(&g, "wf".into()).expect("TimerWait must project");
+        let ExecutionNode::Wait(wait) = plan.nodes.get("cooling_off").unwrap() else {
+            panic!("cooling_off must be a Wait node");
+        };
+        assert!(matches!(wait.spec, crate::ir::TimerSpec::Duration { ms: 259_200_000 }));
+        assert_eq!(wait.next, "end");
+        assert!(plan.mathematically_proved());
+    }
+
+    /// RED (WS-D D1): a guard attached to a host that never projected
+    /// must refuse — never evaporate.
+    #[test]
+    fn guard_on_unprojected_host_is_refused_not_dropped() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(task("t1"));
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        let bt = g.add_node(IRNode::BoundaryTimer {
+            id: "bt".into(),
+            attached_to: "ghost".into(),
+            spec: crate::ir::TimerSpec::Duration { ms: 1000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        let esc_end = g.add_node(IRNode::End { id: "end_esc".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, end, IREdge { id: "e2".into(), condition: None });
+        g.add_edge(bt, esc_end, IREdge { id: "g1".into(), condition: None });
+
+        let err = project_ir(&g, "wf".into())
+            .expect_err("a guard on a nonexistent host must be refused");
+        assert!(matches!(
+            err,
+            IrPlanError::GuardHostUnprojected { ref host, .. } if host == "ghost"
+        ));
+    }
+
+    /// RED (WS-D D1): a condition on the escape edge has no field in
+    /// GuardExecSpec — refused, never dropped.
+    #[test]
+    fn condition_on_escape_edge_is_refused() {
+        let mut g = guarded_graph(true, None);
+        // Rebuild the escape edge with a condition.
+        let bt = g
+            .node_indices()
+            .find(|&i| matches!(&g[i], IRNode::BoundaryTimer { .. }))
+            .unwrap();
+        let esc_edge = g.edges_directed(bt, Direction::Outgoing).next().unwrap().id();
+        g.remove_edge(esc_edge);
+        let esc = g.node_indices().find(|&i| g[i].id() == "escalate").unwrap();
+        g.add_edge(
+            bt,
+            esc,
+            IREdge {
+                id: "g1".into(),
+                condition: Some(ConditionExpr {
+                    flag_name: "@flag".into(),
+                    op: ConditionOp::Eq,
+                    literal: ConditionLiteral::Bool(true),
+                }),
+            },
+        );
+        let err = project_ir(&g, "wf".into())
+            .expect_err("a conditioned escape edge must be refused");
+        assert!(matches!(
+            err,
+            IrPlanError::UnrepresentableCondition { kind: "BoundaryTimer", .. }
+        ));
+    }
+
+    /// Cement (WS-D D1 scope boundary): kinds still without a plan
+    /// representation stay refused by name — widening for guards/waits
+    /// must not have loosened the catch-all.
+    #[test]
+    fn still_unsupported_kinds_remain_refused() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let m = g.add_node(IRNode::MessageWait {
+            id: "mw".into(),
+            name: "mw".into(),
+            corr_key_source: "docs_received".into(),
+        });
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, m, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(m, end, IREdge { id: "e2".into(), condition: None });
+
+        let err = project_ir(&g, "wf".into()).expect_err("MessageWait must still be refused");
+        assert!(matches!(
+            err,
+            IrPlanError::UnsupportedNode { kind: "MessageWait", .. }
         ));
     }
 

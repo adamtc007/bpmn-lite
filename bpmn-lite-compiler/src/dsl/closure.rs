@@ -20,20 +20,11 @@ pub fn validate_path_family(
     let mut adj = HashMap::new();
     let mut incoming = HashMap::new();
     for (id, node) in &plan.nodes {
-        let nexts = match node {
-            ExecutionNode::Start(n) => vec![n.next.as_str()],
-            ExecutionNode::Task(n) => vec![n.next.as_str()],
-            ExecutionNode::Split(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
-            ExecutionNode::Join(n) => vec![n.next.as_str()],
-            ExecutionNode::Loop(n) => {
-                let mut v = vec![n.next.as_str()];
-                if let Some(first) = n.body.first() {
-                    v.push(first.as_str());
-                }
-                v
-            }
-            ExecutionNode::End(_) => vec![],
-        };
+        // WS-D D1: shared successor formula (guard escape entries
+        // included — an escape subgraph's tasks are part of the closure's
+        // dependency surface exactly like the main flow's).
+        let mut nexts = node.flow_successors();
+        nexts.extend(node.guard_escape_entries());
         for &next in &nexts {
             incoming
                 .entry(next.to_string())

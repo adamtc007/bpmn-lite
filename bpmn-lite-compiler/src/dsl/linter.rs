@@ -419,6 +419,7 @@ impl<'a> Linter<'a> {
                         next: n.next.clone(),
                         produces_placeholder: decl.produces,
                         consumes_placeholders: decl.consumes,
+                        guards: Vec::new(),
                         span: Some(n.span),
                     })
                 }
@@ -521,6 +522,7 @@ impl<'a> Linter<'a> {
                                 ExecutionNode::Loop(lp) => Some(lp.next.clone()),
                                 ExecutionNode::Join(j) => Some(j.next.clone()),
                                 ExecutionNode::Start(st) => Some(st.next.clone()),
+                                ExecutionNode::Wait(w) => Some(w.next.clone()),
                                 ExecutionNode::End(e) => Some(e.id.clone()),
                             };
                             if let Some(next_id) = next_of_target {
@@ -587,6 +589,11 @@ impl<'a> Linter<'a> {
                         ExecutionNode::Start(st) => {
                             if st.next == meet_id {
                                 st.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::Wait(w) => {
+                            if w.next == meet_id {
+                                w.next = join_id.clone();
                             }
                         }
                         ExecutionNode::End(_) => {}

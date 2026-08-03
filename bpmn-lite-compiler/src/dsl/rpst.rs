@@ -24,6 +24,30 @@ pub fn verify_sese_nesting(plan: &WorkflowExecutionPlan) -> Result<(), String> {
         ));
     }
 
+    // WS-D D1: each guard escape subgraph is its own SESE region, walked
+    // with a FRESH split stack — the guard fires outside the main flow's
+    // split nesting (an interrupting guard has already unwound the host's
+    // scope; a rearming one spawns a sibling fibre). Consequence, recorded
+    // deliberately: an escape flow that merges into the main flow's own
+    // Join pops an empty stack here and errors — only self-contained
+    // escape subgraphs ending in their own End (the shape
+    // `productions.rs`'s interrupting_timeout emits, and the only shape
+    // the XML lowering's guardn-close walk supports) verify as SESE.
+    // A merging escape therefore surfaces as a breach, never a silent
+    // admit.
+    for node in plan.nodes.values() {
+        for entry in node.guard_escape_entries() {
+            let mut escape_stack = Vec::new();
+            dfs_walk(entry, plan, &mut visited, &mut escape_stack, &mut errors);
+            if !escape_stack.is_empty() {
+                errors.push(format!(
+                    "Unclosed Split nodes in guard escape flow from '{entry}': [{}]",
+                    escape_stack.join(", ")
+                ));
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -98,6 +122,9 @@ fn dfs_walk(
         }
         ExecutionNode::Task(tk) => {
             dfs_walk(&tk.next, plan, visited, split_stack, errors);
+        }
+        ExecutionNode::Wait(w) => {
+            dfs_walk(&w.next, plan, visited, split_stack, errors);
         }
         ExecutionNode::End(_) => {
             split_stack.clear();

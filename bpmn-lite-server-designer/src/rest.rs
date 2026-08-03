@@ -322,6 +322,19 @@ pub(crate) struct VisualEdgeDto {
     condition: Option<String>,
 }
 
+/// Human label for a timer spec on the visual graph (WS-D D1).
+fn timer_spec_label(spec: &bpmn_lite_compiler::TimerSpec) -> String {
+    use bpmn_lite_compiler::TimerSpec;
+    match spec {
+        TimerSpec::Duration { ms } => format!("{}s", ms / 1000),
+        TimerSpec::Date { deadline_ms } => format!("until t={deadline_ms}"),
+        TimerSpec::Cycle {
+            interval_ms,
+            max_fires,
+        } => format!("every {}s ×{}", interval_ms / 1000, max_fires),
+    }
+}
+
 fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
     use bpmn_lite_compiler::dsl::JoinMode;
     use bpmn_lite_compiler::dsl::SplitMode;
@@ -368,6 +381,12 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 l.span,
             ),
+            ExecutionNode::Wait(w) => (
+                "wait".to_owned(),
+                format!("Wait ({})", timer_spec_label(&w.spec)),
+                None,
+                w.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -393,6 +412,16 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     to: t.next.clone(),
                     condition: None,
                 });
+                // WS-D D1: a guard's escape flow is a real route out of
+                // the host — rendered as a labelled edge so the escape
+                // subgraph never appears disconnected in the preview.
+                for guard in &t.guards {
+                    edges.push(VisualEdgeDto {
+                        from: id.clone(),
+                        to: guard.escape_entry.clone(),
+                        condition: Some(format!("Guard: {}", guard.guard_id)),
+                    });
+                }
             }
             ExecutionNode::Split(s) => {
                 for flow in &s.flows {
@@ -428,6 +457,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     from: id.clone(),
                     to: l.next.clone(),
                     condition: Some("Loop Exit".into()),
+                });
+            }
+            ExecutionNode::Wait(w) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: w.next.clone(),
+                    condition: None,
                 });
             }
             ExecutionNode::End(_) => {}

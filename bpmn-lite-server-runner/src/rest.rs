@@ -719,7 +719,16 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     }
                     queue.push_back(l.next.clone());
                 }
+                ExecutionNode::Wait(w) => {
+                    queue.push_back(w.next.clone());
+                }
                 ExecutionNode::End(_) => {}
+            }
+            // WS-D D1: guard escape subgraphs are reachable via their
+            // host — walk them so escape nodes list in flow order rather
+            // than falling to the missed-nodes sweep below.
+            for entry in node.guard_escape_entries() {
+                queue.push_back(entry.to_string());
             }
         }
     }
@@ -797,6 +806,13 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     fqn: None,
                     target_domain: None,
                     kind: "loop".into(),
+                },
+                ExecutionNode::Wait(w) => NodeInfo {
+                    id: id.clone(),
+                    label: format!("⏲ Wait ({})", timer_spec_label(&w.spec)),
+                    fqn: None,
+                    target_domain: None,
+                    kind: "wait".into(),
                 },
                 ExecutionNode::End(end) => NodeInfo {
                     id: id.clone(),
@@ -892,6 +908,7 @@ async fn get_instance_stack(
                     ExecutionNode::Split(sp) => span = sp.span,
                     ExecutionNode::Join(j) => span = j.span,
                     ExecutionNode::Loop(l) => span = l.span,
+                    ExecutionNode::Wait(w) => span = w.span,
                 }
             }
         }
@@ -975,6 +992,12 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 l.span,
             ),
+            ExecutionNode::Wait(w) => (
+                "wait".to_owned(),
+                format!("Wait ({})", timer_spec_label(&w.spec)),
+                None,
+                w.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -1000,6 +1023,16 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     to: t.next.clone(),
                     condition: None,
                 });
+                // WS-D D1: a guard's escape flow is a real route out of
+                // the host — rendered as a labelled edge so the escape
+                // subgraph never appears disconnected.
+                for guard in &t.guards {
+                    edges.push(VisualEdgeDto {
+                        from: id.clone(),
+                        to: guard.escape_entry.clone(),
+                        condition: Some(format!("Guard: {}", guard.guard_id)),
+                    });
+                }
             }
             ExecutionNode::Split(s) => {
                 for flow in &s.flows {
@@ -1037,6 +1070,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     condition: Some("Loop Exit".into()),
                 });
             }
+            ExecutionNode::Wait(w) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: w.next.clone(),
+                    condition: None,
+                });
+            }
             ExecutionNode::End(_) => {}
         }
     }
@@ -1045,6 +1085,19 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
         workflow_id: plan.workflow_id().to_string(),
         nodes,
         edges,
+    }
+}
+
+/// Human label for a timer spec (WS-D D1).
+fn timer_spec_label(spec: &bpmn_lite_compiler::TimerSpec) -> String {
+    use bpmn_lite_compiler::TimerSpec;
+    match spec {
+        TimerSpec::Duration { ms } => format!("{}s", ms / 1000),
+        TimerSpec::Date { deadline_ms } => format!("until t={deadline_ms}"),
+        TimerSpec::Cycle {
+            interval_ms,
+            max_fires,
+        } => format!("every {}s ×{}", interval_ms / 1000, max_fires),
     }
 }
 const OB_POC_MANIFEST_YAML: &str = include_str!(concat!(

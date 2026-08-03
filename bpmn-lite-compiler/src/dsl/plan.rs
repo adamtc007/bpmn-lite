@@ -153,6 +153,28 @@ impl WorkflowExecutionPlan {
         }
     }
 
+    /// BFS from `entry` over flow successors + guard escape entries:
+    /// does any path reach an End node? Used by `analyze_safety`'s guard
+    /// escape-closure check.
+    fn reaches_end(&self, entry: &str) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::from([entry]);
+        while let Some(id) = queue.pop_front() {
+            if !visited.insert(id) {
+                continue;
+            }
+            match self.nodes.get(id) {
+                Some(ExecutionNode::End(_)) => return true,
+                Some(node) => {
+                    queue.extend(node.flow_successors());
+                    queue.extend(node.guard_escape_entries());
+                }
+                None => {}
+            }
+        }
+        false
+    }
+
     /// Return all end-event node ids.
     pub fn end_nodes(&self) -> Vec<&str> {
         self.nodes
@@ -221,6 +243,23 @@ impl WorkflowExecutionPlan {
             }
         }
 
+        // 3. Guard escape closure (WS-D D1): every guard's escape_entry
+        // must exist, and every escape subgraph must reach an End — a
+        // guard whose handler leads nowhere is a control transfer off the
+        // proved surface. `project_ir` can't produce these shapes (its
+        // single-successor rule + validate_dag close them structurally),
+        // but a caller-submitted plan_body can, and the proof must hold
+        // for the PLAN, not for one construction path.
+        for node in self.nodes.values() {
+            for entry in node.guard_escape_entries() {
+                if !self.nodes.contains_key(entry) {
+                    breaches.push("BPMN_GUARD_ESCAPE_DANGLING".to_string());
+                } else if !self.reaches_end(entry) {
+                    breaches.push("BPMN_GUARD_ESCAPE_OPEN".to_string());
+                }
+            }
+        }
+
         // Deduplicate breaches
         breaches.sort();
         breaches.dedup();
@@ -243,6 +282,7 @@ pub enum ExecutionNode {
     Split(SplitExecNode),
     Join(JoinExecNode),
     Loop(LoopExecNode),
+    Wait(WaitExecNode),
     End(EndExecNode),
 }
 
@@ -254,7 +294,45 @@ impl ExecutionNode {
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
+            Self::Wait(n) => &n.id,
             Self::End(n) => &n.id,
+        }
+    }
+
+    /// Plain control-flow successors of this node — the single shared
+    /// successor formula for every plan traversal (`dag.rs` adjacency,
+    /// `analyze_safety`'s escape-closure walk), so a new node kind can
+    /// never be silently skipped by one walker while another learned it.
+    /// Guard escape entries are deliberately NOT included here: a guard is
+    /// a decoration, not a flow edge, and each traversal decides
+    /// explicitly whether escape subgraphs are in its scope (see
+    /// `guard_escape_entries`).
+    pub fn flow_successors(&self) -> Vec<&str> {
+        match self {
+            Self::Start(n) => vec![n.next.as_str()],
+            Self::Task(n) => vec![n.next.as_str()],
+            Self::Split(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
+            Self::Join(n) => vec![n.next.as_str()],
+            Self::Loop(n) => {
+                let mut v = vec![n.next.as_str()];
+                if let Some(first) = n.body.first() {
+                    v.push(first.as_str());
+                }
+                v
+            }
+            Self::Wait(n) => vec![n.next.as_str()],
+            Self::End(_) => vec![],
+        }
+    }
+
+    /// Escape-flow entry node ids of every guard attached to this node
+    /// (empty for anything but a guarded Task). The companion to
+    /// [`Self::flow_successors`] for traversals that must also cover
+    /// escape subgraphs (reachability, cycle detection, escape closure).
+    pub fn guard_escape_entries(&self) -> Vec<&str> {
+        match self {
+            Self::Task(n) => n.guards.iter().map(|g| g.escape_entry.as_str()).collect(),
+            _ => vec![],
         }
     }
 }
@@ -290,6 +368,63 @@ pub struct TaskExecNode {
     pub produces_placeholder: Option<String>,
     /// Placeholders this node consumes.
     pub consumes_placeholders: Vec<String>,
+    /// Boundary guards attached to this task (WS-D D1). A guard is a
+    /// DECORATION on its host, not a flow node — mirroring the kernel's
+    /// model, where guard arming is emitted inline in the host's own
+    /// lowering (`lowering.rs`'s `lower_boundary_guarded_task_v2`) and the
+    /// escape flow is ordinary downstream bytecode. `serde(default)` so
+    /// every plan serialized before this field existed deserializes as
+    /// unguarded, which is exactly what it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<GuardExecSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
+}
+
+/// One boundary guard attached to a [`TaskExecNode`] (WS-D D1).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuardExecSpec {
+    /// The guard's own node id in the authored graph (diagnostics +
+    /// stable identity; the guard is not a plan node).
+    pub guard_id: String,
+    pub trigger: GuardTriggerExec,
+    /// Per-guard failure budget (verifier V8/§31); `None` inherits the
+    /// workflow default.
+    pub failure_budget: Option<u32>,
+    /// Entry node id of the guard's escape flow — exactly one, mirroring
+    /// the lowering's single-successor handler resolution (`handler` is
+    /// one bytecode address). The escape subgraph itself is ordinary plan
+    /// nodes.
+    pub escape_entry: String,
+}
+
+/// Guard trigger, plan-side. `interrupting` lives INSIDE the `Timer`
+/// variant because a boundary error is interrupting-only in this substrate
+/// (designer-graph F2a; BPMN has no non-interrupting error boundary) — the
+/// type makes "non-interrupting error" unrepresentable rather than
+/// runtime-checked.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum GuardTriggerExec {
+    Timer {
+        spec: crate::ir::TimerSpec,
+        interrupting: bool,
+    },
+    Error {
+        /// `None` = catch-all route (sorted last at lowering, matching
+        /// kernel `error_routes` precedence).
+        error_code: Option<String>,
+    },
+}
+
+/// Standalone timer wait (`IRNode::TimerWait`), WS-D D1. Replaces the
+/// dead `"bpmn:timer-wait"` Task-plug shoehorn (no consumer of that plug
+/// ever existed) with a first-class node the frontend can lower to real
+/// `V2WaitFor`/`V2WaitUntil` opcodes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WaitExecNode {
+    pub id: String,
+    pub spec: crate::ir::TimerSpec,
+    pub next: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<bpmn_lite_types::SourceSpan>,
 }
@@ -373,4 +508,133 @@ pub struct PlaceholderSlot {
     pub produced_by: String,
     /// Ids of nodes that consume this slot's value.
     pub consumed_by: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::TimerSpec;
+    use std::collections::BTreeMap;
+
+    /// start → t1(guarded) → end, with the guard's escape_entry set by
+    /// the caller — hand-built (not via project_ir) precisely because
+    /// analyze_safety must prove the PLAN, not one construction path.
+    fn guarded_plan(escape_entry: &str, extra: Vec<(String, ExecutionNode)>) -> WorkflowExecutionPlan {
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            "start".to_string(),
+            ExecutionNode::Start(StartExecNode {
+                id: "start".into(),
+                next: "t1".into(),
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "t1".to_string(),
+            ExecutionNode::Task(TaskExecNode {
+                id: "t1".into(),
+                plug: "noop".into(),
+                delivery_mode: DeliveryMode::BestEffort,
+                static_args: Default::default(),
+                next: "end".into(),
+                produces_placeholder: None,
+                consumes_placeholders: Vec::new(),
+                guards: vec![GuardExecSpec {
+                    guard_id: "bt".into(),
+                    trigger: GuardTriggerExec::Timer {
+                        spec: TimerSpec::Duration { ms: 1000 },
+                        interrupting: true,
+                    },
+                    failure_budget: None,
+                    escape_entry: escape_entry.into(),
+                }],
+                span: None,
+            }),
+        );
+        nodes.insert(
+            "end".to_string(),
+            ExecutionNode::End(EndExecNode {
+                id: "end".into(),
+                status: "done".into(),
+                span: None,
+            }),
+        );
+        for (id, node) in extra {
+            nodes.insert(id, node);
+        }
+        WorkflowExecutionPlan::new(
+            "wf".into(),
+            nodes,
+            "start".into(),
+            PlaceholderSchema::default(),
+            None,
+            None,
+        )
+    }
+
+    /// RED (WS-D D1): a guard whose escape_entry names no node is a
+    /// dangling handler — proof must fall.
+    #[test]
+    fn dangling_guard_escape_breaks_the_proof() {
+        let plan = guarded_plan("nowhere", vec![]);
+        assert!(!plan.mathematically_proved());
+        assert!(plan
+            .unsafe_breeches()
+            .contains(&"BPMN_GUARD_ESCAPE_DANGLING".to_string()));
+    }
+
+    /// RED (WS-D D1): an escape subgraph that never reaches an End is an
+    /// open route off the proved surface — proof must fall.
+    #[test]
+    fn open_guard_escape_breaks_the_proof() {
+        // escape_entry exists but its own successor dangles, so no End is
+        // ever reached from it.
+        let stranded = ExecutionNode::Task(TaskExecNode {
+            id: "esc".into(),
+            plug: "noop".into(),
+            delivery_mode: DeliveryMode::BestEffort,
+            static_args: Default::default(),
+            next: "nowhere".into(),
+            produces_placeholder: None,
+            consumes_placeholders: Vec::new(),
+            guards: Vec::new(),
+            span: None,
+        });
+        let plan = guarded_plan("esc", vec![("esc".to_string(), stranded)]);
+        assert!(!plan.mathematically_proved());
+        assert!(plan
+            .unsafe_breeches()
+            .contains(&"BPMN_GUARD_ESCAPE_OPEN".to_string()));
+    }
+
+    /// GREEN (WS-D D1): a self-contained escape subgraph ending in its
+    /// own End keeps the proof intact.
+    #[test]
+    fn closed_guard_escape_keeps_the_proof() {
+        let esc = ExecutionNode::Task(TaskExecNode {
+            id: "esc".into(),
+            plug: "noop".into(),
+            delivery_mode: DeliveryMode::BestEffort,
+            static_args: Default::default(),
+            next: "end_esc".into(),
+            produces_placeholder: None,
+            consumes_placeholders: Vec::new(),
+            guards: Vec::new(),
+            span: None,
+        });
+        let esc_end = ExecutionNode::End(EndExecNode {
+            id: "end_esc".into(),
+            status: "escalated".into(),
+            span: None,
+        });
+        let plan = guarded_plan(
+            "esc",
+            vec![("esc".to_string(), esc), ("end_esc".to_string(), esc_end)],
+        );
+        assert!(
+            plan.mathematically_proved(),
+            "breaches: {:?}",
+            plan.unsafe_breeches()
+        );
+    }
 }

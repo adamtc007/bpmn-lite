@@ -100,6 +100,7 @@ pub fn import_zeebe_bpmn(
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    guards: Vec::new(),
                     span: None,
                 })
             }
@@ -120,6 +121,7 @@ pub fn import_zeebe_bpmn(
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    guards: Vec::new(),
                     span: None,
                 })
             }
@@ -146,6 +148,7 @@ pub fn import_zeebe_bpmn(
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    guards: Vec::new(),
                     span: None,
                 })
             }
@@ -166,6 +169,7 @@ pub fn import_zeebe_bpmn(
                     next: ir[next_idx].id().to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: vec![],
+                    guards: Vec::new(),
                     span: None,
                 })
             }

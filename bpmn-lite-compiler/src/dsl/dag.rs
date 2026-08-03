@@ -69,20 +69,14 @@ pub fn validate_dag(plan: &WorkflowExecutionPlan) -> Result<(), Vec<DagError>> {
 fn build_adjacency(plan: &WorkflowExecutionPlan) -> HashMap<&str, Vec<&str>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for (id, node) in &plan.nodes {
-        let nexts: Vec<&str> = match node {
-            ExecutionNode::Start(n) => vec![n.next.as_str()],
-            ExecutionNode::Task(n) => vec![n.next.as_str()],
-            ExecutionNode::Split(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
-            ExecutionNode::Join(n) => vec![n.next.as_str()],
-            ExecutionNode::Loop(n) => {
-                let mut v = vec![n.next.as_str()];
-                if let Some(first) = n.body.first() {
-                    v.push(first.as_str());
-                }
-                v
-            }
-            ExecutionNode::End(_) => vec![],
-        };
+        // Guard escape entries are real runtime control transfers (the
+        // kernel fires the guard while its host runs), so escape
+        // subgraphs are reachable exactly when the host is — including
+        // them here makes both the reachability check and cycle
+        // detection cover them, mirroring verifier §3's
+        // alternative-root treatment on the IR side (WS-D D1).
+        let mut nexts = node.flow_successors();
+        nexts.extend(node.guard_escape_entries());
         adj.insert(id.as_str(), nexts);
     }
     adj

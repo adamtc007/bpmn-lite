@@ -11,6 +11,12 @@ pub enum FrontendError {
     InvalidRoute(String),
     CyclicOrUnreachable(Vec<String>),
     UnsupportedLoop(String),
+    /// WS-D D1: the plan FORMAT can now express guards and timer waits,
+    /// but this frontend's opcode emission for them lands in WS-D D2 —
+    /// until then a guard-bearing plan is refused by name, never lowered
+    /// with its guards silently dropped (that would be exactly the
+    /// BPMN_BOUNDARY_EVENT_BYPASS `analyze_safety` exists to catch).
+    UnsupportedPlanConstruct(String),
     Artifact(String),
 }
 
@@ -28,6 +34,9 @@ impl std::fmt::Display for FrontendError {
             }
             Self::UnsupportedLoop(node) => {
                 write!(formatter, "DSL loop {node} requires bounded-loop lowering")
+            }
+            Self::UnsupportedPlanConstruct(message) => {
+                write!(formatter, "DSL plan construct not yet lowerable: {message}")
             }
             Self::Artifact(message) => write!(formatter, "DSL artifact rejected: {message}"),
         }
@@ -54,6 +63,28 @@ impl WorkflowFrontend for DslFrontend {
 }
 
 pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, FrontendError> {
+    // WS-D D1 gate: guards and waits are representable in the plan but
+    // their opcode emission is D2's step. Refuse up front with the node
+    // named — a silent drop here would un-guard a task the author guarded.
+    for node in plan.nodes.values() {
+        match node {
+            ExecutionNode::Wait(w) => {
+                return Err(FrontendError::UnsupportedPlanConstruct(format!(
+                    "wait node '{}' — plan-path timer lowering lands in WS-D D2",
+                    w.id
+                )));
+            }
+            ExecutionNode::Task(t) if !t.guards.is_empty() => {
+                return Err(FrontendError::UnsupportedPlanConstruct(format!(
+                    "task '{}' carries {} boundary guard(s) — plan-path guard lowering lands in WS-D D2",
+                    t.id,
+                    t.guards.len()
+                )));
+            }
+            _ => {}
+        }
+    }
+
     let order = topological_order(plan)?;
     let mut addresses: BTreeMap<String, Addr> = BTreeMap::new();
     let mut address = Addr::new(0);
@@ -207,6 +238,15 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                 });
             }
             ExecutionNode::End(_) => instructions.push(Instr::End),
+            // Unreachable behind the D1 gate at the top of this function;
+            // kept as a hard refusal (not `unreachable!`) so a future
+            // caller path that skips the gate still fails closed.
+            ExecutionNode::Wait(w) => {
+                return Err(FrontendError::UnsupportedPlanConstruct(format!(
+                    "wait node '{}' — plan-path timer lowering lands in WS-D D2",
+                    w.id
+                )));
+            }
         }
     }
 
@@ -438,6 +478,10 @@ fn outgoing(node: &ExecutionNode) -> Vec<&str> {
             .map(String::as_str)
             .chain(std::iter::once(node.next.as_str()))
             .collect(),
+        // D2 will extend this with guard escape entries when the guard
+        // emission lands; until then the D1 gate refuses guard-bearing
+        // plans before ordering runs.
+        ExecutionNode::Wait(node) => vec![&node.next],
         ExecutionNode::End(_) => Vec::new(),
     }
 }
@@ -576,6 +620,7 @@ mod tests {
                         next: "route".to_string(),
                         produces_placeholder: Some("@kind".to_string()),
                         consumes_placeholders: Vec::new(),
+                        guards: Vec::new(),
                         span: None,
                     }),
                 ),
@@ -612,6 +657,7 @@ mod tests {
                         next: "join".to_string(),
                         produces_placeholder: None,
                         consumes_placeholders: Vec::new(),
+                        guards: Vec::new(),
                         span: None,
                     }),
                 ),
@@ -625,6 +671,7 @@ mod tests {
                         next: "join".to_string(),
                         produces_placeholder: None,
                         consumes_placeholders: Vec::new(),
+                        guards: Vec::new(),
                         span: None,
                     }),
                 ),
@@ -713,6 +760,7 @@ mod tests {
                     next: "retry".to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: Vec::new(),
+                    guards: Vec::new(),
                     span: None,
                 }),
             ),
@@ -779,6 +827,7 @@ mod tests {
                     next: "join".to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: Vec::new(),
+                    guards: Vec::new(),
                     span: None,
                 }),
             ),
@@ -792,6 +841,7 @@ mod tests {
                     next: "join".to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: Vec::new(),
+                    guards: Vec::new(),
                     span: None,
                 }),
             ),
@@ -896,6 +946,7 @@ mod tests {
                     next: "join".to_string(),
                     produces_placeholder: None,
                     consumes_placeholders: Vec::new(),
+                    guards: Vec::new(),
                     span: None,
                 }),
             );
@@ -967,6 +1018,42 @@ mod tests {
         // of V5.3 (§18, landed 2026-07-23) — the negative assertions that
         // used to sit here are now vacuous (there is no variant left to
         // construct) and are removed rather than kept as dead code.
+    }
+
+    /// RED (WS-D D1 gate): the plan format can now CARRY guards and
+    /// waits, but this frontend's emission for them is D2's step — until
+    /// it lands, lowering a guard-bearing plan must refuse by name, never
+    /// silently drop the guard (an un-guarded lowering of a guarded plan
+    /// is the exact bypass analyze_safety flags on the Task-plug side).
+    #[test]
+    fn guard_bearing_plan_is_refused_until_d2_not_silently_unguarded() {
+        let mut plan = routing_plan();
+        if let Some(ExecutionNode::Task(t)) = plan.nodes.get_mut("decide") {
+            t.guards.push(crate::dsl::plan::GuardExecSpec {
+                guard_id: "bt".into(),
+                trigger: crate::dsl::plan::GuardTriggerExec::Timer {
+                    spec: crate::ir::TimerSpec::Duration { ms: 1000 },
+                    interrupting: true,
+                },
+                failure_budget: None,
+                escape_entry: "end".into(),
+            });
+        }
+        let err = DslFrontend::lower(&plan).expect_err("guarded plan must refuse until D2");
+        assert!(matches!(err, FrontendError::UnsupportedPlanConstruct(ref m) if m.contains("decide")));
+
+        let mut plan = routing_plan();
+        plan.nodes.insert(
+            "w".into(),
+            ExecutionNode::Wait(crate::dsl::plan::WaitExecNode {
+                id: "w".into(),
+                spec: crate::ir::TimerSpec::Duration { ms: 1000 },
+                next: "end".into(),
+                span: None,
+            }),
+        );
+        let err = DslFrontend::lower(&plan).expect_err("wait-bearing plan must refuse until D2");
+        assert!(matches!(err, FrontendError::UnsupportedPlanConstruct(ref m) if m.contains("'w'")));
     }
 
     /// An always-live (default) flow makes the DSL inclusive split's fork
