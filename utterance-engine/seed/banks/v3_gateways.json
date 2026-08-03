@@ -1,0 +1,93 @@
+[
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "terse", "text": "new route out of this decision for the 'rejected' outcome", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "spoken", "text": "give this switch another way out — its own path for the escalated case", "paraphrase_seq": 41 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "full_sentence", "text": "Add one more outgoing route at this decision point, keyed to its own outcome value.", "paraphrase_seq": 42 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "telegraphic", "text": "outcome 'high_risk' -> own exit", "paraphrase_seq": 43 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "question_form", "text": "can declined cases get their own branch off this gate?", "paraphrase_seq": 44 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "rushed_ops", "text": "need a 3rd exit here for the deferred outcome asap", "paraphrase_seq": 45 },
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "spoken", "text": "split this so the failing ones go their own way", "paraphrase_seq": 46 },
+
+  { "class_id": "xor_gateway", "label": "op.insert_after", "regime": "terse", "text": "add a step here before it moves on, staying on this route", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "op.insert_after", "regime": "spoken", "text": "right after the decision, put a 'log_choice' step on the existing path", "paraphrase_seq": 41 },
+  { "class_id": "xor_gateway", "label": "op.insert_after", "regime": "question_form", "text": "can a 'record_route' step sit just downstream of this gate, same lane?", "paraphrase_seq": 42 },
+  { "class_id": "xor_gateway", "label": "op.insert_after", "regime": "telegraphic", "text": "gate -> 'tag_case' -> current route", "paraphrase_seq": 43 },
+
+  { "class_id": "xor_gateway", "label": "op.insert_before", "regime": "terse", "text": "put 'compute_score' in just before the decision", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "op.insert_before", "regime": "spoken", "text": "the switch needs its input ready — add a 'derive_flags' step upstream of it", "paraphrase_seq": 41 },
+
+  { "class_id": "xor_gateway", "label": "op.connect", "regime": "terse", "text": "hook this gate up to the existing 'fast_close' step", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "op.connect", "regime": "spoken", "text": "wire the decision straight through to the 'approval' node that's already in the graph", "paraphrase_seq": 41 },
+  { "class_id": "xor_gateway", "label": "op.connect", "regime": "telegraphic", "text": "link gate -> 'final_review'", "paraphrase_seq": 42 },
+
+  { "class_id": "xor_gateway", "label": "op.replace_node", "regime": "terse", "text": "swap this decision node out, keep all its routes", "paraphrase_seq": 40 },
+
+  { "class_id": "xor_gateway", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this switch and everything it encloses", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "op.delete_subgraph", "regime": "spoken", "text": "we don't branch here any more — take the decision out", "paraphrase_seq": 41 },
+
+  { "class_id": "xor_gateway", "label": "abstain.none_of_the_above", "regime": "terse", "text": "change which outcome value sends cases down the left route", "paraphrase_seq": 40 },
+  { "class_id": "xor_gateway", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "make this pick two routes at once when both apply", "paraphrase_seq": 41 },
+  { "class_id": "xor_gateway", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what decides which way this gate sends things?", "paraphrase_seq": 42 },
+
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "terse", "text": "one more lane running alongside these, joined with the rest", "paraphrase_seq": 40 },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "spoken", "text": "fork another always-run branch here next to the current ones", "paraphrase_seq": 41 },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "question_form", "text": "can 'verify_extras' run concurrently with the existing lanes off this fork?", "paraphrase_seq": 42 },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "telegraphic", "text": "+1 lane: 'audit_trail' || existing", "paraphrase_seq": 43 },
+
+  { "class_id": "and_gateway_node", "label": "op.insert_after", "regime": "terse", "text": "add a step right after this fork on its current route", "paraphrase_seq": 40 },
+  { "class_id": "and_gateway_node", "label": "op.insert_after", "regime": "spoken", "text": "just downstream of the fork, slot in a 'stamp_entry' step on the existing path", "paraphrase_seq": 41 },
+
+  { "class_id": "and_gateway_node", "label": "op.insert_before", "regime": "terse", "text": "put 'snapshot_state' in ahead of the fork", "paraphrase_seq": 40 },
+
+  { "class_id": "and_gateway_node", "label": "op.connect", "regime": "terse", "text": "wire this fork straight to the existing 'consolidate' node", "paraphrase_seq": 40 },
+  { "class_id": "and_gateway_node", "label": "op.connect", "regime": "question_form", "text": "can the fork link directly into 'final_merge', skipping what's between?", "paraphrase_seq": 41 },
+
+  { "class_id": "and_gateway_node", "label": "op.delete_subgraph", "regime": "terse", "text": "collapse this whole parallel block out of the graph", "paraphrase_seq": 40 },
+  { "class_id": "and_gateway_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "no need to fan out here any more — remove the fork and its region", "paraphrase_seq": 41 },
+
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this run only one of the lanes, whichever applies", "paraphrase_seq": 40 },
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "let the join fire as soon as the first lane finishes instead of all of them", "paraphrase_seq": 41 },
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "which of these lanes usually finishes last?", "paraphrase_seq": 42 },
+
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "terse", "text": "another conditional branch here, firing when 'medium_risk' holds", "paraphrase_seq": 40 },
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "spoken", "text": "add one more route to this conditional split, taken whenever its flag is set", "paraphrase_seq": 41 },
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "question_form", "text": "can a 'notify_backup' branch join this split, active only when its condition matches?", "paraphrase_seq": 42 },
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "telegraphic", "text": "+branch if 'flag_c': 'route_c'", "paraphrase_seq": 43 },
+
+  { "class_id": "or_gateway_node", "label": "op.insert_after", "regime": "terse", "text": "slot a step in right after this split, on the route it already has", "paraphrase_seq": 40 },
+
+  { "class_id": "or_gateway_node", "label": "op.insert_before", "regime": "terse", "text": "evaluate 'derive_conditions' just before this split", "paraphrase_seq": 40 },
+
+  { "class_id": "or_gateway_node", "label": "op.connect", "regime": "terse", "text": "wire this split straight through to the existing 'close_case' node", "paraphrase_seq": 40 },
+  { "class_id": "or_gateway_node", "label": "op.connect", "regime": "question_form", "text": "could the gate link directly into 'wrap_up', bypassing the branches?", "paraphrase_seq": 41 },
+
+  { "class_id": "or_gateway_node", "label": "op.delete_subgraph", "regime": "terse", "text": "drop this conditional block entirely", "paraphrase_seq": 40 },
+  { "class_id": "or_gateway_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "the conditional fan-out isn't needed — take the whole region out", "paraphrase_seq": 41 },
+
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "run every branch unconditionally each time", "paraphrase_seq": 40 },
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "make it pick exactly one route instead of all the matching ones", "paraphrase_seq": 41 },
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what happens if none of the conditions match at this split?", "paraphrase_seq": 42 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.insert_after", "regime": "terse", "text": "in this lane, add 'compress_output' right after the current step", "paraphrase_seq": 40 },
+  { "class_id": "parallel_branch_interior", "label": "op.insert_after", "regime": "spoken", "text": "just on this branch, follow the step with a 'validate_lane' check", "paraphrase_seq": 41 },
+  { "class_id": "parallel_branch_interior", "label": "op.insert_after", "regime": "telegraphic", "text": "lane: step -> 'normalise_result'", "paraphrase_seq": 42 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.insert_before", "regime": "terse", "text": "this lane needs a 'fetch_inputs' step ahead of its current one", "paraphrase_seq": 40 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.replace_node", "regime": "terse", "text": "swap this lane's step for 'deep_scan', wiring unchanged", "paraphrase_seq": 40 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.attach_guard", "regime": "terse", "text": "interrupting limit on just this lane's step, kill it on trip", "paraphrase_seq": 40 },
+  { "class_id": "parallel_branch_interior", "label": "op.attach_guard", "regime": "spoken", "text": "put a tripwire on this branch only — fires, and this lane's work is cancelled", "paraphrase_seq": 41 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.attach_rearming_guard", "regime": "terse", "text": "repeating watcher on this lane's step, non-interrupting", "paraphrase_seq": 40 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.delete_subgraph", "regime": "terse", "text": "drop this branch's step from the lane", "paraphrase_seq": 40 },
+
+  { "class_id": "parallel_branch_interior", "label": "prod.interrupting_timeout", "regime": "terse", "text": "deadline just this lane: overrun kills the step, lane takes its fallback", "paraphrase_seq": 40 },
+  { "class_id": "parallel_branch_interior", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "lane t/o -> fallback exit", "paraphrase_seq": 41 },
+
+  { "class_id": "parallel_branch_interior", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "progress ping from this lane on a cycle, work untouched", "paraphrase_seq": 40 },
+
+  { "class_id": "parallel_branch_interior", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make the join stop waiting for this lane", "paraphrase_seq": 40 },
+  { "class_id": "parallel_branch_interior", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "if this lane fails, cancel the other one too", "paraphrase_seq": 41 },
+  { "class_id": "parallel_branch_interior", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "does this lane share state with the one next to it?", "paraphrase_seq": 42 }
+]

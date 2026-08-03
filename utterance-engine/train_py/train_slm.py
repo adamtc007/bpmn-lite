@@ -108,6 +108,27 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             family_split[fam] = "val"
         for fam in families[n_train + n_val :]:
             family_split[fam] = "test"
+        # Split-policy amendment (2026-08-03, from the money-receipt
+        # regression root-cause): NOTA families ALWAYS train. For a real
+        # candidate, holding its class::label family out measures
+        # generalization to unseen phrasings of that operation. A NOTA
+        # family is not a lexical family -- it is the complement of every
+        # other candidate at that position; holding it out guarantees the
+        # model never learns what NOT to do at that class, and it tears
+        # contrast pairs apart (measured: guard_node::op.set_guard_budget
+        # landed in train while its paired guarded_task::abstain half
+        # landed in val -- the pair's entire teaching purpose destroyed by
+        # the shuffle). Reseeding until the lottery comes out right would
+        # be receipt-gaming; this rule is the principled fix. Eval
+        # integrity is unaffected: the reported eval set (eval_disjoint)
+        # is a separate held-out bank, never derived from this split; val
+        # is checkpoint selection + calibration only.
+        forced_to_train = [
+            fam for fam, s in family_split.items()
+            if s != "train" and fam.endswith("::abstain.none_of_the_above")
+        ]
+        for fam in forced_to_train:
+            family_split[fam] = "train"
         manifest = {
             "seed": seed,
             "train_frac": train_frac,
@@ -118,6 +139,8 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             "n_test_families": n - n_train - n_val,
             "corpus_version": records[0]["provenance"] if records else None,
             "n_records": len(records),
+            "split_policy": "family-level shuffle; NOTA families forced to train (2026-08-03 amendment)",
+            "nota_families_forced_to_train": sorted(forced_to_train),
             "family_split": family_split,
         }
         SPLIT_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))

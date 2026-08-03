@@ -288,69 +288,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder esc -> +notify_supervisor",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "on exhaust: +open_case_review",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "append +flag_for_compliance to esc path",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder out-of-budget -> +manual_followup",
-  "paraphrase_seq": 4
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "esc chain += route_to_ops",
-  "paraphrase_seq": 5
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "after last miss: +create_incident",
-  "paraphrase_seq": 6
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder escalation: +alert_manager",
-  "paraphrase_seq": 7
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "tack +close_and_log onto esc path",
-  "paraphrase_seq": 8
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder: +open_ticket when budget hits zero",
-  "paraphrase_seq": 9
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "dsl_shorthand",
   "text": "kill g_reminder",
@@ -1682,14 +1619,6 @@
   "text": "chase whoever hasn't answered yet",
   "paraphrase_seq": 3,
   "pair_group": "pg_d1_chase_whoever"
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "full_sentence",
-  "text": "Notify compliance if this ever times out.",
-  "paraphrase_seq": 10,
-  "pair_group": "pg_d1_notify_if_timeout"
  },
  {
   "class_id": "mid_sequence_task",

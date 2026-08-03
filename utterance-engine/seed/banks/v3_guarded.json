@@ -1,0 +1,89 @@
+[
+  { "class_id": "guarded_task", "label": "op.insert_after", "regime": "terse", "text": "put a 'record_outcome' step right after this guarded one", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.insert_after", "regime": "spoken", "text": "once this step wraps up, I want 'log_result' next on the same route", "paraphrase_seq": 41 },
+  { "class_id": "guarded_task", "label": "op.insert_after", "regime": "telegraphic", "text": "this -> 'summarise_run' downstream", "paraphrase_seq": 42 },
+  { "class_id": "guarded_task", "label": "op.insert_after", "regime": "question_form", "text": "can a 'double_check' step follow straight after this one?", "paraphrase_seq": 43 },
+
+  { "class_id": "guarded_task", "label": "op.insert_before", "regime": "terse", "text": "slot 'prepare_batch' in ahead of this step", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.insert_before", "regime": "spoken", "text": "before this even starts, run a 'fetch_context' step upstream", "paraphrase_seq": 41 },
+  { "class_id": "guarded_task", "label": "op.insert_before", "regime": "question_form", "text": "shouldn't 'stage_data' come in just before this node?", "paraphrase_seq": 42 },
+
+  { "class_id": "guarded_task", "label": "op.attach_guard", "regime": "terse", "text": "also give this an interrupting cutoff that kills the work when it fires", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.attach_guard", "regime": "spoken", "text": "on top of the existing watcher, add a hard tripwire that cancels the step outright", "paraphrase_seq": 41 },
+  { "class_id": "guarded_task", "label": "op.attach_guard", "regime": "full_sentence", "text": "Attach a second boundary guard here, an interrupting one that terminates the running work on trigger.", "paraphrase_seq": 42 },
+
+  { "class_id": "guarded_task", "label": "op.attach_rearming_guard", "regime": "terse", "text": "add another repeating watcher to this step, non-interrupting", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.attach_rearming_guard", "regime": "spoken", "text": "hang one more cycling alarm on this that re-arms itself and leaves the work alone", "paraphrase_seq": 41 },
+
+  { "class_id": "guarded_task", "label": "op.create_parallel_region", "regime": "terse", "text": "fork after this: 'verify_left' and 'verify_right' at the same time, then join", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.create_parallel_region", "regime": "spoken", "text": "split the flow here into two always-run lanes that come back together", "paraphrase_seq": 41 },
+
+  { "class_id": "guarded_task", "label": "op.create_inclusive_region", "regime": "terse", "text": "conditional split after this: run whichever of 'notify_a' or 'notify_b' apply, then merge", "paraphrase_seq": 40 },
+
+  { "class_id": "guarded_task", "label": "op.create_multi_instance_region", "regime": "terse", "text": "then repeat 'handle_item' per element of 'queue', ceiling of nine", "paraphrase_seq": 40 },
+
+  { "class_id": "guarded_task", "label": "op.connect", "regime": "terse", "text": "wire this straight through to the existing 'wrap_up' node", "paraphrase_seq": 40 },
+
+  { "class_id": "guarded_task", "label": "prod.request_and_wait", "regime": "terse", "text": "after this, send the request out and hold for the correlated reply", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "prod.request_and_wait", "regime": "spoken", "text": "next up: fire the ask and park until the matching answer shows", "paraphrase_seq": 41 },
+
+  { "class_id": "guarded_task", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "cycle nudges on this and route the last one into an escalation step", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "keep prodding on a schedule, and when the prods are spent, escalate off to the side", "paraphrase_seq": 41 },
+
+  { "class_id": "guarded_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "wrap this in a duration limit: overrun kills it, timeout route runs", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "hard deadline on the whole step — miss it and the work dies down the failure exit", "paraphrase_seq": 41 },
+  { "class_id": "guarded_task", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "t/o wrap, interrupting, failure continuation", "paraphrase_seq": 42 },
+
+  { "class_id": "guarded_task", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "periodic status ping off this step, work untouched", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "prod.non_interrupting_notification", "regime": "spoken", "text": "send a heads-up on a schedule while this keeps grinding away", "paraphrase_seq": 41 },
+
+  { "class_id": "guarded_task", "label": "prod.parallel_checks_and_join", "regime": "terse", "text": "launch all the checks at once after this and join on completion", "paraphrase_seq": 40 },
+
+  { "class_id": "guarded_task", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "run it once per entry in 'targets', with the mandatory cap", "paraphrase_seq": 40 },
+
+  { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make the reminders run forever until someone answers", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "change what this step actually executes under the hood", "paraphrase_seq": 41 },
+  { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "why is there a watcher hanging off this step at all?", "paraphrase_seq": 42 },
+  { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "trigger this step manually right now", "paraphrase_seq": 43 },
+
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "terse", "text": "fire this every three days instead of daily", "paraphrase_seq": 40 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "spoken", "text": "change the cadence so it goes off twice a week, not every day", "paraphrase_seq": 41 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "full_sentence", "text": "Adjust this guard so its arming interval becomes every twelve hours.", "paraphrase_seq": 42 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "telegraphic", "text": "interval := P2D", "paraphrase_seq": 43 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "question_form", "text": "can this fire on a weekly cycle instead of the current one?", "paraphrase_seq": 44 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "rushed_ops", "text": "cadence wrong, make it every 6h pls", "paraphrase_seq": 45 },
+
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "terse", "text": "let it fail four times before it stops for good", "paraphrase_seq": 40 },
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "spoken", "text": "bump the allowance so it gets five goes before quitting", "paraphrase_seq": 41 },
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "full_sentence", "text": "Raise the number of permitted misfires on this to six before it retires itself.", "paraphrase_seq": 42 },
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "question_form", "text": "could this get two extra tries before it gives up entirely?", "paraphrase_seq": 43 },
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "rushed_ops", "text": "its quitting too early, allow 5 misses pls", "paraphrase_seq": 44 },
+
+  { "class_id": "guard_node", "label": "op.delete_subgraph", "regime": "terse", "text": "drop this watcher entirely", "paraphrase_seq": 40 },
+  { "class_id": "guard_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "we don't need this alarm any more, take it off the step", "paraphrase_seq": 41 },
+  { "class_id": "guard_node", "label": "op.delete_subgraph", "regime": "question_form", "text": "can this side trigger just be removed altogether?", "paraphrase_seq": 42 },
+  { "class_id": "guard_node", "label": "op.delete_subgraph", "regime": "telegraphic", "text": "rm this guard", "paraphrase_seq": 43 },
+
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "fire this manually right now", "paraphrase_seq": 40 },
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "when this goes off, have it also undo whatever the step already did", "paraphrase_seq": 41 },
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "how many times has this fired so far in production?", "paraphrase_seq": 42 },
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "move this watcher onto a different step", "paraphrase_seq": 43 },
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "add another step after this trigger's escape path, past the one that's there", "paraphrase_seq": 44 },
+
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "terse", "text": "catch 'ERR_TIMEOUT' here instead of the current code", "paraphrase_seq": 40 },
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "spoken", "text": "make this trip on the validation failure code rather than what it listens for now", "paraphrase_seq": 41 },
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "question_form", "text": "can this handler react to 'E_CONFLICT' instead?", "paraphrase_seq": 42 },
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "telegraphic", "text": "error code := 'E_STALE'", "paraphrase_seq": 43 },
+
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "terse", "text": "allow three failures on this before it stops handling them", "paraphrase_seq": 40 },
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "spoken", "text": "two misses and this handler is spent — set it up that way", "paraphrase_seq": 41 },
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "question_form", "text": "how about capping this at four trips before it's done?", "paraphrase_seq": 42 },
+
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this error handler from the step", "paraphrase_seq": 40 },
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "spoken", "text": "take the whole catch-and-divert bit off this node", "paraphrase_seq": 41 },
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "question_form", "text": "can we drop this failure hook completely?", "paraphrase_seq": 42 },
+
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "terse", "text": "when this trips, also roll back what the step wrote", "paraphrase_seq": 40 },
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "make this handler re-arm and keep catching instead of interrupting", "paraphrase_seq": 41 },
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "which upstream step produced the error this catches?", "paraphrase_seq": 42 }
+]

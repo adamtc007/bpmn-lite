@@ -1,0 +1,93 @@
+[
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "terse", "text": "add a confirmation step right after the cooling-off period", "paraphrase_seq": 1 },
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "full_sentence", "text": "Once the cooling-off period ends, please insert a confirmation check before anything else happens.", "paraphrase_seq": 2 },
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "telegraphic", "text": "after wait -> add confirm step", "paraphrase_seq": 3 },
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "spoken", "text": "yeah so once that waiting period is done, stick a confirmation in there", "paraphrase_seq": 4 },
+
+  { "class_id": "timer_wait", "label": "op.insert_before", "regime": "terse", "text": "put a notice step in before the cooling-off period starts", "paraphrase_seq": 1 },
+  { "class_id": "timer_wait", "label": "op.insert_before", "regime": "full_sentence", "text": "I want a client notice sent right before the cooling-off period begins.", "paraphrase_seq": 2 },
+  { "class_id": "timer_wait", "label": "op.insert_before", "regime": "telegraphic", "text": "notice -> before wait", "paraphrase_seq": 3 },
+
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "terse", "text": "just get rid of this waiting period entirely", "paraphrase_seq": 1 },
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "full_sentence", "text": "We don't need the cooling-off period anymore, please remove it from the flow.", "paraphrase_seq": 2 },
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "spoken", "text": "can you just yank this waiting step out completely", "paraphrase_seq": 3 },
+
+  { "class_id": "timer_wait", "label": "op.replace_node", "regime": "terse", "text": "swap this out for a different kind of wait", "paraphrase_seq": 1 },
+  { "class_id": "timer_wait", "label": "op.replace_node", "regime": "full_sentence", "text": "Replace this cooling-off period with something else, but keep it wired the same way.", "paraphrase_seq": 2 },
+  { "class_id": "timer_wait", "label": "op.replace_node", "regime": "telegraphic", "text": "swap wait -> keep wiring", "paraphrase_seq": 3 },
+
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this wait five days instead of three", "paraphrase_seq": 1 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "full_sentence", "text": "Can you extend the cooling-off period to two weeks?", "paraphrase_seq": 2 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "shorten that waiting period down a bit please", "paraphrase_seq": 3 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "wait duration -> 5 days", "paraphrase_seq": 4 },
+
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "terse", "text": "only allow two rejection retries before giving up", "paraphrase_seq": 1 },
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "full_sentence", "text": "Please cap the filing-rejected handler at two attempts before it escalates.", "paraphrase_seq": 2 },
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "spoken", "text": "let's not let this rejection thing retry forever, cap it at two", "paraphrase_seq": 3 },
+  { "class_id": "boundary_error", "label": "op.set_guard_budget", "regime": "telegraphic", "text": "rejection retries -> max 2", "paraphrase_seq": 4 },
+
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "terse", "text": "catch a different error code here instead", "paraphrase_seq": 1 },
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "full_sentence", "text": "Change this guard so it fires on a validation error rather than a rejection.", "paraphrase_seq": 2 },
+  { "class_id": "boundary_error", "label": "op.set_guard_trigger", "regime": "spoken", "text": "actually make it trip on the validation error code, not rejection", "paraphrase_seq": 3 },
+
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this rejection handler", "paraphrase_seq": 1 },
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "full_sentence", "text": "We no longer need to handle filing rejections separately, take this guard out.", "paraphrase_seq": 2 },
+  { "class_id": "boundary_error", "label": "op.delete_subgraph", "regime": "spoken", "text": "drop the whole rejection-catching bit", "paraphrase_seq": 3 },
+
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "terse", "text": "notify compliance whenever this fires", "paraphrase_seq": 1 },
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "full_sentence", "text": "When the filing is rejected, make sure compliance gets pinged automatically.", "paraphrase_seq": 2 },
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "can this rejection thing also loop legal in somehow", "paraphrase_seq": 3 },
+  { "class_id": "boundary_error", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "on reject -> also notify legal", "paraphrase_seq": 4 },
+
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "terse", "text": "if the sanctions screen times out, stop and escalate immediately", "paraphrase_seq": 1 },
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "full_sentence", "text": "Put an interrupting timeout guard on the sanctions screening call so it escalates the moment it's overdue.", "paraphrase_seq": 2 },
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "spoken", "text": "yeah if that screening call hangs, just kill it and escalate right away", "paraphrase_seq": 3 },
+
+  { "class_id": "ffi_service_task", "label": "op.attach_rearming_guard", "regime": "terse", "text": "keep nudging every day if the sanctions screen hasn't come back", "paraphrase_seq": 1 },
+  { "class_id": "ffi_service_task", "label": "op.attach_rearming_guard", "regime": "full_sentence", "text": "Add a daily reminder that keeps firing until the sanctions screening result comes back, without cancelling the call.", "paraphrase_seq": 2 },
+  { "class_id": "ffi_service_task", "label": "op.attach_rearming_guard", "regime": "telegraphic", "text": "screen pending -> nudge daily, non-interrupting", "paraphrase_seq": 3 },
+
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "terse", "text": "add a manual review step right after the sanctions screen", "paraphrase_seq": 1 },
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "full_sentence", "text": "Once the sanctions screening call returns, insert a manual review before moving on.", "paraphrase_seq": 2 },
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "spoken", "text": "stick a review step right after the sanctions check comes back", "paraphrase_seq": 3 },
+
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "terse", "text": "take out the sanctions screening call", "paraphrase_seq": 1 },
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "full_sentence", "text": "We don't need automated sanctions screening here anymore, please remove it.", "paraphrase_seq": 2 },
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "spoken", "text": "just pull the sanctions screening step out", "paraphrase_seq": 3 },
+
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "point this at a different screening provider", "paraphrase_seq": 1 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "full_sentence", "text": "Can you switch the sanctions screening call over to our other vendor's API?", "paraphrase_seq": 2 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "swap the screening provider on this one", "paraphrase_seq": 3 },
+
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "terse", "text": "add another check to run at the same time as these", "paraphrase_seq": 1 },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "full_sentence", "text": "Open up another set of checks here that run in parallel alongside the existing ones.", "paraphrase_seq": 2 },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "spoken", "text": "can we run a couple more of these checks at the same time as the current ones", "paraphrase_seq": 3 },
+
+  { "class_id": "and_gateway_node", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this whole parallel block", "paraphrase_seq": 1 },
+  { "class_id": "and_gateway_node", "label": "op.delete_subgraph", "regime": "full_sentence", "text": "We don't need these checks running in parallel anymore, take the whole block out.", "paraphrase_seq": 2 },
+  { "class_id": "and_gateway_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "just get rid of this parallel section entirely", "paraphrase_seq": 3 },
+
+  { "class_id": "and_gateway_node", "label": "op.connect", "regime": "terse", "text": "wire this gate straight through to the final review step", "paraphrase_seq": 1 },
+  { "class_id": "and_gateway_node", "label": "op.connect", "regime": "full_sentence", "text": "Connect this fork directly to the final review step, skipping what's between them.", "paraphrase_seq": 2 },
+  { "class_id": "and_gateway_node", "label": "op.connect", "regime": "telegraphic", "text": "fork -> final review, direct", "paraphrase_seq": 3 },
+
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this an either/or instead of doing both", "paraphrase_seq": 1 },
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "full_sentence", "text": "Change this so only one of the two checks runs, whichever applies, instead of running both.", "paraphrase_seq": 2 },
+  { "class_id": "and_gateway_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "actually make it pick one path instead of doing everything at once", "paraphrase_seq": 3 },
+
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "terse", "text": "add another condition branch here for medium risk", "paraphrase_seq": 1 },
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "full_sentence", "text": "Open another conditional branch here that fires when the case is medium risk.", "paraphrase_seq": 2 },
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "spoken", "text": "let's add a branch for the medium risk cases too, whichever ones qualify", "paraphrase_seq": 3 },
+
+  { "class_id": "or_gateway_node", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this notification branching entirely", "paraphrase_seq": 1 },
+  { "class_id": "or_gateway_node", "label": "op.delete_subgraph", "regime": "full_sentence", "text": "We don't need the conditional notification branches anymore, remove them.", "paraphrase_seq": 2 },
+  { "class_id": "or_gateway_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "just take out this whole conditional notify bit", "paraphrase_seq": 3 },
+
+  { "class_id": "or_gateway_node", "label": "op.connect", "regime": "terse", "text": "connect this gate directly to case closure", "paraphrase_seq": 1 },
+  { "class_id": "or_gateway_node", "label": "op.connect", "regime": "full_sentence", "text": "Wire this conditional gate straight through to case closure, skipping the notifications.", "paraphrase_seq": 2 },
+  { "class_id": "or_gateway_node", "label": "op.connect", "regime": "telegraphic", "text": "gate -> case closure, direct", "paraphrase_seq": 3 },
+
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this run all branches every time regardless of condition", "paraphrase_seq": 1 },
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "full_sentence", "text": "Change this so every branch fires together instead of only the ones whose condition matches.", "paraphrase_seq": 2 },
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "just have it do all of them every time, not just whichever matches", "paraphrase_seq": 3 }
+]

@@ -1,0 +1,19 @@
+[
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "terse", "text": "add the next step here", "paraphrase_seq": 60, "pair_group": "pg_v3_next_step" },
+  { "class_id": "end_anchor", "label": "abstain.none_of_the_above", "regime": "terse", "text": "add the next step here", "paraphrase_seq": 60, "pair_group": "pg_v3_next_step" },
+
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "spoken", "text": "give this another way out", "paraphrase_seq": 60, "pair_group": "pg_v3_another_way_out" },
+  { "class_id": "and_gateway_node", "label": "op.create_parallel_region", "regime": "spoken", "text": "give this another way out", "paraphrase_seq": 60, "pair_group": "pg_v3_another_way_out" },
+
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "terse", "text": "make it fire every other day", "paraphrase_seq": 60, "pair_group": "pg_v3_cadence" },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make it fire every other day", "paraphrase_seq": 60, "pair_group": "pg_v3_cadence" },
+
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "terse", "text": "match these on the request reference", "paraphrase_seq": 60, "pair_group": "pg_v3_match_ref" },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "match these on the request reference", "paraphrase_seq": 60, "pair_group": "pg_v3_match_ref" },
+
+  { "class_id": "mid_sequence_task", "label": "prod.request_and_wait", "regime": "spoken", "text": "hold here until the answer comes back", "paraphrase_seq": 60, "pair_group": "pg_v3_hold_for_reply" },
+  { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "hold here until the answer comes back", "paraphrase_seq": 60, "pair_group": "pg_v3_hold_for_reply" },
+
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "past the deadline, kill it and divert", "paraphrase_seq": 60, "pair_group": "pg_v3_kill_on_deadline" },
+  { "class_id": "guard_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "past the deadline, kill it and divert", "paraphrase_seq": 60, "pair_group": "pg_v3_kill_on_deadline" }
+]

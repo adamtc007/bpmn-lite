@@ -31,7 +31,7 @@
   "class_id": "mid_sequence_task",
   "label": "op.insert_before",
   "regime": "full_sentence",
-  "text": "We need something to happen before the review — add a node ahead of the anchor.",
+  "text": "We need something to happen before the review \u2014 add a node ahead of the anchor.",
   "paraphrase_seq": 2
  },
  {
@@ -210,13 +210,6 @@
   "regime": "full_sentence",
   "text": "Override the workflow default and give this guard its own failure budget.",
   "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "hang the escalation path off this guard, append the first node",
-  "paraphrase_seq": 1
  },
  {
   "class_id": "guard_node",

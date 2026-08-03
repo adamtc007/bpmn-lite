@@ -1,0 +1,94 @@
+[
+  { "class_id": "mi_node", "label": "op.create_multi_instance_region", "regime": "terse", "text": "add another per-element pass over 'variants', capped at six", "paraphrase_seq": 40 },
+  { "class_id": "mi_node", "label": "op.create_multi_instance_region", "regime": "spoken", "text": "loop one more step over the 'samples' collection, with the mandatory ceiling", "paraphrase_seq": 41 },
+  { "class_id": "mi_node", "label": "op.create_multi_instance_region", "regime": "question_form", "text": "can we repeat a 'render_page' step once per entry in 'pages', max thirty?", "paraphrase_seq": 42 },
+  { "class_id": "mi_node", "label": "op.create_multi_instance_region", "regime": "telegraphic", "text": "foreach 'chunks' x 'hash_chunk', cap 25", "paraphrase_seq": 43 },
+
+  { "class_id": "mi_node", "label": "op.insert_after", "regime": "terse", "text": "after the per-item loop finishes, run 'merge_outputs'", "paraphrase_seq": 40 },
+  { "class_id": "mi_node", "label": "op.insert_after", "regime": "spoken", "text": "once every instance is done, follow with a 'combine_results' step", "paraphrase_seq": 41 },
+  { "class_id": "mi_node", "label": "op.insert_after", "regime": "telegraphic", "text": "loop -> 'aggregate_all'", "paraphrase_seq": 42 },
+
+  { "class_id": "mi_node", "label": "op.insert_before", "regime": "terse", "text": "stage the collection with 'split_batch' before the loop starts", "paraphrase_seq": 40 },
+
+  { "class_id": "mi_node", "label": "op.replace_node", "regime": "terse", "text": "swap the looped step for 'fast_transform', keep the region wiring", "paraphrase_seq": 40 },
+
+  { "class_id": "mi_node", "label": "op.delete_subgraph", "regime": "terse", "text": "remove the per-element loop entirely", "paraphrase_seq": 40 },
+  { "class_id": "mi_node", "label": "op.delete_subgraph", "regime": "spoken", "text": "we don't iterate here any more — take the repeating region out", "paraphrase_seq": 41 },
+
+  { "class_id": "mi_node", "label": "op.connect", "regime": "terse", "text": "wire the loop straight into the existing 'ship_bundle' node", "paraphrase_seq": 40 },
+
+  { "class_id": "mi_node", "label": "abstain.none_of_the_above", "regime": "terse", "text": "raise the cap on this loop to fifty", "paraphrase_seq": 40 },
+  { "class_id": "mi_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "run the iterations one after another instead of all at once", "paraphrase_seq": 41 },
+  { "class_id": "mi_node", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "which collection is this loop actually iterating over?", "paraphrase_seq": 42 },
+  { "class_id": "mi_node", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "keep looping this until the results converge, no fixed count", "paraphrase_seq": 43 },
+
+  { "class_id": "send_task", "label": "op.set_correlation_source", "regime": "terse", "text": "stamp outgoing publishes with 'trace_id' as the key", "paraphrase_seq": 40 },
+  { "class_id": "send_task", "label": "op.set_correlation_source", "regime": "spoken", "text": "the outbound message should carry the batch reference as its correlation key", "paraphrase_seq": 41 },
+  { "class_id": "send_task", "label": "op.set_correlation_source", "regime": "telegraphic", "text": "publish corr := 'job_ref'", "paraphrase_seq": 42 },
+
+  { "class_id": "send_task", "label": "op.insert_after", "regime": "terse", "text": "after the publish goes out, run 'log_dispatch'", "paraphrase_seq": 40 },
+  { "class_id": "send_task", "label": "op.insert_after", "regime": "spoken", "text": "straight after this fires its message, add a 'confirm_sent' step", "paraphrase_seq": 41 },
+
+  { "class_id": "send_task", "label": "op.insert_before", "regime": "terse", "text": "compose the payload in 'build_notice' just before the send", "paraphrase_seq": 40 },
+
+  { "class_id": "send_task", "label": "op.replace_node", "regime": "terse", "text": "swap the publish for a 'write_queue' step, same wiring", "paraphrase_seq": 40 },
+
+  { "class_id": "send_task", "label": "op.delete_subgraph", "regime": "terse", "text": "drop the outbound publish from the flow", "paraphrase_seq": 40 },
+
+  { "class_id": "send_task", "label": "prod.request_and_wait", "regime": "terse", "text": "make this a round trip: send, then hold for the correlated reply", "paraphrase_seq": 40 },
+  { "class_id": "send_task", "label": "prod.request_and_wait", "regime": "spoken", "text": "don't just fire and forget here — send it and park until the answer comes back", "paraphrase_seq": 41 },
+
+  { "class_id": "send_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "change what payload this publish carries", "paraphrase_seq": 40 },
+  { "class_id": "send_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "send this to two topics at once", "paraphrase_seq": 41 },
+  { "class_id": "send_task", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "who subscribes to the message this step emits?", "paraphrase_seq": 42 },
+
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "terse", "text": "interrupting limit on the external call — trip it and the call is cancelled, diverted", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "spoken", "text": "if the outside system hangs, a tripwire should cut this call and take the escape route", "paraphrase_seq": 41 },
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "question_form", "text": "can this external call carry a hard cutoff that cancels it when tripped?", "paraphrase_seq": 42 },
+
+  { "class_id": "ffi_service_task", "label": "op.attach_rearming_guard", "regime": "terse", "text": "cycle a status check off this external call without interrupting it", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "op.attach_rearming_guard", "regime": "spoken", "text": "while the call runs, keep firing a re-arming watcher that never cancels it", "paraphrase_seq": 41 },
+
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "terse", "text": "when the call returns, go into 'map_response' next", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "spoken", "text": "right after the external result lands, add a 'validate_result' step", "paraphrase_seq": 41 },
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "telegraphic", "text": "call -> 'unwrap_payload'", "paraphrase_seq": 42 },
+
+  { "class_id": "ffi_service_task", "label": "op.insert_before", "regime": "terse", "text": "marshal the inputs in 'build_request' before the call", "paraphrase_seq": 40 },
+
+  { "class_id": "ffi_service_task", "label": "op.replace_node", "regime": "terse", "text": "swap the external call for an in-flow 'local_compute' step, wiring intact", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "op.replace_node", "regime": "question_form", "text": "could this outside call become an internal step instead, same routes?", "paraphrase_seq": 41 },
+
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "terse", "text": "cut the external call out of the flow", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "spoken", "text": "we've stopped using that integration — remove the call node", "paraphrase_seq": 41 },
+
+  { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "deadline the external call: overrun kills it, failure route continues", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "ext call t/o -> failure exit", "paraphrase_seq": 41 },
+
+  { "class_id": "ffi_service_task", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "heartbeat while the call is out, work untouched", "paraphrase_seq": 40 },
+
+  { "class_id": "ffi_service_task", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "chase the pending call on a bounded cycle, then escalate", "paraphrase_seq": 40 },
+
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "point this call at a different provider", "paraphrase_seq": 40 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "change which template this external call is bound to", "paraphrase_seq": 41 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what inputs does this call actually send across?", "paraphrase_seq": 42 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "retry the call automatically inside the same step when it errors", "paraphrase_seq": 43 },
+
+  { "class_id": "data_object", "label": "op.delete_subgraph", "regime": "terse", "text": "drop this declared variable from the graph", "paraphrase_seq": 40 },
+  { "class_id": "data_object", "label": "op.delete_subgraph", "regime": "spoken", "text": "nothing reads this data declaration any more, remove it", "paraphrase_seq": 41 },
+  { "class_id": "data_object", "label": "op.delete_subgraph", "regime": "question_form", "text": "can this data object come out of the workflow?", "paraphrase_seq": 42 },
+  { "class_id": "data_object", "label": "op.delete_subgraph", "regime": "telegraphic", "text": "rm this declaration", "paraphrase_seq": 43 },
+
+  { "class_id": "data_object", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this a number instead of text", "paraphrase_seq": 40 },
+  { "class_id": "data_object", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "rename this variable to 'parent_ref'", "paraphrase_seq": 41 },
+  { "class_id": "data_object", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "which steps read from this declaration?", "paraphrase_seq": 42 },
+  { "class_id": "data_object", "label": "abstain.none_of_the_above", "regime": "terse", "text": "set a default value on this variable", "paraphrase_seq": 43 },
+
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "terse", "text": "run the workflow", "paraphrase_seq": 40 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "loop the second step back to the first whenever there's a redo", "paraphrase_seq": 41 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what templates are already published?", "paraphrase_seq": 42 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "terse", "text": "spawn an instance of this design", "paraphrase_seq": 43 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "show me the execution history for yesterday's runs", "paraphrase_seq": 44 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "export diagram as png", "paraphrase_seq": 45 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "who last edited this design session?", "paraphrase_seq": 46 },
+  { "class_id": "empty_graph", "label": "abstain.none_of_the_above", "regime": "rushed_ops", "text": "deploy this to prod now pls", "paraphrase_seq": 47 }
+]

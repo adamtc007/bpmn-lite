@@ -127,27 +127,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder: +attest_completeness on exhaust",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder exhausted -> +publish_case_summary",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "append +request_additional_evidence to g_reminder's escalation path",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "dsl_shorthand",
   "text": "excise g_reminder, seal the gap",
@@ -1854,14 +1833,6 @@
  {
   "class_id": "message_wait",
   "label": "prod.reminder_then_escalate",
-  "regime": "full_sentence",
-  "text": "if they never reply, someone else has to pick it up",
-  "paraphrase_seq": 1,
-  "pair_group": "pg_e1_who_covers_absence"
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
   "regime": "full_sentence",
   "text": "if they never reply, someone else has to pick it up",
   "paraphrase_seq": 1,

@@ -131,3 +131,47 @@ items above (§3 xor reinforcement, §4 open patterns).
    §10.3 measured, not the synthetic eval number alone.
 8. New bake-off report addendum; ratification is Adam's again, not automatic
    carry-forward from this cycle's ruling.
+
+## 7. Corpus-v3 — the verb/cargo doctrine (Adam, ratified 2026-08-03)
+
+**Doctrine:** the workflow operation is the VERB — the SLM's discovery target
+(`insert_after`, `set_guard_budget`, `create_parallel_region`, …). The
+business meaning is CARGO — a name riding on the node ("sanctions_screen",
+"chase_client"), meaningful to the business reader, load-free for discovery.
+Cargo must not pollute the utterance → SLM → pack → DSL chain. The model
+cannot be made blind to cargo words by decree (they appear in utterance
+text); they are made NON-DISCRIMINATIVE BY VARIATION — the same structural
+phrasing appears with many different cargo names across domains, so the only
+stable learnable signal is the structural verb. Downstream the architecture
+already agrees: R3 binds quoted spans to node ids verbatim — cargo flows to
+the DSL as data, never as a selection feature.
+
+**What motivated it (receipted):** the money-receipt regression root-cause
+(2026-08-03) — ~140 `prod.interrupting_timeout` examples authored as custody
+narrative ("If the custodian hasn't confirmed by the deadline, hard-stop the
+work and route it to compliance") drowned the structural distinction
+duration-trigger vs failure-count-budget: 36 duration-flavoured "give up on
+the chase" examples vs 1 count-flavoured. Vagueness is the third root-cause
+leg alongside the two mechanical ones fixed the same day (guarded-fixture
+admissibility skew; count-based margin thinness).
+
+**v3 bank composition** (staged in `seed/banks_v3/`, swapped in at the v3
+regeneration):
+- NEW workflow-first banks (v3_*.json): structural verbs primary, cargo
+  names quoted/varied across domains (logistics, HR, publishing, dev,
+  support, finance-as-name-only), all style regimes retained (terse, spoken,
+  telegraphic, question_form, rushed_ops, full_sentence, esl_formal,
+  dsl_shorthand) — style noise is good noise; narrative substrate is not.
+- RETAINED from v2: the compact-structural banks (*_terse, *_shorthand_pairs,
+  alpha, eta_supplement, theta_new_node_types, iota_guard_budget_pairs) —
+  banking cargo as names is doctrine-compliant.
+- DROPPED from v2: the narrative banks (*_full, *_spoken, verbose_manager-
+  heavy entries) — domain story as substrate is what the doctrine removes.
+- eval_disjoint stays domain-buried ON PURPOSE: workflow-first training,
+  domain-buried held-out eval = the honest generalization measurement.
+
+**Known coverage additions riding v3:** guard-fixture admissibility
+alignment (fixtures.rs guarded_task/guard_node now carry the escalation
+continuation — a bare guard cannot admit, so the old shape was untrainable
+skew); 133 unreachable-state guard_node::op.append_node entries deleted;
+count-vs-duration contrast pairs (iota + v3_round2 additions).

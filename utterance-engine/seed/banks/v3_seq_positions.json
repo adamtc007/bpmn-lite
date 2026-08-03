@@ -1,0 +1,120 @@
+[
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "terse", "text": "add a 'verify_totals' step right after this one", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "terse", "text": "slot 'notify_owner' in downstream of this step, same route", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "spoken", "text": "right after this finishes, I want a 'quality_check' step before anything else happens", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "full_sentence", "text": "Insert a step called 'assemble_report' immediately downstream of the selected one, staying on the current path.", "paraphrase_seq": 43 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "telegraphic", "text": "this -> 'index_records' -> rest of route", "paraphrase_seq": 44 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "question_form", "text": "can we put a 'confirm_delivery' step next on this path?", "paraphrase_seq": 45 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "rushed_ops", "text": "need 'scan_parcel' directly after this step pls, same lane", "paraphrase_seq": 46 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "esl_formal", "text": "please to place one step 'book_interview' just following this node on the same flow", "paraphrase_seq": 47 },
+
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "terse", "text": "put a 'validate_input' step in front of this one", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "spoken", "text": "before this runs I want a 'sanity_check' step upstream of it", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "full_sentence", "text": "A preparatory step named 'collect_references' should sit just ahead of the selected node.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "telegraphic", "text": "'stage_inputs' -> then this", "paraphrase_seq": 43 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "question_form", "text": "shouldn't something like 'precheck_files' come in just ahead of this step?", "paraphrase_seq": 44 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "rushed_ops", "text": "prepend 'load_manifest' upstream of this, quick", "paraphrase_seq": 45 },
+
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "terse", "text": "swap this step for 'auto_triage', keep its wiring", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "spoken", "text": "rip this step out and drop 'machine_review' in its place, connections stay put", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "full_sentence", "text": "Substitute the selected step with one called 'batch_process', preserving every inbound and outbound flow.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "telegraphic", "text": "this := 'render_preview', edges unchanged", "paraphrase_seq": 43 },
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "question_form", "text": "could this node become 'draft_reply' instead, without touching the routing?", "paraphrase_seq": 44 },
+
+  { "class_id": "mid_sequence_task", "label": "op.connect", "regime": "terse", "text": "wire this step straight to 'archive_case'", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.connect", "regime": "spoken", "text": "draw a flow from here over to the 'publish_result' node that's already there", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.connect", "regime": "telegraphic", "text": "link: this -> 'merge_results'", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.connect", "regime": "question_form", "text": "can we hook this node up to the existing 'close_out' step directly?", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "op.delete_subgraph", "regime": "terse", "text": "delete this step from the flow", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.delete_subgraph", "regime": "spoken", "text": "just take this node out of the graph entirely", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.delete_subgraph", "regime": "question_form", "text": "can this step come out of the workflow altogether?", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.delete_subgraph", "regime": "telegraphic", "text": "rm this node", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "terse", "text": "fork here: run 'check_stock' and 'check_credit' side by side, then join", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "spoken", "text": "after this, split into two lanes that both always run and meet up again", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "full_sentence", "text": "Open a parallel section after this step so 'scan_docs' and 'fetch_history' execute concurrently before rejoining.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "question_form", "text": "could 'measure_load' and 'log_metrics' run at the same time after this instead of in sequence?", "paraphrase_seq": 43 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "telegraphic", "text": "fork/join: 'lint' || 'compile'", "paraphrase_seq": 44 },
+
+  { "class_id": "mid_sequence_task", "label": "op.create_inclusive_region", "regime": "terse", "text": "branch here on conditions: 'notify_vip' if flagged, 'log_normal' if routine, either or both, then rejoin", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.create_inclusive_region", "regime": "spoken", "text": "split after this so whichever conditions match, those branches run and then come back together", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.create_inclusive_region", "regime": "full_sentence", "text": "After this step, open conditional branches where each route runs only when its flag holds, merging again downstream.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.create_inclusive_region", "regime": "question_form", "text": "can this fan out to whichever of the follow-up branches apply, and then merge?", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "terse", "text": "after this, run 'process_item' once per element in 'items', max twenty", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "spoken", "text": "loop the next bit over everything in the 'attachments' collection, capped at ten", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "full_sentence", "text": "Add a repeating section after this that executes once for each entry in 'batch_list', with a declared ceiling of fifteen.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "telegraphic", "text": "foreach 'rows' x 'transform_row', cap 50", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "op.attach_guard", "regime": "terse", "text": "hang an interrupting timeout on this step, kill the work when it trips", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_guard", "regime": "spoken", "text": "put a tripwire on this node that cancels it outright when it fires", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_guard", "regime": "full_sentence", "text": "This step needs a boundary guard that interrupts and cancels the running work the moment it triggers.", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_guard", "regime": "telegraphic", "text": "guard(interrupting) on this node", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "op.attach_rearming_guard", "regime": "terse", "text": "add a repeating watcher on this step that fires and re-arms without stopping the work", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_rearming_guard", "regime": "spoken", "text": "give this node a nudger that keeps going off on a cycle but never cancels the step itself", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_rearming_guard", "regime": "question_form", "text": "can this step get a non-interrupting side alarm that re-arms after each firing?", "paraphrase_seq": 42 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.request_and_wait", "regime": "terse", "text": "after this, fire off a request and hold until the matching reply lands", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.request_and_wait", "regime": "spoken", "text": "send the ask out from here and park the flow till the correlated answer comes back", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "prod.request_and_wait", "regime": "telegraphic", "text": "emit request -> block on reply", "paraphrase_seq": 42 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "nudge on a cycle while this runs, and after the last nudge hand it to 'escalate_owner'", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "keep poking this on a schedule, and when the pokes run out, escalate down a side path", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "full_sentence", "text": "Wrap this with a bounded reminder cycle whose final firing routes into an escalation continuation.", "paraphrase_seq": 42 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "deadline this step: past the limit it dies and the failure route runs", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "give this a hard time limit — blow it and the step is killed, flow takes the timeout exit", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "hard t/o on this node -> failure exit", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "question_form", "text": "can this step get a duration cutoff that cancels it and diverts to a timeout branch?", "paraphrase_seq": 43 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "ping 'notify_channel' on a schedule while this keeps running untouched", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.non_interrupting_notification", "regime": "spoken", "text": "fire a periodic heads-up off this step without ever pausing the work", "paraphrase_seq": 41 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.parallel_checks_and_join", "regime": "terse", "text": "run the declared checks in parallel here and join on all of them", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.parallel_checks_and_join", "regime": "spoken", "text": "kick off every check at once after this and wait till they've all landed", "paraphrase_seq": 41 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "for every element of 'entries' run the step, mandatory cap of twelve", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "prod.for_each_with_ceiling", "regime": "spoken", "text": "do this once per item in the list, but never more than the declared max", "paraphrase_seq": 41 },
+
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "rename this step to 'final_pass'", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "loop this back to the step before it whenever the result is a redo", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "run this node right now and show me the output", "paraphrase_seq": 42 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what does this step actually do when it executes?", "paraphrase_seq": 43 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "step colour -> green in the diagram", "paraphrase_seq": 44 },
+
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "terse", "text": "first step after the start should be 'load_config'", "paraphrase_seq": 40 },
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "spoken", "text": "kick the whole flow off with an 'init_context' step right after start", "paraphrase_seq": 41 },
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "full_sentence", "text": "Directly after the start event, insert an opening step named 'register_case' on the main route.", "paraphrase_seq": 42 },
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "telegraphic", "text": "start -> 'bootstrap_env' first", "paraphrase_seq": 43 },
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "question_form", "text": "can the flow open with a 'greet_user' step straight off the start?", "paraphrase_seq": 44 },
+
+  { "class_id": "start_anchor", "label": "op.create_parallel_region", "regime": "terse", "text": "from the start, fork 'warm_cache' and 'load_rules' together, join before the rest", "paraphrase_seq": 40 },
+  { "class_id": "start_anchor", "label": "op.create_parallel_region", "regime": "spoken", "text": "open the workflow with two lanes running at once that meet before the first real step", "paraphrase_seq": 41 },
+
+  { "class_id": "start_anchor", "label": "op.create_multi_instance_region", "regime": "terse", "text": "straight from start, run 'ingest_file' once per entry in 'uploads', cap eight", "paraphrase_seq": 40 },
+
+  { "class_id": "start_anchor", "label": "prod.request_and_wait", "regime": "terse", "text": "open by sending the kickoff request and holding for its reply", "paraphrase_seq": 40 },
+
+  { "class_id": "start_anchor", "label": "op.connect", "regime": "terse", "text": "wire the start directly into the existing 'fast_path' node", "paraphrase_seq": 40 },
+
+  { "class_id": "start_anchor", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "add a second start point for cases that come in by phone", "paraphrase_seq": 40 },
+  { "class_id": "start_anchor", "label": "abstain.none_of_the_above", "regime": "terse", "text": "delete the start event", "paraphrase_seq": 41 },
+  { "class_id": "start_anchor", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "can the start wait for a trigger message before anything runs?", "paraphrase_seq": 42 },
+
+  { "class_id": "end_anchor", "label": "op.insert_before", "regime": "terse", "text": "one last 'write_audit' step just before the end", "paraphrase_seq": 40 },
+  { "class_id": "end_anchor", "label": "op.insert_before", "regime": "spoken", "text": "before the flow finishes, squeeze in a 'cleanup_temp' step", "paraphrase_seq": 41 },
+  { "class_id": "end_anchor", "label": "op.insert_before", "regime": "full_sentence", "text": "Immediately ahead of the end event, add a closing step named 'emit_summary'.", "paraphrase_seq": 42 },
+  { "class_id": "end_anchor", "label": "op.insert_before", "regime": "telegraphic", "text": "'flush_buffers' -> end", "paraphrase_seq": 43 },
+  { "class_id": "end_anchor", "label": "op.insert_before", "regime": "question_form", "text": "could a final 'archive_outputs' step run right before we finish?", "paraphrase_seq": 44 },
+
+  { "class_id": "end_anchor", "label": "op.replace_node", "regime": "terse", "text": "make this ending a terminating one instead", "paraphrase_seq": 40 },
+  { "class_id": "end_anchor", "label": "op.replace_node", "regime": "spoken", "text": "swap this end event out for a different finish, wiring stays", "paraphrase_seq": 41 },
+
+  { "class_id": "end_anchor", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this end point from the graph", "paraphrase_seq": 40 },
+
+  { "class_id": "end_anchor", "label": "abstain.none_of_the_above", "regime": "terse", "text": "add the next step after the end", "paraphrase_seq": 40 },
+  { "class_id": "end_anchor", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "when it ends, loop back to the top and go again", "paraphrase_seq": 41 },
+  { "class_id": "end_anchor", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "can finishing here also kick off a brand new run automatically?", "paraphrase_seq": 42 }
+]

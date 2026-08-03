@@ -1,0 +1,290 @@
+[
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "give up after too many attempts",
+  "paraphrase_seq": 20,
+  "pair_group": "pg_i1_too_many_attempts"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "give up after too many attempts",
+  "paraphrase_seq": 20,
+  "pair_group": "pg_i1_too_many_attempts"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "stop retrying after the third failure",
+  "paraphrase_seq": 21,
+  "pair_group": "pg_i1_third_failure"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "stop retrying after the third failure",
+  "paraphrase_seq": 21,
+  "pair_group": "pg_i1_third_failure"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "let it miss twice, then it's done for good",
+  "paraphrase_seq": 22,
+  "pair_group": "pg_i1_miss_twice"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "let it miss twice, then it's done for good",
+  "paraphrase_seq": 22,
+  "pair_group": "pg_i1_miss_twice"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "three strikes then quit",
+  "paraphrase_seq": 23,
+  "pair_group": "pg_i1_three_strikes"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "three strikes then quit",
+  "paraphrase_seq": 23,
+  "pair_group": "pg_i1_three_strikes"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "question_form",
+  "text": "how many misfires before this stops trying?",
+  "paraphrase_seq": 24,
+  "pair_group": "pg_i1_how_many_misfires"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "how many misfires before this stops trying?",
+  "paraphrase_seq": 24,
+  "pair_group": "pg_i1_how_many_misfires"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "one more failed try and it packs it in",
+  "paraphrase_seq": 25,
+  "pair_group": "pg_i1_one_more_try"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "one more failed try and it packs it in",
+  "paraphrase_seq": 25,
+  "pair_group": "pg_i1_one_more_try"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "telegraphic",
+  "text": "max misses -> 4, then stop",
+  "paraphrase_seq": 26,
+  "pair_group": "pg_i1_max_misses"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "max misses -> 4, then stop",
+  "paraphrase_seq": 26,
+  "pair_group": "pg_i1_max_misses"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "full_sentence",
+  "text": "After enough consecutive failures this should simply stop firing for good.",
+  "paraphrase_seq": 27,
+  "pair_group": "pg_i1_enough_failures"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "After enough consecutive failures this should simply stop firing for good.",
+  "paraphrase_seq": 27,
+  "pair_group": "pg_i1_enough_failures"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "don't let it keep failing forever, count them and stop",
+  "paraphrase_seq": 28,
+  "pair_group": "pg_i1_count_and_stop"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "don't let it keep failing forever, count them and stop",
+  "paraphrase_seq": 28,
+  "pair_group": "pg_i1_count_and_stop"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "quit nagging after a handful of failed goes",
+  "paraphrase_seq": 29,
+  "pair_group": "pg_i1_handful_of_goes"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "quit nagging after a handful of failed goes",
+  "paraphrase_seq": 29,
+  "pair_group": "pg_i1_handful_of_goes"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "question_form",
+  "text": "can we bound the number of times this is allowed to fail?",
+  "paraphrase_seq": 30,
+  "pair_group": "pg_i1_bound_the_count"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "can we bound the number of times this is allowed to fail?",
+  "paraphrase_seq": 30,
+  "pair_group": "pg_i1_bound_the_count"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "telegraphic",
+  "text": "attempt ceiling 5, then dead",
+  "paraphrase_seq": 31,
+  "pair_group": "pg_i1_attempt_ceiling"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "telegraphic",
+  "text": "attempt ceiling 5, then dead",
+  "paraphrase_seq": 31,
+  "pair_group": "pg_i1_attempt_ceiling"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "too many failed goes and it should just stop",
+  "paraphrase_seq": 32,
+  "pair_group": "pg_i2_32"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "too many failed goes and it should just stop",
+  "paraphrase_seq": 32,
+  "pair_group": "pg_i2_32"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "after the fourth miss, no more attempts",
+  "paraphrase_seq": 33,
+  "pair_group": "pg_i2_33"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "after the fourth miss, no more attempts",
+  "paraphrase_seq": 33,
+  "pair_group": "pg_i2_33"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "it keeps trying past the point it should quit \u2014 bound the count",
+  "paraphrase_seq": 34,
+  "pair_group": "pg_i2_34"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "it keeps trying past the point it should quit \u2014 bound the count",
+  "paraphrase_seq": 34,
+  "pair_group": "pg_i2_34"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "enough misses means done, not another go",
+  "paraphrase_seq": 35,
+  "pair_group": "pg_i2_35"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "enough misses means done, not another go",
+  "paraphrase_seq": 35,
+  "pair_group": "pg_i2_35"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "terse",
+  "text": "cap the number of goes this gets",
+  "paraphrase_seq": 36,
+  "pair_group": "pg_i2_36"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "cap the number of goes this gets",
+  "paraphrase_seq": 36,
+  "pair_group": "pg_i2_36"
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "when the tries are used up, that's the end of it",
+  "paraphrase_seq": 37,
+  "pair_group": "pg_i2_37"
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "when the tries are used up, that's the end of it",
+  "paraphrase_seq": 37,
+  "pair_group": "pg_i2_37"
+ }
+]

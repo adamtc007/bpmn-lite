@@ -1,4 +1,4 @@
-//! Shared board fixtures — the 13 enumeration-class board states (spec
+//! Shared board fixtures — the 18 enumeration-class board states (spec
 //! S3: "every class is CONSTRUCTED — a class that cannot be built through
 //! seed+ops does not exist here"). Originally lived only inside
 //! `examples/corpus_gen.rs`; extracted 2026-07-28 so the Phase D eval-set
@@ -12,8 +12,8 @@
 //! exists to prevent.
 
 use anyhow::Result;
-use bpmn_lite_compiler::{IRNode, TimerSpec};
-use designer_graph::ops::{apply, GuardTrigger, Operation};
+use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
+use designer_graph::ops::{apply, GuardTrigger, Operation, RegionBranch};
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 
 fn key() -> NodeKey {
@@ -99,11 +99,19 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
         });
     }
 
-    // guarded_task + guard_node: same graph, two anchors.
+    // guarded_task + guard_node: same graph, two anchors. The guard
+    // carries its escalation continuation (escalate_case -> end_esc):
+    // a boundary guard without an outgoing escape flow cannot admit
+    // (verifier 7c), so the bare shape used before 2026-08-03 was a
+    // train/serve skew — the serving path only ever sees admitted
+    // graphs, whose guards ALWAYS have a continuation. Root-caused from
+    // the money-receipt regression (context projection `end x1` vs
+    // `end x2` on otherwise identical boards).
     {
         let (dag, start) = base(false)?;
         let t = key();
         let guard = key();
+        let esc = key();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -126,6 +134,18 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                     interval_ms: 86_400_000,
                     max_fires: 3,
                 }),
+            },
+            Operation::AppendNode {
+                anchor: guard,
+                key: esc,
+                node: task("escalate_case"),
+                edge_id: "f3".into(),
+            },
+            Operation::AppendNode {
+                anchor: esc,
+                key: key(),
+                node: IRNode::End { id: "end_esc".into(), terminate: false },
+                edge_id: "f4".into(),
             },
         ] {
             g = apply(&g, op, p())?.candidate;
@@ -472,6 +492,250 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             dag: g,
             anchor_key: Some(w),
             anchor_id: Some("await_documents"),
+        });
+    }
+
+    // timer_wait: a bare inline timer (not a boundary guard) — start ->
+    // prep -> timer_wait -> end, anchored on the wait itself.
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let w = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("prepare_dispatch"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: w,
+                node: IRNode::TimerWait {
+                    id: "cooling_off_period".into(),
+                    spec: TimerSpec::Duration { ms: 3 * 86_400_000 },
+                },
+                edge_id: "f2".into(),
+            },
+            Operation::AppendNode {
+                anchor: w,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f3".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "timer_wait",
+            dag: g,
+            anchor_key: Some(w),
+            anchor_id: Some("cooling_off_period"),
+        });
+    }
+
+    // boundary_error: an interrupting error guard on a task, with its own
+    // escape path (verifier 7c — a boundary guard needs an outgoing flow
+    // distinct from its host's). Anchored on the guard itself.
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let guard = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("submit_filing"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::AttachGuard {
+                host: t,
+                key: guard,
+                guard_id: "on_filing_rejected".into(),
+                trigger: GuardTrigger::Error {
+                    error_code: Some("FILING_REJECTED".into()),
+                },
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        g = apply(
+            &g,
+            Operation::AppendNode {
+                anchor: guard,
+                key: key(),
+                node: IRNode::End { id: "end_rejected".into(), terminate: false },
+                edge_id: "f_guard_out".into(),
+            },
+            p(),
+        )?
+        .candidate;
+        out.push(ClassState {
+            class_id: "boundary_error",
+            dag: g,
+            anchor_key: Some(guard),
+            anchor_id: Some("on_filing_rejected"),
+        });
+    }
+
+    // ffi_service_task: bare FFI-dispatched task (Zeebe-style external
+    // job), anchored on the task itself.
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: IRNode::FfiServiceTask {
+                    id: "run_sanctions_screen".into(),
+                    name: "run_sanctions_screen".into(),
+                    template_id: [0u8; 32],
+                    inputs: vec![],
+                    outputs: vec![],
+                },
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "ffi_service_task",
+            dag: g,
+            anchor_key: Some(t),
+            anchor_id: Some("run_sanctions_screen"),
+        });
+    }
+
+    // and_gateway_node / or_gateway_node: the fork node ITSELF as anchor
+    // (parallel_branch_interior anchors INSIDE the region — this pair
+    // covers the gateway node as the position, closing the gap for
+    // utterances that address the gate directly rather than a branch).
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let fork = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("intake_application"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::CreateParallelRegion {
+                anchor: t,
+                fork_key: fork,
+                fork_node_id: "checks_fork".into(),
+                join_key: key(),
+                join_node_id: "checks_join".into(),
+                entry_edge_id: "f_fork".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: key(),
+                        node: task("screen_sanctions"),
+                        in_edge_id: "b1_in".into(),
+                        out_edge_id: "b1_out".into(),
+                        condition: None,
+                    },
+                    RegionBranch {
+                        key: key(),
+                        node: task("screen_pep"),
+                        in_edge_id: "b2_in".into(),
+                        out_edge_id: "b2_out".into(),
+                        condition: None,
+                    },
+                ],
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "and_gateway_node",
+            dag: g,
+            anchor_key: Some(fork),
+            anchor_id: Some("checks_fork"),
+        });
+    }
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let fork = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("assess_risk_profile"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::CreateInclusiveRegion {
+                anchor: t,
+                fork_key: fork,
+                fork_node_id: "notify_fork".into(),
+                join_key: key(),
+                join_node_id: "notify_join".into(),
+                entry_edge_id: "f_fork".into(),
+                branches: vec![
+                    RegionBranch {
+                        key: key(),
+                        node: task("notify_compliance"),
+                        in_edge_id: "b1_in".into(),
+                        out_edge_id: "b1_out".into(),
+                        condition: Some(ConditionExpr {
+                            flag_name: "high_risk".into(),
+                            op: ConditionOp::Eq,
+                            literal: ConditionLiteral::Bool(true),
+                        }),
+                    },
+                    RegionBranch {
+                        key: key(),
+                        node: task("notify_relationship_manager"),
+                        in_edge_id: "b2_in".into(),
+                        out_edge_id: "b2_out".into(),
+                        condition: Some(ConditionExpr {
+                            flag_name: "client_facing".into(),
+                            op: ConditionOp::Eq,
+                            literal: ConditionLiteral::Bool(true),
+                        }),
+                    },
+                ],
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "or_gateway_node",
+            dag: g,
+            anchor_key: Some(fork),
+            anchor_id: Some("notify_fork"),
         });
     }
 

@@ -1,30 +1,191 @@
 [
-  {"class_id":"mid_sequence_task","label":"op.insert_after","regime":"terse","text":"put a fee reconciliation right after this one","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.insert_before","regime":"terse","text":"slot a mandate check ahead of this step","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.replace_node","regime":"full_sentence","text":"Swap this task out for a proper source-of-wealth trace, keeping its existing wiring intact.","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.delete_subgraph","regime":"spoken","text":"honestly this whole step is redundant now, just cut it out","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.connect","regime":"terse","text":"wire escrow_release straight to the closing task","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.create_parallel_region","regime":"spoken","text":"can we get the licence check and the reference check running side by side here","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.create_inclusive_region","regime":"full_sentence","text":"Depending on the risk tier, any combination of the enhanced checks might apply here, so open a conditional multi-branch region.","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"op.create_multi_instance_region","regime":"terse","text":"repeat this per signatory, cap at 6","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"prod.request_and_wait","regime":"spoken","text":"fire off the request to the registrar and just sit tight for their reply","paraphrase_seq":1},
-  {"class_id":"mid_sequence_task","label":"prod.for_each_with_ceiling","regime":"full_sentence","text":"For every director on file, run the identity check, but never exceed eight in a single pass.","paraphrase_seq":1},
-  {"class_id":"guard_node","label":"op.set_guard_trigger","regime":"terse","text":"bump the cadence to every 12h","paraphrase_seq":1},
-  {"class_id":"guard_node","label":"op.set_guard_budget","regime":"spoken","text":"yeah drop the retry cap on this one down to two, not five","paraphrase_seq":1},
-  {"class_id":"guard_node","label":"op.append_node","regime":"terse","text":"tack a manager ping onto the tail of this escalation","paraphrase_seq":1},
-  {"class_id":"guarded_task","label":"prod.interrupting_timeout","regime":"full_sentence","text":"If the custodian hasn't confirmed by the deadline, hard-stop the work and route it to compliance.","paraphrase_seq":1},
-  {"class_id":"message_wait","label":"op.set_correlation_source","regime":"terse","text":"tie the reply back to deal_ref not case_ref","paraphrase_seq":1},
-  {"class_id":"message_wait","label":"prod.non_interrupting_notification","regime":"spoken","text":"just keep pinging them on a schedule but don't hold up the rest of the work while we wait","paraphrase_seq":1},
-  {"class_id":"human_wait","label":"op.attach_rearming_guard","regime":"terse","text":"add a non-blocking nudge that keeps re-firing until reviewed","paraphrase_seq":1},
-  {"class_id":"send_task","label":"op.insert_after","regime":"full_sentence","text":"Right after this notice goes out, queue up the follow-up call scheduling step.","paraphrase_seq":1},
-  {"class_id":"xor_gateway","label":"op.create_branch","regime":"terse","text":"open a third outcome arm for partial approval","paraphrase_seq":1},
-  {"class_id":"xor_gateway","label":"op.insert_before","regime":"spoken","text":"before we hit this decision point can we throw in one more validation step","paraphrase_seq":1},
-  {"class_id":"parallel_branch_interior","label":"op.attach_guard","regime":"terse","text":"put a hard cutoff on this leg of the fork","paraphrase_seq":1},
-  {"class_id":"mi_node","label":"op.create_multi_instance_region","regime":"full_sentence","text":"Nest another bounded per-item region inside this one for the sub-document set, capped at four each.","paraphrase_seq":1},
-  {"class_id":"start_anchor","label":"prod.parallel_checks_and_join","regime":"terse","text":"kick off sanctions and adverse-media together, join when both land","paraphrase_seq":1},
-  {"class_id":"end_anchor","label":"op.insert_before","regime":"spoken","text":"right before we close this out, stick in a final sign-off step","paraphrase_seq":1},
-  {"class_id":"data_object","label":"op.delete_subgraph","regime":"terse","text":"drop the stale deal_ref binding, nothing reads it anymore","paraphrase_seq":1},
-  {"class_id":"empty_graph","label":"abstain.none_of_the_above","regime":"spoken","text":"hang on, can this thing text me directly when something breaks","paraphrase_seq":1},
-  {"class_id":"guard_node","label":"abstain.none_of_the_above","regime":"terse","text":"undo the last five edits","paraphrase_seq":2},
-  {"class_id":"guarded_task","label":"abstain.none_of_the_above","regime":"full_sentence","text":"Could this task just approve itself once the guard fires, without anyone reviewing it?","paraphrase_seq":2}
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "terse",
+  "text": "put a fee reconciliation right after this one",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "terse",
+  "text": "slot a mandate check ahead of this step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "full_sentence",
+  "text": "Swap this task out for a proper source-of-wealth trace, keeping its existing wiring intact.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "honestly this whole step is redundant now, just cut it out",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.connect",
+  "regime": "terse",
+  "text": "wire escrow_release straight to the closing task",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "can we get the licence check and the reference check running side by side here",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_inclusive_region",
+  "regime": "full_sentence",
+  "text": "Depending on the risk tier, any combination of the enhanced checks might apply here, so open a conditional multi-branch region.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_multi_instance_region",
+  "regime": "terse",
+  "text": "repeat this per signatory, cap at 6",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "spoken",
+  "text": "fire off the request to the registrar and just sit tight for their reply",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.for_each_with_ceiling",
+  "regime": "full_sentence",
+  "text": "For every director on file, run the identity check, but never exceed eight in a single pass.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "terse",
+  "text": "bump the cadence to every 12h",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "yeah drop the retry cap on this one down to two, not five",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "full_sentence",
+  "text": "If the custodian hasn't confirmed by the deadline, hard-stop the work and route it to compliance.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "terse",
+  "text": "tie the reply back to deal_ref not case_ref",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "spoken",
+  "text": "just keep pinging them on a schedule but don't hold up the rest of the work while we wait",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "terse",
+  "text": "add a non-blocking nudge that keeps re-firing until reviewed",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "full_sentence",
+  "text": "Right after this notice goes out, queue up the follow-up call scheduling step.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "terse",
+  "text": "open a third outcome arm for partial approval",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "before we hit this decision point can we throw in one more validation step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "terse",
+  "text": "put a hard cutoff on this leg of the fork",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "full_sentence",
+  "text": "Nest another bounded per-item region inside this one for the sub-document set, capped at four each.",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.parallel_checks_and_join",
+  "regime": "terse",
+  "text": "kick off sanctions and adverse-media together, join when both land",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "right before we close this out, stick in a final sign-off step",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "terse",
+  "text": "drop the stale deal_ref binding, nothing reads it anymore",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "hang on, can this thing text me directly when something breaks",
+  "paraphrase_seq": 1
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "terse",
+  "text": "undo the last five edits",
+  "paraphrase_seq": 2
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "full_sentence",
+  "text": "Could this task just approve itself once the guard fires, without anyone reviewing it?",
+  "paraphrase_seq": 2
+ }
 ]

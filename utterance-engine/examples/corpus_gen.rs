@@ -87,24 +87,35 @@ fn main() -> Result<()> {
     // Load banks. Files named `eval_*.json` are the HELD-OUT slice
     // (A3.3 disjoint-regime eval) — routed to a separate eval corpus,
     // NEVER into training (split leakage would be silent and fatal).
+    // `starter_seed_v1*.json` is a DIFFERENT schema entirely (seq/category/
+    // label/text/disputed, not BankEntry's regime-tagged shape) — a
+    // hypothesis-only, not-gold-by-construction slice owned by
+    // `starter_seed_eval.rs`/`adjudicate_starter_seed.rs` and explicitly
+    // "kept out of training entirely" per that file's own doc comment.
+    // It happens to live in this same directory; skip it by name rather
+    // than let it fail BankEntry parsing (the pre-existing failure mode —
+    // corpus_gen could not run at all once this file landed).
     let mut entries: Vec<BankEntry> = Vec::new();
     let mut eval_entries: Vec<BankEntry> = Vec::new();
     for f in std::fs::read_dir(&bank_dir).context("seed/banks missing")? {
         let path = f?.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let bank: Vec<BankEntry> =
-                serde_json::from_str(&std::fs::read_to_string(&path)?)
-                    .with_context(|| format!("{path:?}"))?;
-            let is_eval = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("eval_"))
-                .unwrap_or(false);
-            if is_eval {
-                eval_entries.extend(bank);
-            } else {
-                entries.extend(bank);
-            }
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned)
+            .unwrap_or_default();
+        if file_name.starts_with("starter_seed_v1") {
+            continue;
+        }
+        let bank: Vec<BankEntry> = serde_json::from_str(&std::fs::read_to_string(&path)?)
+            .with_context(|| format!("{path:?}"))?;
+        if file_name.starts_with("eval_") {
+            eval_entries.extend(bank);
+        } else {
+            entries.extend(bank);
         }
     }
     if entries.is_empty() {

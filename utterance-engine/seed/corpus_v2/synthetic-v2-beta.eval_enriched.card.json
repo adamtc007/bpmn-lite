@@ -2,10 +2,23 @@
   "corpus_version": "synthetic-v2-beta.eval_enriched",
   "k": 12,
   "k8_miss_gold_ranks": [
-    13
+    13,
+    14,
+    14,
+    15
   ],
   "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
   "per_class_recall_at_k": {
+    "and_gateway_node": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
+    "boundary_error": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
     "data_object": {
       "hits": 4,
       "recall": 1.0,
@@ -17,6 +30,11 @@
       "total": 6
     },
     "end_anchor": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
+    "ffi_service_task": {
       "hits": 4,
       "recall": 1.0,
       "total": 4
@@ -37,8 +55,8 @@
       "total": 6
     },
     "message_wait": {
-      "hits": 9,
-      "recall": 1.0,
+      "hits": 8,
+      "recall": 0.8888888888888888,
       "total": 9
     },
     "mi_node": {
@@ -47,13 +65,18 @@
       "total": 6
     },
     "mid_sequence_task": {
-      "hits": 17,
-      "recall": 0.9444444444444444,
+      "hits": 16,
+      "recall": 0.8888888888888888,
       "total": 18
     },
-    "parallel_branch_interior": {
-      "hits": 7,
+    "or_gateway_node": {
+      "hits": 4,
       "recall": 1.0,
+      "total": 4
+    },
+    "parallel_branch_interior": {
+      "hits": 6,
+      "recall": 0.8571428571428571,
       "total": 7
     },
     "send_task": {
@@ -66,6 +89,11 @@
       "recall": 1.0,
       "total": 6
     },
+    "timer_wait": {
+      "hits": 4,
+      "recall": 1.0,
+      "total": 4
+    },
     "xor_gateway": {
       "hits": 8,
       "recall": 1.0,
@@ -74,37 +102,37 @@
   },
   "recall_curve": {
     "01": {
-      "hits": 61,
-      "recall": 0.6224489795918368
+      "hits": 34,
+      "recall": 0.288135593220339
     },
     "02": {
-      "hits": 73,
-      "recall": 0.7448979591836735
+      "hits": 56,
+      "recall": 0.4745762711864407
     },
     "04": {
-      "hits": 84,
-      "recall": 0.8571428571428571
+      "hits": 80,
+      "recall": 0.6779661016949152
     },
     "08": {
-      "hits": 93,
-      "recall": 0.9489795918367347
+      "hits": 102,
+      "recall": 0.864406779661017
     },
     "12": {
-      "hits": 97,
-      "recall": 0.9897959183673469
+      "hits": 114,
+      "recall": 0.9661016949152542
     },
     "16": {
-      "hits": 98,
+      "hits": 118,
       "recall": 1.0
     }
   },
-  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
+  "retriever": "tier0.lexical.v1",
   "source": "seed/banks/eval_*.json",
   "totals": {
-    "examples": 98,
-    "gold_in_tier1": 97,
-    "recall_at_k": 0.9897959183673469,
-    "tier0_top1_accuracy": 0.4387755102040816,
-    "tier0_top1_correct": 43
+    "examples": 118,
+    "gold_in_tier1": 114,
+    "recall_at_k": 0.9661016949152542,
+    "tier0_top1_accuracy": 0.288135593220339,
+    "tier0_top1_correct": 34
   }
 }

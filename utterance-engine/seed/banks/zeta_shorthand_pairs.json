@@ -295,20 +295,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "g_reminder esc leg gets +mlro_route appended on exhaust",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "tack +tier2_review onto g_reminder's escalation branch",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "dsl_shorthand",
   "text": "del(g_reminder) :: strip the whole guard off its host",
@@ -333,13 +319,6 @@
   "label": "op.set_guard_budget",
   "regime": "dsl_shorthand",
   "text": "g_reminder.budget: bump ceiling from 3 to 6",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "esc(g_reminder) += notify_compliance, chain grows by one hop",
   "paraphrase_seq": 3
  },
  {
@@ -1538,14 +1517,6 @@
   "paraphrase_seq": 2
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "if it comes back bad, send it down a different path",
-  "pair_group": "pg_z1_reroute_on_fail",
-  "paraphrase_seq": 4
- },
- {
   "class_id": "xor_gateway",
   "label": "op.create_branch",
   "regime": "spoken",
@@ -1610,14 +1581,6 @@
   "paraphrase_seq": 6
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "once this closes out, compliance owns it",
-  "pair_group": "pg_z1_pass_the_baton",
-  "paraphrase_seq": 5
- },
- {
   "class_id": "xor_gateway",
   "label": "op.create_branch",
   "regime": "spoken",
@@ -1680,14 +1643,6 @@
   "text": "shrink the window before this gets flagged",
   "pair_group": "pg_z1_tighten_the_window",
   "paraphrase_seq": 4
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "if nobody answers, send it down the escalation path",
-  "pair_group": "pg_z1_route_the_no_reply",
-  "paraphrase_seq": 6
  },
  {
   "class_id": "message_wait",
@@ -1786,28 +1741,12 @@
   "paraphrase_seq": 2
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "wire this straight into the next stage, no detours",
-  "pair_group": "pg_z1_stitch_downstream",
-  "paraphrase_seq": 7
- },
- {
   "class_id": "mid_sequence_task",
   "label": "op.replace_node",
   "regime": "spoken",
   "text": "hand this off to something newer if it comes to that",
   "pair_group": "pg_z1_freshen_the_step",
   "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "hand this off to something newer if it comes to that",
-  "pair_group": "pg_z1_freshen_the_step",
-  "paraphrase_seq": 8
  },
  {
   "class_id": "human_wait",

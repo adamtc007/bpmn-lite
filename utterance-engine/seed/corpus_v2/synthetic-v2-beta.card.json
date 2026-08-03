@@ -3,54 +3,56 @@
   "ctxproj_schema_version": 1,
   "dropped": {
     "duplicate": 2,
-    "overlap_cap": 2,
+    "overlap_cap": 3,
     "pair_break": 44,
-    "retrieval_miss": 370
+    "retrieval_miss": 230
   },
   "floors": {
     "note": "synthetic-v2-beta is a pipeline/authoring-progress receipt; S3 floors (>=5000 etc.) are the release criterion for the eventual GA synthetic-v2 corpus, not any intermediate build",
-    "total_floor_met": true
+    "total_floor_met": false
   },
-  "list_rule": "tier0 top-8 + NOTA appended (Adam ruling 2026-07-27)",
+  "list_rule": "tier0 top-12 + NOTA appended (Adam ruling 2026-07-27)",
   "overlap_cap": 0.5,
   "per_label": {
-    "abstain.none_of_the_above": 723,
-    "op.append_node": 131,
-    "op.attach_guard": 166,
-    "op.attach_rearming_guard": 169,
-    "op.connect": 210,
-    "op.create_branch": 62,
-    "op.create_inclusive_region": 235,
-    "op.create_multi_instance_region": 274,
-    "op.create_parallel_region": 208,
-    "op.delete_subgraph": 456,
-    "op.insert_after": 252,
-    "op.insert_before": 318,
-    "op.replace_node": 258,
-    "op.set_correlation_source": 133,
-    "op.set_guard_budget": 136,
-    "op.set_guard_trigger": 140,
-    "prod.for_each_with_ceiling": 240,
-    "prod.interrupting_timeout": 148,
-    "prod.non_interrupting_notification": 136,
-    "prod.parallel_checks_and_join": 247,
-    "prod.reminder_then_escalate": 140,
-    "prod.request_and_wait": 236
+    "abstain.none_of_the_above": 453,
+    "op.attach_guard": 116,
+    "op.attach_rearming_guard": 109,
+    "op.connect": 150,
+    "op.create_branch": 77,
+    "op.create_inclusive_region": 143,
+    "op.create_multi_instance_region": 148,
+    "op.create_parallel_region": 130,
+    "op.delete_subgraph": 276,
+    "op.insert_after": 232,
+    "op.insert_before": 203,
+    "op.replace_node": 149,
+    "op.set_correlation_source": 56,
+    "op.set_guard_budget": 104,
+    "op.set_guard_trigger": 86,
+    "prod.for_each_with_ceiling": 118,
+    "prod.interrupting_timeout": 67,
+    "prod.non_interrupting_notification": 58,
+    "prod.parallel_checks_and_join": 110,
+    "prod.reminder_then_escalate": 52,
+    "prod.request_and_wait": 104
   },
   "per_regime": {
-    "dsl_shorthand": 813,
-    "full_sentence": 1310,
-    "spoken": 1415,
-    "telegraphic": 551,
-    "terse": 929
+    "dsl_shorthand": 818,
+    "esl_formal": 1,
+    "full_sentence": 88,
+    "question_form": 63,
+    "rushed_ops": 16,
+    "spoken": 268,
+    "telegraphic": 591,
+    "terse": 1096
   },
-  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
+  "retriever": "tier0.lexical.v1",
   "spec": "EOP-SPEC-SLM-TRAIN-001 v0.3",
   "totals": {
-    "context_pairs": 262,
-    "examples": 5018,
-    "nota": 723,
-    "nota_pct": 0.14408130729374252,
-    "pair_pct": 0.05221203666799522
+    "context_pairs": 312,
+    "examples": 2941,
+    "nota": 453,
+    "nota_pct": 0.15402924175450527,
+    "pair_pct": 0.10608636518191092
   }
 }

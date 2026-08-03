@@ -631,62 +631,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "grow the escalation route: notify_desk_head at the tail",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "guard leg gains custodian_ack at its finish",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "when this trips, continue into a log-and-assign step",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "extend the reminder's follow-on path with fatca_review",
-  "paraphrase_seq": 4
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "tail of the g_reminder route: record_contact_attempt",
-  "paraphrase_seq": 5
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "put a hand-to-supervisor step on the far side of this leg",
-  "paraphrase_seq": 6
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "escalation continuation gets sanctions_recheck last",
-  "paraphrase_seq": 7
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "lengthen the trip path with a case-note task",
-  "paraphrase_seq": 8
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "terse",
   "text": "strip this reminder off chase_client for good",

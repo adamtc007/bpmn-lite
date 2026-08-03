@@ -204,13 +204,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "esc path: +notify_compliance",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "dsl_shorthand",
   "text": "rm g_reminder",
@@ -581,14 +574,6 @@
   "pair_group": "pg_tie_reply"
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "once the reminders run out, route it to J. Smith",
-  "paraphrase_seq": 1,
-  "pair_group": "pg_reminders_runout"
- },
- {
   "class_id": "mid_sequence_task",
   "label": "prod.reminder_then_escalate",
   "regime": "spoken",
@@ -840,7 +825,7 @@
   "class_id": "human_wait",
   "label": "op.create_parallel_region",
   "regime": "telegraphic",
-  "text": "sanctions, PEP, adverse media — all at once",
+  "text": "sanctions, PEP, adverse media \u2014 all at once",
   "paraphrase_seq": 1,
   "pair_group": "pg_all_at_once"
  },
@@ -848,7 +833,7 @@
   "class_id": "parallel_branch_interior",
   "label": "prod.parallel_checks_and_join",
   "regime": "telegraphic",
-  "text": "sanctions, PEP, adverse media — all at once",
+  "text": "sanctions, PEP, adverse media \u2014 all at once",
   "paraphrase_seq": 1,
   "pair_group": "pg_all_at_once"
  },

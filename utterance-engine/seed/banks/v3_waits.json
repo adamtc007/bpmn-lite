@@ -1,0 +1,94 @@
+[
+  { "class_id": "human_wait", "label": "op.insert_after", "regime": "terse", "text": "after the human signs off, add an 'apply_decision' step", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.insert_after", "regime": "spoken", "text": "once the reviewer's done, drop a 'publish_verdict' step next on the route", "paraphrase_seq": 41 },
+  { "class_id": "human_wait", "label": "op.insert_after", "regime": "question_form", "text": "can 'notify_requester' come right after this manual step?", "paraphrase_seq": 42 },
+  { "class_id": "human_wait", "label": "op.insert_after", "regime": "telegraphic", "text": "human step -> 'record_verdict'", "paraphrase_seq": 43 },
+
+  { "class_id": "human_wait", "label": "op.insert_before", "regime": "terse", "text": "give the reviewer a 'compile_brief' step just before their task", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.insert_before", "regime": "spoken", "text": "before it reaches a person, run 'summarise_inputs' so they have context", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "op.replace_node", "regime": "terse", "text": "swap this manual step for 'auto_approve', keep the wiring", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.replace_node", "regime": "spoken", "text": "take the human out of the loop here — replace the step, connections as-is", "paraphrase_seq": 41 },
+  { "class_id": "human_wait", "label": "op.replace_node", "regime": "question_form", "text": "could this manual gate become an automated check instead, same routing?", "paraphrase_seq": 42 },
+
+  { "class_id": "human_wait", "label": "op.set_correlation_source", "regime": "terse", "text": "match the reviewer's submission on 'ticket_id'", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.set_correlation_source", "regime": "spoken", "text": "correlate the human's answer using the request reference, not what it uses now", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "op.attach_guard", "regime": "terse", "text": "interrupting deadline on the reviewer: trip it and the task is pulled", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.attach_guard", "regime": "spoken", "text": "if the person sits on it too long, a tripwire should yank the task away", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "op.attach_rearming_guard", "regime": "terse", "text": "remind the reviewer on a cycle without pulling their task", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.attach_rearming_guard", "regime": "spoken", "text": "keep nudging whoever owns this, re-arming each time, work stays live", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "op.delete_subgraph", "regime": "terse", "text": "drop the manual review from the flow entirely", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "op.delete_subgraph", "regime": "question_form", "text": "can this human step just come out of the graph?", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "nudge the assignee on a bounded cycle, then escalate to 'notify_lead'", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "poke them a few times on a schedule and when the pokes run out, hand it up the chain", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "prod.interrupting_timeout", "regime": "terse", "text": "duration cap on the review: blow it and the step dies, fallback route runs", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "review t/o -> auto path", "paraphrase_seq": 41 },
+
+  { "class_id": "human_wait", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "status ping on a cycle while the reviewer works, task untouched", "paraphrase_seq": 40 },
+
+  { "class_id": "human_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "reassign this task to a different reviewer", "paraphrase_seq": 40 },
+  { "class_id": "human_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "let the reviewer send it back upstream for rework if the inputs are bad", "paraphrase_seq": 41 },
+  { "class_id": "human_wait", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "who's currently assigned to this manual step?", "paraphrase_seq": 42 },
+
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "terse", "text": "match incoming messages on 'order_ref' instead", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "spoken", "text": "key the wait off the batch identifier rather than what it listens on now", "paraphrase_seq": 41 },
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "full_sentence", "text": "This wait should correlate arrivals using the 'session_token' field from the payload.", "paraphrase_seq": 42 },
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "telegraphic", "text": "corr key := 'request_id'", "paraphrase_seq": 43 },
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "question_form", "text": "can arrivals here be matched on the parent reference instead?", "paraphrase_seq": 44 },
+
+  { "class_id": "message_wait", "label": "op.insert_after", "regime": "terse", "text": "when the message lands, go into 'parse_payload' next", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.insert_after", "regime": "spoken", "text": "straight after the reply arrives, run a 'verify_signature' step", "paraphrase_seq": 41 },
+  { "class_id": "message_wait", "label": "op.insert_after", "regime": "telegraphic", "text": "wait -> 'unpack_response'", "paraphrase_seq": 42 },
+
+  { "class_id": "message_wait", "label": "op.insert_before", "regime": "terse", "text": "put 'announce_waiting' in just before this hold", "paraphrase_seq": 40 },
+
+  { "class_id": "message_wait", "label": "op.replace_node", "regime": "terse", "text": "swap this wait for a 'poll_endpoint' step, same wiring", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.replace_node", "regime": "spoken", "text": "instead of waiting for a push, make this node pull — replace it, keep the routes", "paraphrase_seq": 41 },
+
+  { "class_id": "message_wait", "label": "op.attach_guard", "regime": "terse", "text": "interrupting limit on the wait: trip and it's abandoned down the failure exit", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.attach_guard", "regime": "spoken", "text": "don't let this hold sit forever — a tripwire should cut it and divert", "paraphrase_seq": 41 },
+
+  { "class_id": "message_wait", "label": "op.attach_rearming_guard", "regime": "terse", "text": "cycle a chaser off this wait without cancelling it", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.attach_rearming_guard", "regime": "spoken", "text": "while we're holding, keep firing a repeating reminder that re-arms and never kills the wait", "paraphrase_seq": 41 },
+
+  { "class_id": "message_wait", "label": "op.delete_subgraph", "regime": "terse", "text": "remove this hold from the route", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.delete_subgraph", "regime": "question_form", "text": "can the flow skip waiting here entirely — just delete the wait node?", "paraphrase_seq": 41 },
+
+  { "class_id": "message_wait", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "chase on a bounded cycle while holding, last chase escalates", "paraphrase_seq": 40 },
+
+  { "class_id": "message_wait", "label": "prod.interrupting_timeout", "regime": "terse", "text": "cap how long this holds: past the limit the wait dies, failure route runs", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "prod.interrupting_timeout", "regime": "telegraphic", "text": "hold t/o -> non-delivery exit", "paraphrase_seq": 41 },
+
+  { "class_id": "message_wait", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "heartbeat ping while the wait is open, hold untouched", "paraphrase_seq": 40 },
+
+  { "class_id": "message_wait", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "once the batch lands, process each element with the declared max", "paraphrase_seq": 40 },
+
+  { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "inject a fake message so the wait releases now", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "have this wait accept two different message types at once", "paraphrase_seq": 41 },
+  { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "what's the message name this hold is subscribed to?", "paraphrase_seq": 42 },
+
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "terse", "text": "when the delay elapses, run 'resume_processing' next", "paraphrase_seq": 40 },
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "spoken", "text": "after the pause is up, I want a 'recheck_state' step before the flow continues", "paraphrase_seq": 41 },
+  { "class_id": "timer_wait", "label": "op.insert_after", "regime": "telegraphic", "text": "delay -> 'refresh_quote'", "paraphrase_seq": 42 },
+
+  { "class_id": "timer_wait", "label": "op.insert_before", "regime": "terse", "text": "add 'notify_pause' just before the delay starts", "paraphrase_seq": 40 },
+
+  { "class_id": "timer_wait", "label": "op.replace_node", "regime": "terse", "text": "swap the fixed delay for a 'wait_for_signal' step, wiring intact", "paraphrase_seq": 40 },
+  { "class_id": "timer_wait", "label": "op.replace_node", "regime": "spoken", "text": "make this pause message-driven instead of clock-driven — replace the node, keep routes", "paraphrase_seq": 41 },
+
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "terse", "text": "drop the delay from this route", "paraphrase_seq": 40 },
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "spoken", "text": "no need to pause here any more, take the wait out", "paraphrase_seq": 41 },
+  { "class_id": "timer_wait", "label": "op.delete_subgraph", "regime": "question_form", "text": "can we lose this cooling-off pause entirely?", "paraphrase_seq": 42 },
+
+  { "class_id": "timer_wait", "label": "op.create_parallel_region", "regime": "terse", "text": "while that's pending, also fork 'prefetch_data' and 'warm_cache', join after", "paraphrase_seq": 40 },
+
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make this delay five days instead", "paraphrase_seq": 40 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "shorten the pause a bit, it's too long", "paraphrase_seq": 41 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "could the delay end early if the data's already fresh?", "paraphrase_seq": 42 },
+  { "class_id": "timer_wait", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "delay := PT1H", "paraphrase_seq": 43 }
+]

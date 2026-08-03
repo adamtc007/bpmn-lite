@@ -1,167 +1,19 @@
 [
   {
-    "base": "gte-modernbert",
-    "bundle_identity": "slm.trained.gte-modernbert@f7481e60",
-    "n_eval": 98,
-    "per_class_accuracy": {
-      "data_object": {
-        "accuracy": 1.0,
-        "correct": 4,
-        "total": 4
-      },
-      "empty_graph": {
-        "accuracy": 1.0,
-        "correct": 6,
-        "total": 6
-      },
-      "end_anchor": {
-        "accuracy": 1.0,
-        "correct": 4,
-        "total": 4
-      },
-      "guard_node": {
-        "accuracy": 0.75,
-        "correct": 6,
-        "total": 8
-      },
-      "guarded_task": {
-        "accuracy": 1.0,
-        "correct": 9,
-        "total": 9
-      },
-      "human_wait": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
-        "total": 6
-      },
-      "message_wait": {
-        "accuracy": 0.7777777777777778,
-        "correct": 7,
-        "total": 9
-      },
-      "mi_node": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
-        "total": 6
-      },
-      "mid_sequence_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 16,
-        "total": 18
-      },
-      "parallel_branch_interior": {
-        "accuracy": 1.0,
-        "correct": 7,
-        "total": 7
-      },
-      "send_task": {
-        "accuracy": 1.0,
-        "correct": 7,
-        "total": 7
-      },
-      "start_anchor": {
-        "accuracy": 1.0,
-        "correct": 6,
-        "total": 6
-      },
-      "xor_gateway": {
-        "accuracy": 0.625,
-        "correct": 5,
-        "total": 8
-      }
-    },
-    "tier0_top1_accuracy_baseline": 0.4387755102040816,
-    "top1_end_to_end": 0.8877551020408163,
-    "top1_end_to_end_correct": 87,
-    "top1_given_inclusion": 0.8969072164948454,
-    "top1_given_inclusion_correct": 87,
-    "top1_given_inclusion_total": 97,
-    "uplift_vs_tier0_top1_pp": 44.89795918367347
-  },
-  {
-    "base": "ms-marco",
-    "bundle_identity": "slm.trained.ms-marco@c5ee24cb",
-    "n_eval": 98,
-    "per_class_accuracy": {
-      "data_object": {
-        "accuracy": 0.75,
-        "correct": 3,
-        "total": 4
-      },
-      "empty_graph": {
-        "accuracy": 1.0,
-        "correct": 6,
-        "total": 6
-      },
-      "end_anchor": {
-        "accuracy": 1.0,
-        "correct": 4,
-        "total": 4
-      },
-      "guard_node": {
-        "accuracy": 0.75,
-        "correct": 6,
-        "total": 8
-      },
-      "guarded_task": {
-        "accuracy": 0.5555555555555556,
-        "correct": 5,
-        "total": 9
-      },
-      "human_wait": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
-        "total": 6
-      },
-      "message_wait": {
-        "accuracy": 0.6666666666666666,
-        "correct": 6,
-        "total": 9
-      },
-      "mi_node": {
-        "accuracy": 0.5,
-        "correct": 3,
-        "total": 6
-      },
-      "mid_sequence_task": {
-        "accuracy": 0.6666666666666666,
-        "correct": 12,
-        "total": 18
-      },
-      "parallel_branch_interior": {
-        "accuracy": 1.0,
-        "correct": 7,
-        "total": 7
-      },
-      "send_task": {
-        "accuracy": 0.7142857142857143,
-        "correct": 5,
-        "total": 7
-      },
-      "start_anchor": {
-        "accuracy": 0.6666666666666666,
-        "correct": 4,
-        "total": 6
-      },
-      "xor_gateway": {
-        "accuracy": 0.375,
-        "correct": 3,
-        "total": 8
-      }
-    },
-    "tier0_top1_accuracy_baseline": 0.4387755102040816,
-    "top1_end_to_end": 0.7040816326530612,
-    "top1_end_to_end_correct": 69,
-    "top1_given_inclusion": 0.711340206185567,
-    "top1_given_inclusion_correct": 69,
-    "top1_given_inclusion_total": 97,
-    "uplift_vs_tier0_top1_pp": 26.53061224489796
-  },
-  {
     "base": "modernbert-base",
     "bundle_identity": "slm.trained.modernbert-base@8949b909",
-    "n_eval": 98,
+    "n_eval": 118,
     "per_class_accuracy": {
+      "and_gateway_node": {
+        "accuracy": 1.0,
+        "correct": 4,
+        "total": 4
+      },
+      "boundary_error": {
+        "accuracy": 1.0,
+        "correct": 4,
+        "total": 4
+      },
       "data_object": {
         "accuracy": 1.0,
         "correct": 4,
@@ -177,98 +29,24 @@
         "correct": 4,
         "total": 4
       },
+      "ffi_service_task": {
+        "accuracy": 0.5,
+        "correct": 2,
+        "total": 4
+      },
       "guard_node": {
-        "accuracy": 0.75,
-        "correct": 6,
+        "accuracy": 1.0,
+        "correct": 8,
         "total": 8
       },
       "guarded_task": {
-        "accuracy": 0.7777777777777778,
-        "correct": 7,
-        "total": 9
-      },
-      "human_wait": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
-        "total": 6
-      },
-      "message_wait": {
         "accuracy": 1.0,
         "correct": 9,
         "total": 9
       },
-      "mi_node": {
-        "accuracy": 0.6666666666666666,
-        "correct": 4,
-        "total": 6
-      },
-      "mid_sequence_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 16,
-        "total": 18
-      },
-      "parallel_branch_interior": {
-        "accuracy": 0.8571428571428571,
-        "correct": 6,
-        "total": 7
-      },
-      "send_task": {
-        "accuracy": 0.8571428571428571,
-        "correct": 6,
-        "total": 7
-      },
-      "start_anchor": {
-        "accuracy": 0.8333333333333334,
-        "correct": 5,
-        "total": 6
-      },
-      "xor_gateway": {
-        "accuracy": 0.625,
-        "correct": 5,
-        "total": 8
-      }
-    },
-    "tier0_top1_accuracy_baseline": 0.4387755102040816,
-    "top1_end_to_end": 0.8469387755102041,
-    "top1_end_to_end_correct": 83,
-    "top1_given_inclusion": 0.8556701030927835,
-    "top1_given_inclusion_correct": 83,
-    "top1_given_inclusion_total": 97,
-    "uplift_vs_tier0_top1_pp": 40.81632653061225
-  },
-  {
-    "base": "bge-reranker",
-    "bundle_identity": "slm.trained.bge-reranker@2cfc18c9",
-    "n_eval": 98,
-    "per_class_accuracy": {
-      "data_object": {
-        "accuracy": 1.0,
-        "correct": 4,
-        "total": 4
-      },
-      "empty_graph": {
-        "accuracy": 1.0,
-        "correct": 6,
-        "total": 6
-      },
-      "end_anchor": {
-        "accuracy": 1.0,
-        "correct": 4,
-        "total": 4
-      },
-      "guard_node": {
-        "accuracy": 0.625,
-        "correct": 5,
-        "total": 8
-      },
-      "guarded_task": {
-        "accuracy": 0.8888888888888888,
-        "correct": 8,
-        "total": 9
-      },
       "human_wait": {
-        "accuracy": 0.6666666666666666,
-        "correct": 4,
+        "accuracy": 1.0,
+        "correct": 6,
         "total": 6
       },
       "message_wait": {
@@ -277,18 +55,23 @@
         "total": 9
       },
       "mi_node": {
-        "accuracy": 0.6666666666666666,
-        "correct": 4,
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
         "total": 6
       },
       "mid_sequence_task": {
-        "accuracy": 0.7777777777777778,
-        "correct": 14,
+        "accuracy": 0.7222222222222222,
+        "correct": 13,
         "total": 18
       },
+      "or_gateway_node": {
+        "accuracy": 0.75,
+        "correct": 3,
+        "total": 4
+      },
       "parallel_branch_interior": {
-        "accuracy": 0.7142857142857143,
-        "correct": 5,
+        "accuracy": 0.5714285714285714,
+        "correct": 4,
         "total": 7
       },
       "send_task": {
@@ -301,18 +84,23 @@
         "correct": 5,
         "total": 6
       },
+      "timer_wait": {
+        "accuracy": 1.0,
+        "correct": 4,
+        "total": 4
+      },
       "xor_gateway": {
         "accuracy": 0.75,
         "correct": 6,
         "total": 8
       }
     },
-    "tier0_top1_accuracy_baseline": 0.4387755102040816,
-    "top1_end_to_end": 0.7857142857142857,
-    "top1_end_to_end_correct": 77,
-    "top1_given_inclusion": 0.7938144329896907,
-    "top1_given_inclusion_correct": 77,
-    "top1_given_inclusion_total": 97,
-    "uplift_vs_tier0_top1_pp": 34.69387755102041
+    "tier0_top1_accuracy_baseline": 0.288135593220339,
+    "top1_end_to_end": 0.8389830508474576,
+    "top1_end_to_end_correct": 99,
+    "top1_given_inclusion": 0.868421052631579,
+    "top1_given_inclusion_correct": 99,
+    "top1_given_inclusion_total": 114,
+    "uplift_vs_tier0_top1_pp": 55.08474576271186
   }
 ]

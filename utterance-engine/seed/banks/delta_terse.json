@@ -645,69 +645,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "when the budget's spent, drop into risk_rating_recalc",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "guard tail: append client_risk_reclassify",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "chain a wire_instruction_verify onto the far end of this trip",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "grow the escalation leg with an entry into negative_news_scan",
-  "paraphrase_seq": 4
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "append account_closure_request after the trip fires",
-  "paraphrase_seq": 5
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "put ownership_chain_trace at the end of the escalation route",
-  "paraphrase_seq": 6
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "extend past the trip into a mandate_renewal_check step",
-  "paraphrase_seq": 7
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "trip continuation gains credit_limit_review",
-  "paraphrase_seq": 8
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "add one more hop to the guard's failure path: source_of_funds_check",
-  "paraphrase_seq": 9
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "terse",
   "text": "pull g_reminder and its trip clean off the host",

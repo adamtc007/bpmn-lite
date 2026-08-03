@@ -344,20 +344,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "extend this guard's path with a hand-off to the manager",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "telegraphic",
-  "text": "escalation leg: add notify-compliance at tail of guard route",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "terse",
   "text": "take g_reminder off entirely",

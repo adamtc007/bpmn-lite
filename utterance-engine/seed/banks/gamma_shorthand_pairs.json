@@ -477,48 +477,6 @@
  },
  {
   "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "exhausted path -> +raise_case",
-  "paraphrase_seq": 1
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "tack +alert_desk onto the esc leg",
-  "paraphrase_seq": 2
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "post-budget: +notify_relationship_mgr",
-  "paraphrase_seq": 3
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "extend esc chain w/ +file_breach_note",
-  "paraphrase_seq": 4
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "after final fire -> +handover_to_ops",
-  "paraphrase_seq": 5
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "dsl_shorthand",
-  "text": "esc continuation gets +second_chase_review",
-  "paraphrase_seq": 6
- },
- {
-  "class_id": "guard_node",
   "label": "op.delete_subgraph",
   "regime": "dsl_shorthand",
   "text": "strip this grd off entirely",
@@ -1494,14 +1452,6 @@
   "pair_group": "pg_g1_cutoff_here"
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "if they stay quiet, bump it to compliance",
-  "paraphrase_seq": 7,
-  "pair_group": "pg_g1_quiet_bump"
- },
- {
   "class_id": "message_wait",
   "label": "prod.reminder_then_escalate",
   "regime": "spoken",
@@ -1531,14 +1481,6 @@
   "regime": "terse",
   "text": "then log the outcome",
   "paraphrase_seq": 3,
-  "pair_group": "pg_g1_then_log"
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "then log the outcome",
-  "paraphrase_seq": 8,
   "pair_group": "pg_g1_then_log"
  },
  {
@@ -1798,14 +1740,6 @@
   "pair_group": "pg_g1_timebox"
  },
  {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "spoken",
-  "text": "after the last reminder, tell J. Smith",
-  "paraphrase_seq": 9,
-  "pair_group": "pg_g1_last_reminder_smith"
- },
- {
   "class_id": "human_wait",
   "label": "prod.reminder_then_escalate",
   "regime": "spoken",
@@ -1947,14 +1881,6 @@
   "regime": "terse",
   "text": "send the failures over to compliance",
   "paraphrase_seq": 3,
-  "pair_group": "pg_g1_fails_to_compliance"
- },
- {
-  "class_id": "guard_node",
-  "label": "op.append_node",
-  "regime": "terse",
-  "text": "send the failures over to compliance",
-  "paraphrase_seq": 10,
   "pair_group": "pg_g1_fails_to_compliance"
  },
  {
