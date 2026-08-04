@@ -12723,4 +12723,82 @@ mod tests {
             "same (instance_id, revision) dedupe key must collapse to one row"
         );
     }
+
+    // ── Phase 5 gap #11 (docs/todo/PHASE5-fault-injection-gap-analysis.md):
+    // PostgreSQL connection loss and transaction retry. Every fault-
+    // injection test elsewhere in this codebase runs against MemoryStore
+    // — none of them exercise the backend that actually ships. This uses
+    // pg_terminate_backend to kill a real connection out from under a
+    // live PgPool and proves (a) the killed connection surfaces a clean
+    // error, never a panic or hang, and (b) the pool self-heals: a store
+    // operation issued right after acquires a fresh connection and
+    // succeeds normally, so one dead connection does not poison the pool
+    // for every subsequent caller.
+
+    #[tokio::test]
+    async fn test_pg_connection_loss_surfaces_cleanly_and_pool_recovers() {
+        use sqlx::Connection;
+        let (pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+
+        // Acquire and hold one specific connection, and learn its
+        // backend PID — this is the connection we'll kill.
+        let mut doomed = pool.acquire().await.unwrap();
+        let doomed_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *doomed)
+            .await
+            .unwrap();
+
+        // A second, independent connection terminates the first —
+        // simulating the database (or network) dropping a live
+        // connection out from under the application, not a clean close.
+        sqlx::query("SELECT pg_terminate_backend($1)")
+            .bind(doomed_pid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // The now-dead connection must fail cleanly on its next use —
+        // not panic, not hang.
+        let result = doomed.ping().await;
+        assert!(
+            result.is_err(),
+            "a query on a backend-terminated connection must surface as an error"
+        );
+        drop(doomed);
+
+        // The pool must self-heal: a normal store operation right after
+        // acquires a DIFFERENT (fresh) connection and succeeds — the one
+        // killed connection must not poison the pool for anyone else.
+        let instance_id = seed_running_instance(&store, "phase5-conn-loss").await;
+        let loaded = store
+            .load_instance(&tenant, instance_id)
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "a store operation immediately after one connection was killed must \
+                     still succeed via a fresh pooled connection, got {error:?}"
+                )
+            });
+        assert!(
+            loaded.is_some(),
+            "the instance saved via the recovered pool must be readable"
+        );
+
+        // And a full fenced commit — the exact shape every production
+        // write path uses — must also still work, proving recovery
+        // isn't limited to simple reads.
+        let claim = store
+            .claim_instance_for_transition(&tenant, instance_id, "post-conn-loss", 30_000)
+            .await
+            .unwrap()
+            .expect("claim must succeed on the recovered pool");
+        let mut instance = loaded.unwrap();
+        instance.state = ProcessState::Completed { at: 1 };
+        let transition = TransitionBuilder::new(instance).build();
+        store
+            .commit_transition(&claim, &transition)
+            .await
+            .expect("commit must succeed on the recovered pool after a killed connection");
+    }
 }

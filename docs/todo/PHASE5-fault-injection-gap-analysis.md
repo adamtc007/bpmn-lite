@@ -1,13 +1,15 @@
 # Phase 5 — fault-injection and release qualification: gap analysis + activation-queue coverage
 
-Status: **partial — existing harness extended, full plan scope not
-attempted**. This session closes one concrete gap (the activation queue
-had zero fault-injection coverage) and documents, item by item, how far
-the rest of Phase 5's checklist is from done. Phase 5 as specified is a
-full release-qualification suite (11 named fault-injection points × 3
-execution modes, plus a release-criteria checklist that is effectively
-the whole project's Definition of Done) — too large for one pass; this
-is a status report and one targeted fix, not a completed phase.
+Status: **partial — existing harness extended twice, full plan scope
+not attempted**. This session closes two concrete gaps (the activation
+queue had zero fault-injection coverage; the production Postgres
+backend had zero connection-loss coverage) and documents, item by item,
+how far the rest of Phase 5's checklist is from done. Phase 5 as
+specified is a full release-qualification suite (11 named fault-
+injection points × 3 execution modes, plus a release-criteria checklist
+that is effectively the whole project's Definition of Done) — too large
+for one pass; this is a status report and two targeted fixes, not a
+completed phase.
 
 ## What already existed (predates this session's Phase 0-4 work)
 
@@ -80,6 +82,30 @@ cargo clippy --lib --tests --no-deps        (in bpmn-lite-engine/fuzz) → clean
 cargo build --workspace --tests             (main workspace)           → clean
 ```
 
+### Update: PostgreSQL connection-loss coverage (gap #11)
+
+Added `test_pg_connection_loss_surfaces_cleanly_and_pool_recovers`
+(`bpmn-lite-store-postgres/src/store_postgres.rs`) — the recommendation
+this doc made at the bottom, picked over the alternative (an I-1..I-10
+invariant audit) because it closes a real gap in the backend that ships
+in production, not `MemoryStore`. Uses `pg_terminate_backend` from a
+second connection to kill a live pooled connection, proving (a) the
+dead connection surfaces a clean error, never a panic/hang, and (b) the
+pool self-heals — a normal `load_instance` and a full fenced
+`claim_instance_for_transition`/`commit_transition` cycle issued right
+after both succeed via a fresh connection, so one dead connection does
+not poison the pool for every subsequent caller.
+
+```
+BPMN_LITE_TEST_DATABASE_URL=... cargo test \
+  -p bpmn-lite-store-postgres --lib test_pg_connection_loss \
+  -- --test-threads=1                                            → 1/1
+BPMN_LITE_TEST_DATABASE_URL=... cargo test \
+  -p bpmn-lite-store-postgres --lib -- --test-threads=1           → 99/99
+cargo clippy -p bpmn-lite-store-postgres --lib --tests --no-deps  → clean
+cargo build --workspace --tests                                  → clean
+```
+
 ## Gap analysis: the plan's 11 fault-injection points
 
 | # | Plan's injection point | Current coverage |
@@ -94,16 +120,16 @@ cargo build --workspace --tests             (main workspace)           → clean
 | 8 | During renewal | **Not covered** — `renew_activation_claim` is fault-injectable generically (wrapped in `faulty!`) but nothing calls it yet (per Phase 3's own doc: renewal isn't wired to a long-running tick), so there's no scenario to drive faults through. |
 | 9 | During graceful shutdown | **Not covered.** Phase 4's shutdown sequence lives in `bpmn-lite-server-runner`'s `main()` (a binary, not exercised by this engine-level fuzz harness at all) and has no fault-injection hooks of its own. |
 | 10 | After job validation data received but before atomic job completion | **Partially covered generically** — `validate_job_claim` and job-completion commit paths are both `faulty!`-wrapped and exercised by the storm test, but not as a named, isolated scenario. |
-| 11 | Under PostgreSQL connection loss and transaction retry | **Not covered at all.** No connection-loss simulation exists against `PostgresWorkflowStore` anywhere in this codebase (`bpmn-lite-store-postgres`'s own test suite exercises correctness against a live database, not resilience to connection loss). |
+| 11 | Under PostgreSQL connection loss and transaction retry | **Partially covered, this update.** `test_pg_connection_loss_surfaces_cleanly_and_pool_recovers` uses `pg_terminate_backend` from a second connection to kill a live pooled connection out from under `PgPool`, proving the dead connection errors cleanly (not a panic/hang) and — the real point — that the pool self-heals: a normal `load_instance` and a full fenced `claim_instance_for_transition`/`commit_transition` cycle issued right after both succeed via a fresh connection. **Not covered**: killing a connection *mid-transaction* (interrupting `commit_transition` while its own transaction is open) — that needs a synchronization hook inside `commit_transition` to pause at a known point, which doesn't exist and would be new production instrumentation, not test-only code. |
 
-**Summary: 1 of 11 points has dedicated new coverage this session (#1);
-2-3 more are covered generically by the existing storm test as a side
-effect of hitting every `RuntimeStore` call (#2, #7, #10 partially); the
-remaining 6-7 are gaps, and roughly half of those (#4-6, #9, #11) would
-require fault-injection hooks that don't exist at all yet (SQL-
-transaction-internal instrumentation, a shutdown-sequence hook,
-connection-loss simulation) — not a matter of writing another test
-against existing infrastructure.**
+**Summary (updated): 2 of 11 points have dedicated new coverage across
+this session's two passes (#1 activation claim, #11 connection loss —
+partially); 2-3 more are covered generically by the existing storm test
+as a side effect of hitting every `RuntimeStore` call (#2, #7, #10
+partially); the remaining 5-6 are gaps, and most of those (#4-6, #9)
+would require fault-injection hooks that don't exist at all yet
+(SQL-transaction-internal instrumentation, a shutdown-sequence hook) —
+not a matter of writing another test against existing infrastructure.**
 
 ## Gap analysis: "run under one executor, multiple native executors, and the intended Wasmtime pool"
 
@@ -137,12 +163,12 @@ against existing infrastructure.**
 
 Phase 5 in full is a multi-session effort (Wasmtime pool doesn't exist;
 SQL-transaction-internal fault injection is a real design decision, not
-a quick add; connection-loss simulation against Postgres needs its own
-harness). The highest-value next slice, if continuing here, is
-probably: (a) enumerate I-1..I-10 explicitly and audit test coverage
-per-invariant (closes the first release-criterion cleanly), or (b) add
-PostgreSQL connection-loss/retry fault injection against
-`PostgresWorkflowStore` specifically, since that's the backend that
-actually ships — `MemoryStore`-only fault injection, however thorough,
-doesn't qualify the production storage layer. Both are real forks
-(scope and approach), not decided here.
+a quick add). Option (b) from the original recommendation — PostgreSQL
+connection-loss fault injection against `PostgresWorkflowStore` — is
+now done (above), on the reasoning that a backend that actually ships
+outranks an audit of an already-substantially-tested invariant set.
+Option (a), enumerating I-1..I-10 explicitly and auditing test coverage
+per-invariant, remains open — the plan doc excerpt this session read
+references these invariants by name but doesn't enumerate them, so the
+first step would be locating or reconstructing that list before any
+audit can start. That's the natural next slice if continuing here.
