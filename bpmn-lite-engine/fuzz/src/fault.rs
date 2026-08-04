@@ -46,9 +46,9 @@ use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use uuid::Uuid;
 
-use crate::{emit_process, gen_shape, ConservationTracker, FuzzClock, Tape};
 #[cfg(test)]
 use crate::Shape;
+use crate::{emit_process, gen_shape, ConservationTracker, FuzzClock, Tape};
 
 // ─── Fault plan ──────────────────────────────────────────────────────
 
@@ -160,7 +160,11 @@ impl RuntimeStore for FaultStore {
         instance_id: Uuid,
         fiber_id: Uuid,
     ) -> StoreResult<Option<Fiber>> {
-        faulty!(self, unavailable(), self.inner.load_fiber(tenant_id, instance_id, fiber_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_fiber(tenant_id, instance_id, fiber_id)
+        )
     }
 
     async fn load_fibers(
@@ -168,7 +172,11 @@ impl RuntimeStore for FaultStore {
         tenant_id: &TenantId,
         instance_id: Uuid,
     ) -> StoreResult<Vec<Fiber>> {
-        faulty!(self, unavailable(), self.inner.load_fibers(tenant_id, instance_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_fibers(tenant_id, instance_id)
+        )
     }
 
     async fn dedupe_get(
@@ -190,7 +198,8 @@ impl RuntimeStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.dequeue_jobs(task_types, max, tenant_id, worker_id, lease_ms)
+            self.inner
+                .dequeue_jobs(task_types, max, tenant_id, worker_id, lease_ms)
         )
     }
 
@@ -204,7 +213,8 @@ impl RuntimeStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.validate_job_claim(tenant_id, job_key, worker_id, claim_token)
+            self.inner
+                .validate_job_claim(tenant_id, job_key, worker_id, claim_token)
         )
     }
 
@@ -223,7 +233,11 @@ impl RuntimeStore for FaultStore {
     }
 
     async fn dead_letter_take(&self, name: u32, corr_key: &Value) -> StoreResult<Option<Vec<u8>>> {
-        faulty!(self, unavailable(), self.inner.dead_letter_take(name, corr_key))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.dead_letter_take(name, corr_key)
+        )
     }
 
     async fn claim_buffered_message(
@@ -242,7 +256,11 @@ impl RuntimeStore for FaultStore {
     }
 
     async fn reclaim_stale_buffered_message_claims(&self) -> StoreResult<u32> {
-        faulty!(self, unavailable(), self.inner.reclaim_stale_buffered_message_claims())
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.reclaim_stale_buffered_message_claims()
+        )
     }
 
     async fn prune_expired_messages(&self) -> StoreResult<u32> {
@@ -254,19 +272,31 @@ impl RuntimeStore for FaultStore {
         tenant_id: &TenantId,
         instance_id: Uuid,
     ) -> StoreResult<Vec<Incident>> {
-        faulty!(self, unavailable(), self.inner.load_incidents(tenant_id, instance_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_incidents(tenant_id, instance_id)
+        )
     }
 
-    async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> StoreResult<u32> {
-        faulty!(self, unavailable(), self.inner.reclaim_stale_jobs(timeout_ms))
+    async fn reclaim_stale_jobs(&self) -> StoreResult<u32> {
+        faulty!(self, unavailable(), self.inner.reclaim_stale_jobs())
     }
 
     async fn prune_dedupe_cache(&self, older_than_ms: u64) -> StoreResult<u32> {
-        faulty!(self, unavailable(), self.inner.prune_dedupe_cache(older_than_ms))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.prune_dedupe_cache(older_than_ms)
+        )
     }
 
     async fn list_running_instances(&self, tenant_id: &TenantId) -> StoreResult<Vec<Uuid>> {
-        faulty!(self, unavailable(), self.inner.list_running_instances(tenant_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.list_running_instances(tenant_id)
+        )
     }
 
     async fn claim_running_instances(
@@ -279,7 +309,8 @@ impl RuntimeStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.claim_running_instances(tenant_id, owner, limit, lease_ms)
+            self.inner
+                .claim_running_instances(tenant_id, owner, limit, lease_ms)
         )
     }
 
@@ -333,7 +364,8 @@ impl RuntimeStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.claim_due_timers(tenant_id, owner, now_ms, limit, lease_ms)
+            self.inner
+                .claim_due_timers(tenant_id, owner, now_ms, limit, lease_ms)
         )
     }
 
@@ -362,7 +394,11 @@ impl RuntimeStore for FaultStore {
         effect: &ClaimedEffect,
         response: &EffectResponse,
     ) -> StoreResult<bool> {
-        faulty!(self, unavailable(), self.inner.record_effect_response(effect, response))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.record_effect_response(effect, response)
+        )
     }
 
     async fn load_effect_responses(
@@ -370,7 +406,11 @@ impl RuntimeStore for FaultStore {
         tenant_id: &TenantId,
         limit: usize,
     ) -> StoreResult<Vec<PendingEffectResponse>> {
-        faulty!(self, unavailable(), self.inner.load_effect_responses(tenant_id, limit))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_effect_responses(tenant_id, limit)
+        )
     }
 
     async fn release_effect_claim(&self, effect: &ClaimedEffect) -> StoreResult<()> {
@@ -394,13 +434,13 @@ impl RuntimeStore for FaultStore {
         &self,
         tenant_id: &TenantId,
         instance_id: Uuid,
-        owner: &str,
+        lease_token: &str,
     ) -> StoreResult<()> {
         faulty!(
             self,
             unavailable(),
             self.inner
-                .release_instance_transition(tenant_id, instance_id, owner)
+                .release_instance_transition(tenant_id, instance_id, lease_token)
         )
     }
 
@@ -410,14 +450,113 @@ impl RuntimeStore for FaultStore {
         instance_id: Uuid,
         join_id: JoinId,
     ) -> StoreResult<u16> {
-        faulty!(self, unavailable(), self.inner.join_get(tenant_id, instance_id, join_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.join_get(tenant_id, instance_id, join_id)
+        )
+    }
+
+    async fn enqueue_activation(
+        &self,
+        tenant_id: &TenantId,
+        instance_id: Uuid,
+        command_id: Uuid,
+        command_kind: &str,
+        command: &Command,
+        available_at_ms: Option<u64>,
+    ) -> StoreResult<bool> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.enqueue_activation(
+                tenant_id,
+                instance_id,
+                command_id,
+                command_kind,
+                command,
+                available_at_ms
+            )
+        )
+    }
+
+    async fn claim_ready_activations(
+        &self,
+        tenant_id: &TenantId,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> StoreResult<Vec<ClaimedActivation>> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner
+                .claim_ready_activations(tenant_id, owner, limit, lease_ms)
+        )
+    }
+
+    async fn renew_activation_claim(
+        &self,
+        activation: &ClaimedActivation,
+        lease_ms: u64,
+    ) -> StoreResult<Option<ClaimedActivation>> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.renew_activation_claim(activation, lease_ms)
+        )
+    }
+
+    async fn release_activation_to_ready(
+        &self,
+        activation: &ClaimedActivation,
+        not_before_ms: Option<u64>,
+    ) -> StoreResult<()> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner
+                .release_activation_to_ready(activation, not_before_ms)
+        )
+    }
+
+    async fn consume_activation(&self, activation: &ClaimedActivation) -> StoreResult<bool> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.consume_activation(activation)
+        )
+    }
+
+    async fn dead_letter_activation(
+        &self,
+        activation: &ClaimedActivation,
+        reason: &str,
+    ) -> StoreResult<()> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.dead_letter_activation(activation, reason)
+        )
+    }
+
+    async fn reclaim_expired_activations(&self) -> StoreResult<u32> {
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.reclaim_expired_activations()
+        )
     }
 }
 
 #[async_trait]
 impl ArtifactRepository for FaultStore {
     async fn store_program(&self, version: [u8; 32], program: &CompiledProgram) -> StoreResult<()> {
-        faulty!(self, unavailable(), self.inner.store_program(version, program))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.store_program(version, program)
+        )
     }
 
     async fn load_program(&self, version: [u8; 32]) -> StoreResult<Option<CompiledProgram>> {
@@ -447,7 +586,11 @@ impl ArtifactRepository for FaultStore {
     }
 
     async fn store_plan(&self, plan_hash: [u8; 32], plan_json: &str) -> StoreResult<()> {
-        faulty!(self, unavailable(), self.inner.store_plan(plan_hash, plan_json))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.store_plan(plan_hash, plan_json)
+        )
     }
 
     async fn load_plan(&self, plan_hash: [u8; 32]) -> StoreResult<Option<String>> {
@@ -491,7 +634,8 @@ impl JournalReader for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.read_journal(tenant_id, instance_id, after_revision)
+            self.inner
+                .read_journal(tenant_id, instance_id, after_revision)
         )
     }
 
@@ -504,7 +648,8 @@ impl JournalReader for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.load_payload_version(tenant_id, instance_id, hash)
+            self.inner
+                .load_payload_version(tenant_id, instance_id, hash)
         )
     }
 }
@@ -521,7 +666,8 @@ impl AdminProjectionStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.store_template(name, version, plan_hash, dsl_body)
+            self.inner
+                .store_template(name, version, plan_hash, dsl_body)
         )
     }
 
@@ -530,14 +676,22 @@ impl AdminProjectionStore for FaultStore {
         name: &str,
         version: u32,
     ) -> StoreResult<Option<(String, [u8; 32])>> {
-        faulty!(self, unavailable(), self.inner.load_template_version(name, version))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_template_version(name, version)
+        )
     }
 
     async fn load_latest_template_version(
         &self,
         name: &str,
     ) -> StoreResult<Option<(u32, String, [u8; 32])>> {
-        faulty!(self, unavailable(), self.inner.load_latest_template_version(name))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_latest_template_version(name)
+        )
     }
 
     async fn list_templates(&self) -> StoreResult<Vec<TemplateSummary>> {
@@ -557,7 +711,11 @@ impl AdminProjectionStore for FaultStore {
     }
 
     async fn list_tenants_in_pool(&self, pool_id: &str) -> StoreResult<Vec<String>> {
-        faulty!(self, unavailable(), self.inner.list_tenants_in_pool(pool_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.list_tenants_in_pool(pool_id)
+        )
     }
 
     async fn create_design_session(
@@ -570,7 +728,8 @@ impl AdminProjectionStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner.create_design_session(tenant_id, id, name, dsl_source)
+            self.inner
+                .create_design_session(tenant_id, id, name, dsl_source)
         )
     }
 
@@ -579,14 +738,22 @@ impl AdminProjectionStore for FaultStore {
         tenant_id: &TenantId,
         id: Uuid,
     ) -> StoreResult<Option<bpmn_lite_store::store::DesignSessionRecord>> {
-        faulty!(self, unavailable(), self.inner.load_design_session(tenant_id, id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.load_design_session(tenant_id, id)
+        )
     }
 
     async fn list_design_sessions(
         &self,
         tenant_id: &TenantId,
     ) -> StoreResult<Vec<bpmn_lite_store::store::DesignSessionSummary>> {
-        faulty!(self, unavailable(), self.inner.list_design_sessions(tenant_id))
+        faulty!(
+            self,
+            unavailable(),
+            self.inner.list_design_sessions(tenant_id)
+        )
     }
 
     async fn append_design_session_event(
@@ -613,8 +780,13 @@ impl AdminProjectionStore for FaultStore {
         faulty!(
             self,
             unavailable(),
-            self.inner
-                .mark_design_session_saved(tenant_id, id, template_name, template_version, plan_hash)
+            self.inner.mark_design_session_saved(
+                tenant_id,
+                id,
+                template_name,
+                template_version,
+                plan_hash
+            )
         )
     }
 }
@@ -631,14 +803,17 @@ pub async fn drive_recovery(data: &[u8]) {
     let generated = emit_process(&shape);
 
     let inner = Arc::new(MemoryStore::new());
-    let plan = Arc::new(FaultPlan::new(
-        u64::from_le_bytes([
-            tape.u8(), tape.u8(), tape.u8(), tape.u8(),
-            tape.u8(), tape.u8(), tape.u8(), tape.u8(),
-        ]),
-    ));
-    let store: Arc<dyn WorkflowStore> =
-        Arc::new(FaultStore::new(inner.clone(), plan.clone()));
+    let plan = Arc::new(FaultPlan::new(u64::from_le_bytes([
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+        tape.u8(),
+    ])));
+    let store: Arc<dyn WorkflowStore> = Arc::new(FaultStore::new(inner.clone(), plan.clone()));
     let clock = Arc::new(FuzzClock::new());
     let mut engines = vec![BpmnLiteEngine::new_with_runtime_context(
         store.clone(),
@@ -651,9 +826,7 @@ pub async fn drive_recovery(data: &[u8]) {
     let compiled = engines[0]
         .compile(&generated.xml)
         .await
-        .unwrap_or_else(|error| {
-            panic!("G-A red (recovery tier): {error}\nshape: {shape:?}")
-        });
+        .unwrap_or_else(|error| panic!("G-A red (recovery tier): {error}\nshape: {shape:?}"));
     let orch_flags: BTreeMap<String, Value> = compiled
         .flag_symbol_table
         .iter()
@@ -754,7 +927,10 @@ pub async fn drive_recovery(data: &[u8]) {
     // conclusion by the CURRENT engine (drain), and if still non-terminal,
     // cancellable by SOME engine we own (R-O3).
     plan.set_rate(0);
-    let engine = engines.last().expect("at least one engine").for_tenant(TenantId::default());
+    let engine = engines
+        .last()
+        .expect("at least one engine")
+        .for_tenant(TenantId::default());
     for _ in 0..24 {
         let Ok(activations) = engine.run_instance(instance_id).await else {
             break;
@@ -763,8 +939,7 @@ pub async fn drive_recovery(data: &[u8]) {
             break;
         }
         for job in &activations {
-            if let Err(violation) =
-                tracker.record(&job.task_type, &job.job_key, &generated.bounds)
+            if let Err(violation) = tracker.record(&job.task_type, &job.job_key, &generated.bounds)
             {
                 panic!("R-O2: conservation violated post-recovery: {violation}\nshape: {shape:?}");
             }
@@ -772,7 +947,12 @@ pub async fn drive_recovery(data: &[u8]) {
         for job in activations {
             let result_payload = r#"{"recovered":true}"#;
             if engine
-                .complete_job(&job.job_key, result_payload, current_hash, orch_flags.clone())
+                .complete_job(
+                    &job.job_key,
+                    result_payload,
+                    current_hash,
+                    orch_flags.clone(),
+                )
                 .await
                 .is_ok()
             {
@@ -848,8 +1028,7 @@ mod tests {
             let generated = emit_process(&shape);
             let inner = Arc::new(MemoryStore::new());
             let plan = Arc::new(FaultPlan::new(7));
-            let store: Arc<dyn WorkflowStore> =
-                Arc::new(FaultStore::new(inner, plan.clone()));
+            let store: Arc<dyn WorkflowStore> = Arc::new(FaultStore::new(inner, plan.clone()));
             let clock = Arc::new(FuzzClock::new());
             let engine_a = BpmnLiteEngine::new_with_runtime_context(
                 store.clone(),
@@ -859,7 +1038,13 @@ mod tests {
             let compiled = engine_a.compile(&generated.xml).await.expect("compile");
             let mut hash = EffectId::content_hash(generated.payload.as_bytes());
             let instance_id = engine_a
-                .start("fuzz_graph", compiled.bytecode_version, &generated.payload, hash, "c")
+                .start(
+                    "fuzz_graph",
+                    compiled.bytecode_version,
+                    &generated.payload,
+                    hash,
+                    "c",
+                )
                 .await
                 .expect("start");
 
@@ -918,8 +1103,7 @@ mod tests {
             let generated = emit_process(&shape);
             let inner = Arc::new(MemoryStore::new());
             let plan = Arc::new(FaultPlan::new(99));
-            let store: Arc<dyn WorkflowStore> =
-                Arc::new(FaultStore::new(inner, plan.clone()));
+            let store: Arc<dyn WorkflowStore> = Arc::new(FaultStore::new(inner, plan.clone()));
             let engine = BpmnLiteEngine::new_with_runtime_context(
                 store,
                 TenantId::default(),
@@ -928,7 +1112,13 @@ mod tests {
             let compiled = engine.compile(&generated.xml).await.expect("compile quiet");
             let hash = EffectId::content_hash(generated.payload.as_bytes());
             let instance_id = engine
-                .start("fuzz_graph", compiled.bytecode_version, &generated.payload, hash, "c")
+                .start(
+                    "fuzz_graph",
+                    compiled.bytecode_version,
+                    &generated.payload,
+                    hash,
+                    "c",
+                )
                 .await
                 .expect("start quiet");
 
@@ -937,7 +1127,9 @@ mod tests {
                 engine.run_instance(instance_id).await.is_err(),
                 "total fault storm must surface as an error, not silence"
             );
-            let _ = engine.complete_job("bogus", "{}", hash, BTreeMap::new()).await;
+            let _ = engine
+                .complete_job("bogus", "{}", hash, BTreeMap::new())
+                .await;
             let _ = engine.inspect(instance_id).await;
             let _ = engine.cancel(instance_id, "storm cancel").await;
 

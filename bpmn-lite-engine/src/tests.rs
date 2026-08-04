@@ -833,9 +833,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
     }
     .with_v2_corr_sources(BTreeMap::from([(
         bpmn_lite_types::Addr::new(0),
-        bpmn_lite_types::BindingSource::Literal(
-            bpmn_lite_types::Literal::Bool(false),
-        ),
+        bpmn_lite_types::BindingSource::Literal(bpmn_lite_types::Literal::Bool(false)),
     )]));
     store
         .store_program(program.bytecode_version(), &program)
@@ -949,9 +947,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
     }
     .with_v2_corr_sources(BTreeMap::from([(
         bpmn_lite_types::Addr::new(0),
-        bpmn_lite_types::BindingSource::Literal(
-            bpmn_lite_types::Literal::Bool(false),
-        ),
+        bpmn_lite_types::BindingSource::Literal(bpmn_lite_types::Literal::Bool(false)),
     )]));
     store
         .store_program(program.bytecode_version(), &program)
@@ -1372,7 +1368,13 @@ async fn t_ni_1_non_interrupting_spawns_child() {
 /// scope (see the comment block above), so the program is stored
 /// directly via `store_program`, same as `t_term_2_parallel_terminate_
 /// kills_siblings`'s own hand-assembled `V2Fork` restoration.
-async fn setup_ni_cycle_guard() -> (BpmnLiteEngine, Arc<dyn WorkflowStore>, Uuid, String, [u8; 32]) {
+async fn setup_ni_cycle_guard() -> (
+    BpmnLiteEngine,
+    Arc<dyn WorkflowStore>,
+    Uuid,
+    String,
+    [u8; 32],
+) {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
@@ -1411,7 +1413,13 @@ async fn setup_ni_cycle_guard() -> (BpmnLiteEngine, Arc<dyn WorkflowStore>, Uuid
     let payload = r#"{"case":"ni-cycle-test"}"#;
     let hash = compute_hash(payload);
     let iid = engine
-        .start("test", program.bytecode_version(), payload, hash, "corr-ni-cycle")
+        .start(
+            "test",
+            program.bytecode_version(),
+            payload,
+            hash,
+            "corr-ni-cycle",
+        )
         .await
         .unwrap();
 
@@ -1495,11 +1503,16 @@ async fn t_ni_2_cycle_fires_multiple_times() {
         .iter()
         .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
         .count();
-    assert_eq!(timer_fired_count, 3, "Expected 3 TimerFired events, one per cycle iteration");
+    assert_eq!(
+        timer_fired_count, 3,
+        "Expected 3 TimerFired events, one per cycle iteration"
+    );
     let spawned_handlers: std::collections::BTreeSet<Uuid> = events
         .iter()
         .filter_map(|(_, e)| match e {
-            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            RuntimeEvent::V2GuardNTriggered {
+                handler_fiber_id, ..
+            } => Some(*handler_fiber_id),
             _ => None,
         })
         .collect();
@@ -1515,7 +1528,11 @@ async fn t_ni_2_cycle_fires_multiple_times() {
     // fibres, not the same one reused.
     engine.tick_instance(iid).await.unwrap();
     let fibers = store.load_fibers(&tenant, iid).await.unwrap();
-    assert_eq!(fibers.len(), 4, "host fibre + 3 escalation handler fibres, all still live");
+    assert_eq!(
+        fibers.len(),
+        4,
+        "host fibre + 3 escalation handler fibres, all still live"
+    );
 
     let inspection = engine.inspect(iid).await.unwrap();
     assert_eq!(inspection.state, ProcessState::Running);
@@ -1548,7 +1565,10 @@ async fn t_ni_3_cycle_exhausted_reverts_to_job() {
         .tick_due_timers("timer-test", fourth_fired_at, 10, 30_000)
         .await
         .unwrap();
-    assert_eq!(applied, 0, "the cycle is exhausted — no 4th timer should be due");
+    assert_eq!(
+        applied, 0,
+        "the cycle is exhausted — no 4th timer should be due"
+    );
 
     // "Reverts to job," precisely for what the v2 mechanism actually
     // does: unlike v1's `WaitState::Race` (which diverted the host fiber
@@ -1590,11 +1610,17 @@ async fn t_ni_3_cycle_exhausted_reverts_to_job() {
     let spawned_handlers: std::collections::BTreeSet<Uuid> = events
         .iter()
         .filter_map(|(_, e)| match e {
-            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            RuntimeEvent::V2GuardNTriggered {
+                handler_fiber_id, ..
+            } => Some(*handler_fiber_id),
             _ => None,
         })
         .collect();
-    assert_eq!(spawned_handlers.len(), 3, "3 distinct escalation handler fibres, got: {events:?}");
+    assert_eq!(
+        spawned_handlers.len(),
+        3,
+        "3 distinct escalation handler fibres, got: {events:?}"
+    );
 }
 
 // ── T-NI-4: Job completes before non-interrupting timer → normal resolution ──
@@ -1774,7 +1800,13 @@ async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
     let payload = r#"{"case":"ni-xml-cycle-test"}"#;
     let hash = compute_hash(payload);
     let iid = engine
-        .start("ni_cycle_xml_proc", cr.bytecode_version, payload, hash, "corr-ni6")
+        .start(
+            "ni_cycle_xml_proc",
+            cr.bytecode_version,
+            payload,
+            hash,
+            "corr-ni6",
+        )
         .await
         .unwrap();
 
@@ -1825,7 +1857,10 @@ async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
         .tick_due_timers("timer-test", fourth_fired_at, 10, 30_000)
         .await
         .unwrap();
-    assert_eq!(applied, 0, "the cycle is exhausted — no 4th timer should be due");
+    assert_eq!(
+        applied, 0,
+        "the cycle is exhausted — no 4th timer should be due"
+    );
 
     // 3 distinct escalation handler fibres were spawned, one per fire —
     // same event-based proof `t_ni_2` uses (job_key collision on the
@@ -1836,11 +1871,16 @@ async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
         .iter()
         .filter(|(_, e)| matches!(e, RuntimeEvent::TimerFired { .. }))
         .count();
-    assert_eq!(timer_fired_count, 3, "Expected 3 TimerFired events, one per cycle iteration");
+    assert_eq!(
+        timer_fired_count, 3,
+        "Expected 3 TimerFired events, one per cycle iteration"
+    );
     let spawned_handlers: std::collections::BTreeSet<Uuid> = events
         .iter()
         .filter_map(|(_, e)| match e {
-            RuntimeEvent::V2GuardNTriggered { handler_fiber_id, .. } => Some(*handler_fiber_id),
+            RuntimeEvent::V2GuardNTriggered {
+                handler_fiber_id, ..
+            } => Some(*handler_fiber_id),
             _ => None,
         })
         .collect();
@@ -2849,7 +2889,13 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
 
     // Instance 1: fail with CODE_A — must activate handler_a, never handler_b.
     let instance_a = engine
-        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-a")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-a",
+        )
         .await
         .unwrap();
     let jobs_a = engine.run_instance(instance_a).await.unwrap();
@@ -2857,19 +2903,36 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
     engine
         .fail_job(
             &jobs_a[0].job_key,
-            ErrorClass::BusinessRejection { rejection_code: "CODE_A".to_string() },
+            ErrorClass::BusinessRejection {
+                rejection_code: "CODE_A".to_string(),
+            },
             "attempt A",
         )
         .await
         .unwrap();
     engine.tick_instance(instance_a).await.unwrap();
     let handler_a_jobs = store
-        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .dequeue_jobs(
+            &["handler_a".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
         .await
         .unwrap();
-    assert!(!handler_a_jobs.is_empty(), "CODE_A must activate handler_a's job");
+    assert!(
+        !handler_a_jobs.is_empty(),
+        "CODE_A must activate handler_a's job"
+    );
     let handler_b_jobs_after_a = store
-        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .dequeue_jobs(
+            &["handler_b".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
         .await
         .unwrap();
     assert!(
@@ -2879,7 +2942,13 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
 
     // Instance 2: fail with CODE_B — must activate handler_b, never handler_a.
     let instance_b = engine
-        .start("test", program.bytecode_version(), "{}", compute_hash("{}"), "corr-b")
+        .start(
+            "test",
+            program.bytecode_version(),
+            "{}",
+            compute_hash("{}"),
+            "corr-b",
+        )
         .await
         .unwrap();
     let jobs_b = engine.run_instance(instance_b).await.unwrap();
@@ -2887,19 +2956,36 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
     engine
         .fail_job(
             &jobs_b[0].job_key,
-            ErrorClass::BusinessRejection { rejection_code: "CODE_B".to_string() },
+            ErrorClass::BusinessRejection {
+                rejection_code: "CODE_B".to_string(),
+            },
             "attempt B",
         )
         .await
         .unwrap();
     engine.tick_instance(instance_b).await.unwrap();
     let handler_b_jobs = store
-        .dequeue_jobs(&["handler_b".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .dequeue_jobs(
+            &["handler_b".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
         .await
         .unwrap();
-    assert!(!handler_b_jobs.is_empty(), "CODE_B must activate handler_b's job");
+    assert!(
+        !handler_b_jobs.is_empty(),
+        "CODE_B must activate handler_b's job"
+    );
     let handler_a_jobs_after_b = store
-        .dequeue_jobs(&["handler_a".to_string()], 10, &bpmn_lite_types::TenantId::default(), "w", 300_000)
+        .dequeue_jobs(
+            &["handler_a".to_string()],
+            10,
+            &bpmn_lite_types::TenantId::default(),
+            "w",
+            300_000,
+        )
         .await
         .unwrap();
     assert!(
@@ -3076,11 +3162,17 @@ async fn t_err_7_nested_guard_miss_does_not_fall_through_to_outer_catch_all() {
     let has_incident = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::IncidentCreated { .. }));
-    assert!(has_incident, "unmatched-at-innermost-guard must create an Incident");
+    assert!(
+        has_incident,
+        "unmatched-at-innermost-guard must create an Incident"
+    );
     let has_routed = events
         .iter()
         .any(|(_, e)| matches!(e, RuntimeEvent::ErrorRouted { .. }));
-    assert!(!has_routed, "must not emit ErrorRouted for a miss at the innermost guard");
+    assert!(
+        !has_routed,
+        "must not emit ErrorRouted for a miss at the innermost guard"
+    );
 
     let instance = store
         .load_instance(
@@ -3652,9 +3744,7 @@ fn inclusive_gateway_v2_xml(default_flow: bool) -> String {
     )
 }
 
-async fn compile_inclusive_gateway_v2(
-    default_flow: bool,
-) -> (Arc<MemoryStore>, [u8; 32]) {
+async fn compile_inclusive_gateway_v2(default_flow: bool) -> (Arc<MemoryStore>, [u8; 32]) {
     let store = Arc::new(MemoryStore::new());
     let xml = inclusive_gateway_v2_xml(default_flow);
     let graph = bpmn_lite_compiler::parse_bpmn(&xml).unwrap();
@@ -3673,12 +3763,21 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-1")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-1",
+        )
         .await
         .unwrap();
     {
         let mut inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -3691,7 +3790,11 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 2, "both matched branches must do real concurrent work");
+    assert_eq!(
+        jobs.len(),
+        2,
+        "both matched branches must do real concurrent work"
+    );
 
     for job in &jobs {
         let payload = "{}";
@@ -3703,7 +3806,10 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
     }
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -3713,7 +3819,10 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -3734,12 +3843,21 @@ async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-2")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-2",
+        )
         .await
         .unwrap();
     {
         let mut inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -3761,7 +3879,10 @@ async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
         .unwrap();
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -3771,7 +3892,10 @@ async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -3793,14 +3917,23 @@ async fn t_ig_v2_zero_match_no_default_raises_incident() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-3")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-3",
+        )
         .await
         .unwrap();
     // Neither flag set — both conditions false, no default edge.
     engine.tick_instance(instance_id).await.unwrap();
 
     let inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -3820,13 +3953,23 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-ig-4")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-ig-4",
+        )
         .await
         .unwrap();
     // Neither flag set — the always-live branch is taken regardless.
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 1, "only the always-live/default branch should run");
+    assert_eq!(
+        jobs.len(),
+        1,
+        "only the always-live/default branch should run"
+    );
     assert_eq!(jobs[0].task_type, "always_task");
 
     let payload = "{}";
@@ -3837,7 +3980,10 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
         .unwrap();
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -3847,7 +3993,10 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -3893,7 +4042,10 @@ async fn drain_and_complete_all(
         let jobs = engine.run_instance(instance_id).await.unwrap();
         if jobs.is_empty() {
             let inst = store
-                .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+                .load_instance(
+                    &bpmn_lite_types::TenantId::new("default").unwrap(),
+                    instance_id,
+                )
                 .await
                 .unwrap()
                 .unwrap();
@@ -3996,7 +4148,10 @@ async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
         .unwrap();
     {
         let mut inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4037,7 +4192,10 @@ async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
     );
 
     let inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4186,7 +4344,10 @@ async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently(
         .unwrap();
     {
         let mut inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4225,7 +4386,10 @@ async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently(
     );
 
     let inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4284,9 +4448,10 @@ async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let compiled = engine.compile(bpmn_xml).await.expect(
-        "bare GatewayAnd fork with unequal-length branches (3 tasks vs. 1) must compile",
-    );
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("bare GatewayAnd fork with unequal-length branches (3 tasks vs. 1) must compile");
 
     let instance_id = engine
         .start(
@@ -4300,10 +4465,17 @@ async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
         .unwrap();
     engine.tick_instance(instance_id).await.unwrap();
     let first_jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(first_jobs.len(), 2, "both branches must activate concurrent work");
+    assert_eq!(
+        first_jobs.len(),
+        2,
+        "both branches must activate concurrent work"
+    );
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4323,7 +4495,10 @@ async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
         engine.tick_instance(instance_id).await.unwrap();
         pending = engine.run_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4394,7 +4569,10 @@ async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes(
     // the instance reaches a terminal state (branch C needs 4 sequential
     // jobs, one per tick-drain round).
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4413,7 +4591,10 @@ async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes(
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4508,9 +4689,10 @@ async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let compiled = engine.compile(bpmn_xml).await.expect(
-        "GatewayAnd branch containing a further nested GatewayAnd pair must compile",
-    );
+    let compiled = engine
+        .compile(bpmn_xml)
+        .await
+        .expect("GatewayAnd branch containing a further nested GatewayAnd pair must compile");
 
     let instance_id = engine
         .start(
@@ -4525,7 +4707,10 @@ async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
     engine.tick_instance(instance_id).await.unwrap();
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4544,7 +4729,10 @@ async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4590,10 +4778,9 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
     let store = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
 
-    let compiled = engine
-        .compile(bpmn_xml)
-        .await
-        .expect("GatewayXor with unequal-length branches reconverging on a shared task must compile");
+    let compiled = engine.compile(bpmn_xml).await.expect(
+        "GatewayXor with unequal-length branches reconverging on a shared task must compile",
+    );
 
     // Take the DEFAULT (short) branch straight to merge_task — the flag is
     // left unset, so `take_a` is false.
@@ -4609,7 +4796,11 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
         .unwrap();
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 1, "default branch should reach merge_task directly");
+    assert_eq!(
+        jobs.len(),
+        1,
+        "default branch should reach merge_task directly"
+    );
     assert_eq!(jobs[0].task_type, "merge_task");
 
     let payload = "{}";
@@ -4620,7 +4811,10 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
         .unwrap();
 
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -4630,7 +4824,10 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -4680,13 +4877,23 @@ async fn t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job() {
     let bytecode_version = workflow.hash().into_bytes();
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-bt-1")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-bt-1",
+        )
         .await
         .unwrap();
 
     engine.tick_instance(instance_id).await.unwrap();
     let host_jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(host_jobs.len(), 1, "the host task's own job must be activated");
+    assert_eq!(
+        host_jobs.len(),
+        1,
+        "the host task's own job must be activated"
+    );
 
     assert_eq!(
         engine
@@ -4752,7 +4959,13 @@ async fn t_guard_fire_cancels_pending_host_job_activation() {
     let bytecode_version = workflow.hash().into_bytes();
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-bt-cancel-1")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-v2-bt-cancel-1",
+        )
         .await
         .unwrap();
 
@@ -5408,7 +5621,10 @@ async fn set_collection(
     elements: &[i64],
 ) {
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -5421,9 +5637,16 @@ async fn set_collection(
         .unwrap();
 }
 
-async fn drain_to_terminal(engine: &BpmnLiteEngine, store: &MemoryStore, instance_id: Uuid) -> ProcessInstance {
+async fn drain_to_terminal(
+    engine: &BpmnLiteEngine,
+    store: &MemoryStore,
+    instance_id: Uuid,
+) -> ProcessInstance {
     let mut inst = store
-        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -5433,7 +5656,10 @@ async fn drain_to_terminal(engine: &BpmnLiteEngine, store: &MemoryStore, instanc
         }
         engine.tick_instance(instance_id).await.unwrap();
         inst = store
-            .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), instance_id)
+            .load_instance(
+                &bpmn_lite_types::TenantId::new("default").unwrap(),
+                instance_id,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -5450,7 +5676,13 @@ async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-1")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-mi-1",
+        )
         .await
         .unwrap();
     set_collection(&store, instance_id, collection_flag, &[100, 200, 300]).await;
@@ -5499,7 +5731,13 @@ async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-elements")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-mi-elements",
+        )
         .await
         .unwrap();
     let elements = [111i64, 222i64];
@@ -5507,7 +5745,11 @@ async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
 
     engine.tick_instance(instance_id).await.unwrap();
     let mut jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 2, "both branches must do real work (full collection)");
+    assert_eq!(
+        jobs.len(),
+        2,
+        "both branches must do real work (full collection)"
+    );
 
     // Recover branch index via the "pc_<address>" service_task_id
     // fallback — branch 0's ExecNative compiles to a lower address than
@@ -5536,7 +5778,10 @@ async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
     // delivery.
     let flag_0 = mi_element_flag_key(&workflow, 0);
     let flag_1 = mi_element_flag_key(&workflow, 1);
-    assert_ne!(flag_0, flag_1, "each branch must write its OWN element flag key");
+    assert_ne!(
+        flag_0, flag_1,
+        "each branch must write its OWN element flag key"
+    );
 
     for job in &jobs {
         let payload = "{}";
@@ -5565,14 +5810,24 @@ async fn t_mi_v2_partial_collection_some_fibres_skip() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-2")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-mi-2",
+        )
         .await
         .unwrap();
     set_collection(&store, instance_id, collection_flag, &[100]).await;
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 1, "only index 0 is live; indices 1,2 skip to V2Join");
+    assert_eq!(
+        jobs.len(),
+        1,
+        "only index 0 is live; indices 1,2 skip to V2Join"
+    );
 
     let payload = "{}";
     let hash = bpmn_lite_vm::compute_hash(payload);
@@ -5603,14 +5858,24 @@ async fn t_mi_v2_empty_collection_completes_without_incident() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-3")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-mi-3",
+        )
         .await
         .unwrap();
     set_collection(&store, instance_id, collection_flag, &[]).await;
 
     engine.tick_instance(instance_id).await.unwrap();
     let jobs = engine.run_instance(instance_id).await.unwrap();
-    assert_eq!(jobs.len(), 0, "an empty collection does no real work at all");
+    assert_eq!(
+        jobs.len(),
+        0,
+        "an empty collection does no real work at all"
+    );
 
     let inst = drain_to_terminal(&engine, &store, instance_id).await;
     assert!(
@@ -5639,10 +5904,22 @@ async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
     let engine = BpmnLiteEngine::new(store.clone());
 
     let instance_id = engine
-        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-mi-4")
+        .start(
+            "test",
+            bytecode_version,
+            "{}",
+            compute_hash("{}"),
+            "corr-mi-4",
+        )
         .await
         .unwrap();
-    set_collection(&store, instance_id, collection_flag, &[100, 200, 300, 400, 500]).await;
+    set_collection(
+        &store,
+        instance_id,
+        collection_flag,
+        &[100, 200, 300, 400, 500],
+    )
+    .await;
 
     let err = engine
         .tick_instance(instance_id)
@@ -5650,7 +5927,8 @@ async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
         .expect_err("exceeding declared_max must be a hard reject, not silent truncation");
     let message = format!("{err:?}");
     assert!(
-        message.contains("multi-instance collection length") || message.contains("ResourceLimitExceeded"),
+        message.contains("multi-instance collection length")
+            || message.contains("ResourceLimitExceeded"),
         "error must name the resource-limit violation: {message}"
     );
 }
@@ -5725,3 +6003,54 @@ fn corpus_sweep_xml_fixtures_lower_and_verify() {
 // scheduler-behavior tests that compile via `engine.compile` and never
 // separately assert on the lowered program) get swept too.
 
+/// F-08 remediation (Phase 2 follow-up,
+/// `docs/todo/PHASE2-tokenised-transition-release.md`): the per-instance
+/// single-flight guard must reject a second acquisition for an instance
+/// already held, and admit it again once released. Tested directly
+/// against the guard primitive (`with_instance_guard` is a private
+/// method, reachable here since `tests` is an inner module of the same
+/// crate) rather than by racing two real engine calls through
+/// `tokio::spawn`: the guarded critical section for an in-memory store
+/// is fast enough (no real `.await` suspension inside it) that an
+/// actual OS-thread race reliably resolves before the second task is
+/// even polled, making a timing-based version of this test flaky by
+/// construction rather than a meaningful proof. This is deliberately
+/// the inverse of what the a11 FFI end-to-end tests prove: those confirm
+/// a NESTED same-chain call (`tick_instance_inner`'s own effect-response
+/// application, for the SAME instance it's already ticking) is correctly
+/// allowed through; this test confirms a second, independent acquisition
+/// for the same instance is not — until the first releases.
+#[tokio::test]
+async fn instance_guard_rejects_second_acquisition_until_released() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store);
+    let instance_id = Uuid::now_v7();
+
+    engine
+        .try_acquire_instance_guard(instance_id)
+        .expect("first acquisition must succeed");
+    let second = engine.try_acquire_instance_guard(instance_id);
+    assert!(
+        second.is_err(),
+        "a second acquisition for an already-held instance must be rejected"
+    );
+    assert!(
+        second
+            .unwrap_err()
+            .to_string()
+            .contains("already in flight"),
+        "rejection must be attributable to the single-flight guard, not some other failure"
+    );
+
+    // A different instance is unaffected — the guard is per-instance,
+    // not a global lock.
+    let other_instance_id = Uuid::now_v7();
+    engine
+        .try_acquire_instance_guard(other_instance_id)
+        .expect("an unrelated instance must not be blocked");
+
+    engine.release_instance_guard(instance_id);
+    engine
+        .try_acquire_instance_guard(instance_id)
+        .expect("acquisition must succeed again once released");
+}

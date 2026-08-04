@@ -250,12 +250,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "startup recovery gate passed"
     );
 
-    // Background: reclaim stale claimed jobs (every 60s, 5min timeout)
+    // Background: reclaim jobs whose persisted claim_expires_at has
+    // passed (every 60s). F-06: authority is the deadline recorded at
+    // dequeue time, not a separately supplied timeout here.
     let reclaim_store = store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            match reclaim_store.reclaim_stale_jobs(5 * 60 * 1000).await {
+            match reclaim_store.reclaim_stale_jobs().await {
                 Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "Reclaimed stale jobs"),
                 Err(e) => tracing::error!(error = %e, "Job reclaim failed"),
                 _ => {}

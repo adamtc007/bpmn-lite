@@ -479,6 +479,7 @@ async fn create_instance(
         instance_id,
         0,
         0,
+        "",
     );
     let transition = bpmn_lite_types::TransitionBuilder::new(instance)
         .event(bpmn_lite_types::RuntimeEvent::InstanceStarted {
@@ -510,7 +511,7 @@ async fn commit_demo_instance(
         .release_instance_transition(
             &TenantId::new(instance.tenant_id.clone())?,
             instance.instance_id,
-            owner,
+            claim.lease_token(),
         )
         .await;
     result?;

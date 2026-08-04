@@ -51,12 +51,20 @@ pub enum TenantIdError {
 }
 
 /// The exclusive right to commit one revision of an instance.
+///
+/// `lease_token` (Phase 2, F-04 remediation) is the unique identity of
+/// THIS acquisition — not the owner string, which is reused across
+/// concurrent operations from the same engine instance and across expiry
+/// boundaries. Release/renewal must match on this token, never on owner
+/// alone, or a stale (already-superseded) acquisition can clear the live
+/// one that replaced it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     tenant_id: TenantId,
     instance_id: Uuid,
     expected_revision: u64,
     fence: u64,
+    lease_token: String,
 }
 
 /// One fenced unit of locally executable work. The aggregate snapshot and
@@ -292,12 +300,19 @@ impl StartDedupe {
 }
 
 impl Claim {
-    pub fn new(tenant_id: TenantId, instance_id: Uuid, expected_revision: u64, fence: u64) -> Self {
+    pub fn new(
+        tenant_id: TenantId,
+        instance_id: Uuid,
+        expected_revision: u64,
+        fence: u64,
+        lease_token: impl Into<String>,
+    ) -> Self {
         Self {
             tenant_id,
             instance_id,
             expected_revision,
             fence,
+            lease_token: lease_token.into(),
         }
     }
 
@@ -315,6 +330,10 @@ impl Claim {
 
     pub fn fence(&self) -> u64 {
         self.fence
+    }
+
+    pub fn lease_token(&self) -> &str {
+        &self.lease_token
     }
 }
 
@@ -667,14 +686,20 @@ impl ScopeFailureBudget {
         if version == 0 || max_failures == 0 {
             return Err("invalid scope failure budget bounds");
         }
-        Ok(Self { version, max_failures })
+        Ok(Self {
+            version,
+            max_failures,
+        })
     }
 
     /// The conservative compiled-in default budget, applied to a guard that
     /// carries neither its own nor a workflow-level budget — the ceiling the
     /// retired hardcoded placeholder used (§31).
     pub const fn conservative_default() -> Self {
-        Self { version: 1, max_failures: 5 }
+        Self {
+            version: 1,
+            max_failures: 5,
+        }
     }
 
     pub fn version(&self) -> u32 {
@@ -974,6 +999,81 @@ pub enum Command {
     },
 }
 
+/// One claimed row from the durable ready-activation table (Phase 3A,
+/// `docs/todo/PHASE3-durable-activation-queue.md`). Mirrors
+/// `ClaimedTimer`/`ClaimedEffect`'s shape: the claim token is the unique
+/// per-acquisition identity a release/renew/consume must match, not the
+/// owner string. As of 3A nothing in the engine enqueues to or consumes
+/// from this table yet — it exists as a tested, unwired store primitive.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimedActivation {
+    tenant_id: TenantId,
+    activation_id: Uuid,
+    instance_id: Uuid,
+    command_id: Uuid,
+    command_kind: String,
+    command: Command,
+    attempt_count: u32,
+    claim_token: String,
+}
+
+impl ClaimedActivation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        tenant_id: TenantId,
+        activation_id: Uuid,
+        instance_id: Uuid,
+        command_id: Uuid,
+        command_kind: impl Into<String>,
+        command: Command,
+        attempt_count: u32,
+        claim_token: impl Into<String>,
+    ) -> Self {
+        Self {
+            tenant_id,
+            activation_id,
+            instance_id,
+            command_id,
+            command_kind: command_kind.into(),
+            command,
+            attempt_count,
+            claim_token: claim_token.into(),
+        }
+    }
+
+    pub fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    pub fn activation_id(&self) -> Uuid {
+        self.activation_id
+    }
+
+    pub fn instance_id(&self) -> Uuid {
+        self.instance_id
+    }
+
+    pub fn command_id(&self) -> Uuid {
+        self.command_id
+    }
+
+    pub fn command_kind(&self) -> &str {
+        &self.command_kind
+    }
+
+    pub fn command(&self) -> &Command {
+        &self.command
+    }
+
+    pub fn attempt_count(&self) -> u32 {
+        self.attempt_count
+    }
+
+    pub fn claim_token(&self) -> &str {
+        &self.claim_token
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobRetry {
     worker_id: String,
@@ -1142,6 +1242,22 @@ pub enum BufferedMessageMutation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JobMutation {
+    /// A successful completion arriving through the claim-bound worker
+    /// protocol (`complete_job_with_claim`). Same claimed-only,
+    /// Conflict-checked shape as `RetryClaimed`/`DeadLetterClaimed`:
+    /// the store must consume exactly the row this worker/token pair
+    /// still owns, or reject the whole transition — this is what closes
+    /// the forensic-review F-02 gap, where a stale worker's belated
+    /// completion could otherwise delete a reassigned worker's live
+    /// claim. Deliberately distinct from `jobs_ack` (the legacy
+    /// unconditional-by-job-key ack used by internal/trusted callers
+    /// that never held a job_queue claim in the first place, e.g.
+    /// `complete_job` without a worker identity).
+    AckClaimed {
+        job_key: String,
+        worker_id: String,
+        claim_token: String,
+    },
     RetryClaimed {
         job_key: String,
         worker_id: String,

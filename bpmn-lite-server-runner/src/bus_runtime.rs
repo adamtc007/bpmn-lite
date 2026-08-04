@@ -121,7 +121,11 @@ impl SubmissionAckHandler for StoreSubmissionAckHandler {
             let commit = self.store.commit_transition(&claim, &transition).await;
             let release = self
                 .store
-                .release_instance_transition(&pending.tenant_id, instance.instance_id, &owner)
+                .release_instance_transition(
+                    &pending.tenant_id,
+                    instance.instance_id,
+                    claim.lease_token(),
+                )
                 .await;
             commit.map_err(|error| format!("commit submission ack: {error}"))?;
             release.map_err(|error| format!("release ack instance: {error}"))?;
@@ -295,7 +299,11 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             }
             OutcomeDisposition::Retry => {
                 self.store
-                    .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
+                    .release_instance_transition(
+                        &row.tenant_id,
+                        instance.instance_id,
+                        claim.lease_token(),
+                    )
                     .await
                     .map_err(|error| {
                         ProcessAdvancerError::Internal(format!("release instance: {error}"))
@@ -305,7 +313,11 @@ impl ProcessAdvancer for StoreBackedAdvancer {
             OutcomeDisposition::Malformed => {
                 let _ = self
                     .store
-                    .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
+                    .release_instance_transition(
+                        &row.tenant_id,
+                        instance.instance_id,
+                        claim.lease_token(),
+                    )
                     .await;
                 return Err(ProcessAdvancerError::Malformed(
                     "ExecutionOutcomeKind::OutcomeUnspecified — peer must populate kind".to_owned(),
@@ -337,7 +349,7 @@ impl ProcessAdvancer for StoreBackedAdvancer {
 
         let release_res = self
             .store
-            .release_instance_transition(&row.tenant_id, instance.instance_id, &owner)
+            .release_instance_transition(&row.tenant_id, instance.instance_id, claim.lease_token())
             .await;
 
         match commit_res {

@@ -14,7 +14,9 @@ use uuid::Uuid;
 /// artifacts." `Addr` wraps `u32`, `RecordId` wraps `Uuid`; there is no
 /// `From`/`Into` between them, so mixing the two is a compile error. See
 /// `bpmn_lite_types::concurrency`'s compile-fail doctest for the proof.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct Addr(u32);
 
@@ -832,11 +834,17 @@ pub enum Instr {
 /// state instead). `target` is each arm's own winning-resume address.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum V2RaceArm {
-    Timer { target: Addr },
+    Timer {
+        target: Addr,
+    },
     /// `corr_key` is the content correlation key resolved from process data
     /// at arm time (§28), stored inline on the arm — the race resolution runs
     /// off runtime state only, never a static register/side-table read.
-    Msg { target: Addr, name: u32, corr_key: String },
+    Msg {
+        target: Addr,
+        name: u32,
+        corr_key: String,
+    },
     /// Captured by `V2ArmEffect` — the effect's own `effect_id` (derived at
     /// arm time from `(instance, fiber, pc)`, same as `V2AwaitEffect`) is
     /// the resolution key; `apply_ffi_completion` matches it against this
@@ -1144,6 +1152,17 @@ pub struct JobCompletion {
     /// from the returned payload before persistence.
     pub expected_instance_payload_hash: [u8; 32],
     pub orch_flags: BTreeMap<String, Value>,
+    /// Job-queue claim identity for the worker that produced this
+    /// completion. `Some` iff the completion arrived through the
+    /// claim-bound worker protocol (`complete_job_with_claim`) — the
+    /// kernel uses their presence to decide between the legacy
+    /// unconditional `jobs_ack` and the claim-checked
+    /// `JobMutation::AckClaimed`. `None` for internal/trusted callers
+    /// (`complete_job`) that never held a job_queue claim.
+    #[serde(default)]
+    pub worker_id: Option<String>,
+    #[serde(default)]
+    pub claim_token: Option<String>,
 }
 
 /// Returned by ob-poc worker on failure.
@@ -1368,10 +1387,7 @@ impl CompiledProgram {
     /// Set the workflow-level transient-effect retry policy. Not part of
     /// `LegacyProgramParts` — see field doc on `default_retry_policy`.
     #[doc(hidden)]
-    pub fn with_default_retry_policy(
-        mut self,
-        policy: crate::transition::RetryPolicy,
-    ) -> Self {
+    pub fn with_default_retry_policy(mut self, policy: crate::transition::RetryPolicy) -> Self {
         self.default_retry_policy = policy;
         self
     }
@@ -1497,12 +1513,7 @@ mod process_state_predicate_tests {
         let uid = Uuid::from_u128(1);
         vec![
             ("Running", ProcessState::Running, false, true),
-            (
-                "Completed",
-                ProcessState::Completed { at: 0 },
-                true,
-                false,
-            ),
+            ("Completed", ProcessState::Completed { at: 0 }, true, false),
             (
                 "Cancelled",
                 ProcessState::Cancelled {
@@ -1553,8 +1564,7 @@ mod process_state_predicate_tests {
 
     #[test]
     fn is_terminal_and_is_schedulable_classify_every_variant_as_expected() {
-        for (label, state, expected_terminal, expected_schedulable) in representative_instances()
-        {
+        for (label, state, expected_terminal, expected_schedulable) in representative_instances() {
             assert_eq!(
                 state.is_terminal(),
                 expected_terminal,
@@ -1583,7 +1593,13 @@ mod process_state_predicate_tests {
         let state = ProcessState::Incidented {
             incident_id: Uuid::from_u128(42),
         };
-        assert!(!state.is_terminal(), "Incidented must not be terminal — ResolveIncident revives it");
-        assert!(!state.is_schedulable(), "Incidented must not be schedulable — it awaits ResolveIncident, not ticking");
+        assert!(
+            !state.is_terminal(),
+            "Incidented must not be terminal — ResolveIncident revives it"
+        );
+        assert!(
+            !state.is_schedulable(),
+            "Incidented must not be schedulable — it awaits ResolveIncident, not ticking"
+        );
     }
 }

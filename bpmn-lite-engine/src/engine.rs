@@ -5,13 +5,14 @@ use bpmn_lite_compiler::{parse_bpmn_with_meta, verify_bytecode};
 use bpmn_lite_kernel::{apply as apply_kernel, DeterministicContext};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::CommitOutcome;
-use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::session_stack::SessionStackState;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use ffi_dispatcher::FfiDispatcher;
 use ffi_types::{FfiCall, FfiIncidentClass, FfiResult};
 use futures::{stream, StreamExt};
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -70,6 +71,18 @@ pub struct BpmnLiteEngine {
     artifact_cache_capacity: usize,
     /// Optional in-process FFI dispatcher. None = ExecFfi produces an incident.
     ffi_dispatcher: Option<Arc<FfiDispatcher>>,
+    /// F-08 remediation (Phase 2 follow-up,
+    /// `docs/todo/PHASE2-tokenised-transition-release.md`): a per-instance
+    /// single-flight guard. `Claim::new`'s same-owner-still-live
+    /// reacquisition is a safe, needed continuation when it's the SAME
+    /// logical call sequence (the scheduler's two-phase claim), but two
+    /// genuinely DIFFERENT local operations racing the same owner onto
+    /// the same instance would both pass that check and compute
+    /// redundant (wasted, though not corrupting — revision CAS still
+    /// protects commit) work. This guard serializes at the process level
+    /// so that race never starts; the database remains final authority
+    /// regardless.
+    in_flight: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 /// Parameters for starting a new process instance.
@@ -214,6 +227,7 @@ impl BpmnLiteEngine {
             artifact_cache: Arc::new(Mutex::new(ArtifactCache::default())),
             artifact_cache_capacity: DEFAULT_ARTIFACT_CACHE_CAPACITY,
             ffi_dispatcher: None,
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -234,7 +248,66 @@ impl BpmnLiteEngine {
             artifact_cache: self.artifact_cache.clone(),
             artifact_cache_capacity: self.artifact_cache_capacity,
             ffi_dispatcher: self.ffi_dispatcher.clone(),
+            in_flight: self.in_flight.clone(),
         }
+    }
+
+    /// F-08: run `body` only if no other local call is currently holding
+    /// a transition for `instance_id`; otherwise return a `Busy` error
+    /// without ever reaching the store. Serializes concurrent local
+    /// operations targeting the same instance so the same-owner-still-
+    /// live reacquisition path in `claim_work_for_transition` can never
+    /// be raced by two genuinely different callers — only ever reached
+    /// sequentially by the SAME logical call chain (e.g. the scheduler's
+    /// claim-then-tick), which is exactly what it's for.
+    /// Synchronous by design (see `with_instance_guard`): a `std::sync`
+    /// `MutexGuard` briefly alive inside an `async fn`, even if dropped
+    /// before any `.await`, can still make the surrounding future
+    /// `!Send` under the compiler's generator-state analysis. Keeping
+    /// the lock's entire lifetime inside a plain `fn` call — invisible
+    /// to the async state machine — sidesteps that entirely instead of
+    /// fighting it with `tokio::sync::Mutex` (which would need the lock
+    /// held across `.await` to matter, and it never is here).
+    pub(crate) fn try_acquire_instance_guard(&self, instance_id: Uuid) -> Result<()> {
+        let mut in_flight = self.in_flight.lock().unwrap();
+        if !in_flight.insert(instance_id) {
+            return Err(anyhow!(
+                "instance {instance_id} transition already in flight in this process"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn release_instance_guard(&self, instance_id: Uuid) {
+        self.in_flight.lock().unwrap().remove(&instance_id);
+    }
+
+    async fn with_instance_guard<T, Fut>(&self, instance_id: Uuid, body: Fut) -> Result<T>
+    where
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        self.try_acquire_instance_guard(instance_id)?;
+        // RAII, not a manual post-await removal: if `body` is dropped
+        // without completing (caller-side cancellation — a `select!`, a
+        // gRPC client disconnect, an outer timeout) rather than running
+        // to completion or panicking, a manual "remove after .await"
+        // line would never execute, leaking this instance out of local
+        // scheduling permanently. `Drop` runs regardless of how the
+        // future stops being polled.
+        struct ReleaseOnDrop<'a> {
+            engine: &'a BpmnLiteEngine,
+            instance_id: Uuid,
+        }
+        impl Drop for ReleaseOnDrop<'_> {
+            fn drop(&mut self) {
+                self.engine.release_instance_guard(self.instance_id);
+            }
+        }
+        let _release = ReleaseOnDrop {
+            engine: self,
+            instance_id,
+        };
+        body.await
     }
 
     pub fn store(&self) -> Arc<dyn WorkflowStore> {
@@ -284,6 +357,16 @@ impl BpmnLiteEngine {
         Ok(())
     }
 
+    /// Deliberately NOT single-flight-guarded (unlike its public callers
+    /// below): this shared primitive is also invoked NESTED, from within
+    /// an already-guarded caller's own call chain —
+    /// `apply_pending_effect_responses`, itself reached from
+    /// `dispatch_pending_effects` inside `tick_instance_inner`'s loop,
+    /// targets the SAME instance `tick_instance_inner` is still ticking.
+    /// Guarding here as well would reject that legitimate same-chain
+    /// re-entry as if it were a genuine concurrent race. Callers that
+    /// ARE true independent entry points (`signal`, `cancel`, `fail_job`,
+    /// ...) hold the guard themselves before reaching this function.
     #[tracing::instrument(
         name = "workflow.transition",
         skip(self, command),
@@ -302,6 +385,7 @@ impl BpmnLiteEngine {
             )
             .await?
             .ok_or_else(|| anyhow!("instance transition is leased or missing: {instance_id}"))?;
+        let lease_token = work.claim().lease_token().to_string();
         let result = async {
             let (claim, snapshot, command) = work.into_parts();
             let instance = snapshot.instance();
@@ -328,7 +412,7 @@ impl BpmnLiteEngine {
         .await;
         let release = self
             .store
-            .release_instance_transition(&self.tenant_id, instance_id, &owner)
+            .release_instance_transition(&self.tenant_id, instance_id, &lease_token)
             .await;
         match (result, release) {
             (Ok(()), Ok(())) => Ok(()),
@@ -787,9 +871,7 @@ impl BpmnLiteEngine {
         // reject it now instead. Any VALID JSON is legal (object-ness gates
         // only placeholder extraction below, not admission).
         let payload_value = serde_json::from_str::<serde_json::Value>(command.initial_payload())
-            .map_err(|error| {
-                anyhow!("start command initial_payload is not valid JSON: {error}")
-            })?;
+            .map_err(|error| anyhow!("start command initial_payload is not valid JSON: {error}"))?;
         let initial_placeholders = Some(payload_value).filter(serde_json::Value::is_object);
         let instance = ProcessInstance {
             instance_id,
@@ -832,7 +914,7 @@ impl BpmnLiteEngine {
             .start_dedupe(StartDedupe::new(command.clone()))
             .command_envelope(command_envelope)
             .build();
-        let claim = Claim::new(command.tenant_id().clone(), instance_id, 0, 0);
+        let claim = Claim::new(command.tenant_id().clone(), instance_id, 0, 0, "");
         let outcome = self
             .store
             .commit_transition(&claim, &transition)
@@ -908,6 +990,19 @@ impl BpmnLiteEngine {
         command: Command,
         owner: &str,
     ) -> Result<TimerFireOutcome> {
+        let Command::TimerFired { timer, .. } = &command else {
+            return Err(anyhow!("apply_timer_command requires TimerFired"));
+        };
+        let instance_id = timer.instance_id();
+        self.with_instance_guard(instance_id, self.apply_timer_command_body(command, owner))
+            .await
+    }
+
+    async fn apply_timer_command_body(
+        &self,
+        command: Command,
+        owner: &str,
+    ) -> Result<TimerFireOutcome> {
         let Command::TimerFired { timer, fired_at } = &command else {
             return Err(anyhow!("apply_timer_command requires TimerFired"));
         };
@@ -928,6 +1023,7 @@ impl BpmnLiteEngine {
             )
             .await?
             .ok_or_else(|| anyhow!("timer instance is leased or missing"))?;
+        let lease_token = work.claim().lease_token().to_string();
         let result = async {
             let (claim, snapshot, command) = work.into_parts();
             let instance = snapshot.instance();
@@ -963,7 +1059,7 @@ impl BpmnLiteEngine {
         .await;
         let release = self
             .store
-            .release_instance_transition(&self.tenant_id, timer.instance_id(), owner)
+            .release_instance_transition(&self.tenant_id, timer.instance_id(), &lease_token)
             .await;
         match (result, release) {
             (Ok(outcome), Ok(())) => Ok(outcome),
@@ -1002,7 +1098,8 @@ impl BpmnLiteEngine {
     }
 
     async fn tick_instance_as_owner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        self.tick_instance_inner(instance_id, owner).await
+        self.with_instance_guard(instance_id, self.tick_instance_inner(instance_id, owner))
+            .await
     }
 
     #[tracing::instrument(
@@ -1025,6 +1122,7 @@ impl BpmnLiteEngine {
                 .ok_or_else(|| {
                     anyhow!("instance transition is leased or missing: {instance_id}")
                 })?;
+            let lease_token = work.claim().lease_token().to_string();
 
             let result = async {
                 let (claim, mut snapshot, command) = work.into_parts();
@@ -1115,7 +1213,7 @@ impl BpmnLiteEngine {
             .await;
             let release = self
                 .store
-                .release_instance_transition(&self.tenant_id, instance_id, owner)
+                .release_instance_transition(&self.tenant_id, instance_id, &lease_token)
                 .await;
             match (result, release) {
                 (Ok(Some(())), Ok(())) => {
@@ -1177,74 +1275,26 @@ impl BpmnLiteEngine {
         expected_instance_payload_hash: [u8; 32],
         orch_flags: BTreeMap<String, Value>,
     ) -> Result<()> {
-        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
-        let owner = self.transition_owner.clone();
-        let work = self
-            .store
-            .claim_work_for_transition(
-                &self.tenant_id,
-                instance_id,
-                &owner,
-                self.transition_lease_ms,
-                Command::Tick { fiber_id: None },
-            )
-            .await?
-            .ok_or_else(|| anyhow!("instance transition is leased or missing: {instance_id}"))?;
-        let result = async {
-            let (claim, snapshot, _) = work.into_parts();
-            let instance = snapshot.instance();
-            if self
-                .store
-                .dedupe_get(&TenantId::new(instance.tenant_id.clone())?, job_key)
-                .await?
-                .is_some()
-            {
-                return Ok(());
-            }
-            let artifact = self
-                .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
-                .await?;
-            let completion = JobCompletion {
-                job_key: job_key.to_string(),
-                domain_payload: domain_payload.to_string(),
-                expected_instance_payload_hash,
-                orch_flags,
-            };
-            let revision = claim.expected_revision().saturating_add(1);
-            let context = DeterministicContext::new(
-                u64::try_from(self.logical_time()?)
-                    .map_err(|_| anyhow!("logical time cannot be negative"))?,
-                EffectId::for_transition(instance_id, revision, 0).as_uuid(),
-                revision,
-            );
-            let transition = apply_kernel(
-                &artifact,
-                &snapshot,
-                &Command::EffectCompleted {
-                    effect_id: EffectId::for_transition(instance_id, revision, 0),
-                    output: EffectOutput::Job(completion),
-                },
-                &context,
-            )
-            .map_err(|error| anyhow!(error))?;
-            self.store
-                .commit_transition(&claim, &transition)
-                .await
-                .map_err(|error| anyhow!(error))?;
-            Ok(())
-        }
-        .await;
-        let release = self
-            .store
-            .release_instance_transition(&self.tenant_id, instance_id, &owner)
-            .await;
-        match (result, release) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), _) => Err(error),
-            (Ok(()), Err(error)) => Err(error.into()),
-        }
+        self.complete_job_inner(
+            job_key,
+            domain_payload,
+            expected_instance_payload_hash,
+            orch_flags,
+            None,
+        )
+        .await
     }
 
+    /// Claim-bound completion for the external worker protocol (F-02
+    /// remediation, `docs/todo/zed_agent_execution_lease_remediation_plan.md`
+    /// Phase 1). `validate_job_claim` below is a fast-fail readability
+    /// check only — it is NOT the authority. The actual gate is the
+    /// claim-checked `JobMutation::AckClaimed` commit inside
+    /// `complete_job_inner`, which atomically requires the job row to
+    /// still be held by exactly this `(worker_id, claim_token)` pair or
+    /// rolls back the whole transition. A stale worker that raced past
+    /// this pre-check (or skipped straight past a transport retry) still
+    /// cannot steal a reassigned claim.
     pub async fn complete_job_with_claim(
         &self,
         job_key: &str,
@@ -1275,13 +1325,115 @@ impl BpmnLiteEngine {
         {
             return Err(anyhow!("job claim does not match worker ownership"));
         }
-        self.complete_job(
+        self.complete_job_inner(
             job_key,
             domain_payload,
             expected_instance_payload_hash,
             orch_flags,
+            Some((worker_id, claim_token)),
         )
         .await
+    }
+
+    async fn complete_job_inner(
+        &self,
+        job_key: &str,
+        domain_payload: &str,
+        expected_instance_payload_hash: [u8; 32],
+        orch_flags: BTreeMap<String, Value>,
+        claim_identity: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let (instance_id, _, _) = parse_job_key(job_key)?;
+        self.with_instance_guard(
+            instance_id,
+            self.complete_job_body(
+                job_key,
+                domain_payload,
+                expected_instance_payload_hash,
+                orch_flags,
+                claim_identity,
+            ),
+        )
+        .await
+    }
+
+    async fn complete_job_body(
+        &self,
+        job_key: &str,
+        domain_payload: &str,
+        expected_instance_payload_hash: [u8; 32],
+        orch_flags: BTreeMap<String, Value>,
+        claim_identity: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let (instance_id, _task_type_id, _pc) = parse_job_key(job_key)?;
+        let owner = self.transition_owner.clone();
+        let work = self
+            .store
+            .claim_work_for_transition(
+                &self.tenant_id,
+                instance_id,
+                &owner,
+                self.transition_lease_ms,
+                Command::Tick { fiber_id: None },
+            )
+            .await?
+            .ok_or_else(|| anyhow!("instance transition is leased or missing: {instance_id}"))?;
+        let lease_token = work.claim().lease_token().to_string();
+        let result = async {
+            let (claim, snapshot, _) = work.into_parts();
+            let instance = snapshot.instance();
+            if self
+                .store
+                .dedupe_get(&TenantId::new(instance.tenant_id.clone())?, job_key)
+                .await?
+                .is_some()
+            {
+                return Ok(());
+            }
+            let artifact = self
+                .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
+                .await?;
+            let completion = JobCompletion {
+                job_key: job_key.to_string(),
+                domain_payload: domain_payload.to_string(),
+                expected_instance_payload_hash,
+                orch_flags,
+                worker_id: claim_identity.map(|(worker_id, _)| worker_id.to_string()),
+                claim_token: claim_identity.map(|(_, claim_token)| claim_token.to_string()),
+            };
+            let revision = claim.expected_revision().saturating_add(1);
+            let context = DeterministicContext::new(
+                u64::try_from(self.logical_time()?)
+                    .map_err(|_| anyhow!("logical time cannot be negative"))?,
+                EffectId::for_transition(instance_id, revision, 0).as_uuid(),
+                revision,
+            );
+            let transition = apply_kernel(
+                &artifact,
+                &snapshot,
+                &Command::EffectCompleted {
+                    effect_id: EffectId::for_transition(instance_id, revision, 0),
+                    output: EffectOutput::Job(completion),
+                },
+                &context,
+            )
+            .map_err(|error| anyhow!(error))?;
+            self.store
+                .commit_transition(&claim, &transition)
+                .await
+                .map_err(|error| anyhow!(error))?;
+            Ok(())
+        }
+        .await;
+        let release = self
+            .store
+            .release_instance_transition(&self.tenant_id, instance_id, &lease_token)
+            .await;
+        match (result, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error.into()),
+        }
     }
 
     /// Fail a job — route to error boundary handler or create an incident.
@@ -1295,18 +1447,21 @@ impl BpmnLiteEngine {
         message: &str,
     ) -> Result<()> {
         let (instance_id, _task_type_id, pc) = parse_job_key(job_key)?;
-        self.apply_and_commit_command(
+        self.with_instance_guard(
             instance_id,
-            Command::EffectFailed {
-                effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
-                job_key: job_key.to_string(),
-                error_class,
-                message: message.to_string(),
-                retry: None,
-                // No RetryPolicy bookkeeping is consulted on this path
-                // (V&S §15 ruling E): honest absence, not a lie.
-                attempt: 0,
-            },
+            self.apply_and_commit_command(
+                instance_id,
+                Command::EffectFailed {
+                    effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
+                    job_key: job_key.to_string(),
+                    error_class,
+                    message: message.to_string(),
+                    retry: None,
+                    // No RetryPolicy bookkeeping is consulted on this path
+                    // (V&S §15 ruling E): honest absence, not a lie.
+                    attempt: 0,
+                },
+            ),
         )
         .await
     }
@@ -1340,24 +1495,27 @@ impl BpmnLiteEngine {
         {
             return Err(anyhow!("job claim does not match worker ownership"));
         }
-        self.apply_and_commit_command(
+        self.with_instance_guard(
             instance_id,
-            Command::EffectFailed {
-                effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
-                job_key: job_key.to_string(),
-                error_class,
-                message: message.to_string(),
-                retry: Some(JobRetry::new(
-                    worker_id,
-                    claim_token,
-                    self.logical_time()?
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow!("retry timestamp overflow"))?,
-                )),
-                // No RetryPolicy bookkeeping is consulted on this path
-                // (V&S §15 ruling E): honest absence, not a lie.
-                attempt: 0,
-            },
+            self.apply_and_commit_command(
+                instance_id,
+                Command::EffectFailed {
+                    effect_id: EffectId::for_instruction(instance_id, Uuid::nil(), pc),
+                    job_key: job_key.to_string(),
+                    error_class,
+                    message: message.to_string(),
+                    retry: Some(JobRetry::new(
+                        worker_id,
+                        claim_token,
+                        self.logical_time()?
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("retry timestamp overflow"))?,
+                    )),
+                    // No RetryPolicy bookkeeping is consulted on this path
+                    // (V&S §15 ruling E): honest absence, not a lie.
+                    attempt: 0,
+                },
+            ),
         )
         .await
     }
@@ -1399,26 +1557,32 @@ impl BpmnLiteEngine {
             .filter(|msg_id| !msg_id.is_empty())
             .ok_or_else(|| anyhow!("msg_id is required for idempotent signal delivery"))?;
         let now = self.logical_time()?;
-        self.apply_and_commit_command(
+        self.with_instance_guard(
             instance_id,
-            Command::MessageDelivered {
-                message_id: msg_id.to_string(),
-                name: msg_name.to_string(),
-                correlation_key: corr_key,
-                payload: domain_payload.map(str::as_bytes).unwrap_or(&[]).to_vec(),
-                payload_hash: domain_payload_hash,
-                expires_at: now + DEFAULT_MESSAGE_TTL_MS as i64,
-            },
+            self.apply_and_commit_command(
+                instance_id,
+                Command::MessageDelivered {
+                    message_id: msg_id.to_string(),
+                    name: msg_name.to_string(),
+                    correlation_key: corr_key,
+                    payload: domain_payload.map(str::as_bytes).unwrap_or(&[]).to_vec(),
+                    payload_hash: domain_payload_hash,
+                    expires_at: now + DEFAULT_MESSAGE_TTL_MS as i64,
+                },
+            ),
         )
         .await
     }
 
     pub async fn cancel(&self, instance_id: Uuid, reason: &str) -> Result<()> {
-        self.apply_and_commit_command(
+        self.with_instance_guard(
             instance_id,
-            Command::Cancel {
-                reason: reason.to_string(),
-            },
+            self.apply_and_commit_command(
+                instance_id,
+                Command::Cancel {
+                    reason: reason.to_string(),
+                },
+            ),
         )
         .await
     }
@@ -1584,13 +1748,16 @@ impl BpmnLiteEngine {
     async fn emit_job_claimed_events(&self, jobs: &[JobActivation]) -> Result<()> {
         for job in jobs {
             if let Some(claim_expires_at) = job.claim_expires_at {
-                self.apply_and_commit_command(
+                self.with_instance_guard(
                     job.process_instance_id,
-                    Command::JobClaimed {
-                        job_key: job.job_key.clone(),
-                        worker_id: job.worker_id.clone(),
-                        claim_expires_at,
-                    },
+                    self.apply_and_commit_command(
+                        job.process_instance_id,
+                        Command::JobClaimed {
+                            job_key: job.job_key.clone(),
+                            worker_id: job.worker_id.clone(),
+                            claim_expires_at,
+                        },
+                    ),
                 )
                 .await?;
             }
@@ -1629,7 +1796,7 @@ impl BpmnLiteEngine {
         lease_ms: u64,
     ) -> Result<RecoveryReport> {
         self.store.health_check().await?;
-        let stale_jobs_reclaimed = self.store.reclaim_stale_jobs(5 * 60 * 1_000).await?;
+        let stale_jobs_reclaimed = self.store.reclaim_stale_jobs().await?;
         self.store.reclaim_stale_buffered_message_claims().await?;
         let tenants = self.store.list_tenants().await?;
         let logical_time = u64::try_from(self.logical_time()?)
@@ -1647,62 +1814,68 @@ impl BpmnLiteEngine {
             let tenant_engine = self.for_tenant(tenant.clone());
             let instances = self.store.list_running_instances(&tenant).await?;
             for instance_id in instances {
-                let work = self
-                    .store
-                    .claim_work_for_transition(
-                        &tenant,
-                        instance_id,
-                        owner,
-                        lease_ms,
-                        Command::Tick { fiber_id: None },
-                    )
-                    .await?
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "recovery could not fence tenant {tenant_id} instance {instance_id}"
+                self.with_instance_guard(instance_id, async {
+                    let work = self
+                        .store
+                        .claim_work_for_transition(
+                            &tenant,
+                            instance_id,
+                            owner,
+                            lease_ms,
+                            Command::Tick { fiber_id: None },
                         )
-                    })?;
-                let (claim, snapshot, _) = work.into_parts();
-                let verification = async {
-                    let instance = snapshot.instance();
-                    let artifact = self
-                        .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
-                        .await?;
-                    if artifact.envelope().abi_version() != CURRENT_ARTIFACT_ABI {
-                        return Err(anyhow!("recovery artifact ABI mismatch: {instance_id}"));
-                    }
-                    if snapshot.fibers().is_empty() {
-                        return Err(anyhow!("recovery fibers are missing: {instance_id}"));
-                    }
-                    Ok::<(), anyhow::Error>(())
-                }
-                .await;
-                if let Err(error) = verification {
-                    let mut instance = snapshot.instance().clone();
-                    instance.quarantine_state = Some("recovery_invariant_failure".to_string());
-                    let transition = TransitionBuilder::new(instance)
-                        .command_envelope(CommandEnvelope::new(
-                            EffectId::for_transition(
-                                instance_id,
-                                claim.expected_revision().saturating_add(1),
-                                u32::MAX,
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "recovery could not fence tenant {tenant_id} instance {instance_id}"
                             )
-                            .as_uuid(),
-                            self.logical_time()?,
-                            JournalCommand::Administrative {
-                                kind: "recovery_quarantine".to_string(),
-                            },
-                        ))
-                        .build();
-                    self.store.commit_transition(&claim, &transition).await?;
+                        })?;
+                    let (claim, snapshot, _) = work.into_parts();
+                    let verification = async {
+                        let instance = snapshot.instance();
+                        let artifact = self
+                            .load_artifact_cached(ArtifactHash::from_bytes(
+                                instance.bytecode_version,
+                            ))
+                            .await?;
+                        if artifact.envelope().abi_version() != CURRENT_ARTIFACT_ABI {
+                            return Err(anyhow!("recovery artifact ABI mismatch: {instance_id}"));
+                        }
+                        if snapshot.fibers().is_empty() {
+                            return Err(anyhow!("recovery fibers are missing: {instance_id}"));
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    .await;
+                    if let Err(error) = verification {
+                        let mut instance = snapshot.instance().clone();
+                        instance.quarantine_state = Some("recovery_invariant_failure".to_string());
+                        let transition = TransitionBuilder::new(instance)
+                            .command_envelope(CommandEnvelope::new(
+                                EffectId::for_transition(
+                                    instance_id,
+                                    claim.expected_revision().saturating_add(1),
+                                    u32::MAX,
+                                )
+                                .as_uuid(),
+                                self.logical_time()?,
+                                JournalCommand::Administrative {
+                                    kind: "recovery_quarantine".to_string(),
+                                },
+                            ))
+                            .build();
+                        self.store.commit_transition(&claim, &transition).await?;
+                        self.store
+                            .release_instance_transition(&tenant, instance_id, claim.lease_token())
+                            .await?;
+                        return Err(error);
+                    }
                     self.store
-                        .release_instance_transition(&tenant, instance_id, owner)
+                        .release_instance_transition(&tenant, instance_id, claim.lease_token())
                         .await?;
-                    return Err(error);
-                }
-                self.store
-                    .release_instance_transition(&tenant, instance_id, owner)
-                    .await?;
+                    Ok(())
+                })
+                .await?;
                 report.instances_verified += 1;
             }
 

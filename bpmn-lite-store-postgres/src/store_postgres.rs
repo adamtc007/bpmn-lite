@@ -10,8 +10,8 @@ use bpmn_lite_store::TemplateSummary;
 use bpmn_lite_store::{
     ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult,
 };
-use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::integrity::compute_instance_integrity_hash;
+use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -416,17 +416,24 @@ impl PostgresWorkflowStore {
         };
         for event in transition.events() {
             match event {
-                RuntimeEvent::V2ScopeCancelled { record_id, fiber_id, .. } => {
+                RuntimeEvent::V2ScopeCancelled {
+                    record_id,
+                    fiber_id,
+                    ..
+                } => {
                     if !transition.fibers_delete().contains(fiber_id) {
                         continue;
                     }
-                    let Some(guard_addr) =
-                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    let Some(guard_addr) = concurrency_table
+                        .get(*record_id)
+                        .and_then(|record| record.opened_at)
                     else {
                         continue;
                     };
                     let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
-                        StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                        StoreError::Integrity(
+                            "guard address exceeds PostgreSQL INTEGER".to_string(),
+                        )
                     })?;
                     let new_count: i32 = sqlx::query_scalar(
                         r#"
@@ -443,7 +450,9 @@ impl PostgresWorkflowStore {
                     .fetch_one(&mut **tx)
                     .await
                     .persistence()?;
-                    let prior = u32::try_from(new_count).unwrap_or(u32::MAX).saturating_sub(1);
+                    let prior = u32::try_from(new_count)
+                        .unwrap_or(u32::MAX)
+                        .saturating_sub(1);
                     let budget = guard_budgets
                         .get(&guard_addr)
                         .copied()
@@ -471,11 +480,14 @@ impl PostgresWorkflowStore {
                     }
                 }
                 RuntimeEvent::V2GuardRetired { record_id, .. } => {
-                    if let Some(guard_addr) =
-                        concurrency_table.get(*record_id).and_then(|record| record.opened_at)
+                    if let Some(guard_addr) = concurrency_table
+                        .get(*record_id)
+                        .and_then(|record| record.opened_at)
                     {
                         let guard_addr_i32 = i32::try_from(guard_addr.get()).map_err(|_| {
-                            StoreError::Integrity("guard address exceeds PostgreSQL INTEGER".to_string())
+                            StoreError::Integrity(
+                                "guard address exceeds PostgreSQL INTEGER".to_string(),
+                            )
                         })?;
                         sqlx::query(
                             "DELETE FROM guard_failure_budget WHERE tenant_id = $1 AND instance_id = $2 AND guard_addr = $3",
@@ -759,6 +771,13 @@ impl RuntimeStore for PostgresWorkflowStore {
         .await
     }
 
+    /// F-07 remediation: this is an advisory fast-fail read only (see
+    /// `complete_job_with_claim`'s doc comment) — the actual authority is
+    /// the claim-checked `JobMutation::AckClaimed` commit. It must not
+    /// encode a retry-budget predicate: a job legitimately claimed on its
+    /// last permitted attempt (`retries_remaining == 1`) can still
+    /// succeed, and gating this pre-check on `retries_remaining > 1`
+    /// rejected exactly that attempt before completion was ever tried.
     async fn validate_job_claim(
         &self,
         tenant_id: &TenantId,
@@ -782,7 +801,6 @@ impl RuntimeStore for PostgresWorkflowStore {
                   AND worker_id = $2
                   AND claim_token = $3
                   AND claim_expires_at > now()
-                  AND retries_remaining > 1
                 "#,
                 )
                 .bind(&job_key)
@@ -1087,14 +1105,14 @@ impl RuntimeStore for PostgresWorkflowStore {
 
     // ── Durability maintenance ──
 
-    async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> StoreResult<u32> {
+    async fn reclaim_stale_jobs(&self) -> StoreResult<u32> {
         let lease_owner = "unused";
         let tenants = self.list_tenants().await.persistence()?;
         let mut total_count = 0;
         for tenant_id in tenants {
             let reclaims = self
                 .execute_tenant_scoped(&tenant_id, lease_owner, |tx| {
-                    Box::pin(async move { Self::reclaim_stale_jobs_inner(tx, timeout_ms).await })
+                    Box::pin(async move { Self::reclaim_stale_jobs_inner(tx).await })
                 })
                 .await
                 .persistence()?;
@@ -1240,13 +1258,23 @@ impl RuntimeStore for PostgresWorkflowStore {
                 fence = CASE
                     WHEN lease_owner = $3 AND lease_until >= now() THEN fence
                     ELSE fence + 1
+                END,
+                -- Phase 2 (F-04): the token is the acquisition identity a
+                -- later release/renewal must match — reused across a
+                -- same-owner renewal of the SAME generation (fence
+                -- unchanged, above), minted fresh whenever the fence
+                -- actually advances (a genuinely new acquisition), so a
+                -- release carrying the superseded token cannot clear it.
+                lease_token = CASE
+                    WHEN lease_owner = $3 AND lease_until >= now() THEN lease_token
+                    ELSE md5(random()::text || clock_timestamp()::text)
                 END
             WHERE tenant_id = $1
               AND instance_id = $2
               AND quarantine_state IS NULL
               AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $3)
             RETURNING revision, fence, bytecode_version, snapshot_schema_version,
-                      artifact_abi, snapshot_envelope, frame_hash
+                      artifact_abi, snapshot_envelope, frame_hash, lease_token
             "#,
         )
         .bind(tenant_id.as_str())
@@ -1271,6 +1299,7 @@ impl RuntimeStore for PostgresWorkflowStore {
         let artifact_abi: Option<i32> = row.get("artifact_abi");
         let snapshot_bytes: Option<Vec<u8>> = row.get("snapshot_envelope");
         let stored_frame_hash: Option<Vec<u8>> = row.get("frame_hash");
+        let lease_token: String = row.get("lease_token");
         let integrity_result = async {
             let revision_u64 =
                 u64::try_from(revision).map_err(|_| "negative instance revision".to_string())?;
@@ -1443,7 +1472,7 @@ impl RuntimeStore for PostgresWorkflowStore {
             .map_err(|error| ClaimError::Integrity(error.to_string()))?
             .state()
             .to_runtime_snapshot();
-        let claim = Claim::new(tenant_id, instance_id, revision, fence);
+        let claim = Claim::new(tenant_id, instance_id, revision, fence, lease_token);
         Ok(Some(ClaimedWork::new(claim, snapshot, command)))
     }
 
@@ -1758,6 +1787,32 @@ impl RuntimeStore for PostgresWorkflowStore {
                 continue;
             }
             let result = match mutation {
+                // F-02 remediation: the claim-bound completion ack. Same
+                // claimed-only, exact-one-row postcondition as
+                // Retry/DeadLetter below — a stale worker's belated
+                // completion (its claim reassigned in the meantime) hits
+                // zero rows and the whole commit rolls back as
+                // `CommitError::Conflict`, never touching the process
+                // revision or deleting the current claimant's row.
+                JobMutation::AckClaimed {
+                    job_key,
+                    worker_id,
+                    claim_token,
+                } => {
+                    sqlx::query(
+                        r#"
+                        DELETE FROM job_queue
+                        WHERE tenant_id = $1 AND job_key = $2 AND status = 'claimed'
+                          AND worker_id = $3 AND claim_token = $4 AND claim_expires_at > now()
+                        "#,
+                    )
+                    .bind(claim.tenant_id().as_str())
+                    .bind(job_key)
+                    .bind(worker_id)
+                    .bind(claim_token)
+                    .execute(&mut *tx)
+                    .await
+                }
                 JobMutation::RetryClaimed {
                     job_key,
                     worker_id,
@@ -3524,12 +3579,330 @@ impl RuntimeStore for PostgresWorkflowStore {
         &self,
         tenant_id: &TenantId,
         instance_id: Uuid,
-        owner: &str,
+        lease_token: &str,
     ) -> StoreResult<()> {
-        self.execute_tenant_scoped(tenant_id.as_str(), owner, |tx| {
+        self.execute_tenant_scoped(tenant_id.as_str(), lease_token, |tx| {
             Box::pin(async move { Self::release_instance_transition_inner(tx, instance_id).await })
         })
         .await
+    }
+
+    // ── Phase 3A durable activation queue scaffolding (unwired) ──
+    // See docs/todo/PHASE3-durable-activation-queue.md. Nothing in the
+    // engine calls these yet.
+
+    async fn enqueue_activation(
+        &self,
+        tenant_id: &TenantId,
+        instance_id: Uuid,
+        command_id: Uuid,
+        command_kind: &str,
+        command: &Command,
+        available_at_ms: Option<u64>,
+    ) -> StoreResult<bool> {
+        let tenant_id_owned = tenant_id.to_string();
+        let command_kind = command_kind.to_string();
+        let command_json = serde_json::to_value(command)
+            .map_err(|error| StoreError::Integrity(error.to_string()))?;
+        self.execute_tenant_scoped(&tenant_id_owned, "unused", |tx| {
+            Box::pin(async move {
+                let activation_id = Uuid::now_v7();
+                let available_at = available_at_ms
+                    .map(|ms| epoch_ms_to_datetime(ms as i64))
+                    .unwrap_or_else(chrono::Utc::now);
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO workflow_activations
+                        (tenant_id, activation_id, instance_id, command_id, command_kind,
+                         command_envelope, available_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (tenant_id, command_id) DO NOTHING
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(activation_id)
+                .bind(instance_id)
+                .bind(command_id)
+                .bind(&command_kind)
+                .bind(&command_json)
+                .bind(available_at)
+                .execute(&mut *tx.tx)
+                .await
+                .persistence()?;
+                Ok(result.rows_affected() == 1)
+            })
+        })
+        .await
+    }
+
+    async fn claim_ready_activations(
+        &self,
+        tenant_id: &TenantId,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> StoreResult<Vec<ClaimedActivation>> {
+        let tenant_id_owned = tenant_id.to_string();
+        let owner_owned = owner.to_string();
+        // Over-fetch bound for the row-locking candidate scan: locked
+        // BEFORE per-instance dedup (`FOR UPDATE SKIP LOCKED` cannot be
+        // combined with `DISTINCT`/window functions in the same SELECT
+        // in PostgreSQL), so a batch skewed toward few instances still
+        // finds `limit` distinct instances to claim rather than locking
+        // ten ready rows for one instance and returning only one result.
+        let scan_limit = (limit.saturating_mul(8)).max(64) as i64;
+        self.execute_tenant_scoped(&tenant_id_owned, &owner_owned, |tx| {
+            Box::pin(async move {
+                let rows = sqlx::query(
+                    r#"
+                    WITH locked AS (
+                        SELECT activation_id, instance_id, priority, available_at, seq
+                        FROM workflow_activations
+                        WHERE tenant_id = $1
+                          AND status = 'ready'
+                          AND available_at <= now()
+                          AND instance_id NOT IN (
+                              SELECT instance_id FROM workflow_activations
+                              WHERE tenant_id = $1 AND status = 'claimed'
+                          )
+                        ORDER BY priority, available_at, seq
+                        LIMIT $2
+                        FOR UPDATE SKIP LOCKED
+                    ),
+                    deduped AS (
+                        SELECT activation_id, priority, available_at, seq,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY instance_id
+                                   ORDER BY priority, available_at, seq
+                               ) AS rn
+                        FROM locked
+                    ),
+                    ranked AS (
+                        SELECT activation_id FROM deduped
+                        WHERE rn = 1
+                        ORDER BY priority, available_at, seq
+                        LIMIT $3
+                    )
+                    UPDATE workflow_activations
+                    SET status = 'claimed',
+                        claim_owner = $4,
+                        claim_token = md5(random()::text || clock_timestamp()::text),
+                        claim_expires_at = now() + make_interval(secs => $5::float / 1000.0),
+                        attempt_count = attempt_count + 1
+                    FROM ranked
+                    WHERE workflow_activations.activation_id = ranked.activation_id
+                    RETURNING workflow_activations.activation_id, workflow_activations.tenant_id,
+                              workflow_activations.instance_id, workflow_activations.command_id,
+                              workflow_activations.command_kind, workflow_activations.command_envelope,
+                              workflow_activations.attempt_count, workflow_activations.claim_token
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(scan_limit)
+                .bind(limit as i64)
+                .bind(&tx.lease_owner)
+                .bind(lease_ms as f64)
+                .fetch_all(&mut *tx.tx)
+                .await
+                .persistence()?;
+
+                use sqlx::Row;
+                let mut result = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let tenant_id: String = row.get("tenant_id");
+                    let command_kind: String = row.get("command_kind");
+                    let command_json: serde_json::Value = row.get("command_envelope");
+                    let command: Command =
+                        serde_json::from_value(command_json).persistence()?;
+                    let attempt_count: i32 = row.get("attempt_count");
+                    let claim_token: String = row.get("claim_token");
+                    result.push(ClaimedActivation::new(
+                        TenantId::new(tenant_id).persistence()?,
+                        row.get("activation_id"),
+                        row.get("instance_id"),
+                        row.get("command_id"),
+                        command_kind,
+                        command,
+                        attempt_count as u32,
+                        claim_token,
+                    ));
+                }
+                Ok(result)
+            })
+        })
+        .await
+    }
+
+    async fn renew_activation_claim(
+        &self,
+        activation: &ClaimedActivation,
+        lease_ms: u64,
+    ) -> StoreResult<Option<ClaimedActivation>> {
+        let tenant_id_owned = activation.tenant_id().to_string();
+        let activation_id = activation.activation_id();
+        let claim_token = activation.claim_token().to_string();
+        let command_id = activation.command_id();
+        let instance_id = activation.instance_id();
+        let command_kind = activation.command_kind().to_string();
+        let command = activation.command().clone();
+        let attempt_count = activation.attempt_count();
+        self.execute_tenant_scoped(&tenant_id_owned, "unused", |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE workflow_activations
+                    SET claim_expires_at = now() + make_interval(secs => $4::float / 1000.0)
+                    WHERE tenant_id = $1 AND activation_id = $2 AND status = 'claimed'
+                      AND claim_token = $3 AND claim_expires_at > now()
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(activation_id)
+                .bind(&claim_token)
+                .bind(lease_ms as f64)
+                .execute(&mut *tx.tx)
+                .await
+                .persistence()?;
+                if result.rows_affected() != 1 {
+                    return Ok(None);
+                }
+                Ok(Some(ClaimedActivation::new(
+                    TenantId::new(tx.tenant_id.clone()).persistence()?,
+                    activation_id,
+                    instance_id,
+                    command_id,
+                    command_kind,
+                    command,
+                    attempt_count,
+                    claim_token,
+                )))
+            })
+        })
+        .await
+    }
+
+    async fn release_activation_to_ready(
+        &self,
+        activation: &ClaimedActivation,
+        not_before_ms: Option<u64>,
+    ) -> StoreResult<()> {
+        let tenant_id_owned = activation.tenant_id().to_string();
+        let activation_id = activation.activation_id();
+        let claim_token = activation.claim_token().to_string();
+        self.execute_tenant_scoped(&tenant_id_owned, "unused", |tx| {
+            Box::pin(async move {
+                let available_at = not_before_ms
+                    .map(|ms| epoch_ms_to_datetime(ms as i64))
+                    .unwrap_or_else(chrono::Utc::now);
+                sqlx::query(
+                    r#"
+                    UPDATE workflow_activations
+                    SET status = 'ready', claim_owner = NULL, claim_token = NULL,
+                        claim_expires_at = NULL, available_at = $4
+                    WHERE tenant_id = $1 AND activation_id = $2 AND status = 'claimed'
+                      AND claim_token = $3
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(activation_id)
+                .bind(&claim_token)
+                .bind(available_at)
+                .execute(&mut *tx.tx)
+                .await
+                .persistence()?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn consume_activation(&self, activation: &ClaimedActivation) -> StoreResult<bool> {
+        let tenant_id_owned = activation.tenant_id().to_string();
+        let activation_id = activation.activation_id();
+        let claim_token = activation.claim_token().to_string();
+        self.execute_tenant_scoped(&tenant_id_owned, "unused", |tx| {
+            Box::pin(async move {
+                let result = sqlx::query(
+                    r#"
+                    UPDATE workflow_activations
+                    SET status = 'completed', claim_owner = NULL, claim_token = NULL,
+                        claim_expires_at = NULL, completed_at = now()
+                    WHERE tenant_id = $1 AND activation_id = $2 AND status = 'claimed'
+                      AND claim_token = $3
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(activation_id)
+                .bind(&claim_token)
+                .execute(&mut *tx.tx)
+                .await
+                .persistence()?;
+                Ok(result.rows_affected() == 1)
+            })
+        })
+        .await
+    }
+
+    async fn dead_letter_activation(
+        &self,
+        activation: &ClaimedActivation,
+        reason: &str,
+    ) -> StoreResult<()> {
+        let tenant_id_owned = activation.tenant_id().to_string();
+        let activation_id = activation.activation_id();
+        let claim_token = activation.claim_token().to_string();
+        let reason = reason.to_string();
+        self.execute_tenant_scoped(&tenant_id_owned, "unused", |tx| {
+            Box::pin(async move {
+                sqlx::query(
+                    r#"
+                    UPDATE workflow_activations
+                    SET status = 'dead_lettered', claim_owner = NULL, claim_token = NULL,
+                        claim_expires_at = NULL, last_error = $4
+                    WHERE tenant_id = $1 AND activation_id = $2 AND status = 'claimed'
+                      AND claim_token = $3
+                    "#,
+                )
+                .bind(&tx.tenant_id)
+                .bind(activation_id)
+                .bind(&claim_token)
+                .bind(&reason)
+                .execute(&mut *tx.tx)
+                .await
+                .persistence()?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// F-06's lesson applied from the start: authority is the persisted
+    /// `claim_expires_at`, never a caller-supplied timeout. Iterates
+    /// tenants explicitly (mirroring `reclaim_stale_buffered_message_claims`)
+    /// because RLS scopes a single transaction to one tenant at a time.
+    async fn reclaim_expired_activations(&self) -> StoreResult<u32> {
+        let tenants = self.list_tenants().await.persistence()?;
+        let mut total_reclaimed = 0;
+        for tenant_id in tenants {
+            let mut tx = self.pool.begin().await.persistence()?;
+            if Self::set_tenant_context(&mut tx, &tenant_id).await.is_err() {
+                continue;
+            }
+            let result = sqlx::query(
+                r#"
+                UPDATE workflow_activations
+                SET status = 'ready', claim_owner = NULL, claim_token = NULL,
+                    claim_expires_at = NULL, available_at = now()
+                WHERE status = 'claimed' AND claim_expires_at <= now()
+                "#,
+            )
+            .execute(&mut *tx)
+            .await
+            .persistence()?;
+            tx.commit().await.persistence()?;
+            total_reclaimed += result.rows_affected() as u32;
+        }
+        Ok(total_reclaimed)
     }
 
     async fn join_get(
@@ -4098,17 +4471,23 @@ impl AdminProjectionStore for PostgresWorkflowStore {
         tenant_id: &TenantId,
         id: Uuid,
     ) -> StoreResult<Option<DesignSessionRecord>> {
-        let head: Option<(String, String, Option<String>, Option<i32>, Option<Vec<u8>>, String)> =
-            sqlx::query_as(
-                r#"SELECT name, status, template_name, template_version, template_plan_hash,
+        let head: Option<(
+            String,
+            String,
+            Option<String>,
+            Option<i32>,
+            Option<Vec<u8>>,
+            String,
+        )> = sqlx::query_as(
+            r#"SELECT name, status, template_name, template_version, template_plan_hash,
                           created_at::text
                    FROM design_sessions WHERE id = $1 AND tenant_id = $2"#,
-            )
-            .bind(id)
-            .bind(tenant_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(StoreError::unavailable)?;
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
         let Some((name, status, t_name, t_version, t_hash, created_at)) = head else {
             return Ok(None);
         };
@@ -4172,16 +4551,18 @@ impl AdminProjectionStore for PostgresWorkflowStore {
         .map_err(StoreError::unavailable)?;
         Ok(rows
             .into_iter()
-            .map(|(id, name, status, revisions, updated_at)| DesignSessionSummary {
-                id,
-                name,
-                status: match status.as_str() {
-                    "saved" => DesignSessionStatus::Saved,
-                    _ => DesignSessionStatus::Draft,
+            .map(
+                |(id, name, status, revisions, updated_at)| DesignSessionSummary {
+                    id,
+                    name,
+                    status: match status.as_str() {
+                        "saved" => DesignSessionStatus::Saved,
+                        _ => DesignSessionStatus::Draft,
+                    },
+                    revisions: revisions as u32,
+                    updated_at,
                 },
-                revisions: revisions as u32,
-                updated_at,
-            })
+            )
             .collect())
     }
 
@@ -4244,7 +4625,6 @@ impl AdminProjectionStore for PostgresWorkflowStore {
         }
         Ok(())
     }
-
 }
 
 impl PostgresWorkflowStore {
@@ -4267,7 +4647,9 @@ impl PostgresWorkflowStore {
             let canonical: Option<Vec<u8>> = row.get("canonical_bytes");
             let hash_hex: String = version.iter().map(|b| format!("{b:02x}")).collect();
             match canonical {
-                None => failures.push(format!("{hash_hex}: pre-canonical (canonical_bytes IS NULL)")),
+                None => failures.push(format!(
+                    "{hash_hex}: pre-canonical (canonical_bytes IS NULL)"
+                )),
                 Some(bytes) => {
                     if let Err(error) = ExecutableWorkflow::verify(&bytes) {
                         failures.push(format!("{hash_hex}: {error}"));
@@ -4389,17 +4771,14 @@ impl PostgresWorkflowStore {
         Ok(result)
     }
 
-    async fn reclaim_stale_jobs_inner(
-        tx: &mut TenantTx<'_>,
-        timeout_ms: u64,
-    ) -> Result<Vec<StaleReclaimInfo>> {
+    async fn reclaim_stale_jobs_inner(tx: &mut TenantTx<'_>) -> Result<Vec<StaleReclaimInfo>> {
         let rows = sqlx::query(
             r#"
             WITH stale AS (
                 SELECT job_key, process_instance_id, worker_id AS previous_worker_id, retries_remaining
                 FROM job_queue
                 WHERE status = 'claimed'
-                  AND claimed_at < now() - make_interval(secs => $1::float / 1000.0)
+                  AND claim_expires_at <= now()
                 FOR UPDATE SKIP LOCKED
             ),
             dead_lettered AS (
@@ -4437,7 +4816,6 @@ impl PostgresWorkflowStore {
             SELECT job_key, process_instance_id, previous_worker_id FROM dead_lettered
             "#,
         )
-        .bind(timeout_ms as f64)
         .fetch_all(&mut *tx.tx)
         .await.persistence()?;
 
@@ -4479,6 +4857,12 @@ impl PostgresWorkflowStore {
         Ok(results)
     }
 
+    /// Phase 2 (F-04): matches on `lease_token`, the unique acquisition
+    /// identity — NOT owner, which is reused across concurrent
+    /// operations from the same engine instance and across expiry
+    /// boundaries. A release carrying a superseded token (e.g. a task
+    /// that held the lease before it expired and was reacquired) is a
+    /// harmless no-op against whatever currently holds it.
     async fn release_instance_transition_inner(
         tx: &mut TenantTx<'_>,
         instance_id: Uuid,
@@ -4487,10 +4871,11 @@ impl PostgresWorkflowStore {
             r#"
             UPDATE workflow_instances
             SET lease_owner = NULL,
-                lease_until = NULL
+                lease_until = NULL,
+                lease_token = NULL
             WHERE tenant_id = $1
               AND instance_id = $2
-              AND lease_owner = $3
+              AND lease_token = $3
             "#,
         )
         .bind(&tx.tenant_id)
@@ -4535,10 +4920,16 @@ mod tests {
             should_sample_canonical_round_trip(0),
             "genesis must always sample"
         );
-        assert!(should_sample_canonical_round_trip(DEFAULT_CANONICAL_SAMPLE_RATE));
-        assert!(should_sample_canonical_round_trip(2 * DEFAULT_CANONICAL_SAMPLE_RATE));
+        assert!(should_sample_canonical_round_trip(
+            DEFAULT_CANONICAL_SAMPLE_RATE
+        ));
+        assert!(should_sample_canonical_round_trip(
+            2 * DEFAULT_CANONICAL_SAMPLE_RATE
+        ));
         assert!(!should_sample_canonical_round_trip(1));
-        assert!(!should_sample_canonical_round_trip(DEFAULT_CANONICAL_SAMPLE_RATE - 1));
+        assert!(!should_sample_canonical_round_trip(
+            DEFAULT_CANONICAL_SAMPLE_RATE - 1
+        ));
         assert!(!should_sample_canonical_round_trip(
             DEFAULT_CANONICAL_SAMPLE_RATE + 1
         ));
@@ -4817,10 +5208,17 @@ mod tests {
         let states: Vec<ProcessState> = vec![
             ProcessState::Running,
             ProcessState::Completed { at: now },
-            ProcessState::Cancelled { reason: "r".to_string(), at: now },
+            ProcessState::Cancelled {
+                reason: "r".to_string(),
+                at: now,
+            },
             ProcessState::Terminated { at: now },
-            ProcessState::Failed { incident_id: Uuid::now_v7() },
-            ProcessState::Incidented { incident_id: Uuid::now_v7() },
+            ProcessState::Failed {
+                incident_id: Uuid::now_v7(),
+            },
+            ProcessState::Incidented {
+                incident_id: Uuid::now_v7(),
+            },
             ProcessState::WaitingOnSubmission {
                 callout_id: Uuid::now_v7(),
                 node_id: "n".to_string(),
@@ -4834,7 +5232,10 @@ mod tests {
             let instance_id = Uuid::now_v7();
             let mut instance = make_instance(instance_id);
             instance.state = state.clone();
-            store.save_instance("claim-predicate", &instance).await.unwrap();
+            store
+                .save_instance("claim-predicate", &instance)
+                .await
+                .unwrap();
             let claimed = store
                 .claim_running_instances(&TenantId::new("default").unwrap(), "sweep", 100, 30_000)
                 .await
@@ -5042,6 +5443,8 @@ mod tests {
             domain_payload: r#"{"done":true}"#.to_string(),
             expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
+            worker_id: None,
+            claim_token: None,
         };
 
         assert!(store
@@ -5077,6 +5480,8 @@ mod tests {
             domain_payload: r#"{"done":true}"#.to_string(),
             expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
+            worker_id: None,
+            claim_token: None,
         };
 
         // Initially both tenants see nothing
@@ -6007,7 +6412,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
-        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        store
+            .save_instance("guard-budget-fixture", &instance)
+            .await
+            .unwrap();
         let guard_addr = Addr::new(7);
 
         for _ in 0..5u32 {
@@ -6174,12 +6582,14 @@ mod tests {
         assert_eq!(count, 2, "both stored artifacts must verify");
 
         // Corrupt one row's canonical_bytes; the gate must now fail closed.
-        sqlx::query("UPDATE compiled_programs SET canonical_bytes = $1 WHERE bytecode_version = $2")
-            .bind(&b"not a valid canonical envelope"[..])
-            .bind(&good_hash[..])
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE compiled_programs SET canonical_bytes = $1 WHERE bytecode_version = $2",
+        )
+        .bind(&b"not a valid canonical envelope"[..])
+        .bind(&good_hash[..])
+        .execute(&pool)
+        .await
+        .unwrap();
         let result = store.verify_artifact_corpus().await;
         assert!(
             matches!(&result, Err(StoreError::Integrity(message)) if message.contains("corpus verification failed")),
@@ -6203,7 +6613,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = hash;
-        store.save_instance("cutover-seed", &instance).await.unwrap();
+        store
+            .save_instance("cutover-seed", &instance)
+            .await
+            .unwrap();
 
         let mut conn = pool.acquire().await.unwrap();
         sqlx::query("SELECT set_config('app.current_tenant', 'default', false)")
@@ -6365,7 +6778,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = workflow.hash().into_bytes();
-        store.save_instance("guard-budget-artifact", &instance).await.unwrap();
+        store
+            .save_instance("guard-budget-artifact", &instance)
+            .await
+            .unwrap();
         let guard_addr = Addr::new(7);
 
         let mut quarantine_after = None;
@@ -6432,7 +6848,10 @@ mod tests {
         // accepts the non-empty table — mirrors v2_verifier's minimal guard.
         let guard_addr = Addr::new(0);
         let mut budgets = BTreeMap::new();
-        budgets.insert(guard_addr, bpmn_lite_types::ScopeFailureBudget::new(1, 1).unwrap());
+        budgets.insert(
+            guard_addr,
+            bpmn_lite_types::ScopeFailureBudget::new(1, 1).unwrap(),
+        );
         let program = bpmn_lite_types::legacy_program! {
             bytecode_version: [0u8; 32],
             program: vec![
@@ -6457,7 +6876,8 @@ mod tests {
             bpmn_lite_types::ScopeFailureBudget::new(1, 9).unwrap(),
         );
         let workflow = bpmn_lite_types::ExecutableWorkflow::from_verified_envelope(
-            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-per-guard-1").unwrap(),
+            bpmn_lite_types::ArtifactEnvelope::from_legacy_program(program, "v8-per-guard-1")
+                .unwrap(),
         )
         .unwrap();
         store.store_artifact(&workflow).await.unwrap();
@@ -6465,7 +6885,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = workflow.hash().into_bytes();
-        store.save_instance("per-guard-budget", &instance).await.unwrap();
+        store
+            .save_instance("per-guard-budget", &instance)
+            .await
+            .unwrap();
 
         let claim = store
             .claim_instance_for_transition(
@@ -6519,7 +6942,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
-        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        store
+            .save_instance("guard-budget-fixture", &instance)
+            .await
+            .unwrap();
         let guard_addr = Addr::new(9);
 
         for _ in 0..10u32 {
@@ -6577,7 +7003,10 @@ mod tests {
         let instance_id = Uuid::now_v7();
         let mut instance = make_instance(instance_id);
         instance.bytecode_version = store_default_budget_artifact(&store, 5).await;
-        store.save_instance("guard-budget-fixture", &instance).await.unwrap();
+        store
+            .save_instance("guard-budget-fixture", &instance)
+            .await
+            .unwrap();
         let guard_addr = Addr::new(11);
 
         async fn fail_once(
@@ -6632,12 +7061,16 @@ mod tests {
             .unwrap();
         let record_id = RecordId::new(Uuid::now_v7());
         let fiber_id = Uuid::now_v7();
-        let mut record = ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
+        let mut record =
+            ConcurrencyRecord::new(record_id, RecordKind::Guard { interrupting: true });
         record.opened_at = Some(guard_addr);
         record.state = RecordState::Retired;
         let transition = TransitionBuilder::new(instance.clone())
             .concurrency_mutation(ConcurrencyMutation::Insert(Box::new(record)))
-            .event(RuntimeEvent::V2GuardRetired { record_id, fiber_id })
+            .event(RuntimeEvent::V2GuardRetired {
+                record_id,
+                fiber_id,
+            })
             .build();
         store.commit_transition(&claim, &transition).await.unwrap();
 
@@ -7140,7 +7573,7 @@ mod tests {
             r#"
             INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
             VALUES ($1, $2, 0, '[]'::jsonb, 'null'::jsonb, 0, $3)
-            "#
+            "#,
         )
         .bind(iid_b)
         .bind(fib_id_b)
@@ -7362,7 +7795,7 @@ mod tests {
             r#"
             INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
             VALUES ($1, $2, 0, '[]'::jsonb, 'null'::jsonb, 0, $3)
-            "#
+            "#,
         )
         .bind(iid_b)
         .bind(Uuid::now_v7())
@@ -7924,8 +8357,8 @@ mod tests {
                 30000,
             )
             .await
-            .unwrap();
-        assert!(claimed.is_some());
+            .unwrap()
+            .expect("first delivery must claim the transition lease");
 
         // First delivery: commit take pending + state change
         inst.state = ProcessState::Running; // advance state
@@ -7938,9 +8371,15 @@ mod tests {
         let first_res = commit_ops(&store, iid, tenant_id, "owner-first", &ops).await;
         assert!(first_res.is_ok(), "First delivery must succeed");
 
-        // Release first lease manually (as we didn't park)
+        // Release first lease manually (as we didn't park). commit_ops
+        // reclaimed as the same owner while still live, i.e. a same-
+        // generation renewal (Phase 2), so it shares `claimed`'s token.
         store
-            .release_instance_transition(&TenantId::new(tenant_id).unwrap(), iid, "owner-first")
+            .release_instance_transition(
+                &TenantId::new(tenant_id).unwrap(),
+                iid,
+                claimed.lease_token(),
+            )
             .await
             .unwrap();
 
@@ -8002,6 +8441,8 @@ mod tests {
             domain_payload: r#"{"done":true}"#.to_string(),
             expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
+            worker_id: None,
+            claim_token: None,
         };
 
         // First completion call: advance state to Completed { at: 11111 }, add one event
@@ -8247,7 +8688,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            if claimed.is_some() {
+            if let Some(claim) = &claimed {
                 // Recover the instance
                 let mut inst = s1_rec
                     .load_instance(&TenantId::new("default").unwrap(), iid)
@@ -8257,7 +8698,11 @@ mod tests {
                 inst.state = ProcessState::Running;
                 s1_rec.save_instance(owner, &inst).await.unwrap();
                 s1_rec
-                    .release_instance_transition(&TenantId::new("default").unwrap(), iid, owner)
+                    .release_instance_transition(
+                        &TenantId::new("default").unwrap(),
+                        iid,
+                        claim.lease_token(),
+                    )
                     .await
                     .unwrap();
                 true
@@ -8277,7 +8722,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            if claimed.is_some() {
+            if let Some(claim) = &claimed {
                 // Recover the instance
                 let mut inst = s2_rec
                     .load_instance(&TenantId::new("default").unwrap(), iid)
@@ -8287,7 +8732,11 @@ mod tests {
                 inst.state = ProcessState::Running;
                 s2_rec.save_instance(owner, &inst).await.unwrap();
                 s2_rec
-                    .release_instance_transition(&TenantId::new("default").unwrap(), iid, owner)
+                    .release_instance_transition(
+                        &TenantId::new("default").unwrap(),
+                        iid,
+                        claim.lease_token(),
+                    )
                     .await
                     .unwrap();
                 true
@@ -8601,7 +9050,11 @@ mod tests {
         ));
 
         store
-            .release_instance_transition(&TenantId::new(tenant_id).unwrap(), instance_id, "timer-b")
+            .release_instance_transition(
+                &TenantId::new(tenant_id).unwrap(),
+                instance_id,
+                consume_claim.lease_token(),
+            )
             .await
             .unwrap();
         let duplicate_claim = store
@@ -8814,9 +9267,8 @@ mod tests {
             .await
         }
 
-        async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> StoreResult<u32> {
-            <PostgresWorkflowStore as RuntimeStore>::reclaim_stale_jobs(&*self.inner, timeout_ms)
-                .await
+        async fn reclaim_stale_jobs(&self) -> StoreResult<u32> {
+            <PostgresWorkflowStore as RuntimeStore>::reclaim_stale_jobs(&*self.inner).await
         }
 
         async fn prune_dedupe_cache(&self, older_than_ms: u64) -> StoreResult<u32> {
@@ -8990,13 +9442,13 @@ mod tests {
             &self,
             tenant_id: &TenantId,
             instance_id: Uuid,
-            owner: &str,
+            lease_token: &str,
         ) -> StoreResult<()> {
             <PostgresWorkflowStore as RuntimeStore>::release_instance_transition(
                 &*self.inner,
                 tenant_id,
                 instance_id,
-                owner,
+                lease_token,
             )
             .await
         }
@@ -9014,6 +9466,92 @@ mod tests {
                 join_id,
             )
             .await
+        }
+
+        async fn enqueue_activation(
+            &self,
+            tenant_id: &TenantId,
+            instance_id: Uuid,
+            command_id: Uuid,
+            command_kind: &str,
+            command: &Command,
+            available_at_ms: Option<u64>,
+        ) -> StoreResult<bool> {
+            <PostgresWorkflowStore as RuntimeStore>::enqueue_activation(
+                &*self.inner,
+                tenant_id,
+                instance_id,
+                command_id,
+                command_kind,
+                command,
+                available_at_ms,
+            )
+            .await
+        }
+
+        async fn claim_ready_activations(
+            &self,
+            tenant_id: &TenantId,
+            owner: &str,
+            limit: usize,
+            lease_ms: u64,
+        ) -> StoreResult<Vec<ClaimedActivation>> {
+            <PostgresWorkflowStore as RuntimeStore>::claim_ready_activations(
+                &*self.inner,
+                tenant_id,
+                owner,
+                limit,
+                lease_ms,
+            )
+            .await
+        }
+
+        async fn renew_activation_claim(
+            &self,
+            activation: &ClaimedActivation,
+            lease_ms: u64,
+        ) -> StoreResult<Option<ClaimedActivation>> {
+            <PostgresWorkflowStore as RuntimeStore>::renew_activation_claim(
+                &*self.inner,
+                activation,
+                lease_ms,
+            )
+            .await
+        }
+
+        async fn release_activation_to_ready(
+            &self,
+            activation: &ClaimedActivation,
+            not_before_ms: Option<u64>,
+        ) -> StoreResult<()> {
+            <PostgresWorkflowStore as RuntimeStore>::release_activation_to_ready(
+                &*self.inner,
+                activation,
+                not_before_ms,
+            )
+            .await
+        }
+
+        async fn consume_activation(&self, activation: &ClaimedActivation) -> StoreResult<bool> {
+            <PostgresWorkflowStore as RuntimeStore>::consume_activation(&*self.inner, activation)
+                .await
+        }
+
+        async fn dead_letter_activation(
+            &self,
+            activation: &ClaimedActivation,
+            reason: &str,
+        ) -> StoreResult<()> {
+            <PostgresWorkflowStore as RuntimeStore>::dead_letter_activation(
+                &*self.inner,
+                activation,
+                reason,
+            )
+            .await
+        }
+
+        async fn reclaim_expired_activations(&self) -> StoreResult<u32> {
+            <PostgresWorkflowStore as RuntimeStore>::reclaim_expired_activations(&*self.inner).await
         }
     }
     #[async_trait]
@@ -9190,7 +9728,7 @@ mod tests {
             )
             .await
         }
-    
+
         async fn create_design_session(
             &self,
             _tenant_id: &TenantId,
@@ -9231,7 +9769,7 @@ mod tests {
         ) -> StoreResult<()> {
             Err(StoreError::Unavailable("test double".into()))
         }
-}
+    }
 
     /// E-invariant #1 & #2: Violation -> quarantine, not crash, not churn. Quarantine survives rollback.
     /// Drives a tick through the production path, rolls it back, and verifies state changes do not persist while quarantine does.
@@ -9654,7 +10192,10 @@ mod tests {
                 ))
                 .start_dedupe(StartDedupe::new(command))
                 .build();
-            (Claim::new(tenant.clone(), instance_id, 0, 0), transition)
+            (
+                Claim::new(tenant.clone(), instance_id, 0, 0, ""),
+                transition,
+            )
         };
         let (first_claim, first_transition) = make_start(first_id);
         let (second_claim, second_transition) = make_start(second_id);
@@ -9805,7 +10346,10 @@ mod tests {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
         let instance = make_instance(instance_id);
-        store.save_instance("integrity-fixture", &instance).await.unwrap();
+        store
+            .save_instance("integrity-fixture", &instance)
+            .await
+            .unwrap();
 
         let claim = store
             .claim_instance_for_transition(
@@ -9885,7 +10429,10 @@ mod tests {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
         let instance = make_instance(instance_id);
-        store.save_instance("integrity-fixture", &instance).await.unwrap();
+        store
+            .save_instance("integrity-fixture", &instance)
+            .await
+            .unwrap();
 
         let claim = store
             .claim_instance_for_transition(
@@ -9953,7 +10500,10 @@ mod tests {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
         let instance = make_instance(instance_id);
-        store.save_instance("integrity-fixture", &instance).await.unwrap();
+        store
+            .save_instance("integrity-fixture", &instance)
+            .await
+            .unwrap();
 
         let claim = store
             .claim_instance_for_transition(
@@ -10018,7 +10568,10 @@ mod tests {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
         let instance = make_instance(instance_id);
-        store.save_instance("integrity-fixture", &instance).await.unwrap();
+        store
+            .save_instance("integrity-fixture", &instance)
+            .await
+            .unwrap();
 
         // Two commits: genesis, then one more, so the journal head has a
         // real (non-zero, non-genesis) prior_state_hash to corrupt.
@@ -10033,10 +10586,7 @@ mod tests {
             .unwrap()
             .unwrap();
         store
-            .commit_transition(
-                &claim1,
-                &TransitionBuilder::new(instance.clone()).build(),
-            )
+            .commit_transition(&claim1, &TransitionBuilder::new(instance.clone()).build())
             .await
             .unwrap();
         let claim2 = store
@@ -10061,7 +10611,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(head_revision > 0, "need a non-genesis journal head to break its chain link");
+        assert!(
+            head_revision > 0,
+            "need a non-genesis journal head to break its chain link"
+        );
         sqlx::query(
             "UPDATE workflow_journal SET prior_state_hash = $1 WHERE instance_id = $2 AND new_revision = $3",
         )
@@ -10113,7 +10666,10 @@ mod tests {
         let (pool, store, _lock) = setup().await;
         let instance_id = Uuid::now_v7();
         let instance = make_instance(instance_id);
-        store.save_instance("integrity-fixture", &instance).await.unwrap();
+        store
+            .save_instance("integrity-fixture", &instance)
+            .await
+            .unwrap();
 
         let claim = store
             .claim_instance_for_transition(
@@ -10166,7 +10722,9 @@ mod tests {
                     "expected unsupported-version tripwire naming version 99, got: {message}"
                 );
             }
-            other => panic!("expected ClaimError::Integrity naming the version tripwire, got {other:?}"),
+            other => {
+                panic!("expected ClaimError::Integrity naming the version tripwire, got {other:?}")
+            }
         }
         let quarantine: Option<String> = sqlx::query_scalar(
             "SELECT quarantine_state FROM workflow_instances WHERE instance_id = $1",
@@ -10463,7 +11021,7 @@ mod tests {
                 let tenant =
                     TenantId::new(instance.tenant_id.clone()).map_err(StoreError::invalid)?;
                 self.commit_transition(
-                    &Claim::new(tenant, instance.instance_id, 0, 0),
+                    &Claim::new(tenant, instance.instance_id, 0, 0, ""),
                     &TransitionBuilder::new(instance.clone()).build(),
                 )
                 .await
@@ -10490,7 +11048,7 @@ mod tests {
                 self.release_instance_transition(
                     &TenantId::new(instance.tenant_id.clone()).map_err(StoreError::invalid)?,
                     instance.instance_id,
-                    lease_owner,
+                    claim.lease_token(),
                 )
                 .await
                 .persistence()?;
@@ -10581,7 +11139,7 @@ mod tests {
             let wait_state = serde_json::to_value(&fiber.wait).persistence()?;
 
             let result = sqlx::query(
-            r#"
+                r#"
             INSERT INTO fibers (instance_id, fiber_id, pc, stack, wait_state, loop_epoch, tenant_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (instance_id, fiber_id) DO UPDATE SET
@@ -10590,16 +11148,17 @@ mod tests {
                 wait_state = EXCLUDED.wait_state,
                 loop_epoch = EXCLUDED.loop_epoch
             "#,
-        )
-        .bind(instance_id)
-        .bind(fiber.fiber_id)
-        .bind(fiber.pc.get() as i32)
-        .bind(&stack)
-        .bind(&wait_state)
-        .bind(fiber.loop_epoch as i32)
-        .bind(&tenant_id)
-        .execute(&mut *tx)
-        .await.persistence()?;
+            )
+            .bind(instance_id)
+            .bind(fiber.fiber_id)
+            .bind(fiber.pc.get() as i32)
+            .bind(&stack)
+            .bind(&wait_state)
+            .bind(fiber.loop_epoch as i32)
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+            .persistence()?;
 
             // A18 — rows_affected validation. INSERT ... ON CONFLICT DO UPDATE
             // must touch exactly one row. Zero means RLS rejection on the
@@ -11198,5 +11757,754 @@ mod tests {
 
             tx.assert_rows_affected(&result, 1, "save_incident")
         }
+    }
+
+    // ── Phase 0 lease/dispatch regression tests ──
+    //
+    // See docs/todo/PHASE0-execution-lease-mapping.md and
+    // docs/todo/wasm_bpmn_execution_lease_forensic_review.md for the full
+    // analysis. Each test below pins one forensic-review finding (F-01,
+    // F-02, F-03, F-04) against the live database so later phases have a
+    // red->green receipt instead of a prose claim. F-02 and F-04 have
+    // since gone green (Phase 1, Phase 2); F-03 remains EXPECTED TO FAIL
+    // — that is the point: it captures a defect not yet fixed, not a
+    // false "all green" state.
+
+    /// F-04 (same-owner ABA release), FIXED by Phase 2: `Claim` now
+    /// carries a unique `lease_token` per acquisition
+    /// (`docs/todo/PHASE2-tokenised-transition-release.md`), and
+    /// `release_instance_transition` matches on it instead of owner
+    /// alone. A task that reacquires after its own lease expired (fence
+    /// advances, fresh token minted) is no longer indistinguishable, at
+    /// release time, from the stale task whose expired lease it just
+    /// replaced — releasing with the STALE token is now a no-op against
+    /// the live reacquisition.
+    #[tokio::test]
+    async fn test_phase0_f04_same_owner_aba_release_clears_new_claim() {
+        let (pool, store, _lock) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+        let tenant = TenantId::new(tenant_id).unwrap();
+
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("owner-x", &inst).await.unwrap();
+
+        // Acquire as owner X (first generation).
+        let claim_gen1 = store
+            .claim_instance_for_transition(&tenant, iid, "owner-x", 30_000)
+            .await
+            .unwrap()
+            .expect("first acquisition must succeed");
+
+        // Force expiry, then reacquire as the SAME owner string. The fence
+        // advances (new generation) and a fresh token is minted — nothing
+        // about the owner string distinguishes this acquisition from the
+        // one that just expired, but the token does.
+        sqlx::query(
+            "UPDATE workflow_instances SET lease_until = now() - interval '1 second' WHERE instance_id = $1",
+        )
+        .bind(iid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let claim_gen2 = store
+            .claim_instance_for_transition(&tenant, iid, "owner-x", 30_000)
+            .await
+            .unwrap()
+            .expect("reacquisition after expiry must succeed");
+        assert!(
+            claim_gen2.fence() > claim_gen1.fence(),
+            "reacquisition must advance the fence"
+        );
+        assert_ne!(
+            claim_gen1.lease_token(),
+            claim_gen2.lease_token(),
+            "a genuinely new acquisition (fence advanced) must mint a fresh token"
+        );
+
+        // The stale first-generation task now releases using ITS OWN
+        // (superseded) token, believing it still owns the lease.
+        store
+            .release_instance_transition(&tenant, iid, claim_gen1.lease_token())
+            .await
+            .unwrap();
+
+        let (lease_owner, lease_until): (Option<String>, Option<chrono::DateTime<chrono::Utc>>) =
+            sqlx::query_as(
+                "SELECT lease_owner, lease_until FROM workflow_instances WHERE instance_id = $1",
+            )
+            .bind(iid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert!(
+            lease_owner.is_some() && lease_until.is_some(),
+            "F-04: the new (generation-2) claim must remain authoritative after a stale \
+             same-owner release carrying the superseded token. lease_owner={lease_owner:?} \
+             lease_until={lease_until:?}"
+        );
+    }
+
+    /// F-02 baseline capture, now RE-SCOPED after Phase 1: `jobs_ack`'s
+    /// unconditional `DELETE FROM job_queue WHERE tenant_id = $1 AND
+    /// job_key = $2` (see `store_postgres.rs`, the `jobs_ack` loop) is
+    /// deliberately UNCHANGED — it remains the ack path for internal/
+    /// trusted callers (`complete_job` without a worker identity, ~60
+    /// existing test/fuzz call sites and the designer REST demo) that
+    /// never held a job_queue claim in the first place, so there is no
+    /// ownership to check. This test now documents that intentional
+    /// contract rather than a live defect: the real external worker
+    /// protocol (gRPC `complete_job_with_claim`) no longer reaches this
+    /// statement at all — it goes through the new claim-checked
+    /// `JobMutation::AckClaimed` path instead, proven by
+    /// `test_phase1_f02_complete_job_with_claim_rejects_stale_worker`
+    /// below. PASSES today and is expected to keep passing.
+    #[tokio::test]
+    async fn test_phase0_f02_unconditional_job_ack_deletes_reassigned_claim() {
+        let (pool, store, _lock) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+        let tenant = TenantId::new(tenant_id).unwrap();
+        let job_key = format!("job-phase0-f02-{}", Uuid::now_v7());
+
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("default", &inst).await.unwrap();
+
+        let session_stack =
+            serde_json::to_value(bpmn_lite_types::session_stack::SessionStackState::default())
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO job_queue (job_key, tenant_id, process_instance_id, task_type, \
+             service_task_id, domain_payload, domain_payload_hash, session_stack) \
+             VALUES ($1, $2, $3, 'phase0-task', 'svc', 'payload', $4, $5)",
+        )
+        .bind(&job_key)
+        .bind(tenant_id)
+        .bind(iid)
+        .bind(&test_hash("phase0-f02")[..])
+        .bind(&session_stack)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Worker A claims it.
+        let claimed_a = store
+            .dequeue_jobs(
+                &["phase0-task".to_string()],
+                10,
+                &tenant,
+                "worker-a",
+                30_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed_a.len(), 1, "worker A must claim the seeded job");
+        let claim_a = &claimed_a[0];
+        assert!(
+            store
+                .validate_job_claim(&tenant, &job_key, "worker-a", &claim_a.claim_token)
+                .await
+                .unwrap(),
+            "worker A's claim must validate immediately after dequeue"
+        );
+
+        // A stalls; the claim is forced stale (F-06: staleness is
+        // decided by the persisted claim_expires_at, not claimed_at) and
+        // reassigned to worker B.
+        sqlx::query(
+            "UPDATE job_queue SET claim_expires_at = now() - interval '1 hour' WHERE job_key = $1",
+        )
+        .bind(&job_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let reclaimed = store.reclaim_stale_jobs().await.unwrap();
+        assert!(
+            reclaimed >= 1,
+            "stale reclaim must return the job to pending"
+        );
+
+        let claimed_b = store
+            .dequeue_jobs(
+                &["phase0-task".to_string()],
+                10,
+                &tenant,
+                "worker-b",
+                30_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed_b.len(), 1, "worker B must claim the reassigned job");
+        let claim_b = &claimed_b[0];
+        assert!(
+            store
+                .validate_job_claim(&tenant, &job_key, "worker-b", &claim_b.claim_token)
+                .await
+                .unwrap(),
+            "worker B's claim must be live before A's belated completion arrives"
+        );
+
+        // Trusted/internal completion (e.g. `complete_job` with no
+        // worker identity) reaches the database. This is the exact
+        // `jobs_ack` statement `commit_transition` still runs for that
+        // path — job-key-only by design, since the caller never held a
+        // job_queue claim to be checked against.
+        sqlx::query("DELETE FROM job_queue WHERE tenant_id = $1 AND job_key = $2")
+            .bind(tenant_id)
+            .bind(&job_key)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let survives: Option<(String,)> =
+            sqlx::query_as("SELECT worker_id FROM job_queue WHERE job_key = $1")
+                .bind(&job_key)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            survives, None,
+            "the legacy unconditional jobs_ack primitive removes the row by job_key alone — \
+             this is the intentional contract for internal/trusted callers with no claim \
+             identity, not a regression; external workers now avoid this path entirely via \
+             complete_job_with_claim's claim-checked AckClaimed mutation"
+        );
+    }
+
+    /// F-02 fix (Phase 1, `zed_agent_execution_lease_remediation_plan.md`):
+    /// the real external worker protocol, `complete_job_with_claim`, must
+    /// reject a stale worker whose claim was reassigned, and must never
+    /// touch the current claimant's row or the process revision. Unlike
+    /// `test_phase0_f02_...` above (which exercises the legacy
+    /// unconditional primitive directly), this drives the actual
+    /// production call path end-to-end: compile, start, dequeue, force
+    /// reassignment through the real reclaim path, then complete.
+    #[tokio::test]
+    async fn test_phase1_f02_complete_job_with_claim_rejects_stale_worker() {
+        let (pool, store, _lock) = setup().await;
+        let store = Arc::new(store);
+        let engine = BpmnLiteEngine::new(store.clone());
+
+        let compiled = engine.compile(SMOKE_BPMN).await.unwrap();
+        let version = compiled.bytecode_version;
+        let payload = r#"{"case_id":"phase1-f02"}"#;
+        let hash = bpmn_lite_vm::compute_hash(payload);
+        let instance_id = engine
+            .start("smoke_proc", version, payload, hash, "phase1-f02-corr")
+            .await
+            .unwrap();
+        engine.tick_instance(instance_id).await.unwrap();
+
+        let task_types = compiled.task_types;
+        let jobs = store
+            .dequeue_jobs(&task_types, 1, &TenantId::default(), "worker-a", 30_000)
+            .await
+            .unwrap();
+        assert_eq!(jobs.len(), 1, "should have 1 job");
+        let job_a = jobs[0].clone();
+        let stale_token = job_a.claim_token.clone();
+
+        // A stalls; force expiry and reassign to worker B through the
+        // real reclaim + dequeue paths (F-06: claim_expires_at, not
+        // claimed_at, is authority).
+        sqlx::query(
+            "UPDATE job_queue SET claim_expires_at = now() - interval '1 hour' \
+             WHERE job_key = $1",
+        )
+        .bind(&job_a.job_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let reclaimed = store.reclaim_stale_jobs().await.unwrap();
+        assert!(reclaimed >= 1, "stale reclaim must reassign the job");
+
+        let jobs_b = store
+            .dequeue_jobs(&task_types, 1, &TenantId::default(), "worker-b", 30_000)
+            .await
+            .unwrap();
+        assert_eq!(jobs_b.len(), 1, "worker B must claim the reassigned job");
+        let job_b = &jobs_b[0];
+
+        // A's belated completion must be rejected outright — no process
+        // transition, no deletion of B's row.
+        let stale_result = engine
+            .complete_job_with_claim(
+                &job_a.job_key,
+                r#"{"result":"stale"}"#,
+                job_a.domain_payload_hash,
+                BTreeMap::new(),
+                "worker-a",
+                &stale_token,
+            )
+            .await;
+        assert!(
+            stale_result.is_err(),
+            "F-02: stale worker A's completion must be rejected, not silently accepted"
+        );
+
+        let b_row: Option<(String, String)> =
+            sqlx::query_as("SELECT status, worker_id FROM job_queue WHERE job_key = $1")
+                .bind(&job_a.job_key)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            b_row,
+            Some(("claimed".to_string(), "worker-b".to_string())),
+            "F-02: worker B's live claim must survive worker A's rejected stale completion"
+        );
+
+        // B's legitimate completion succeeds and the instance progresses.
+        engine
+            .complete_job_with_claim(
+                &job_b.job_key,
+                r#"{"result":"ok"}"#,
+                job_b.domain_payload_hash,
+                BTreeMap::new(),
+                "worker-b",
+                &job_b.claim_token,
+            )
+            .await
+            .unwrap();
+        engine.tick_instance(instance_id).await.unwrap();
+
+        let inst = store
+            .load_instance(&TenantId::new("default").unwrap(), instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(inst.state, ProcessState::Completed { .. }),
+            "expected Completed after B's legitimate completion, got {:?}",
+            inst.state
+        );
+    }
+
+    /// F-07 fix (Phase 1): a job claimed on its LAST permitted attempt
+    /// (`retries_remaining == 1`) must still validate successfully —
+    /// `validate_job_claim` is an advisory pre-check and must not encode
+    /// a retry-budget predicate that rejects a legitimately claimed final
+    /// attempt before completion is ever tried.
+    #[tokio::test]
+    async fn test_phase1_f07_validate_job_claim_allows_final_attempt() {
+        let (pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let iid = Uuid::now_v7();
+        let mut inst = make_instance(iid);
+        inst.tenant_id = "default".to_string();
+        store.save_instance("default", &inst).await.unwrap();
+
+        let job_key = format!("job-phase1-f07-{}", Uuid::now_v7());
+        let session_stack =
+            serde_json::to_value(bpmn_lite_types::session_stack::SessionStackState::default())
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO job_queue (job_key, tenant_id, process_instance_id, task_type, \
+             service_task_id, domain_payload, domain_payload_hash, session_stack, \
+             retries_remaining) \
+             VALUES ($1, $2, $3, 'phase1-f07-task', 'svc', 'payload', $4, $5, 1)",
+        )
+        .bind(&job_key)
+        .bind("default")
+        .bind(iid)
+        .bind(&test_hash("phase1-f07")[..])
+        .bind(&session_stack)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let claimed = store
+            .dequeue_jobs(
+                &["phase1-f07-task".to_string()],
+                1,
+                &tenant,
+                "worker-last",
+                30_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(
+            claimed[0].retries_remaining, 1,
+            "seeded job must be on its final permitted attempt"
+        );
+
+        assert!(
+            store
+                .validate_job_claim(&tenant, &job_key, "worker-last", &claimed[0].claim_token)
+                .await
+                .unwrap(),
+            "F-07: a claim on its final permitted attempt (retries_remaining == 1) must still \
+             validate — the retry-budget predicate must not gate completion authority"
+        );
+    }
+
+    /// F-03 (active-active recovery): `recover_all_tenants` treats a busy
+    /// transition claim (`None`, because a live peer already holds an
+    /// unexpired lease) as fatal via `.ok_or_else(...)?`, aborting the
+    /// entire recovery scan instead of skipping the one busy instance. A
+    /// second replica starting while a healthy peer is doing legitimate
+    /// work must not fail its own startup gate.
+    ///
+    /// EXPECTED TO FAIL at baseline (`6e4de6d`) — `recover_all_tenants`
+    /// returns `Err`. Fixed by Phase 4's active-active-tolerant recovery.
+    #[tokio::test]
+    async fn test_phase0_f03_active_active_recovery_aborts_on_busy_lease() {
+        let (_pool, store, _lock) = setup().await;
+        let iid = Uuid::now_v7();
+        let tenant_id = "default";
+        let tenant = TenantId::new(tenant_id).unwrap();
+
+        let mut inst = make_instance(iid);
+        inst.tenant_id = tenant_id.to_string();
+        store.save_instance("replica-a", &inst).await.unwrap();
+
+        // Replica A holds a legitimate, unexpired transition lease.
+        let claim = store
+            .claim_instance_for_transition(&tenant, iid, "replica-a", 30_000)
+            .await
+            .unwrap();
+        assert!(claim.is_some(), "replica A must hold a live lease");
+
+        // Replica B starts up and runs recovery while A's lease is live.
+        let engine = BpmnLiteEngine::new(Arc::new(store));
+        let report = engine.recover_all_tenants("replica-b", 100, 30_000).await;
+
+        assert!(
+            report.is_ok(),
+            "F-03: startup recovery must skip an instance busy with a live peer lease, not \
+             abort the whole scan; got {report:?}"
+        );
+    }
+
+    /// F-01 (idle population write amplification): `claim_running_instances`
+    /// selects and lease-writes every row whose `state = '"Running"'`,
+    /// with no predicate on fibre readiness (readiness is only decoded
+    /// afterward, from the claimed snapshot, in `tick_instance_inner`).
+    /// Dispatch cost is therefore O(live population), not O(ready work).
+    ///
+    /// This asserts today's ACTUAL (undesirable) behaviour — every
+    /// `Running` instance gets claimed/written every sweep regardless of
+    /// whether any fibre is runnable — because there is no readiness
+    /// predicate yet to assert against. It currently PASSES; Phase 3's
+    /// durable activation queue (`zed_agent_execution_lease_remediation_plan.md`
+    /// Phase 3) removes `claim_running_instances` from the normal dispatch
+    /// path entirely, at which point this test's assertion should invert
+    /// to "an idle population produces zero claims/writes" per Phase 3's
+    /// own scale gate.
+    #[tokio::test]
+    async fn test_phase0_f01_idle_population_claims_regardless_of_readiness() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let owner = "phase0-f01-sweep";
+
+        let mut idle_ids = Vec::new();
+        for _ in 0..10 {
+            let iid = Uuid::now_v7();
+            let mut inst = make_instance(iid);
+            inst.tenant_id = "default".to_string();
+            inst.state = ProcessState::Running;
+            store.save_instance(owner, &inst).await.unwrap();
+            idle_ids.push(iid);
+        }
+
+        let claimed = store
+            .claim_running_instances(&tenant, owner, 100, 30_000)
+            .await
+            .unwrap();
+
+        for iid in &idle_ids {
+            assert!(
+                claimed.contains(iid),
+                "F-01 baseline: dispatch claims every Running row regardless of readiness \
+                 (instance {iid} was not claimed — investigate before treating this as fixed)"
+            );
+        }
+    }
+
+    // ── Phase 3A: durable activation queue primitives ──
+
+    async fn seed_running_instance(store: &PostgresWorkflowStore, tenant_owner: &str) -> Uuid {
+        let iid = Uuid::now_v7();
+        let mut inst = make_instance(iid);
+        inst.tenant_id = "default".to_string();
+        inst.state = ProcessState::Running;
+        store.save_instance(tenant_owner, &inst).await.unwrap();
+        iid
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_enqueue_activation_is_idempotent_on_command_id() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-enqueue").await;
+        let command_id = Uuid::now_v7();
+        let command = Command::Tick { fiber_id: None };
+
+        let first = store
+            .enqueue_activation(&tenant, instance_id, command_id, "tick", &command, None)
+            .await
+            .unwrap();
+        assert!(first, "first enqueue of a fresh command_id must insert");
+
+        let second = store
+            .enqueue_activation(&tenant, instance_id, command_id, "tick", &command, None)
+            .await
+            .unwrap();
+        assert!(
+            !second,
+            "re-enqueueing the same command_id must be a no-op, not a duplicate row"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_claim_ready_activations_respects_available_at() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-avail").await;
+        let command = Command::Tick { fiber_id: None };
+
+        // Ten seconds in the future: not yet ready.
+        store
+            .enqueue_activation(
+                &tenant,
+                instance_id,
+                Uuid::now_v7(),
+                "tick",
+                &command,
+                Some(datetime_to_epoch_ms(chrono::Utc::now()) as u64 + 10_000),
+            )
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-avail-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            claimed.is_empty(),
+            "an activation scheduled in the future must not be claimable yet"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_claim_enforces_one_claimed_activation_per_instance() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-oneperinst").await;
+        let command = Command::Tick { fiber_id: None };
+
+        for _ in 0..3 {
+            store
+                .enqueue_activation(&tenant, instance_id, Uuid::now_v7(), "tick", &command, None)
+                .await
+                .unwrap();
+        }
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-oneperinst-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "I-8: at most one claimed activation per instance at a time, \
+             even when multiple are ready and the batch limit allows more"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_claim_then_consume_removes_from_ready_pool() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-consume").await;
+        let command = Command::Tick { fiber_id: None };
+        let command_id = Uuid::now_v7();
+
+        store
+            .enqueue_activation(&tenant, instance_id, command_id, "tick", &command, None)
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-consume-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let activation = &claimed[0];
+        assert_eq!(activation.command_id(), command_id);
+
+        let consumed = store.consume_activation(activation).await.unwrap();
+        assert!(
+            consumed,
+            "consume must succeed against the live claim token"
+        );
+
+        let again = store
+            .claim_ready_activations(&tenant, "phase3a-consume-owner-2", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            again.is_empty(),
+            "a consumed activation must never be claimable again"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_release_returns_activation_to_ready_pool() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-release").await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(&tenant, instance_id, Uuid::now_v7(), "tick", &command, None)
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-release-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        store
+            .release_activation_to_ready(&claimed[0], None)
+            .await
+            .unwrap();
+
+        let reclaimed = store
+            .claim_ready_activations(&tenant, "phase3a-release-owner-2", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            reclaimed.len(),
+            1,
+            "a released activation must return to the ready pool for a fresh claim"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_renew_activation_claim_extends_expiry_for_live_token() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-renew").await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(&tenant, instance_id, Uuid::now_v7(), "tick", &command, None)
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-renew-owner", 10, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        let renewed = store
+            .renew_activation_claim(&claimed[0], 30_000)
+            .await
+            .unwrap();
+        assert!(
+            renewed.is_some(),
+            "renew must succeed while the claim token is still live"
+        );
+
+        let stale_token = ClaimedActivation::new(
+            tenant.clone(),
+            claimed[0].activation_id(),
+            claimed[0].instance_id(),
+            claimed[0].command_id(),
+            claimed[0].command_kind().to_string(),
+            claimed[0].command().clone(),
+            claimed[0].attempt_count(),
+            "not-the-real-token",
+        );
+        let rejected = store
+            .renew_activation_claim(&stale_token, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            rejected.is_none(),
+            "renew must reject a claim_token that does not match the persisted one"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_dead_letter_activation_removes_it_from_ready_pool() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-dlq").await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(&tenant, instance_id, Uuid::now_v7(), "tick", &command, None)
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-dlq-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        store
+            .dead_letter_activation(&claimed[0], "poison message")
+            .await
+            .unwrap();
+
+        let again = store
+            .claim_ready_activations(&tenant, "phase3a-dlq-owner-2", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            again.is_empty(),
+            "a dead-lettered activation must not resurface as ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_reclaim_expired_activations_returns_stale_claims_to_ready() {
+        let (pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3a-reclaim").await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(&tenant, instance_id, Uuid::now_v7(), "tick", &command, None)
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3a-reclaim-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        sqlx::query(
+            "UPDATE workflow_activations SET claim_expires_at = now() - interval '1 second' \
+             WHERE activation_id = $1",
+        )
+        .bind(claimed[0].activation_id())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let reclaimed_count = store.reclaim_expired_activations().await.unwrap();
+        assert_eq!(reclaimed_count, 1);
+
+        let again = store
+            .claim_ready_activations(&tenant, "phase3a-reclaim-owner-2", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            again.len(),
+            1,
+            "a claim past its persisted claim_expires_at must be reclaimable, \
+             mirroring F-06's lesson: authority is the persisted deadline, not a caller timeout"
+        );
     }
 }

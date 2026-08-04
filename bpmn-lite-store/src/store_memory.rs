@@ -39,7 +39,10 @@ struct Inner {
     payload_history: HashMap<(Uuid, [u8; 32]), String>,
     incidents: HashMap<Uuid, Vec<Incident>>,
     concurrency_tables: HashMap<Uuid, ConcurrencyTable>,
-    transition_leases: HashMap<Uuid, (String, Instant, u64)>,
+    /// (owner, expires_at, fence, lease_token). `lease_token` (Phase 2,
+    /// F-04) is the unique acquisition identity release/renewal must
+    /// match — see `bpmn_lite_types::Claim`'s doc comment.
+    transition_leases: HashMap<Uuid, (String, Instant, u64, String)>,
     revisions: HashMap<Uuid, u64>,
     durable_effects: HashMap<EffectId, MemoryEffect>,
     timers: HashMap<EffectId, MemoryTimer>,
@@ -47,6 +50,37 @@ struct Inner {
     starts: HashMap<(String, Uuid), Uuid>,
     snapshots: HashMap<Uuid, SnapshotEnvelope>,
     journals: HashMap<Uuid, Vec<JournalRecord>>,
+    /// Phase 3A durable activation queue scaffolding — unwired; nothing
+    /// enqueues to or consumes from this yet.
+    activations: HashMap<Uuid, MemoryActivation>,
+    /// (tenant_id, command_id) -> activation_id, for idempotent enqueue.
+    activation_dedupe: HashMap<(String, Uuid), Uuid>,
+    activation_seq_counter: u64,
+}
+
+#[derive(Clone)]
+struct MemoryActivation {
+    tenant_id: TenantId,
+    instance_id: Uuid,
+    command_id: Uuid,
+    command_kind: String,
+    command: Command,
+    status: MemoryActivationStatus,
+    available_at_ms: i64,
+    priority: i32,
+    seq: u64,
+    claim: Option<(String, String, i64)>, // (owner, token, expires_at_ms)
+    attempt_count: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemoryActivationStatus {
+    Ready,
+    Claimed,
+    // No `Completed` variant: `consume_activation` removes the row
+    // outright (mirroring how job/timer/effect acks work in this store)
+    // rather than tombstoning it.
+    DeadLettered,
 }
 
 #[derive(Clone)]
@@ -127,6 +161,9 @@ impl MemoryStore {
                 starts: HashMap::new(),
                 snapshots: HashMap::new(),
                 journals: HashMap::new(),
+                activations: HashMap::new(),
+                activation_dedupe: HashMap::new(),
+                activation_seq_counter: 0,
             }),
             pending_store: crate::pending::MemoryPendingInvocationStore::new(),
         }
@@ -450,7 +487,7 @@ impl RuntimeStore for MemoryStore {
 
     // ── Durability maintenance ──
 
-    async fn reclaim_stale_jobs(&self, _timeout_ms: u64) -> StoreResult<u32> {
+    async fn reclaim_stale_jobs(&self) -> StoreResult<u32> {
         let mut w = self.inner.write().await;
         let now = now_ms();
         let stale_keys: Vec<String> = w
@@ -574,18 +611,20 @@ impl RuntimeStore for MemoryStore {
         let now = Instant::now();
         let lease_until = now + Duration::from_millis(lease_ms);
         match w.transition_leases.get(&instance_id) {
-            Some((current_owner, expires_at, _)) if current_owner != owner && *expires_at > now => {
+            Some((current_owner, expires_at, _, _))
+                if current_owner != owner && *expires_at > now =>
+            {
                 Ok(None)
             }
             _ => {
                 let is_renewal = matches!(
                     w.transition_leases.get(&instance_id),
-                    Some((current_owner, expires_at, _)) if current_owner == owner && *expires_at > now
+                    Some((current_owner, expires_at, _, _)) if current_owner == owner && *expires_at > now
                 );
                 let previous_fence = w
                     .transition_leases
                     .get(&instance_id)
-                    .map(|(_, _, fence)| *fence)
+                    .map(|(_, _, fence, _)| *fence)
                     .unwrap_or(0);
                 let fence = if is_renewal {
                     previous_fence
@@ -594,14 +633,30 @@ impl RuntimeStore for MemoryStore {
                         ClaimError::Invalid("transition fence overflow".to_string())
                     })?
                 };
-                w.transition_leases
-                    .insert(instance_id, (owner.to_string(), lease_until, fence));
+                // F-04: reuse the token across a same-owner renewal of the
+                // SAME generation (fence unchanged) so it stays a no-op
+                // continuation; mint a fresh one whenever the fence
+                // actually advances (a genuinely new acquisition), so a
+                // release carrying the superseded token cannot clear it.
+                let lease_token = if is_renewal {
+                    w.transition_leases
+                        .get(&instance_id)
+                        .map(|(_, _, _, token)| token.clone())
+                        .unwrap_or_else(|| Uuid::now_v7().to_string())
+                } else {
+                    Uuid::now_v7().to_string()
+                };
+                w.transition_leases.insert(
+                    instance_id,
+                    (owner.to_string(), lease_until, fence, lease_token.clone()),
+                );
                 let tenant_id = tenant_id.clone();
                 Ok(Some(Claim::new(
                     tenant_id,
                     instance_id,
                     current_revision,
                     fence,
+                    lease_token,
                 )))
             }
         }
@@ -684,7 +739,7 @@ impl RuntimeStore for MemoryStore {
             let current_fence = w
                 .transition_leases
                 .get(&instance_id)
-                .map(|(_, _, fence)| *fence)
+                .map(|(_, _, fence, _)| *fence)
                 .unwrap_or(0);
             if current_fence != claim.fence() {
                 return Err(CommitError::StaleFence);
@@ -864,6 +919,21 @@ impl RuntimeStore for MemoryStore {
         }
         for mutation in transition.job_mutations() {
             match mutation {
+                JobMutation::AckClaimed {
+                    job_key,
+                    worker_id,
+                    claim_token,
+                } => {
+                    let Some((job, _)) = w.inflight_jobs.remove(job_key) else {
+                        return Err(CommitError::Conflict);
+                    };
+                    if job.worker_id != *worker_id || job.claim_token != *claim_token {
+                        w.inflight_jobs
+                            .insert(job.job_key.clone(), (job, Instant::now()));
+                        return Err(CommitError::Conflict);
+                    }
+                    w.job_queue.retain(|job| &job.job_key != job_key);
+                }
                 JobMutation::RetryClaimed {
                     job_key,
                     worker_id,
@@ -1528,7 +1598,7 @@ impl RuntimeStore for MemoryStore {
         &self,
         tenant_id: &TenantId,
         instance_id: Uuid,
-        owner: &str,
+        lease_token: &str,
     ) -> StoreResult<()> {
         let mut w = self.inner.write().await;
         let same_tenant = w
@@ -1539,12 +1609,226 @@ impl RuntimeStore for MemoryStore {
         if same_tenant
             && matches!(
                 w.transition_leases.get(&instance_id),
-                Some((current_owner, _, _)) if current_owner == owner
+                Some((_, _, _, current_token)) if current_token == lease_token
             )
         {
             w.transition_leases.remove(&instance_id);
         }
         Ok(())
+    }
+
+    // ── Phase 3A durable activation queue scaffolding (unwired) ──
+
+    async fn enqueue_activation(
+        &self,
+        tenant_id: &TenantId,
+        instance_id: Uuid,
+        command_id: Uuid,
+        command_kind: &str,
+        command: &Command,
+        available_at_ms: Option<u64>,
+    ) -> StoreResult<bool> {
+        let mut w = self.inner.write().await;
+        let dedupe_key = (tenant_id.to_string(), command_id);
+        if w.activation_dedupe.contains_key(&dedupe_key) {
+            return Ok(false);
+        }
+        let activation_id = Uuid::now_v7();
+        let seq = w.activation_seq_counter;
+        w.activation_seq_counter += 1;
+        w.activations.insert(
+            activation_id,
+            MemoryActivation {
+                tenant_id: tenant_id.clone(),
+                instance_id,
+                command_id,
+                command_kind: command_kind.to_string(),
+                command: command.clone(),
+                status: MemoryActivationStatus::Ready,
+                available_at_ms: available_at_ms.map(|ms| ms as i64).unwrap_or_else(now_ms),
+                priority: 0,
+                seq,
+                claim: None,
+                attempt_count: 0,
+            },
+        );
+        w.activation_dedupe.insert(dedupe_key, activation_id);
+        Ok(true)
+    }
+
+    async fn claim_ready_activations(
+        &self,
+        tenant_id: &TenantId,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> StoreResult<Vec<ClaimedActivation>> {
+        let mut w = self.inner.write().await;
+        let now = now_ms();
+        let claimed_instances: HashSet<Uuid> = w
+            .activations
+            .values()
+            .filter(|a| {
+                a.tenant_id.as_str() == tenant_id.as_str()
+                    && a.status == MemoryActivationStatus::Claimed
+            })
+            .map(|a| a.instance_id)
+            .collect();
+        let mut candidates: Vec<Uuid> = w
+            .activations
+            .iter()
+            .filter(|(_, a)| {
+                a.tenant_id.as_str() == tenant_id.as_str()
+                    && a.status == MemoryActivationStatus::Ready
+                    && a.available_at_ms <= now
+                    && !claimed_instances.contains(&a.instance_id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        candidates.sort_by_key(|id| {
+            let a = &w.activations[id];
+            (a.priority, a.available_at_ms, a.seq)
+        });
+        let mut result = Vec::new();
+        let mut claimed_this_batch: HashSet<Uuid> = HashSet::new();
+        for activation_id in candidates {
+            if result.len() >= limit {
+                break;
+            }
+            let instance_id = w.activations[&activation_id].instance_id;
+            if claimed_this_batch.contains(&instance_id) {
+                continue;
+            }
+            let token = Uuid::now_v7().to_string();
+            let expires_at = now + lease_ms as i64;
+            let activation = w.activations.get_mut(&activation_id).unwrap();
+            activation.status = MemoryActivationStatus::Claimed;
+            activation.claim = Some((owner.to_string(), token.clone(), expires_at));
+            activation.attempt_count += 1;
+            claimed_this_batch.insert(instance_id);
+            result.push(ClaimedActivation::new(
+                activation.tenant_id.clone(),
+                activation_id,
+                activation.instance_id,
+                activation.command_id,
+                activation.command_kind.clone(),
+                activation.command.clone(),
+                activation.attempt_count,
+                token,
+            ));
+        }
+        Ok(result)
+    }
+
+    async fn renew_activation_claim(
+        &self,
+        activation: &ClaimedActivation,
+        lease_ms: u64,
+    ) -> StoreResult<Option<ClaimedActivation>> {
+        let mut w = self.inner.write().await;
+        let Some(row) = w.activations.get_mut(&activation.activation_id()) else {
+            return Ok(None);
+        };
+        if row.status != MemoryActivationStatus::Claimed {
+            return Ok(None);
+        }
+        let Some((owner, token, _)) = row.claim.clone() else {
+            return Ok(None);
+        };
+        if token != activation.claim_token() {
+            return Ok(None);
+        }
+        let expires_at = now_ms() + lease_ms as i64;
+        row.claim = Some((owner, token.clone(), expires_at));
+        Ok(Some(ClaimedActivation::new(
+            row.tenant_id.clone(),
+            activation.activation_id(),
+            row.instance_id,
+            row.command_id,
+            row.command_kind.clone(),
+            row.command.clone(),
+            row.attempt_count,
+            token,
+        )))
+    }
+
+    async fn release_activation_to_ready(
+        &self,
+        activation: &ClaimedActivation,
+        not_before_ms: Option<u64>,
+    ) -> StoreResult<()> {
+        let mut w = self.inner.write().await;
+        if let Some(row) = w.activations.get_mut(&activation.activation_id()) {
+            let matches = row.status == MemoryActivationStatus::Claimed
+                && row
+                    .claim
+                    .as_ref()
+                    .is_some_and(|(_, token, _)| token == activation.claim_token());
+            if matches {
+                row.status = MemoryActivationStatus::Ready;
+                row.claim = None;
+                row.available_at_ms = not_before_ms.map(|ms| ms as i64).unwrap_or_else(now_ms);
+            }
+        }
+        Ok(())
+    }
+
+    async fn consume_activation(&self, activation: &ClaimedActivation) -> StoreResult<bool> {
+        let mut w = self.inner.write().await;
+        let matches = w
+            .activations
+            .get(&activation.activation_id())
+            .is_some_and(|row| {
+                row.status == MemoryActivationStatus::Claimed
+                    && row
+                        .claim
+                        .as_ref()
+                        .is_some_and(|(_, token, _)| token == activation.claim_token())
+            });
+        if matches {
+            w.activations.remove(&activation.activation_id());
+        }
+        Ok(matches)
+    }
+
+    async fn dead_letter_activation(
+        &self,
+        activation: &ClaimedActivation,
+        _reason: &str,
+    ) -> StoreResult<()> {
+        let mut w = self.inner.write().await;
+        if let Some(row) = w.activations.get_mut(&activation.activation_id()) {
+            let matches = row.status == MemoryActivationStatus::Claimed
+                && row
+                    .claim
+                    .as_ref()
+                    .is_some_and(|(_, token, _)| token == activation.claim_token());
+            if matches {
+                row.status = MemoryActivationStatus::DeadLettered;
+                row.claim = None;
+            }
+        }
+        Ok(())
+    }
+
+    async fn reclaim_expired_activations(&self) -> StoreResult<u32> {
+        let mut w = self.inner.write().await;
+        let now = now_ms();
+        let mut count = 0u32;
+        for row in w.activations.values_mut() {
+            if row.status == MemoryActivationStatus::Claimed
+                && row
+                    .claim
+                    .as_ref()
+                    .is_some_and(|(_, _, expires_at)| *expires_at <= now)
+            {
+                row.status = MemoryActivationStatus::Ready;
+                row.claim = None;
+                row.available_at_ms = now;
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     async fn join_get(
@@ -1911,9 +2195,7 @@ impl AdminProjectionStore for MemoryStore {
                 revisions: record
                     .events
                     .iter()
-                    .filter(|event| {
-                        matches!(event.kind, DesignSessionEventKind::Revision { .. })
-                    })
+                    .filter(|event| matches!(event.kind, DesignSessionEventKind::Revision { .. }))
                     .count() as u32,
                 updated_at: record
                     .events
@@ -1963,7 +2245,6 @@ impl AdminProjectionStore for MemoryStore {
         record.template_ref = Some((template_name.to_owned(), template_version, plan_hash));
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -1976,10 +2257,13 @@ mod tests {
             let tenant =
                 TenantId::new(instance.tenant_id.clone()).map_err(StoreError::integrity)?;
             let transition = TransitionBuilder::new(instance.clone()).build();
-            self.commit_transition(&Claim::new(tenant, instance.instance_id, 0, 0), &transition)
-                .await
-                .map(|_| ())
-                .map_err(StoreError::integrity)
+            self.commit_transition(
+                &Claim::new(tenant, instance.instance_id, 0, 0, ""),
+                &transition,
+            )
+            .await
+            .map(|_| ())
+            .map_err(StoreError::integrity)
         }
 
         async fn fixture_transition(
@@ -2023,7 +2307,7 @@ mod tests {
             self.release_instance_transition(
                 &TenantId::new(tenant_id).unwrap(),
                 instance_id,
-                "fixture",
+                claim.lease_token(),
             )
             .await?;
             result
@@ -2373,8 +2657,10 @@ mod tests {
             .unwrap();
         {
             let mut w = store.inner.write().await;
-            w.instances.get_mut(&quarantined_id).unwrap().quarantine_state =
-                Some("replay_integrity_violation".to_string());
+            w.instances
+                .get_mut(&quarantined_id)
+                .unwrap()
+                .quarantine_state = Some("replay_integrity_violation".to_string());
         }
 
         let running = store.list_running_instances(&tenant).await.unwrap();
@@ -2539,6 +2825,8 @@ mod tests {
             domain_payload: r#"{"done":true}"#.to_string(),
             expected_instance_payload_hash: test_hash(r#"{"case_id":"abc"}"#),
             orch_flags: BTreeMap::new(),
+            worker_id: None,
+            claim_token: None,
         };
 
         assert!(store
@@ -2741,7 +3029,7 @@ mod tests {
             )
             .await
             .unwrap());
-        assert_eq!(store.reclaim_stale_jobs(0).await.unwrap(), 1);
+        assert_eq!(store.reclaim_stale_jobs().await.unwrap(), 1);
 
         let reclaimed = store
             .dequeue_jobs(
@@ -3058,24 +3346,32 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(store
+        let claim_a1 = store
             .claim_instance_for_transition(&TenantId::default(), iid, "owner-a", 5_000)
             .await
             .unwrap()
-            .is_some());
+            .expect("first acquisition must succeed");
         assert!(store
             .claim_instance_for_transition(&TenantId::default(), iid, "owner-b", 5_000)
             .await
             .unwrap()
             .is_none());
-        assert!(store
+        let claim_a2 = store
             .claim_instance_for_transition(&TenantId::default(), iid, "owner-a", 5_000)
             .await
             .unwrap()
-            .is_some());
+            .expect("same-owner renewal while still live must succeed");
+        assert_eq!(
+            claim_a1.lease_token(),
+            claim_a2.lease_token(),
+            "a same-owner renewal of the same generation must keep the same token"
+        );
 
+        // F-04: releasing with a token that doesn't match the live
+        // acquisition (simulating a party that never held it, or a
+        // superseded generation) must be a harmless no-op.
         store
-            .release_instance_transition(&TenantId::default(), iid, "owner-b")
+            .release_instance_transition(&TenantId::default(), iid, "not-the-real-token")
             .await
             .unwrap();
         assert!(store
@@ -3085,7 +3381,7 @@ mod tests {
             .is_none());
 
         store
-            .release_instance_transition(&TenantId::default(), iid, "owner-a")
+            .release_instance_transition(&TenantId::default(), iid, claim_a2.lease_token())
             .await
             .unwrap();
         assert!(store
@@ -3360,6 +3656,196 @@ mod tests {
         assert!(claimed.contains(&running_id));
         assert!(!claimed.contains(&incidented_id));
     }
+
+    // ── Phase 3A: durable activation queue primitives (MemoryStore) ──
+
+    async fn seed_running_instance_for_activation_tests(store: &MemoryStore) -> Uuid {
+        let iid = Uuid::now_v7();
+        store
+            .save_instance("default", &make_instance(iid))
+            .await
+            .unwrap();
+        iid
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_memory_enqueue_activation_is_idempotent_on_command_id() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command_id = Uuid::now_v7();
+        let command = Command::Tick { fiber_id: None };
+
+        let first = store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                command_id,
+                "tick",
+                &command,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(first);
+
+        let second = store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                command_id,
+                "tick",
+                &command,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!second, "re-enqueueing the same command_id must be a no-op");
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_memory_claim_enforces_one_claimed_activation_per_instance() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command = Command::Tick { fiber_id: None };
+
+        for _ in 0..3 {
+            store
+                .enqueue_activation(
+                    &TenantId::default(),
+                    instance_id,
+                    Uuid::now_v7(),
+                    "tick",
+                    &command,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "I-8: at most one claimed activation per instance at a time"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_memory_claim_then_consume_removes_from_ready_pool() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command = Command::Tick { fiber_id: None };
+        let command_id = Uuid::now_v7();
+
+        store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                command_id,
+                "tick",
+                &command,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        let consumed = store.consume_activation(&claimed[0]).await.unwrap();
+        assert!(consumed);
+
+        let again = store
+            .claim_ready_activations(&TenantId::default(), "owner-b", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(again.is_empty(), "a consumed activation must not resurface");
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_memory_release_returns_activation_to_ready_pool() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                Uuid::now_v7(),
+                "tick",
+                &command,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        store
+            .release_activation_to_ready(&claimed[0], None)
+            .await
+            .unwrap();
+
+        let reclaimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-b", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            reclaimed.len(),
+            1,
+            "a released activation must return to ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3a_memory_dead_letter_activation_removes_it_from_ready_pool() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command = Command::Tick { fiber_id: None };
+
+        store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                Uuid::now_v7(),
+                "tick",
+                &command,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        store
+            .dead_letter_activation(&claimed[0], "poison message")
+            .await
+            .unwrap();
+
+        let again = store
+            .claim_ready_activations(&TenantId::default(), "owner-b", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            again.is_empty(),
+            "a dead-lettered activation must not resurface"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3440,7 +3926,11 @@ mod design_session_tests {
             .await
             .expect("load")
             .expect("exists");
-        assert_eq!(record.current_source(), Some("(workflow v0)"), "undo walked back");
+        assert_eq!(
+            record.current_source(),
+            Some("(workflow v0)"),
+            "undo walked back"
+        );
         assert_eq!(record.events.len(), 4, "undo appended, nothing deleted");
     }
 

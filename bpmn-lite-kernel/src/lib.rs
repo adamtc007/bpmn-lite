@@ -3407,16 +3407,25 @@ fn apply_job_completion(
         return Err(TransitionError::OptimisticConflict);
     }
     if snapshot.instance().state.is_terminal() {
-        return Ok(TransitionBuilder::new(snapshot.instance().clone())
-            .event(RuntimeEvent::SignalIgnored {
+        let mut builder =
+            TransitionBuilder::new(snapshot.instance().clone()).event(RuntimeEvent::SignalIgnored {
                 signal_desc: format!(
                     "complete_job(key={}, state={:?})",
                     completion.job_key,
                     snapshot.instance().state
                 ),
-            })
-            .ack_job(completion.job_key.clone())
-            .build());
+            });
+        builder = match (&completion.worker_id, &completion.claim_token) {
+            (Some(worker_id), Some(claim_token)) => {
+                builder.job_mutation(JobMutation::AckClaimed {
+                    job_key: completion.job_key.clone(),
+                    worker_id: worker_id.clone(),
+                    claim_token: claim_token.clone(),
+                })
+            }
+            _ => builder.ack_job(completion.job_key.clone()),
+        };
+        return Ok(builder.build());
     }
     let mut fiber = snapshot
         .fibers()
@@ -3445,7 +3454,14 @@ fn apply_job_completion(
         pc_next: fiber.pc,
     });
     changes.fibers_upsert.push(fiber);
-    changes.jobs_ack.push(completion.job_key.clone());
+    match (&completion.worker_id, &completion.claim_token) {
+        (Some(worker_id), Some(claim_token)) => changes.job_mutations.push(JobMutation::AckClaimed {
+            job_key: completion.job_key.clone(),
+            worker_id: worker_id.clone(),
+            claim_token: claim_token.clone(),
+        }),
+        _ => changes.jobs_ack.push(completion.job_key.clone()),
+    }
     changes.dedupe.push(DedupeWrite::new(
         completion.job_key.clone(),
         completion.clone(),
@@ -4539,6 +4555,8 @@ mod tests {
             domain_payload: "{}".to_string(),
             expected_instance_payload_hash: [0u8; 32],
             orch_flags,
+            worker_id: None,
+            claim_token: None,
         };
         apply_completion(&mut instance, &completion).unwrap();
         assert_eq!(instance.flags.get(&5), Some(&Value::Bool(true)));
@@ -4554,6 +4572,8 @@ mod tests {
             domain_payload: "{}".to_string(),
             expected_instance_payload_hash: [0u8; 32],
             orch_flags,
+            worker_id: None,
+            claim_token: None,
         };
         assert!(apply_completion(&mut instance, &completion).is_err());
     }

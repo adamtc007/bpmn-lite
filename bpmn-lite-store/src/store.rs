@@ -19,7 +19,10 @@ pub struct TemplateSummary {
 /// ever deleted), utterances carry the REPL dialogue.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DesignSessionEventKind {
-    Revision { dsl_source: String, note: String },
+    Revision {
+        dsl_source: String,
+        note: String,
+    },
     Utterance {
         text: String,
         response: String,
@@ -54,7 +57,10 @@ pub enum DesignSessionEventKind {
     /// of `WholeGraphLegality`. Sessions with zero GraphEdit events stay
     /// on the legacy DSL-source path — purely additive, no session's
     /// existing behavior changes underneath it.
-    GraphEdit { operations_json: String, note: String },
+    GraphEdit {
+        operations_json: String,
+        note: String,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -88,11 +94,14 @@ pub struct DesignSessionRecord {
 impl DesignSessionRecord {
     /// The session's current DSL source: the last Revision event.
     pub fn current_source(&self) -> Option<&str> {
-        self.events.iter().rev().find_map(|event| match &event.kind {
-            DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
-            DesignSessionEventKind::Utterance { .. }
-            | DesignSessionEventKind::GraphEdit { .. } => None,
-        })
+        self.events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.kind {
+                DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
+                DesignSessionEventKind::Utterance { .. }
+                | DesignSessionEventKind::GraphEdit { .. } => None,
+            })
     }
 
     /// WS-B.4: every `GraphEdit` operations payload, in event order — the
@@ -103,9 +112,9 @@ impl DesignSessionRecord {
         self.events
             .iter()
             .filter_map(|event| match &event.kind {
-                DesignSessionEventKind::GraphEdit { operations_json, .. } => {
-                    Some(operations_json.as_str())
-                }
+                DesignSessionEventKind::GraphEdit {
+                    operations_json, ..
+                } => Some(operations_json.as_str()),
                 DesignSessionEventKind::Revision { .. }
                 | DesignSessionEventKind::Utterance { .. } => None,
             })
@@ -215,8 +224,15 @@ pub trait RuntimeStore: Send + Sync + JournalReader {
 
     // ── Durability maintenance ──
 
-    /// Reclaim jobs stuck in 'claimed' state past timeout. Returns count reclaimed.
-    async fn reclaim_stale_jobs(&self, timeout_ms: u64) -> StoreResult<u32>;
+    /// Reclaim jobs whose persisted `claim_expires_at` has passed.
+    ///
+    /// F-06 remediation: authority is the deadline recorded at dequeue
+    /// time (`claim_expires_at`), never a separately supplied timeout —
+    /// a caller-chosen timeout shorter than the issued lease reclaims a
+    /// still-valid claim out from under its worker, and a longer one
+    /// leaves an actually-expired claim unrecoverable. Returns count
+    /// reclaimed.
+    async fn reclaim_stale_jobs(&self) -> StoreResult<u32>;
 
     /// Prune dedupe entries older than the given age. Returns count pruned.
     async fn prune_dedupe_cache(&self, older_than_ms: u64) -> StoreResult<u32>;
@@ -275,7 +291,7 @@ pub trait RuntimeStore: Send + Sync + JournalReader {
         };
         if let Some(claim_error) = claim_error {
             if let Err(release_error) = self
-                .release_instance_transition(tenant_id, instance_id, owner)
+                .release_instance_transition(tenant_id, instance_id, claim.lease_token())
                 .await
             {
                 return Err(ClaimError::Unavailable(format!(
@@ -356,13 +372,89 @@ pub trait RuntimeStore: Send + Sync + JournalReader {
         error: &str,
     ) -> StoreResult<()>;
 
-    /// Release a previously claimed transition guard if this owner still holds it.
+    /// Release a previously claimed transition guard if `lease_token`
+    /// still matches the live acquisition (Phase 2, F-04). A stale
+    /// token — one belonging to a superseded generation — is a no-op,
+    /// never touching whatever currently holds the lease. Owner strings
+    /// are not sufficient identity: they are reused across concurrent
+    /// operations from the same engine instance and across expiry
+    /// boundaries.
     async fn release_instance_transition(
         &self,
         tenant_id: &TenantId,
         instance_id: Uuid,
-        owner: &str,
+        lease_token: &str,
     ) -> StoreResult<()>;
+
+    // ── Durable activation queue (Phase 3A scaffolding,
+    // docs/todo/PHASE3-durable-activation-queue.md). Unwired store
+    // primitives — nothing in the engine calls these yet. ──
+
+    /// Idempotently record that `command` is ready to apply against
+    /// `instance_id`. `command_id` is the durable dedupe identity: the
+    /// same command reported ready twice enqueues once. Returns whether
+    /// this call actually inserted a new row (`false` on a duplicate).
+    async fn enqueue_activation(
+        &self,
+        tenant_id: &TenantId,
+        instance_id: Uuid,
+        command_id: Uuid,
+        command_kind: &str,
+        command: &Command,
+        available_at_ms: Option<u64>,
+    ) -> StoreResult<bool>;
+
+    /// Claim a bounded batch of ready activations (`FOR UPDATE SKIP
+    /// LOCKED`, ordered by priority then arrival). At most one CLAIMED
+    /// activation per instance is enforced by the store (a partial
+    /// unique index in the PostgreSQL implementation), not by caller
+    /// discipline — I-8.
+    async fn claim_ready_activations(
+        &self,
+        tenant_id: &TenantId,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> StoreResult<Vec<ClaimedActivation>>;
+
+    /// Extend an already-claimed activation's deadline without changing
+    /// its identity. `None` means the claim was lost (reclaimed by
+    /// another owner after expiry) — the caller must stop treating the
+    /// activation as theirs, not retry the renewal.
+    async fn renew_activation_claim(
+        &self,
+        activation: &ClaimedActivation,
+        lease_ms: u64,
+    ) -> StoreResult<Option<ClaimedActivation>>;
+
+    /// Release a claimed activation back to `ready`, optionally deferred
+    /// until `not_before_ms`, incrementing its attempt count. A no-op if
+    /// `activation`'s token no longer matches the live claim.
+    async fn release_activation_to_ready(
+        &self,
+        activation: &ClaimedActivation,
+        not_before_ms: Option<u64>,
+    ) -> StoreResult<()>;
+
+    /// Mark a claimed activation completed. Returns `false` (not an
+    /// error) if the token no longer matches — an idempotent replay
+    /// after an already-consumed activation is a no-op, not a conflict.
+    async fn consume_activation(&self, activation: &ClaimedActivation) -> StoreResult<bool>;
+
+    /// Move a claimed activation to `dead_lettered` with a diagnostic
+    /// reason, ending its retry lifecycle without blocking other
+    /// activations for the same or other instances.
+    async fn dead_letter_activation(
+        &self,
+        activation: &ClaimedActivation,
+        reason: &str,
+    ) -> StoreResult<()>;
+
+    /// Return every `claimed` activation whose persisted
+    /// `claim_expires_at` has passed to `ready` (F-06's lesson applied
+    /// from the start: authority is the deadline recorded at claim time,
+    /// never a caller-supplied timeout). Returns the count reclaimed.
+    async fn reclaim_expired_activations(&self) -> StoreResult<u32>;
 
     /// Read the current arrive count for a join barrier.
     async fn join_get(
@@ -549,7 +641,7 @@ pub async fn commit_initial_snapshot(
 ) -> std::result::Result<CommitOutcome, CommitError> {
     let tenant_id = TenantId::new(instance.tenant_id.clone())
         .map_err(|error| CommitError::Integrity(error.to_string()))?;
-    let claim = Claim::new(tenant_id, instance.instance_id, 0, 0);
+    let claim = Claim::new(tenant_id, instance.instance_id, 0, 0, "");
     store
         .commit_transition(&claim, &TransitionBuilder::new(instance).build())
         .await
@@ -569,11 +661,12 @@ pub async fn commit_snapshot(
         .await
         .map_err(|error| CommitError::Unavailable(error.to_string()))?
         .ok_or(CommitError::Conflict)?;
+    let lease_token = claim.lease_token().to_string();
     let outcome = store
         .commit_transition(&claim, &TransitionBuilder::new(instance).build())
         .await?;
     store
-        .release_instance_transition(&tenant_id, instance_id, owner)
+        .release_instance_transition(&tenant_id, instance_id, &lease_token)
         .await
         .map_err(|error| CommitError::Unavailable(error.to_string()))?;
     Ok(outcome)
