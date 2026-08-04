@@ -2244,7 +2244,7 @@ impl AdminProjectionStore for MemoryStore {
                     .unwrap_or_else(|| record.created_at.clone()),
             })
             .collect();
-        summaries.sort_by(|a, b| a.id.cmp(&b.id));
+        summaries.sort_by_key(|summary| summary.id);
         Ok(summaries)
     }
 

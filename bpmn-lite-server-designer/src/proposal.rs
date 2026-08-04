@@ -1097,6 +1097,10 @@ mod tests {
                 candidate_id: candidate_id.as_str().to_string(),
             },
             evidence_trace: None,
+            board: Some(utterance_engine::corpus_schema::BoardDump::from_inference_board(&board)),
+            action_span_producer_hash: utterance_engine::disposition::producer_hash(
+                utterance_engine::disposition::NO_ACTION_SPAN_PRODUCER_ID,
+            ),
             decision_record_hash: "d".repeat(64),
         };
         let workbook = start_workbook(

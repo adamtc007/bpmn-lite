@@ -61,6 +61,22 @@ pub enum DesignSessionEventKind {
         operations_json: String,
         note: String,
     },
+    /// Phase 8: one durable link in an utterance-derived proposal chain.
+    /// The store keeps the shared workbook and optional bound plan opaque,
+    /// just as `GraphEdit` keeps Designer operations opaque. Server code owns
+    /// their schemas; the append-only event log owns their historical bytes.
+    ProposalAudit {
+        workbook_json: String,
+        #[serde(default)]
+        bound_plan_json: Option<String>,
+        outcome: String,
+        #[serde(default)]
+        dry_run_diagnostics: Vec<String>,
+        dry_run_diagnostics_hash: String,
+        decision_record_hash: String,
+        #[serde(default)]
+        related_event_seq: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -100,7 +116,8 @@ impl DesignSessionRecord {
             .find_map(|event| match &event.kind {
                 DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
                 DesignSessionEventKind::Utterance { .. }
-                | DesignSessionEventKind::GraphEdit { .. } => None,
+                | DesignSessionEventKind::GraphEdit { .. }
+                | DesignSessionEventKind::ProposalAudit { .. } => None,
             })
     }
 
@@ -116,7 +133,8 @@ impl DesignSessionRecord {
                     operations_json, ..
                 } => Some(operations_json.as_str()),
                 DesignSessionEventKind::Revision { .. }
-                | DesignSessionEventKind::Utterance { .. } => None,
+                | DesignSessionEventKind::Utterance { .. }
+                | DesignSessionEventKind::ProposalAudit { .. } => None,
             })
             .collect()
     }

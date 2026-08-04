@@ -185,7 +185,24 @@ No push is performed by this programme without owner approval.
   exhaustively represent the first-class message-wait node; the all-feature
   workspace check no longer fails on that earlier integration gap.
 
-### Phase 8 onward
+### Phase 8 — ambiguity, abstention, compound boundary and audit closure
+
+- GREEN: policy v2 derives clarification only from reciprocal live-board
+  contrasts; legacy/undiscriminated close scores still escalate.
+- GREEN: impossible-position abstention, hidden-candidate refusal and strict
+  two-span compound fixtures are permanent. Compound evidence creates no
+  workbook and compound execution remains explicitly deferred.
+- GREEN: decision records contain a resolvable board dump and independently
+  identified action-span producer; their hash moves with every recorded
+  dependency tested.
+- GREEN: append-only proposal audits retain workbook state, slot provenance,
+  bound plan, dry-run diagnostics/hash, decision-record identity and event
+  linkage through rejection, expiry or ratifying graph edit.
+- GREEN: development capture retains the expanded closure only after explicit
+  consent; the default live-user capture path remains structurally absent.
+- RECEIPT: `docs/receipts/bpmn-disposition-audit-phase8.md`.
+
+### Phase 9 onward
 
 Receipts are appended here as each phase reaches green. A phase is not marked
 complete solely because it compiles.

@@ -71,11 +71,10 @@ pub struct DesignerState {
     /// DESIGN DECISION — deliberately EPHEMERAL, in-memory only: a
     /// pending proposal is an un-ratified draft; losing it on restart is
     /// fail-closed (nothing un-ratified may survive a process). The
-    /// audit trail is NOT here — the utterance that produced the
-    /// proposal is already a persisted `Utterance` event, and a ratified
-    /// proposal becomes a persisted `GraphEdit` event carrying a
-    /// "ratified proposal …" note. Rejection/drift leave only the
-    /// utterance record, which is correct: no mutation happened.
+    /// audit trail is NOT here: every state is copied into an append-only
+    /// `ProposalAudit` event, while ratification additionally becomes a
+    /// persisted `GraphEdit`. Losing this cache on restart remains
+    /// fail-closed; the historical proposal chain does not disappear.
     proposals: Mutex<HashMap<Uuid, PendingProposal>>,
     /// Tier-1 trained ranker (DIR-002 serving integration, ruled
     /// 2026-08-01): loaded ONCE at startup from `SLM_BUNDLE_DIR` when the
@@ -104,6 +103,8 @@ pub(crate) struct PendingProposal {
     bound: Option<crate::proposal::BoundProposal>,
     source_utterance_text: String,
     staged_against_hash: String,
+    dry_run_diagnostics: Vec<String>,
+    audit_event_seq: Option<u64>,
 }
 
 impl DesignerState {
@@ -2769,6 +2770,46 @@ struct ProposalAnswersBody {
     answers: Vec<crate::proposal::SlotAnswer>,
 }
 
+fn proposal_audit_event(
+    pending: &PendingProposal,
+    outcome: &str,
+) -> Result<DesignSessionEventKind, serde_json::Error> {
+    let workbook_json = serde_json::to_string(&pending.workbook)?;
+    let bound_plan_json = pending
+        .bound
+        .as_ref()
+        .map(|bound| {
+            serde_json::to_string(&serde_json::json!({
+                "operations": bound.ops,
+                "description": bound.description,
+            }))
+        })
+        .transpose()?;
+    let diagnostics_preimage = serde_json::to_vec(&pending.dry_run_diagnostics)?;
+    Ok(DesignSessionEventKind::ProposalAudit {
+        workbook_json,
+        bound_plan_json,
+        outcome: outcome.to_string(),
+        dry_run_diagnostics: pending.dry_run_diagnostics.clone(),
+        dry_run_diagnostics_hash: blake3::hash(&diagnostics_preimage).to_hex().to_string(),
+        decision_record_hash: pending.workbook.evidence_record_hash.as_str().to_string(),
+        related_event_seq: pending.audit_event_seq,
+    })
+}
+
+async fn append_proposal_audit(
+    demo: &DesignerState,
+    session_id: Uuid,
+    pending: &PendingProposal,
+    outcome: &str,
+) -> Result<u64, anyhow::Error> {
+    let event = proposal_audit_event(pending, outcome)?;
+    Ok(demo
+        .store
+        .append_design_session_event(&demo.tenant_id, session_id, &event)
+        .await?)
+}
+
 /// POST /api/dsl/sessions/:id/proposals/:pid/answers — atomically apply typed
 /// answers to a needs-input workbook, then materialize and dry-stage only when
 /// all required slots are resolved.
@@ -2812,6 +2853,26 @@ async fn answer_proposal_endpoint(
     };
     let current_hash = graph_identity_hash(&record);
     if current_hash != pending.staged_against_hash {
+        let mut expired = pending.clone();
+        if let Err(error) = expired
+            .workbook
+            .transition(sem_os_policy::decision_board::ProposalStatus::Expired)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("workbook expiry: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &expired, "expired_graph_drift").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("proposal audit append: {error}") })),
+            )
+                .into_response();
+        }
         demo.proposals
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2820,7 +2881,7 @@ async fn answer_proposal_endpoint(
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": "graph changed since workbook creation",
-                "proposal_status": "expired",
+                "proposal_status": expired.workbook.status(),
                 "staged_against": pending.staged_against_hash,
                 "current": current_hash,
             })),
@@ -2854,11 +2915,24 @@ async fn answer_proposal_endpoint(
         };
 
     if workbook.status() == sem_os_policy::decision_board::ProposalStatus::NeedsArguments {
-        let updated = PendingProposal {
+        let mut updated = PendingProposal {
             workbook: workbook.clone(),
             bound: None,
+            dry_run_diagnostics: Vec::new(),
             ..pending
         };
+        match append_proposal_audit(demo.as_ref(), id, &updated, "answers_applied").await {
+            Ok(audit_seq) => updated.audit_event_seq = Some(audit_seq),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("proposal audit append: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
         demo.proposals
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2932,11 +3006,31 @@ async fn answer_proposal_endpoint(
         }
     }
 
-    let updated = PendingProposal {
+    let mut updated = PendingProposal {
         workbook: workbook.clone(),
         bound: Some(bound.clone()),
+        dry_run_diagnostics: diagnostics.clone(),
         ..pending
     };
+    let outcome = if workbook.status()
+        == sem_os_policy::decision_board::ProposalStatus::ReadyForRatification
+    {
+        "dry_run_admitted"
+    } else {
+        "dry_run_refused"
+    };
+    match append_proposal_audit(demo.as_ref(), id, &updated, outcome).await {
+        Ok(audit_seq) => updated.audit_event_seq = Some(audit_seq),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
+    }
     demo.proposals
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -3038,6 +3132,28 @@ async fn ratify_proposal_endpoint(
     // user re-utters against the current graph.
     let current_hash = graph_identity_hash(&record);
     if current_hash != staged_against_hash {
+        let mut expired = pending.clone();
+        if let Err(error) = expired
+            .workbook
+            .transition(sem_os_policy::decision_board::ProposalStatus::Expired)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("workbook expiry: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &expired, "expired_graph_drift").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
         consume();
         return (
             StatusCode::CONFLICT,
@@ -3102,10 +3218,14 @@ async fn ratify_proposal_endpoint(
     // The note marks this edit as utterance-ratified (vs a manual
     // graph-edit) and anchors it to its source utterance.
     let note = format!(
-        "ratified proposal {pid} (workbook {}, utterance seq {}, evidence {}): {}",
+        "ratified proposal {pid} (workbook {}, utterance seq {}, evidence {}, proposal audit seq {}): {}",
         pending.workbook.workbook_id.as_str(),
         pending.workbook.source_utterance_seq,
         pending.workbook.evidence_record_hash.as_str(),
+        pending
+            .audit_event_seq
+            .map(|seq| seq.to_string())
+            .unwrap_or_else(|| "legacy-none".to_string()),
         pending.source_utterance_text,
     );
     match demo
@@ -3151,42 +3271,61 @@ async fn ratify_proposal_endpoint(
     }
 }
 
-/// POST /api/dsl/sessions/:id/proposals/:pid/reject — drop the pending
-/// entry. Persists nothing (the utterance record already carries the
-/// full audit trail of what was proposed).
+/// POST /api/dsl/sessions/:id/proposals/:pid/reject — durably record the
+/// terminal workbook and then drop the ephemeral pending entry.
 async fn reject_proposal_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path((id, pid)): Path<(Uuid, Uuid)>,
 ) -> impl IntoResponse {
     let lock = demo.session_lock(id);
     let _guard = lock.lock().await;
-    let mut proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
-    match proposals.get(&pid) {
-        Some(p) if p.session_id == id => {
-            let mut workbook = p.workbook.clone();
-            if let Err(error) =
-                workbook.transition(sem_os_policy::decision_board::ProposalStatus::Rejected)
-            {
+    let pending = {
+        let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+        match proposals.get(&pid) {
+            Some(pending) if pending.session_id == id => pending.clone(),
+            _ => {
                 return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({ "error": format!("cannot reject: {error}") })),
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "proposal not found" })),
                 )
                     .into_response();
             }
-            proposals.remove(&pid);
-            Json(serde_json::json!({
-                "rejected": pid,
-                "proposal_status": workbook.status(),
-                "workbook": workbook,
-            }))
-            .into_response()
         }
-        _ => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "proposal not found" })),
+    };
+    let mut rejected = pending;
+    if let Err(error) = rejected
+        .workbook
+        .transition(sem_os_policy::decision_board::ProposalStatus::Rejected)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("cannot reject: {error}") })),
         )
-            .into_response(),
+            .into_response();
     }
+    let audit_seq = match append_proposal_audit(demo.as_ref(), id, &rejected, "rejected").await {
+        Ok(audit_seq) => audit_seq,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    demo.proposals
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&pid);
+    Json(serde_json::json!({
+        "rejected": pid,
+        "proposal_status": rejected.workbook.status(),
+        "workbook": rejected.workbook,
+        "audit_seq": audit_seq,
+    }))
+    .into_response()
 }
 
 /// GET /api/dsl/sessions/:id/proposals — the session's pending
@@ -3250,13 +3389,14 @@ fn render_disposition(
                 .to_owned()
         }
         // Unreachable in v1 (policy enum docs) — rendered defensively.
-        D::Ambiguous { top_candidates } => {
-            format!("Did you mean one of: {}?", top_candidates.join(", "))
-        }
+        D::Ambiguous { question, .. } => question.clone(),
         D::MissingArguments { candidate_id, missing } => {
             format!("'{candidate_id}' needs: {}", missing.join(", "))
         }
-        D::Compound => "That looks like several changes — one at a time, please.".to_owned(),
+        D::Compound { spans } => format!(
+            "That contains {} governed changes. Please submit them one at a time; nothing was staged.",
+            spans.len()
+        ),
     }
 }
 
@@ -3273,7 +3413,7 @@ async fn session_utterance_endpoint(
     use utterance_engine::board::{build_board, EmptyUniverse, InferenceBoard, PolicyFilter};
     #[cfg(feature = "q9-capture")]
     use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
-    use utterance_engine::policy::{decide, DispositionConfig};
+    use utterance_engine::policy::{decide_with_action_spans, DispositionConfig};
 
     // Session must exist; its current source is the graph identity the
     // board hashes (C7 obligation: WS-B supplies the revision identity).
@@ -3357,8 +3497,14 @@ async fn session_utterance_endpoint(
                 &graph_identity,
             )?;
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
-            let (disposition, record) =
-                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
+            let (disposition, record) = decide_with_action_spans(
+                &DispositionConfig::shadow_v2(),
+                &board,
+                &evidence,
+                &context,
+                &body.text,
+                &utterance_engine::disposition::StrictCompoundSyntax,
+            )?;
             Ok((
                 Box::new(board.clone()) as Box<dyn InferenceBoard>,
                 disposition,
@@ -3423,8 +3569,14 @@ async fn session_utterance_endpoint(
                 node_kind_counts,
             )?;
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
-            let (disposition, record) =
-                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
+            let (disposition, record) = decide_with_action_spans(
+                &DispositionConfig::shadow_v2(),
+                &board,
+                &evidence,
+                &context,
+                &body.text,
+                &utterance_engine::disposition::StrictCompoundSyntax,
+            )?;
             Ok((
                 Box::new(board) as Box<dyn InferenceBoard>,
                 disposition,
@@ -3579,6 +3731,8 @@ async fn session_utterance_endpoint(
             bound,
             source_utterance_text: body.text.clone(),
             staged_against_hash: graph_identity.clone(),
+            dry_run_diagnostics: dry_run_diagnostics.clone(),
+            audit_event_seq: None,
         });
     }
 
@@ -3635,6 +3789,8 @@ async fn session_utterance_endpoint(
                     retrieved_subset_hash: record.retrieved_subset_hash.clone(),
                     model_bundle_hash: record.model_bundle_hash.clone(),
                     disposition_policy_hash: record.disposition_policy_hash.clone(),
+                    action_span_producer_hash: record.action_span_producer_hash.clone(),
+                    decision_record_hash: record.decision_record_hash.clone(),
                     ranking: record.ranking.clone(),
                     disposition: disposition.clone(),
                     evidence_trace: record.evidence_trace.clone(),
@@ -3693,6 +3849,22 @@ async fn session_utterance_endpoint(
                                 )
                             })
                             .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
+                        let audit_seq =
+                            match append_proposal_audit(demo.as_ref(), id, &pending, "created")
+                                .await
+                            {
+                                Ok(audit_seq) => audit_seq,
+                                Err(error) => {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(serde_json::json!({
+                                            "error": format!("proposal audit append: {error}")
+                                        })),
+                                    )
+                                        .into_response();
+                                }
+                            };
+                        pending.audit_event_seq = Some(audit_seq);
                         demo.proposals
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
@@ -5123,6 +5295,10 @@ mod tests {
                 .starts_with("ctxproj.v1\n"),
             "captured record must carry serialized context TEXT, not hash-only"
         );
+        assert_eq!(record["decision_record_hash"], u["decision_record_hash"]);
+        assert!(record["action_span_producer_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
 
         // A second session never sees the first session's records
         // (per-session isolation, same pattern as session_locks).
@@ -6093,6 +6269,39 @@ mod tests {
         body_json(response).await
     }
 
+    #[tokio::test]
+    async fn test_strict_compound_utterance_never_falls_through_to_one_proposal() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let before = graph_body(&app, &session_id).await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "attach an interrupting guard; attach a rearming guard",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["inference_disposition"]["Compound"]["spans"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "strict span evidence must preserve both actions: {body}"
+        );
+        assert!(body["proposal"].is_null());
+        assert!(body["workbook"].is_null());
+        assert_eq!(before, graph_body(&app, &session_id).await);
+    }
+
     /// GREEN half of the propose step: a bindable candidate yields a
     /// proposal (id + concrete ops) — and the graph is UNCHANGED (the
     /// utterance endpoint never mutates; ratify is the only door).
@@ -6198,6 +6407,28 @@ mod tests {
             ratified.is_some(),
             "GraphEdit with ratified-proposal note: {record}"
         );
+        assert!(
+            ratified.unwrap()["note"]
+                .as_str()
+                .unwrap()
+                .contains("proposal audit seq"),
+            "ratification must link the durable proposal audit"
+        );
+        let created_audit = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "created")
+            .expect("proposal creation audit");
+        assert_eq!(
+            created_audit["decision_record_hash"],
+            utter["decision_record_hash"]
+        );
+        assert!(created_audit["workbook_json"]
+            .as_str()
+            .unwrap()
+            .contains(&pid));
 
         // Proposal consumed: second ratify is a 404.
         let response = app
@@ -6253,6 +6484,25 @@ mod tests {
             StatusCode::NOT_FOUND,
             "rejected proposal is gone"
         );
+
+        let record = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let rejected = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "rejected")
+            .expect("terminal rejection audit");
+        assert!(rejected["related_event_seq"].is_number());
+        let workbook: serde_json::Value =
+            serde_json::from_str(rejected["workbook_json"].as_str().unwrap()).unwrap();
+        assert_eq!(workbook["status"], "rejected");
     }
 
     /// Drift: a manual graph-edit lands between staging and ratify →
