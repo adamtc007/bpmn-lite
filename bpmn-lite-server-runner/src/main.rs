@@ -265,6 +265,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Background: reclaim durable activations whose persisted
+    // claim_expires_at has passed (every 60s) — the Phase 3C companion
+    // to the job reclaim above. Without this, a worker that claims an
+    // activation and then dies before consume/release strands that
+    // instance permanently: nothing else can claim it, since I-8 caps
+    // one claimed activation per instance.
+    let reclaim_activations_store = store.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            match reclaim_activations_store.reclaim_expired_activations().await {
+                Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "Reclaimed stale activations"),
+                Err(e) => tracing::error!(error = %e, "Activation reclaim failed"),
+                _ => {}
+            }
+        }
+    });
+
     // Background: claim and tick a bounded batch of running instances per tenant.
     // The scheduler enumerates all known tenants from the tenants table (no RLS
     // on that table), then ticks each tenant's instances independently.
@@ -331,11 +349,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             tracing::error!(tenant_id = %tenant_id, %error, "durable effect batch failed");
                         }
+                        // Phase 3C cutover: dispatch from the durable
+                        // activation queue (claim_ready_activations),
+                        // not the full-population claim_running_
+                        // instances scan tick_claimed_batch used — the
+                        // F-01 scale remediation this whole phase exists
+                        // for. tick_claimed_batch/claim_running_
+                        // instances remain on RuntimeStore (3D removes
+                        // them later) but are no longer in the hot path.
                         if let Err(error) = engine
-                            .tick_claimed_batch(&tick_owner, tick_batch_size, tick_lease_ms)
+                            .tick_activated_batch(&tick_owner, tick_batch_size, tick_lease_ms)
                             .await
                         {
-                            tracing::error!(tenant_id = %tenant_id, %error, "scheduler tick batch failed");
+                            tracing::error!(tenant_id = %tenant_id, %error, "activated scheduler tick batch failed");
                         }
                     }
                 })
