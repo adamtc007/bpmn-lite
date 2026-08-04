@@ -143,6 +143,11 @@ pub struct RecoveryIssue {
 pub struct RecoveryReport {
     pub tenants_scanned: usize,
     pub instances_verified: usize,
+    /// F-03: instances a peer replica held a live transition lease on at
+    /// scan time. A legitimately busy process is not a startup failure —
+    /// recovery skips it (the peer is already actively driving it) rather
+    /// than aborting the whole tenant scan on the first contended lease.
+    pub instances_busy_skipped: usize,
     pub timers_applied: u32,
     pub interrupted_effects: usize,
     pub stale_jobs_reclaimed: u32,
@@ -1691,11 +1696,24 @@ impl BpmnLiteEngine {
         })
     }
 
-    pub async fn scan_recoverable_inconsistencies(&self) -> Result<Vec<RecoveryIssue>> {
+    /// `busy` names instances currently held by a live peer transition
+    /// lease (F-03): their structural state may be mid-flight-mutated by
+    /// whoever holds it right now, so inspecting fibers/artifact/start-
+    /// event for them here would race the peer's own commits and produce
+    /// false-positive `RecoveryIssue`s — the same "a legitimately busy
+    /// process is not startup failure" principle `recover_all_tenants`
+    /// already applies when it can't fence them either.
+    pub async fn scan_recoverable_inconsistencies(
+        &self,
+        busy: &std::collections::HashSet<Uuid>,
+    ) -> Result<Vec<RecoveryIssue>> {
         let mut issues = Vec::new();
         let instance_ids = self.store.list_running_instances(&self.tenant_id).await?;
 
         for instance_id in instance_ids {
+            if busy.contains(&instance_id) {
+                continue;
+            }
             let Some(instance) = self
                 .store
                 .load_instance(&self.tenant_id, instance_id)
@@ -1856,6 +1874,7 @@ impl BpmnLiteEngine {
         let mut report = RecoveryReport {
             tenants_scanned: tenants.len(),
             instances_verified: 0,
+            instances_busy_skipped: 0,
             timers_applied: 0,
             interrupted_effects: 0,
             stale_jobs_reclaimed,
@@ -1865,70 +1884,88 @@ impl BpmnLiteEngine {
             let tenant = TenantId::new(&tenant_id)?;
             let tenant_engine = self.for_tenant(tenant.clone());
             let instances = self.store.list_running_instances(&tenant).await?;
+            let mut busy = std::collections::HashSet::new();
             for instance_id in instances {
-                self.with_instance_guard(instance_id, async {
-                    let work = self
-                        .store
-                        .claim_work_for_transition(
-                            &tenant,
-                            instance_id,
-                            owner,
-                            lease_ms,
-                            Command::Tick { fiber_id: None },
-                        )
-                        .await?
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "recovery could not fence tenant {tenant_id} instance {instance_id}"
+                // F-03: `claim_work_for_transition` returning `None` means
+                // a peer replica holds a live transition lease on this
+                // instance right now — that peer is actively driving it,
+                // which is exactly what active-active means. Recovery
+                // must skip, not treat contention as an integrity failure
+                // that aborts the entire tenant scan.
+                let verified = self
+                    .with_instance_guard(instance_id, async {
+                        let Some(work) = self
+                            .store
+                            .claim_work_for_transition(
+                                &tenant,
+                                instance_id,
+                                owner,
+                                lease_ms,
+                                Command::Tick { fiber_id: None },
                             )
-                        })?;
-                    let (claim, snapshot, _) = work.into_parts();
-                    let verification = async {
-                        let instance = snapshot.instance();
-                        let artifact = self
-                            .load_artifact_cached(ArtifactHash::from_bytes(
-                                instance.bytecode_version,
-                            ))
-                            .await?;
-                        if artifact.envelope().abi_version() != CURRENT_ARTIFACT_ABI {
-                            return Err(anyhow!("recovery artifact ABI mismatch: {instance_id}"));
+                            .await?
+                        else {
+                            return Ok(false);
+                        };
+                        let (claim, snapshot, _) = work.into_parts();
+                        let verification = async {
+                            let instance = snapshot.instance();
+                            let artifact = self
+                                .load_artifact_cached(ArtifactHash::from_bytes(
+                                    instance.bytecode_version,
+                                ))
+                                .await?;
+                            if artifact.envelope().abi_version() != CURRENT_ARTIFACT_ABI {
+                                return Err(anyhow!(
+                                    "recovery artifact ABI mismatch: {instance_id}"
+                                ));
+                            }
+                            if snapshot.fibers().is_empty() {
+                                return Err(anyhow!("recovery fibers are missing: {instance_id}"));
+                            }
+                            Ok::<(), anyhow::Error>(())
                         }
-                        if snapshot.fibers().is_empty() {
-                            return Err(anyhow!("recovery fibers are missing: {instance_id}"));
-                        }
-                        Ok::<(), anyhow::Error>(())
-                    }
-                    .await;
-                    if let Err(error) = verification {
-                        let mut instance = snapshot.instance().clone();
-                        instance.quarantine_state = Some("recovery_invariant_failure".to_string());
-                        let transition = TransitionBuilder::new(instance)
-                            .command_envelope(CommandEnvelope::new(
-                                EffectId::for_transition(
+                        .await;
+                        if let Err(error) = verification {
+                            let mut instance = snapshot.instance().clone();
+                            instance.quarantine_state =
+                                Some("recovery_invariant_failure".to_string());
+                            let transition = TransitionBuilder::new(instance)
+                                .command_envelope(CommandEnvelope::new(
+                                    EffectId::for_transition(
+                                        instance_id,
+                                        claim.expected_revision().saturating_add(1),
+                                        u32::MAX,
+                                    )
+                                    .as_uuid(),
+                                    self.logical_time()?,
+                                    JournalCommand::Administrative {
+                                        kind: "recovery_quarantine".to_string(),
+                                    },
+                                ))
+                                .build();
+                            self.store.commit_transition(&claim, &transition).await?;
+                            self.store
+                                .release_instance_transition(
+                                    &tenant,
                                     instance_id,
-                                    claim.expected_revision().saturating_add(1),
-                                    u32::MAX,
+                                    claim.lease_token(),
                                 )
-                                .as_uuid(),
-                                self.logical_time()?,
-                                JournalCommand::Administrative {
-                                    kind: "recovery_quarantine".to_string(),
-                                },
-                            ))
-                            .build();
-                        self.store.commit_transition(&claim, &transition).await?;
+                                .await?;
+                            return Err(error);
+                        }
                         self.store
                             .release_instance_transition(&tenant, instance_id, claim.lease_token())
                             .await?;
-                        return Err(error);
-                    }
-                    self.store
-                        .release_instance_transition(&tenant, instance_id, claim.lease_token())
-                        .await?;
-                    Ok(())
-                })
-                .await?;
-                report.instances_verified += 1;
+                        Ok(true)
+                    })
+                    .await?;
+                if verified {
+                    report.instances_verified += 1;
+                } else {
+                    report.instances_busy_skipped += 1;
+                    busy.insert(instance_id);
+                }
             }
 
             report.timers_applied = report.timers_applied.saturating_add(
@@ -1942,7 +1979,9 @@ impl BpmnLiteEngine {
             report.interrupted_effects = report
                 .interrupted_effects
                 .saturating_add(tenant_engine.detect_interrupted_ffi_calls(&tenant).await?);
-            let issues = tenant_engine.scan_recoverable_inconsistencies().await?;
+            let issues = tenant_engine
+                .scan_recoverable_inconsistencies(&busy)
+                .await?;
             if !issues.is_empty() {
                 return Err(anyhow!("recovery invariant failures: {issues:?}"));
             }

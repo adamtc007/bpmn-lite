@@ -12214,10 +12214,19 @@ mod tests {
         let engine = BpmnLiteEngine::new(Arc::new(store));
         let report = engine.recover_all_tenants("replica-b", 100, 30_000).await;
 
-        assert!(
-            report.is_ok(),
-            "F-03: startup recovery must skip an instance busy with a live peer lease, not \
-             abort the whole scan; got {report:?}"
+        let report = report.unwrap_or_else(|error| {
+            panic!(
+                "F-03: startup recovery must skip an instance busy with a live peer lease, not \
+                 abort the whole scan; got {error:?}"
+            )
+        });
+        assert_eq!(
+            report.instances_busy_skipped, 1,
+            "the busy instance must be counted as skipped, not silently dropped"
+        );
+        assert_eq!(
+            report.instances_verified, 0,
+            "an instance recovery could not fence must not also count as verified"
         );
     }
 
@@ -12264,6 +12273,46 @@ mod tests {
                  (instance {iid} was not claimed — investigate before treating this as fixed)"
             );
         }
+    }
+
+    /// F-01 fixed (Phase 3C, docs/todo/PHASE3-durable-activation-queue.md):
+    /// the inverted counterpart to `test_phase0_f01_idle_population_
+    /// claims_regardless_of_readiness` above, exactly as that test's own
+    /// doc comment forward-referenced. The live scheduler
+    /// (`bpmn-lite-server-runner/src/main.rs`) now dispatches via
+    /// `claim_ready_activations`, not `claim_running_instances` — an idle
+    /// `Running` population with no runnable fiber and therefore no
+    /// Phase 3B dual-write must produce zero claims and zero writes, not
+    /// one claim/write per idle row.
+    #[tokio::test]
+    async fn test_phase3c_f01_idle_population_produces_zero_activation_claims() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let owner = "phase3c-f01-sweep";
+
+        for _ in 0..10 {
+            let iid = Uuid::now_v7();
+            let mut inst = make_instance(iid);
+            inst.tenant_id = "default".to_string();
+            inst.state = ProcessState::Running;
+            // save_instance's own commit carries no fibers_upsert, so
+            // Phase 3B's has_running_fiber check finds nothing and
+            // dual-writes no activation — these ten rows are Running but
+            // genuinely idle, the exact case F-01 misdispatched.
+            store.save_instance(owner, &inst).await.unwrap();
+        }
+
+        let claimed = store
+            .claim_ready_activations(&tenant, owner, 100, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            claimed.is_empty(),
+            "F-01 fixed: an idle Running population with no runnable fiber must produce \
+             zero activation claims, got {} — dispatch cost must scale with ready work, \
+             not live population",
+            claimed.len()
+        );
     }
 
     // ── Phase 3A: durable activation queue primitives ──

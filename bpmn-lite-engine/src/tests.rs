@@ -1090,7 +1090,10 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         .await
         .unwrap();
 
-    let issues = tenant_a.scan_recoverable_inconsistencies().await.unwrap();
+    let issues = tenant_a
+        .scan_recoverable_inconsistencies(&std::collections::HashSet::new())
+        .await
+        .unwrap();
     let kinds = issues
         .iter()
         .map(|issue| issue.kind.as_str())
@@ -1099,7 +1102,10 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
     assert!(kinds.contains(&"missing_fibers"));
     assert!(kinds.contains(&"missing_start_event"));
 
-    let tenant_b_issues = tenant_b.scan_recoverable_inconsistencies().await.unwrap();
+    let tenant_b_issues = tenant_b
+        .scan_recoverable_inconsistencies(&std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert!(tenant_b_issues.is_empty());
 }
 

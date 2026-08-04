@@ -1063,30 +1063,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[patch.unused]]
-name = "dsl-core"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "dsl_types"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "sem_os_core"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "sem_os_ontology"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "sem_os_policy"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "sem_os_types"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "bpmn-lite-analysis"
 version = "0.1.0"
 
@@ -1140,4 +1116,28 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "dsl-bus-storage"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "dsl-core"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "dsl_types"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "sem_os_core"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "sem_os_ontology"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "sem_os_policy"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "sem_os_types"
 version = "0.1.0"
