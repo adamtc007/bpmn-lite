@@ -145,6 +145,7 @@ dependencies = [
 name = "bpmn-lite-engine-fuzz"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bpmn-lite-engine",
  "bpmn-lite-store",

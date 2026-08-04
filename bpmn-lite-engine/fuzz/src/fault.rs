@@ -1169,4 +1169,192 @@ mod tests {
             }
         });
     }
+
+    /// Phase 5 gap closed (docs/todo/PHASE5-fault-injection-gap-analysis.md):
+    /// every test above this one drives ticks via `run_instance` →
+    /// `tick_instance`, the direct per-instance path — none of them ever
+    /// call `tick_activated_batch`, the Phase 3C scheduler-facing
+    /// consumer that claims from the durable activation queue. Faults
+    /// and restarts were proven safe for the direct path; the queue path
+    /// (claim_ready_activations → drain → consume_activation /
+    /// release_activation_to_ready) had zero fault-injection coverage.
+    /// Drains via the queue instead of `tick_instance` directly. No
+    /// `instance_id` parameter: unlike `tick_instance`, `tick_activated_
+    /// batch` doesn't target one — it claims whatever the queue has
+    /// ready across the tenant, which in these single-instance tests is
+    /// always the one under test.
+    async fn run_instance_via_activation_queue(
+        engine: &BpmnLiteEngine,
+        task_types: &[String],
+        owner: &str,
+    ) -> anyhow::Result<Vec<JobActivation>> {
+        engine.tick_activated_batch(owner, 10, 30_000).await?;
+        engine
+            .activate_jobs_for_worker(task_types, 100, owner)
+            .await
+    }
+
+    /// Mirrors `restart_mid_run_resumes_and_conserves` exactly, but
+    /// drains through `tick_activated_batch` — the activation-queue
+    /// consumer — instead of `run_instance`/`tick_instance` directly.
+    #[test]
+    fn restart_mid_run_resumes_and_conserves_via_activation_queue() {
+        let shape = Shape {
+            blocks: vec![
+                Block::Task,
+                Block::And {
+                    branches: vec![vec![Block::Task], vec![Block::Task]],
+                },
+                Block::Task,
+            ],
+        };
+        runtime().block_on(async {
+            let generated = emit_process(&shape);
+            let inner = Arc::new(MemoryStore::new());
+            let plan = Arc::new(FaultPlan::new(7));
+            let store: Arc<dyn WorkflowStore> = Arc::new(FaultStore::new(inner, plan.clone()));
+            let clock = Arc::new(FuzzClock::new());
+            let engine_a = BpmnLiteEngine::new_with_runtime_context(
+                store.clone(),
+                TenantId::default(),
+                clock.clone(),
+            );
+            let compiled = engine_a.compile(&generated.xml).await.expect("compile");
+            let mut hash = EffectId::content_hash(generated.payload.as_bytes());
+            let instance_id = engine_a
+                .start(
+                    "fuzz_graph",
+                    compiled.bytecode_version,
+                    &generated.payload,
+                    hash,
+                    "c",
+                )
+                .await
+                .expect("start");
+
+            let mut tracker = ConservationTracker::default();
+            let jobs =
+                run_instance_via_activation_queue(&engine_a, &compiled.task_types, "owner-a")
+                    .await
+                    .expect("run A via activation queue");
+            assert!(!jobs.is_empty(), "first round must activate init");
+            for job in &jobs {
+                tracker
+                    .record(&job.task_type, &job.job_key, &generated.bounds)
+                    .expect("R-O2 on engine A");
+                engine_a
+                    .complete_job(&job.job_key, r#"{"a":1}"#, hash, BTreeMap::new())
+                    .await
+                    .expect("complete on A");
+                hash = EffectId::content_hash(br#"{"a":1}"#);
+            }
+            let engine_b = engine_a.for_tenant(TenantId::default());
+            drop(engine_a);
+
+            // Engine B (fresh transition owner) must finish it, still
+            // dispatching through the activation queue.
+            for _ in 0..24 {
+                let jobs =
+                    run_instance_via_activation_queue(&engine_b, &compiled.task_types, "owner-b")
+                        .await
+                        .expect("run B via activation queue");
+                if jobs.is_empty() {
+                    break;
+                }
+                for job in jobs {
+                    tracker
+                        .record(&job.task_type, &job.job_key, &generated.bounds)
+                        .expect("R-O2 across restart");
+                    engine_b
+                        .complete_job(&job.job_key, r#"{"b":1}"#, hash, BTreeMap::new())
+                        .await
+                        .expect("complete on B");
+                    hash = EffectId::content_hash(br#"{"b":1}"#);
+                }
+            }
+            let inspection = engine_b.inspect(instance_id).await.expect("inspect");
+            assert!(
+                inspection.state.is_terminal(),
+                "restarted engine must drive the instance to completion via the activation \
+                 queue, got {:?}",
+                inspection.state
+            );
+        });
+    }
+
+    /// Mirrors `full_fault_storm_errors_cleanly_then_recovers` exactly,
+    /// but the storm phase dispatches through `tick_activated_batch`
+    /// instead of `run_instance` — proving claim_ready_activations,
+    /// consume_activation and release_activation_to_ready all survive
+    /// injected faults without ever losing or duplicating work, then
+    /// still recover to completion once the storm quiets.
+    #[test]
+    fn full_fault_storm_survives_activation_queue_dispatch() {
+        let shape = Shape {
+            blocks: vec![Block::Task],
+        };
+        runtime().block_on(async {
+            let generated = emit_process(&shape);
+            let inner = Arc::new(MemoryStore::new());
+            let plan = Arc::new(FaultPlan::new(99));
+            let store: Arc<dyn WorkflowStore> = Arc::new(FaultStore::new(inner, plan.clone()));
+            let engine = BpmnLiteEngine::new_with_runtime_context(
+                store,
+                TenantId::default(),
+                Arc::new(FuzzClock::new()),
+            );
+            let compiled = engine.compile(&generated.xml).await.expect("compile quiet");
+            let hash = EffectId::content_hash(generated.payload.as_bytes());
+            let instance_id = engine
+                .start(
+                    "fuzz_graph",
+                    compiled.bytecode_version,
+                    &generated.payload,
+                    hash,
+                    "c",
+                )
+                .await
+                .expect("start quiet");
+
+            plan.set_rate(16);
+            assert!(
+                run_instance_via_activation_queue(&engine, &compiled.task_types, "storm-owner")
+                    .await
+                    .is_err(),
+                "total fault storm on the activation queue path must surface as an error, \
+                 not silence"
+            );
+            let _ = engine
+                .complete_job("bogus", "{}", hash, BTreeMap::new())
+                .await;
+            let _ = engine.inspect(instance_id).await;
+            let _ = engine.cancel(instance_id, "storm cancel").await;
+
+            plan.set_rate(0);
+            let mut hash = hash;
+            for _ in 0..12 {
+                let jobs =
+                    run_instance_via_activation_queue(&engine, &compiled.task_types, "storm-owner")
+                        .await
+                        .expect("run quiet via activation queue");
+                if jobs.is_empty() {
+                    break;
+                }
+                for job in jobs {
+                    engine
+                        .complete_job(&job.job_key, r#"{"r":1}"#, hash, BTreeMap::new())
+                        .await
+                        .expect("complete quiet");
+                    hash = EffectId::content_hash(br#"{"r":1}"#);
+                }
+            }
+            let inspection = engine.inspect(instance_id).await.expect("inspect");
+            assert!(
+                inspection.state.is_terminal(),
+                "instance must recover to completion via the activation queue after the \
+                 storm, got {:?}",
+                inspection.state
+            );
+        });
+    }
 }
