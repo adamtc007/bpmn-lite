@@ -185,3 +185,24 @@ blocking controls are:
 - persist every project corpus/artifact and use reproducible locked fuzz builds.
 
 Mapper fuzz targets are added only after the nightly schedule is made complete.
+
+### Critical gate remediation
+
+- GREEN: FT-01 is closed with a manifest-discovered, per-target nightly matrix,
+  a full time envelope for every target and an aggregation job that requires
+  every discovered completion receipt.
+- GREEN: FT-02 is closed with a minimized F8-COMPILER-001 input in the consumed
+  regression tree, hash-governed manifest validation, unconditional production
+  replay and runner-level rejection of an empty corpus.
+- GREEN: FT-07's compiler/server corpus and artifact persistence omission is
+  closed by per-target paths derived from discovery.
+- GREEN (partial FT-10): every selected project receives an explicit locked
+  metadata preflight because cargo-fuzz 0.13 itself exposes no `--locked`
+  switch; all five committed fuzz lockfiles currently pass.
+- CORRECTION: current discovery is 15 targets; the source review's table also
+  totals 15 despite stating 16. The old workload was 300 minutes in a
+  180-minute job, so the verdict is unchanged.
+- RECEIPT: `docs/receipts/fuzz-critical-gates-2026-08-04.md`.
+- REMAINING: authority models, PostgreSQL crash cuts, native/Wasm corpus
+  differential execution, resource limits and fuzz telemetry remain open.
+  Mapper-specific targets are not yet added.

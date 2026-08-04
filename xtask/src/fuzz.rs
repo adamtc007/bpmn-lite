@@ -10,17 +10,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde::Serialize;
 
 const DEFAULT_RUN_SECS: u64 = 300;
 const SMOKE_RUN_SECS: u64 = 60;
 
 pub(crate) fn fuzz_command(root: &Path, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
-        Some("list") => list(root),
+        Some("list") => list(root, &args[1..]),
         Some("run") => {
             let (target, secs) = parse_run_args(&args[1..], DEFAULT_RUN_SECS)?;
             run_targets(root, target.as_deref(), secs, RunMode::Fuzz)
@@ -32,7 +33,7 @@ pub(crate) fn fuzz_command(root: &Path, args: &[String]) -> Result<()> {
         _ => {
             eprintln!(
                 "Usage:
-  cargo xtask fuzz list
+  cargo xtask fuzz list [--json]
   cargo xtask fuzz run [--target NAME] [--time SECS]   (default {DEFAULT_RUN_SECS}s per target)
   cargo xtask fuzz smoke                                (build all + regress + {SMOKE_RUN_SECS}s per target)
   cargo xtask fuzz regress                              (committed regression inputs only)
@@ -196,8 +197,42 @@ struct TargetOutcome {
     log_path: PathBuf,
 }
 
-fn list(root: &Path) -> Result<()> {
-    for project in discover(root)? {
+#[derive(Serialize)]
+struct MatrixTarget {
+    crate_name: String,
+    target: String,
+    fuzz_dir: String,
+}
+
+fn list(root: &Path, args: &[String]) -> Result<()> {
+    let json = match args {
+        [] => false,
+        [arg] if arg == "--json" => true,
+        _ => bail!("usage: cargo xtask fuzz list [--json]"),
+    };
+    let projects = discover(root)?;
+    if json {
+        let targets = projects
+            .into_iter()
+            .flat_map(|project| {
+                let fuzz_dir = project
+                    .fuzz_dir
+                    .strip_prefix(root)
+                    .unwrap_or(&project.fuzz_dir)
+                    .to_string_lossy()
+                    .into_owned();
+                project.targets.into_iter().map(move |target| MatrixTarget {
+                    crate_name: project.crate_name.clone(),
+                    target,
+                    fuzz_dir: fuzz_dir.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        println!("{}", serde_json::to_string(&targets)?);
+        return Ok(());
+    }
+
+    for project in projects {
         println!("{} ({})", project.crate_name, project.fuzz_dir.display());
         for target in &project.targets {
             let regressions = count_files(&project.fuzz_dir.join("regressions").join(target));
@@ -212,16 +247,13 @@ fn smoke(root: &Path) -> Result<()> {
     ensure_nightly_cargo_fuzz()?;
     let projects = discover(root)?;
     for project in &projects {
+        verify_fuzz_lock(root, &project.fuzz_dir)?;
         println!("== building all fuzz targets in {} ==", project.crate_name);
         let status = nightly_fuzz_cmd(root, &project.fuzz_dir, "build", None)
             .status()
             .context("failed to spawn cargo +nightly fuzz build")?;
         if !status.success() {
-            bail!(
-                "fuzz build failed for {} ({})",
-                project.crate_name,
-                status
-            );
+            bail!("fuzz build failed for {} ({})", project.crate_name, status);
         }
     }
     // Regression pass first (deterministic, fast), then the time-boxed runs.
@@ -229,12 +261,7 @@ fn smoke(root: &Path) -> Result<()> {
     run_targets(root, None, SMOKE_RUN_SECS, RunMode::Fuzz)
 }
 
-fn run_targets(
-    root: &Path,
-    only_target: Option<&str>,
-    secs: u64,
-    mode: RunMode,
-) -> Result<()> {
+fn run_targets(root: &Path, only_target: Option<&str>, secs: u64, mode: RunMode) -> Result<()> {
     ensure_nightly_cargo_fuzz()?;
     let projects = discover(root)?;
     let results_dir = new_results_dir(root, mode)?;
@@ -242,6 +269,13 @@ fn run_targets(
     let mut matched = false;
 
     for project in &projects {
+        let project_selected = only_target
+            .map(|only| project.targets.iter().any(|target| target == only))
+            .unwrap_or(true);
+        if !project_selected {
+            continue;
+        }
+        verify_fuzz_lock(root, &project.fuzz_dir)?;
         for target in &project.targets {
             if let Some(only) = only_target {
                 if target != only {
@@ -266,6 +300,13 @@ fn run_targets(
         );
     }
 
+    if mode == RunMode::RegressOnly && outcomes.is_empty() {
+        write_summary(&results_dir, &outcomes)?;
+        bail!(
+            "no committed fuzz regression inputs were executed — an empty permanent gate is a failure"
+        );
+    }
+
     write_summary(&results_dir, &outcomes)?;
     let crashed: Vec<_> = outcomes.iter().filter(|o| o.crashed).collect();
     println!(
@@ -285,6 +326,20 @@ fn run_targets(
         }
         bail!("fuzzing found {} crashing target(s)", crashed.len());
     }
+    write_completion_receipt(&results_dir, &outcomes)?;
+    Ok(())
+}
+
+fn write_completion_receipt(results_dir: &Path, outcomes: &[TargetOutcome]) -> Result<()> {
+    let mut completed = outcomes
+        .iter()
+        .map(|outcome| outcome.target.as_str())
+        .collect::<Vec<_>>();
+    completed.sort_unstable();
+    completed.dedup();
+    let path = results_dir.join("completed-targets.txt");
+    fs::write(&path, format!("{}\n", completed.join("\n")))
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -355,7 +410,9 @@ fn execute_and_record(
     results_dir: &Path,
 ) -> Result<TargetOutcome> {
     let started = Instant::now();
-    let output = cmd.output().context("failed to spawn cargo +nightly fuzz run")?;
+    let output = cmd
+        .output()
+        .context("failed to spawn cargo +nightly fuzz run")?;
     let duration_secs = started.elapsed().as_secs_f64();
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -434,8 +491,7 @@ fn clean(root: &Path) -> Result<()> {
         for sub in ["target", "corpus", "coverage"] {
             let dir = project.fuzz_dir.join(sub);
             if dir.exists() {
-                fs::remove_dir_all(&dir)
-                    .with_context(|| format!("remove {}", dir.display()))?;
+                fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
                 println!("removed {}", dir.display());
             }
         }
@@ -473,7 +529,9 @@ fn discover(root: &Path) -> Result<Vec<FuzzProject>> {
         });
     }
     if projects.is_empty() {
-        bail!("no <crate>/fuzz/Cargo.toml projects found — nothing to fuzz is a failure, not a pass");
+        bail!(
+            "no <crate>/fuzz/Cargo.toml projects found — nothing to fuzz is a failure, not a pass"
+        );
     }
     projects.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
     Ok(projects)
@@ -522,6 +580,32 @@ fn nightly_fuzz_cmd(
     cmd
 }
 
+/// cargo-fuzz 0.13 does not expose Cargo's `--locked` switch. Perform an
+/// explicit locked metadata resolution before every selected fuzz project so a
+/// stale independently-resolved fuzz lockfile fails before build or execution.
+fn verify_fuzz_lock(root: &Path, fuzz_dir: &Path) -> Result<()> {
+    let status = Command::new("cargo")
+        .arg("+nightly")
+        .arg("metadata")
+        .arg("--locked")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--manifest-path")
+        .arg(fuzz_dir.join("Cargo.toml"))
+        .stdout(Stdio::null())
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("validate locked fuzz project {}", fuzz_dir.display()))?;
+    if !status.success() {
+        bail!(
+            "fuzz lockfile is stale for {} — regenerate and commit it before running fuzz gates",
+            fuzz_dir.display()
+        );
+    }
+    Ok(())
+}
+
 fn ensure_nightly_cargo_fuzz() -> Result<()> {
     let ok = Command::new("cargo")
         .arg("+nightly")
@@ -560,8 +644,7 @@ fn count_files(dir: &Path) -> usize {
             entries
                 .filter_map(Result::ok)
                 .filter(|e| {
-                    e.path().is_file()
-                        && e.file_name().to_str().map_or(true, |n| n != ".gitkeep")
+                    e.path().is_file() && e.file_name().to_str().map_or(true, |n| n != ".gitkeep")
                 })
                 .count()
         })

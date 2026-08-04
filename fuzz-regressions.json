@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "finding_id": "F8-COMPILER-001",
+      "target": "xml_compile",
+      "regression_path": "bpmn-lite-engine/fuzz/regressions/xml_compile/f8-compiler-001-mi-no-successor.xml",
+      "fixed_commit": "85f4f2e6cbe88d684657df313736271e81ba5b96",
+      "expected_current_outcome": "reject with a typed lowering error; never panic",
+      "input_sha256": "c37b46303eeb6ff309336d098ec16dfc14f5ba46bdc6ca1583d3167eb48bb561",
+      "source_artifact_path": "bpmn-lite-engine/fuzz/seeds/xml_compile/regress-f8-compiler-001.xml",
+      "source_artifact_sha256": "ac493c15a6a787cfea8dfc255c05ad84c4f4dd3340fb1ca31e839f10af077b62"
+    }
+  ]
+}

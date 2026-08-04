@@ -1,7 +1,6 @@
-# EOP-FUZZ-BPMN-ISA-002 F4 (fork F-D: separate from nightly-chaos —
-# chaos = Postgres cut-points, fuzz = kernel/admission findings; distinct
-# failure semantics). Evolved corpora are cached per target across nights
-# so coverage compounds; crash artifacts are uploaded on failure.
+# EOP-FUZZ-BPMN-ISA-002 F4 (fork F-D: separate from nightly-chaos).
+# Target discovery is the matrix source of truth. Every target gets its own
+# time budget, cache and receipt; aggregation fails closed on a missing marker.
 name: nightly-fuzz
 
 on:
@@ -10,49 +9,123 @@ on:
   workflow_dispatch:
 
 jobs:
-  fuzz:
+  discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Discover fuzz targets
+        id: targets
+        run: |
+          matrix=$(cargo run --quiet -p xtask -- fuzz list --json)
+          test "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$matrix")" -gt 0
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@v4
-      # The workspace pins stable 1.95 via rust-toolchain.toml; cargo-fuzz
-      # needs nightly alongside it. The xtask runner invokes `cargo
-      # +nightly fuzz` explicitly and hard-errors if nightly is absent.
+      - name: Validate governed regression inputs
+        run: python3 scripts/check_fuzz_regressions.py
       - uses: dtolnay/rust-toolchain@stable
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
-      - name: Restore evolved corpora
-        uses: actions/cache@v4
-        with:
-          path: |
-            bpmn-lite-types/fuzz/corpus
-            bpmn-lite-kernel/fuzz/corpus
-            bpmn-lite-engine/fuzz/corpus
-          key: fuzz-corpus-${{ github.run_id }}
-          restore-keys: |
-            fuzz-corpus-
-      - name: Regression corpus (committed crash reproducers)
+      - name: Replay committed crash reproducers
         run: cargo run -p xtask -- fuzz regress
-      - name: Fuzz all targets (20 min each)
-        run: cargo run -p xtask -- fuzz run --time 1200
-      - name: Upload run receipts
+      - name: Upload regression receipt
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-results
+          name: fuzz-regression-results
           path: fuzz-results/
-          if-no-files-found: warn
-      - name: Upload crash artifacts
-        if: failure()
+          if-no-files-found: error
+
+  fuzz:
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    name: fuzz-${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Restore evolved corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.fuzz_dir }}/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.crate_name }}-${{ matrix.target }}-${{ hashFiles('**/fuzz/Cargo.lock') }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-${{ matrix.crate_name }}-${{ matrix.target }}-
+      - name: Fuzz target (20 min)
+        run: cargo run -p xtask -- fuzz run --target "${{ matrix.target }}" --time 1200
+      - name: Upload target receipt
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-crash-artifacts
-          path: |
-            bpmn-lite-types/fuzz/artifacts
-            bpmn-lite-kernel/fuzz/artifacts
-            bpmn-lite-engine/fuzz/artifacts
-          if-no-files-found: warn
+          name: fuzz-receipt-${{ matrix.target }}
+          path: fuzz-results/
+          if-no-files-found: error
+      - name: Upload target crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: ${{ matrix.fuzz_dir }}/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  complete:
+    if: always()
+    needs: [discover, regressions, fuzz]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download per-target receipts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fuzz-receipt-*
+          path: collected-receipts
+      - name: Require every discovered target receipt
+        env:
+          EXPECTED_MATRIX: ${{ needs.discover.outputs.matrix }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+          REGRESSION_RESULT: ${{ needs.regressions.result }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          if os.environ["FUZZ_RESULT"] != "success":
+              raise SystemExit(f"fuzz matrix result was {os.environ['FUZZ_RESULT']}")
+          if os.environ["REGRESSION_RESULT"] != "success":
+              raise SystemExit(f"regression replay result was {os.environ['REGRESSION_RESULT']}")
+
+          expected = {entry["target"] for entry in json.loads(os.environ["EXPECTED_MATRIX"])}
+          completed = set()
+          for receipt in Path("collected-receipts").glob("**/completed-targets.txt"):
+              completed.update(line.strip() for line in receipt.read_text().splitlines() if line.strip())
+
+          missing = sorted(expected - completed)
+          unexpected = sorted(completed - expected)
+          if missing or unexpected:
+              raise SystemExit(f"incomplete fuzz receipts: missing={missing}, unexpected={unexpected}")
+          print(f"all {len(expected)} discovered fuzz targets completed")
+          PY

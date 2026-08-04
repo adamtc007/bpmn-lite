@@ -81,3 +81,12 @@ implementation drift in the form of additional DIR-002 model work and a more
 precise 26-candidate catalogue. The plan is therefore executed from the current
 SHAs with those amendments and with shadow-only promotion as the conservative
 default until the owner ratifies thresholds.
+
+## Implementation-time reconciliation
+
+Live target discovery during FT-01 remediation found 15 fuzz targets, matching
+the review's table but not its stated total of 16. Consequently the old nightly
+schedule declared 300 minutes rather than 320; the critical conclusion is
+unchanged because the job timeout was 180 minutes. The replacement workflow is
+discovery-driven and therefore does not hard-code this count. See
+`docs/receipts/fuzz-critical-gates-2026-08-04.md`.
