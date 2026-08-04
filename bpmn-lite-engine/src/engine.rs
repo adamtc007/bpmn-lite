@@ -950,6 +950,58 @@ impl BpmnLiteEngine {
         self.tick_instance_ids_as_owner(ids, owner).await
     }
 
+    /// Phase 3C (docs/todo/PHASE3-durable-activation-queue.md): claim and
+    /// tick a bounded batch from the durable activation queue instead of
+    /// `claim_running_instances`'s full-population scan. An activation
+    /// only names *which instance* has (or had) runnable work — Phase
+    /// 3B's dual-write guarantees one exists whenever a commit leaves a
+    /// fiber `Running` — so consuming it is just "run the existing
+    /// full-drain tick for that instance, then mark the activation
+    /// done." `tick_instance_as_owner` already loops internally until
+    /// the instance is quiescent (or parks again), so one activation
+    /// claim maps to one full drain, not one kernel step.
+    ///
+    /// A failed drain releases the activation back to `ready` rather
+    /// than dead-lettering it: the same failure classes `tick_
+    /// instance_ids_as_owner` already treats as retryable-via-next-
+    /// scheduler-pass (lease contention, transient store errors) would
+    /// otherwise permanently strand the instance on first error.
+    pub async fn tick_activated_batch(
+        &self,
+        owner: &str,
+        limit: usize,
+        lease_ms: u64,
+    ) -> Result<u32> {
+        let activations = self
+            .store
+            .claim_ready_activations(&self.tenant_id, owner, limit, lease_ms)
+            .await?;
+        let total = u32::try_from(activations.len()).unwrap_or(u32::MAX);
+        stream::iter(activations)
+            .map(|activation| async move {
+                let instance_id = activation.instance_id();
+                match self.tick_instance_as_owner(instance_id, owner).await {
+                    Ok(()) => {
+                        if let Err(error) = self.store.consume_activation(&activation).await {
+                            tracing::warn!(instance_id = %instance_id, %error, "activation consume failed after successful drain");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(instance_id = %instance_id, %error, "activated instance tick failed");
+                        if let Err(release_error) =
+                            self.store.release_activation_to_ready(&activation, None).await
+                        {
+                            tracing::warn!(instance_id = %instance_id, error = %release_error, "activation release-to-ready failed");
+                        }
+                    }
+                }
+            })
+            .buffer_unordered(MAX_SCHEDULER_IN_FLIGHT)
+            .collect::<Vec<()>>()
+            .await;
+        Ok(total)
+    }
+
     /// Claim and apply a bounded batch of durable timer commands.
     pub async fn tick_due_timers(
         &self,

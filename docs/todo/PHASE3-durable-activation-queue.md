@@ -1,15 +1,18 @@
 # Phase 3 — durable activation queue
 
-Status: **3A + 3B done, unwired**. 3A built a durable, tenant-scoped,
+Status: **3A + 3B done; 3C consumer built and tested, NOT yet wired
+into the live scheduler.** 3A built a durable, tenant-scoped,
 per-instance-serialised ready-work table plus store primitives on every
 `RuntimeStore` implementer. 3B makes `commit_transition` itself the
 producer: any commit that leaves a fiber in `WaitState::Running` writes
-a matching activation atomically, in the same database transaction —
-still nothing reads from the table. `claim_running_instances`'s
-full-population scan remains the live scheduler. F-01 (the scale defect
-this queue exists to fix) is not yet remediated in production behavior;
-this phase only proves the replacement mechanism works and is correctly
-populated in isolation.
+a matching activation atomically, in the same database transaction. 3C
+adds `BpmnLiteEngine::tick_activated_batch`, a real consumer, tested
+against `MemoryStore` — but `bpmn-lite-server-runner`'s live scheduler
+loop (`main.rs`) still calls `tick_claimed_batch`/`claim_running_
+instances`; the cutover swap itself is a pending decision (see "3C —
+the cutover swap" below), not yet made. F-01 (the scale defect this
+queue exists to fix) is therefore still not remediated in production
+behavior.
 
 ## Why 3A only
 
@@ -27,10 +30,77 @@ its own test receipts would mean debugging two unknowns (a new schema
   an activation atomically with the commit that creates the runnable
   condition, for every command type (they all funnel through this one
   function). Still shadow: nothing consumes from the table.
-- **3C (future):** scheduler cutover — dispatch claims from
-  `claim_ready_activations` instead of `claim_running_instances`.
+- **3C (consumer built, cutover pending):** `tick_activated_batch`
+  claims from `claim_ready_activations` and drains each named instance
+  via the existing `tick_instance_as_owner`. Tested in isolation; the
+  live scheduler in `bpmn-lite-server-runner/src/main.rs` has not been
+  switched over to call it yet.
 - **3D (future):** remove the population-scan path once 3C has run
   clean for a bake period.
+
+## 3C — the consumer
+
+`BpmnLiteEngine::tick_activated_batch(owner, limit, lease_ms)`
+(`bpmn-lite-engine/src/engine.rs`) claims a bounded batch via
+`claim_ready_activations`, then for each activation: runs the existing
+`tick_instance_as_owner` (which already loops internally until the
+instance is quiescent or parks again — so one activation claim maps to
+one full drain, not one kernel step), then `consume_activation` on
+success or `release_activation_to_ready` on failure. A failed drain
+returns its activation to `ready` rather than dead-lettering it — the
+same failure classes the old `tick_instance_ids_as_owner` already
+treats as retryable-via-next-scheduler-pass (lease contention,
+transient store errors) would otherwise permanently strand the
+instance on the very first error.
+
+Known, accepted inefficiency: `tick_instance_as_owner`'s internal drain
+loop can itself trigger several intermediate `commit_transition` calls,
+each of which (per 3B) enqueues its own activation for whatever's still
+runnable. Only the ONE activation this consumer claimed going in gets
+consumed; any intermediate ones the drain's own commits produced along
+the way are not consumed here — they get claimed and drained on some
+future pass, find the instance already quiescent, and return
+immediately as cheap no-ops. This is wasted claim-cycles, not a
+correctness bug (a stale activation trigger a real kernel step is never
+possible — draining an already-quiescent instance is idempotent). Worth
+optimizing (e.g. consuming every activation for the instance being
+drained, not just the one that triggered it) before scale testing, not
+before functional cutover.
+
+Receipts: `tick_activated_batch_drains_an_instance_start_leaves_
+runnable` — instance start's own 3B dual-write produces exactly one
+ready activation with nothing having ticked yet; draining it via
+`tick_activated_batch` reaches `ProcessState::Completed` in exactly one
+activation and leaves nothing else claimable.
+`tick_activated_batch_releases_to_ready_on_tick_failure` — an
+activation whose drain fails (missing artifact) is still counted as
+processed but goes back to `ready`, not dropped.
+
+### 3C — the cutover swap (not yet decided)
+
+The plan's literal instruction: *"Change the scheduler to claim
+activations, not `ProcessState::Running` rows."* That's a real
+production behavior change — `bpmn-lite-server-runner/src/main.rs`'s
+scheduler loop would call `tick_activated_batch` instead of
+`tick_claimed_batch` for every tenant, every 500ms, for every running
+instance in the system. Two sub-questions to settle before touching
+that call site, deliberately not decided here:
+
+1. **Hard swap vs. dual-run behind a flag.** A hard swap is what the
+   plan describes for 3C (3D is a *separate*, later phase that removes
+   `claim_running_instances` itself) — but nothing in this codebase has
+   run `tick_activated_batch` against a real multi-tenant Postgres
+   workload yet, only `MemoryStore` unit tests. A short dual-run (both
+   paths active, `tick_claimed_batch`'s old behavior kept as a safety
+   net) trades a known inefficiency (both scanning and claiming) for a
+   bake-in period with a proven fallback.
+2. **3B's reconciliation query** (deferred in the 3B section above) —
+   the plan positions it as a pre-cutover sanity check, not a
+   post-cutover nice-to-have. Worth building before flipping the
+   production switch, even in the hard-swap case.
+
+Both are real decisions with production blast radius, not
+implementation details — surfaced here rather than decided unilaterally.
 
 ## 3B — design fork and resolution
 

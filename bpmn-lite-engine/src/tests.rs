@@ -6054,3 +6054,164 @@ async fn instance_guard_rejects_second_acquisition_until_released() {
         .try_acquire_instance_guard(instance_id)
         .expect("acquisition must succeed again once released");
 }
+
+// ── Phase 3C: activation-queue-driven scheduler dispatch ──
+
+#[tokio::test]
+async fn tick_activated_batch_drains_an_instance_start_leaves_runnable() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let tenant = bpmn_lite_types::TenantId::default();
+
+    let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+          <bpmn:process id="drain_proc" isExecutable="true">
+            <bpmn:startEvent id="start" />
+            <bpmn:endEvent id="end" />
+            <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="end" />
+          </bpmn:process>
+        </bpmn:definitions>"#;
+    let compile_result = engine.compile(bpmn).await.unwrap();
+    let payload = r#"{"case":"drain"}"#;
+    let hash = compute_hash(payload);
+    let instance_id = engine
+        .start(
+            "drain_proc",
+            compile_result.bytecode_version,
+            payload,
+            hash,
+            "corr-drain",
+        )
+        .await
+        .unwrap();
+
+    // Phase 3B's dual-write must already have produced a ready activation
+    // from the start commit itself, with nothing calling tick yet.
+    let before = store
+        .claim_ready_activations(&tenant, "peek", 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        before.len(),
+        1,
+        "instance start leaving a runnable fiber must dual-write an activation"
+    );
+    store
+        .release_activation_to_ready(&before[0], None)
+        .await
+        .unwrap();
+
+    // Bounded loop: each tick_activated_batch call drains whatever's
+    // ready, and a drain can itself leave one more activation behind if
+    // the kernel needed more than one internal step — this workflow
+    // shouldn't, but the loop is here so the test documents the
+    // "run until dry" shape a real scheduler pass repeats, not a
+    // hardcoded step count.
+    let mut total_processed = 0u32;
+    for _ in 0..5 {
+        let processed = engine
+            .tick_activated_batch("scheduler-1", 10, 30_000)
+            .await
+            .unwrap();
+        total_processed += processed;
+        if processed == 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        total_processed, 1,
+        "a straight-through start->end workflow must drain in exactly one activation"
+    );
+
+    let instance = store
+        .load_instance(&tenant, instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(instance.state, ProcessState::Completed { .. }),
+        "expected Completed, got {:?}",
+        instance.state
+    );
+
+    let after = store
+        .claim_ready_activations(&tenant, "peek-after", 10, 30_000)
+        .await
+        .unwrap();
+    assert!(
+        after.is_empty(),
+        "a completed instance must leave no activation behind for consume_activation to have missed"
+    );
+}
+
+#[tokio::test]
+async fn tick_activated_batch_releases_to_ready_on_tick_failure() {
+    // A claimed activation whose drain fails (e.g. the instance's
+    // transition lease is held elsewhere) must go back to `ready`, not
+    // vanish — otherwise one transient failure permanently strands the
+    // instance with no activation ever claimable again.
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let tenant = bpmn_lite_types::TenantId::default();
+    let instance_id = Uuid::now_v7();
+
+    let mut instance = bpmn_lite_types::ProcessInstance {
+        instance_id,
+        process_key: "no_artifact_proc".to_string(),
+        bytecode_version: [7u8; 32],
+        tenant_id: tenant.as_str().to_string(),
+        domain_payload: "{}".to_string().into(),
+        domain_payload_hash: [0u8; 32],
+        session_stack: SessionStackState::default(),
+        flags: BTreeMap::new(),
+        counters: BTreeMap::new(),
+        join_expected: BTreeMap::new(),
+        state: ProcessState::Running,
+        correlation_id: "corr-fail".to_string(),
+        entry_id: Uuid::new_v4(),
+        runbook_id: Uuid::new_v4(),
+        created_at: 0,
+        integrity_hash: None,
+        quarantine_state: None,
+        plan_hash: None,
+        current_node_id: None,
+        placeholder_values: None,
+    };
+    instance.domain_payload_hash = bpmn_lite_types::EffectId::content_hash(b"{}");
+    let claim = bpmn_lite_types::Claim::new(tenant.clone(), instance_id, 0, 0, "");
+    let transition = bpmn_lite_types::TransitionBuilder::new(instance)
+        .upsert_fiber(Fiber::new(Uuid::now_v7(), 0u32))
+        .build();
+    store.commit_transition(&claim, &transition).await.unwrap();
+
+    let before = store
+        .claim_ready_activations(&tenant, "peek", 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 1);
+    store
+        .release_activation_to_ready(&before[0], None)
+        .await
+        .unwrap();
+
+    // No artifact was ever stored for [7u8; 32], so the drain must fail
+    // (load_artifact_cached errors) rather than panic.
+    let processed = engine
+        .tick_activated_batch("scheduler-1", 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        processed, 1,
+        "tick_activated_batch counts every claimed activation, success or failure"
+    );
+
+    let after = store
+        .claim_ready_activations(&tenant, "peek-after", 10, 30_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        after.len(),
+        1,
+        "a failed drain must release its activation back to ready, not drop it"
+    );
+}
