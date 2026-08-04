@@ -83,6 +83,7 @@ pub struct BpmnLiteEngine {
     /// so that race never starts; the database remains final authority
     /// regardless.
     in_flight: Arc<Mutex<HashSet<Uuid>>>,
+    activation_metrics: Arc<ActivationMetrics>,
 }
 
 /// Parameters for starting a new process instance.
@@ -137,6 +138,56 @@ pub struct RecoveryIssue {
     pub instance_id: Uuid,
     pub kind: String,
     pub detail: String,
+}
+
+/// Phase 4 (docs/todo/PHASE4-activation-metrics.md): durable
+/// activation-queue lifecycle counters. Arc-shared across every
+/// `for_tenant` clone of a `BpmnLiteEngine` so counts aggregate across
+/// tenants rather than resetting per tenant-scoped instance — the same
+/// sharing pattern `in_flight` already uses. Scoped to `tick_activated_
+/// batch`, the sole engine-level consumer of the queue as of Phase 3C;
+/// `enqueued` is deliberately not tracked here, since `commit_
+/// transition`'s Phase 3B dual-write happens in the store crate, which
+/// has no metrics dependency by design — see the doc for the fuller
+/// list of counters the remediation plan calls for that this does not
+/// yet cover (queue age, claim-to-start latency, kernel/transaction
+/// duration, fence-vs-revision conflict breakdown).
+#[derive(Debug, Default)]
+pub struct ActivationMetrics {
+    claimed_total: std::sync::atomic::AtomicU64,
+    consumed_total: std::sync::atomic::AtomicU64,
+    released_total: std::sync::atomic::AtomicU64,
+}
+
+/// Point-in-time read of `ActivationMetrics`' counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ActivationMetricsSnapshot {
+    pub claimed_total: u64,
+    pub consumed_total: u64,
+    pub released_total: u64,
+}
+
+impl ActivationMetrics {
+    fn record_claimed(&self, n: u64) {
+        self.claimed_total
+            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn record_consumed(&self) {
+        self.consumed_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn record_released(&self) {
+        self.released_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn snapshot(&self) -> ActivationMetricsSnapshot {
+        use std::sync::atomic::Ordering::Relaxed;
+        ActivationMetricsSnapshot {
+            claimed_total: self.claimed_total.load(Relaxed),
+            consumed_total: self.consumed_total.load(Relaxed),
+            released_total: self.released_total.load(Relaxed),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +284,7 @@ impl BpmnLiteEngine {
             artifact_cache_capacity: DEFAULT_ARTIFACT_CACHE_CAPACITY,
             ffi_dispatcher: None,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
+            activation_metrics: Arc::new(ActivationMetrics::default()),
         }
     }
 
@@ -254,7 +306,17 @@ impl BpmnLiteEngine {
             artifact_cache_capacity: self.artifact_cache_capacity,
             ffi_dispatcher: self.ffi_dispatcher.clone(),
             in_flight: self.in_flight.clone(),
+            activation_metrics: self.activation_metrics.clone(),
         }
+    }
+
+    /// Point-in-time read of the durable activation-queue lifecycle
+    /// counters `tick_activated_batch` maintains. Shared across every
+    /// `for_tenant` clone, so this reflects activity for every tenant
+    /// this engine (or a clone of it) has dispatched for, not just the
+    /// tenant this particular handle is scoped to.
+    pub fn activation_metrics(&self) -> ActivationMetricsSnapshot {
+        self.activation_metrics.snapshot()
     }
 
     /// F-08: run `body` only if no other local call is currently holding
@@ -982,6 +1044,7 @@ impl BpmnLiteEngine {
             .claim_ready_activations(&self.tenant_id, owner, limit, lease_ms)
             .await?;
         let total = u32::try_from(activations.len()).unwrap_or(u32::MAX);
+        self.activation_metrics.record_claimed(u64::from(total));
         stream::iter(activations)
             .map(|activation| async move {
                 let instance_id = activation.instance_id();
@@ -989,6 +1052,8 @@ impl BpmnLiteEngine {
                     Ok(()) => {
                         if let Err(error) = self.store.consume_activation(&activation).await {
                             tracing::warn!(instance_id = %instance_id, %error, "activation consume failed after successful drain");
+                        } else {
+                            self.activation_metrics.record_consumed();
                         }
                     }
                     Err(error) => {
@@ -997,6 +1062,8 @@ impl BpmnLiteEngine {
                             self.store.release_activation_to_ready(&activation, None).await
                         {
                             tracing::warn!(instance_id = %instance_id, error = %release_error, "activation release-to-ready failed");
+                        } else {
+                            self.activation_metrics.record_released();
                         }
                     }
                 }

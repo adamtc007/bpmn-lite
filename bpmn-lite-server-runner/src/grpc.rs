@@ -231,7 +231,14 @@ impl ServerMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot(&self) -> MetricsResponse {
+    /// `activations` is the engine's live durable-activation-queue
+    /// snapshot (Phase 4, docs/todo/PHASE4-activation-metrics.md) —
+    /// `ServerMetrics` itself has no access to the engine, so the caller
+    /// (the `metrics` RPC handler, which holds `self.engine`) supplies it.
+    fn snapshot(
+        &self,
+        activations: bpmn_lite_engine::ActivationMetricsSnapshot,
+    ) -> MetricsResponse {
         MetricsResponse {
             requests_total: self.requests_total.load(Ordering::Relaxed),
             request_rejections_total: self.request_rejections_total.load(Ordering::Relaxed),
@@ -242,6 +249,9 @@ impl ServerMetrics {
             subscription_rejections_total: self
                 .subscription_rejections_total
                 .load(Ordering::Relaxed),
+            activations_claimed_total: activations.claimed_total,
+            activations_consumed_total: activations.consumed_total,
+            activations_released_total: activations.released_total,
         }
     }
 }
@@ -1020,7 +1030,9 @@ impl BpmnLite for BpmnLiteService {
         _request: Request<MetricsRequest>,
     ) -> Result<Response<MetricsResponse>, Status> {
         self.metrics.request_started();
-        Ok(Response::new(self.metrics.snapshot()))
+        Ok(Response::new(
+            self.metrics.snapshot(self.engine.activation_metrics()),
+        ))
     }
 
     async fn register_dmn_decision(

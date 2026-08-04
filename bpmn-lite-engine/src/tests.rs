@@ -6221,3 +6221,110 @@ async fn tick_activated_batch_releases_to_ready_on_tick_failure() {
         "a failed drain must release its activation back to ready, not drop it"
     );
 }
+
+// ── Phase 4: activation-queue metrics ──
+
+#[tokio::test]
+async fn tick_activated_batch_records_claimed_and_consumed_metrics() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+          <bpmn:process id="metrics_proc" isExecutable="true">
+            <bpmn:startEvent id="start" />
+            <bpmn:endEvent id="end" />
+            <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="end" />
+          </bpmn:process>
+        </bpmn:definitions>"#;
+    let compile_result = engine.compile(bpmn).await.unwrap();
+    let payload = r#"{"case":"metrics"}"#;
+    let hash = compute_hash(payload);
+
+    let before = engine.activation_metrics();
+    engine
+        .start(
+            "metrics_proc",
+            compile_result.bytecode_version,
+            payload,
+            hash,
+            "corr-metrics",
+        )
+        .await
+        .unwrap();
+    engine
+        .tick_activated_batch("scheduler-1", 10, 30_000)
+        .await
+        .unwrap();
+
+    let after = engine.activation_metrics();
+    assert_eq!(
+        after.claimed_total,
+        before.claimed_total + 1,
+        "claimed_total must record every activation claim_ready_activations returns"
+    );
+    assert_eq!(
+        after.consumed_total,
+        before.consumed_total + 1,
+        "consumed_total must record a successful drain"
+    );
+    assert_eq!(
+        after.released_total, before.released_total,
+        "a successful drain must not also count as released"
+    );
+}
+
+#[tokio::test]
+async fn tick_activated_batch_records_released_metric_on_failure() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let tenant = bpmn_lite_types::TenantId::default();
+    let instance_id = Uuid::now_v7();
+
+    let mut instance = bpmn_lite_types::ProcessInstance {
+        instance_id,
+        process_key: "no_artifact_proc".to_string(),
+        bytecode_version: [9u8; 32],
+        tenant_id: tenant.as_str().to_string(),
+        domain_payload: "{}".to_string().into(),
+        domain_payload_hash: [0u8; 32],
+        session_stack: SessionStackState::default(),
+        flags: BTreeMap::new(),
+        counters: BTreeMap::new(),
+        join_expected: BTreeMap::new(),
+        state: ProcessState::Running,
+        correlation_id: "corr-metrics-fail".to_string(),
+        entry_id: Uuid::new_v4(),
+        runbook_id: Uuid::new_v4(),
+        created_at: 0,
+        integrity_hash: None,
+        quarantine_state: None,
+        plan_hash: None,
+        current_node_id: None,
+        placeholder_values: None,
+    };
+    instance.domain_payload_hash = bpmn_lite_types::EffectId::content_hash(b"{}");
+    let claim = bpmn_lite_types::Claim::new(tenant.clone(), instance_id, 0, 0, "");
+    let transition = bpmn_lite_types::TransitionBuilder::new(instance)
+        .upsert_fiber(Fiber::new(Uuid::now_v7(), 0u32))
+        .build();
+    store.commit_transition(&claim, &transition).await.unwrap();
+
+    let before = engine.activation_metrics();
+    engine
+        .tick_activated_batch("scheduler-1", 10, 30_000)
+        .await
+        .unwrap();
+    let after = engine.activation_metrics();
+
+    assert_eq!(after.claimed_total, before.claimed_total + 1);
+    assert_eq!(
+        after.released_total,
+        before.released_total + 1,
+        "a failed drain must record released_total"
+    );
+    assert_eq!(
+        after.consumed_total, before.consumed_total,
+        "a failed drain must not also count as consumed"
+    );
+}

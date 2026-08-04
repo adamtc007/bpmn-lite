@@ -202,6 +202,12 @@ message MetricsResponse {
     uint64 job_failures_total = 5;
     uint64 active_subscriptions = 6;
     uint64 subscription_rejections_total = 7;
+    // Phase 4 (docs/todo/PHASE4-activation-metrics.md): durable
+    // activation-queue lifecycle counters from tick_activated_batch,
+    // the scheduler's sole consumer of the queue.
+    uint64 activations_claimed_total = 8;
+    uint64 activations_consumed_total = 9;
+    uint64 activations_released_total = 10;
 }
 
 // --- FFI vocabulary registration ---
