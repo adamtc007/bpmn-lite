@@ -67,6 +67,28 @@ fn spec(
     )
     .to_hex()
     .to_string();
+    let mut argument_specs = arguments
+        .iter()
+        .map(|(name, kind, required, prompt)| ArgumentSpec {
+            name: (*name).to_string(),
+            kind: *kind,
+            required: *required,
+            clarification_prompt: (*prompt).to_string(),
+        })
+        .collect::<Vec<_>>();
+    if let Some((name, prompt)) = positional_argument(canonical_id) {
+        if !argument_specs.iter().any(|argument| argument.name == name) {
+            argument_specs.insert(
+                0,
+                ArgumentSpec {
+                    name: name.to_string(),
+                    kind: ArgumentKind::NodeReference,
+                    required: true,
+                    clarification_prompt: prompt.to_string(),
+                },
+            );
+        }
+    }
     BpmnCandidateSpec {
         semantic: CandidateSemanticSlice {
             canonical_id: CanonicalCandidateId::new(canonical_id)
@@ -77,15 +99,7 @@ fn spec(
             action_class,
             applicability: applicability.to_string(),
             effect: effect.to_string(),
-            arguments: arguments
-                .iter()
-                .map(|(name, kind, required, prompt)| ArgumentSpec {
-                    name: (*name).to_string(),
-                    kind: *kind,
-                    required: *required,
-                    clarification_prompt: (*prompt).to_string(),
-                })
-                .collect(),
+            arguments: argument_specs,
             phrases: phrases
                 .iter()
                 .map(|(text, role)| PhraseEvidence {
@@ -108,6 +122,49 @@ fn spec(
             adapter_payload_hash,
         },
         binder_support,
+    }
+}
+
+/// The Designer legality board is positional. Its anchor is therefore a real
+/// operation argument, not out-of-band server state. Candidate-specific names
+/// preserve the underlying operation vocabulary while giving the proposal
+/// workbook a declared slot into which the resolved position can be written.
+fn positional_argument(canonical_id: &str) -> Option<(&'static str, &'static str)> {
+    match canonical_id {
+        "op.append_node"
+        | "op.insert_before"
+        | "op.insert_after"
+        | "op.create_parallel_region"
+        | "op.create_inclusive_region"
+        | "op.create_multi_instance_region"
+        | "op.create_race"
+        | "op.call_subprocess"
+        | "prod.request_and_wait"
+        | "prod.timer_message_race"
+        | "prod.reminder_then_escalate"
+        | "prod.interrupting_timeout"
+        | "prod.non_interrupting_notification"
+        | "prod.human_review_with_rework"
+        | "prod.call_durable_subprocess" => Some((
+            "anchor",
+            "Which existing BPMN node should this change follow or apply to?",
+        )),
+        "op.replace_node" => Some(("target", "Which existing BPMN node should be replaced?")),
+        "op.create_branch" => Some(("gateway", "Which exclusive gateway owns the new outcome?")),
+        "op.attach_guard" | "op.attach_rearming_guard" | "op.attach_rollback_guard" => Some((
+            "host",
+            "Which existing BPMN node should host this boundary guard?",
+        )),
+        "op.set_guard_trigger" | "op.set_guard_budget" => {
+            Some(("guard", "Which existing boundary guard should be changed?"))
+        }
+        "op.set_correlation_source" => Some((
+            "node",
+            "Which message-capable node should use this correlation source?",
+        )),
+        // These contracts already declare their positional reference.
+        "op.connect" | "op.close_parallel_region" | "op.delete_subgraph" => None,
+        _ => None,
     }
 }
 
@@ -196,11 +253,10 @@ pub(crate) fn operation_spec(operation: OperationKind) -> BpmnCandidateSpec {
             "Add a new named route from an existing exclusive gateway",
             ActionClass::Create,
             "The anchor is an exclusive gateway with a valid forward target",
-            "Creates a unique outcome route and its first branch node",
+            "Creates a unique conditional route to an existing forward target",
             &[
                 ("outcome", Identifier, true, "What outcome should select the new branch?"),
                 ("target", NodeReference, true, "Where should the branch rejoin or continue?"),
-                ("node", Identifier, true, "What should the branch do first?"),
             ],
             &[("create a branch", Canonical), ("add another outcome", Paraphrase)],
             &["Add a rejected outcome branch from the decision"],
@@ -686,7 +742,10 @@ mod tests {
         let collision_rate = collision_keys as f64 / owners.len() as f64;
         println!(
             "governed exact metrics: phrase_keys={} unique={} collisions={} collision_rate={:.6}",
-            owners.len(), unique_keys, collision_keys, collision_rate
+            owners.len(),
+            unique_keys,
+            collision_keys,
+            collision_rate
         );
         assert!(unique_keys > 0);
         assert!(collision_rate.is_finite());

@@ -167,7 +167,25 @@ No push is performed by this programme without owner approval.
   weights are intentionally not relabelled. See
   `docs/receipts/bpmn-candidate-pair-phase6.md`.
 
-### Phase 7 onward
+### Phase 7 — resumable proposal workbook
+
+- GREEN: terminal binding is replaced by a shared typed workbook created from
+  the selected board contract; positional arguments are now declared rather
+  than held as undeclared server state.
+- GREEN: the answers endpoint applies batches atomically, supports partial
+  completion, dry-stages only complete workbooks and preserves inference as a
+  separate response fact.
+- GREEN: direct needs-input ratification, invalid/unknown/duplicate answers,
+  answer-time drift and restart reuse all fail closed. Request-and-wait with a
+  later data-reference answer dry-admits without pre-ratification mutation.
+- GREEN: ratify/reject remain one-shot and graph mutation remains behind
+  ratification. Detailed evidence is in
+  `docs/receipts/bpmn-proposal-workbook-phase7.md`.
+- GREEN (Phase 0 closure): all server-runner plan/graph/stack projections now
+  exhaustively represent the first-class message-wait node; the all-feature
+  workspace check no longer fails on that earlier integration gap.
+
+### Phase 8 onward
 
 Receipts are appended here as each phase reaches green. A phase is not marked
 complete solely because it compiles.

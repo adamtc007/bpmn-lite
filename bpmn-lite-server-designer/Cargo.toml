@@ -30,6 +30,7 @@ bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 designer-graph = { path = "../designer-graph" }
 utterance-engine = { path = "../utterance-engine" }
+sem_os_policy = { workspace = true }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
 sqlx = { workspace = true, optional = true }
@@ -41,6 +42,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

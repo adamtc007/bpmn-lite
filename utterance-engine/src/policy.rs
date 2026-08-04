@@ -79,7 +79,10 @@ pub enum ProposalDisposition {
     /// UNREACHABLE in v1 (see enum docs).
     Ambiguous { top_candidates: Vec<String> },
     /// UNREACHABLE in v1: requires the option-(a) slot resolvers.
-    MissingArguments { candidate_id: String, missing: Vec<String> },
+    MissingArguments {
+        candidate_id: String,
+        missing: Vec<String>,
+    },
     /// UNREACHABLE in v1: requires certified action-span evidence.
     Compound,
     /// The abstention hypothesis won: the board does not contain the
@@ -112,6 +115,8 @@ pub struct DecisionRecord {
     pub disposition: ProposalDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_trace: Option<crate::contract::EvidenceTrace>,
+    /// Content address of the complete historical decision closure.
+    pub decision_record_hash: String,
 }
 
 /// THE disposition function. Fail-closed: a ranking naming any
@@ -199,7 +204,7 @@ pub fn decide(
         }
     };
 
-    let record = DecisionRecord {
+    let mut record = DecisionRecord {
         board_hash: board.board_hash().to_string(),
         retrieved_subset_hash: result.retrieved_subset_hash.clone(),
         model_bundle_hash: result.model_bundle_hash.clone(),
@@ -213,7 +218,19 @@ pub fn decide(
             .collect(),
         disposition: disposition.clone(),
         evidence_trace: result.evidence_trace.clone(),
+        decision_record_hash: String::new(),
     };
+    let preimage = serde_json::to_vec(&(
+        &record.board_hash,
+        &record.retrieved_subset_hash,
+        &record.model_bundle_hash,
+        &record.disposition_policy_hash,
+        &record.context_projection_hash,
+        &record.ranking,
+        &record.disposition,
+        &record.evidence_trace,
+    ))?;
+    record.decision_record_hash = blake3::hash(&preimage).to_hex().to_string();
     Ok((disposition, record))
 }
 
@@ -261,7 +278,14 @@ mod tests {
     }
 
     fn board() -> Board {
-        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap()
+        build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap()
     }
 
     fn result(board: &Board, ranking: Vec<(&str, f64)>) -> SlmResult {
@@ -285,10 +309,18 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.90), ("op.connect", 0.40)]);
-        let (d, rec) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let (d, rec) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert_eq!(
             d,
-            ProposalDisposition::Candidate { candidate_id: "op.append_node".into() }
+            ProposalDisposition::Candidate {
+                candidate_id: "op.append_node".into()
+            }
         );
         assert_eq!(rec.board_hash, b.board_hash);
         assert_eq!(rec.disposition_policy_hash, cfg.policy_hash());
@@ -305,16 +337,33 @@ mod tests {
     fn close_scores_and_weak_evidence_both_escalate() {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
-        let r = result(&b, vec![("op.append_node", 0.80), ("op.insert_after", 0.75)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let r = result(
+            &b,
+            vec![("op.append_node", 0.80), ("op.insert_after", 0.75)],
+        );
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert!(
             matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("separation")),
             "close scores must escalate, not render Ambiguous: {d:?}"
         );
 
         let r = result(&b, vec![("op.append_node", 0.30)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
-        assert!(matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor")));
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
+        assert!(
+            matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor"))
+        );
     }
 
     /// Review C5 reds: duplicate ids refused; misordered producer input
@@ -326,15 +375,42 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.9), ("op.append_node", 0.9)]);
-        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("more than once"));
+        assert!(decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("more than once"));
 
         // Misordered: low score listed first; re-sort selects the real top.
         let r = result(&b, vec![("op.connect", 0.55), ("op.append_node", 0.95)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
-        assert_eq!(d, ProposalDisposition::Candidate { candidate_id: "op.append_node".into() });
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
+        assert_eq!(
+            d,
+            ProposalDisposition::Candidate {
+                candidate_id: "op.append_node".into()
+            }
+        );
 
         let r = result(&b, vec![]);
-        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("malfunction"));
+        assert!(decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("malfunction"));
     }
 
     /// Review N4: golden decision table cementing policy_version 1
@@ -352,29 +428,51 @@ mod tests {
         let b = board();
         type DecisionCase<'a> = (Vec<(&'a str, f64)>, fn(&ProposalDisposition) -> bool);
         let table: Vec<DecisionCase<'_>> = vec![
-            (vec![("op.append_node", 0.90), ("op.connect", 0.40)],
-             |d| matches!(d, ProposalDisposition::Candidate { .. })),
-            (vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],
-             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
-            (vec![("op.append_node", 0.49)],
-             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
-            (vec![(NONE_OF_THE_ABOVE, 0.99), ("op.append_node", 0.10)],
-             |d| matches!(d, ProposalDisposition::OutOfScope)),
+            (vec![("op.append_node", 0.90), ("op.connect", 0.40)], |d| {
+                matches!(d, ProposalDisposition::Candidate { .. })
+            }),
+            (
+                vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],
+                |d| matches!(d, ProposalDisposition::EscalateToSage { .. }),
+            ),
+            (vec![("op.append_node", 0.49)], |d| {
+                matches!(d, ProposalDisposition::EscalateToSage { .. })
+            }),
+            (
+                vec![(NONE_OF_THE_ABOVE, 0.99), ("op.append_node", 0.10)],
+                |d| matches!(d, ProposalDisposition::OutOfScope),
+            ),
         ];
         for (ranking, check) in table {
             let r = result(&b, ranking.clone());
-            let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+            let (d, _) = decide(
+                &cfg,
+                &b,
+                &r,
+                &crate::context::minimal("pack.none", "g-test"),
+            )
+            .unwrap();
             assert!(check(&d), "decision table drift for {ranking:?}: {d:?}");
         }
     }
 
-    const GOLDEN_SHADOW_V1_POLICY_HASH: &str = "b93371789f5202158f286d44555087dba5da4b059b01b929a279479bc60815b2";
+    const GOLDEN_SHADOW_V1_POLICY_HASH: &str =
+        "b93371789f5202158f286d44555087dba5da4b059b01b929a279479bc60815b2";
 
     #[test]
     fn abstention_top_is_out_of_scope() {
         let b = board();
-        let r = result(&b, vec![(NONE_OF_THE_ABOVE, 0.95), ("op.append_node", 0.20)]);
-        let (d, _) = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let r = result(
+            &b,
+            vec![(NONE_OF_THE_ABOVE, 0.95), ("op.append_node", 0.20)],
+        );
+        let (d, _) = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert_eq!(d, ProposalDisposition::OutOfScope);
     }
 
@@ -384,12 +482,24 @@ mod tests {
     fn off_board_and_wrong_board_evidence_are_rejected() {
         let b = board();
         let r = result(&b, vec![("verb.made_up_by_model", 0.99)]);
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
+        let err = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not on board"));
 
         let mut wrong = result(&b, vec![("op.append_node", 0.9)]);
         wrong.board_hash = "deadbeef".into();
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &wrong, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
+        let err = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &wrong,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("does not match"));
     }
 
