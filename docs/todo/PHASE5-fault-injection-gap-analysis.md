@@ -1,15 +1,16 @@
 # Phase 5 — fault-injection and release qualification: gap analysis + activation-queue coverage
 
-Status: **partial — existing harness extended twice, full plan scope
-not attempted**. This session closes two concrete gaps (the activation
-queue had zero fault-injection coverage; the production Postgres
-backend had zero connection-loss coverage) and documents, item by item,
-how far the rest of Phase 5's checklist is from done. Phase 5 as
-specified is a full release-qualification suite (11 named fault-
-injection points × 3 execution modes, plus a release-criteria checklist
-that is effectively the whole project's Definition of Done) — too large
-for one pass; this is a status report and two targeted fixes, not a
-completed phase.
+Status: **partial — existing harness extended twice, first release
+criterion closed, full plan scope not attempted**. This session closes
+two concrete fault-injection gaps (the activation queue and the
+production Postgres backend both had zero coverage), completes the
+I-1..I-10 invariant audit (`docs/todo/PHASE5-invariant-audit.md`), and
+documents, item by item, how far the rest of Phase 5's checklist is
+from done. Phase 5 as specified is a full release-qualification suite
+(11 named fault-injection points × 3 execution modes, plus a release-
+criteria checklist that is effectively the whole project's Definition
+of Done) — too large for one pass; this is a status report and three
+targeted pieces of work, not a completed phase.
 
 ## What already existed (predates this session's Phase 0-4 work)
 
@@ -149,7 +150,7 @@ not a matter of writing another test against existing infrastructure.**
 
 | Criterion | Status |
 |---|---|
-| I-1 through I-10 have named automated tests | **Not audited this session** — would require enumerating the plan's invariants I-1..I-10 (not reproduced in the plan doc as a discrete list; they're referenced but not enumerated in the excerpt this session read) against the test suite. |
+| I-1 through I-10 have named automated tests | **Done** — see `docs/todo/PHASE5-invariant-audit.md`. All 10 mapped to specific, verified-passing tests; I-10 is only partially covered (acquisition-stop half proven, drain-before-exit half has no test harness) and stated as such, not rounded up to a clean pass. |
 | No stale acquisition can release/renew/ack/consume newer work | **Largely covered** — Phase 2 (F-04 lease tokens) and Phase 3A (activation claim tokens) both have dedicated tests for exactly this. |
 | No business transition can commit from a lost external-work claim | **Covered** for jobs (Phase 1, F-02) and transitions (Phase 2); not separately proven for activations. |
 | Active-active startup and rolling restart pass repeatedly under load | **Partially covered** — F-03 (Phase 4) proves one contended lease is skipped correctly; "repeatedly under load" with real concurrency is not tested. |
@@ -159,16 +160,21 @@ not a matter of writing another test against existing infrastructure.**
 | `cargo fmt`, focused tests, workspace tests, `cargo clippy`, repo CI checks pass | **fmt/clippy/tests verified locally, repeatedly, this session** — repo-specific CI checks beyond `cargo` commands not inspected. |
 | Migration upgrade tested from last production schema; rollback documented | **Not done.** No "last production schema" baseline exists to test an upgrade from in this dev branch context, and no rollback strategy doc was written for the new `061_transition_lease_token.sql`/`062_workflow_activations.sql` migrations. |
 
-## Recommendation
+## Recommendation — both done
 
-Phase 5 in full is a multi-session effort (Wasmtime pool doesn't exist;
-SQL-transaction-internal fault injection is a real design decision, not
-a quick add). Option (b) from the original recommendation — PostgreSQL
-connection-loss fault injection against `PostgresWorkflowStore` — is
-now done (above), on the reasoning that a backend that actually ships
-outranks an audit of an already-substantially-tested invariant set.
-Option (a), enumerating I-1..I-10 explicitly and auditing test coverage
-per-invariant, remains open — the plan doc excerpt this session read
-references these invariants by name but doesn't enumerate them, so the
-first step would be locating or reconstructing that list before any
-audit can start. That's the natural next slice if continuing here.
+Both options from the original recommendation are now closed. Option
+(b), PostgreSQL connection-loss fault injection against
+`PostgresWorkflowStore`, is done above. Option (a) — this doc initially
+claimed the plan didn't enumerate I-1..I-10 anywhere it had read, which
+was simply wrong: they're at `zed_agent_execution_lease_remediation_
+plan.md` lines 28-46, missed on the first pass. Corrected and completed
+as `docs/todo/PHASE5-invariant-audit.md` — every invariant mapped to a
+specific, independently-verified-to-exist-and-pass test, with one real
+gap stated plainly (I-10's drain-before-exit half has no test harness
+that starts a real process and asserts what happens to in-flight work).
+
+Phase 5 in full remains a multi-session effort beyond these two slices
+(Wasmtime pool doesn't exist; SQL-transaction-internal fault injection
+is a real design decision; multi-executor races are untested; CI wiring
+and migration-rollback documentation weren't inspected/written this
+session — see the release-criteria table above for the complete list).
