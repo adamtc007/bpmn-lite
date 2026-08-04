@@ -15,7 +15,7 @@ use bpmn_lite_store::store_memory::MemoryStore;
 use dmn_lite_bridge::DmnLiteOwner;
 use ffi_catalogue::{FfiCatalogue, MemoryFfiTemplateStore};
 use ffi_dispatcher::FfiDispatcher;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use tokio::sync::Semaphore;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
@@ -250,13 +250,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "startup recovery gate passed"
     );
 
+    // Phase 4 graceful shutdown: a single broadcast every background
+    // loop below watches. Sending `true` (from `shutdown_signal`, below,
+    // the instant ctrl_c/SIGTERM is observed) makes every loop stop
+    // waiting for its next tick and exit instead of starting another
+    // round of work — "cancel acquisition loops" per the remediation
+    // plan's Phase 4 shutdown sequence. Each loop's in-flight unit of
+    // work (a single fenced claim/commit/release cycle) is short and
+    // already releases its own lease before returning, so there is no
+    // separate "release exact tokenised claims" step to add here: worst
+    // case, a claim held at the moment of a forced (timed-out) exit
+    // recovers via that work type's normal reclaim window, same as any
+    // other crash.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
     // Background: reclaim jobs whose persisted claim_expires_at has
     // passed (every 60s). F-06: authority is the deadline recorded at
     // dequeue time, not a separately supplied timeout here.
     let reclaim_store = store.clone();
-    tokio::spawn(async move {
+    let mut job_reclaim_shutdown = shutdown_rx.clone();
+    let job_reclaim_handle = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            if !sleep_or_shutdown(
+                std::time::Duration::from_secs(60),
+                &mut job_reclaim_shutdown,
+            )
+            .await
+            {
+                tracing::info!("job reclaim loop stopping: shutdown signal received");
+                break;
+            }
             match reclaim_store.reclaim_stale_jobs().await {
                 Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "Reclaimed stale jobs"),
                 Err(e) => tracing::error!(error = %e, "Job reclaim failed"),
@@ -272,10 +295,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // instance permanently: nothing else can claim it, since I-8 caps
     // one claimed activation per instance.
     let reclaim_activations_store = store.clone();
-    tokio::spawn(async move {
+    let mut activation_reclaim_shutdown = shutdown_rx.clone();
+    let activation_reclaim_handle = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            match reclaim_activations_store.reclaim_expired_activations().await {
+            if !sleep_or_shutdown(
+                std::time::Duration::from_secs(60),
+                &mut activation_reclaim_shutdown,
+            )
+            .await
+            {
+                tracing::info!("activation reclaim loop stopping: shutdown signal received");
+                break;
+            }
+            match reclaim_activations_store
+                .reclaim_expired_activations()
+                .await
+            {
                 Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "Reclaimed stale activations"),
                 Err(e) => tracing::error!(error = %e, "Activation reclaim failed"),
                 _ => {}
@@ -289,10 +324,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_engine = engine.clone();
     let tick_store = store.clone();
     let tick_owner = scheduler_owner.clone();
-    tokio::spawn(async move {
+    let mut scheduler_shutdown = shutdown_rx.clone();
+    let scheduler_handle = tokio::spawn(async move {
         let mut tenant_cursor = 0usize;
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(tick_interval_ms)).await;
+            if !sleep_or_shutdown(
+                std::time::Duration::from_millis(tick_interval_ms),
+                &mut scheduler_shutdown,
+            )
+            .await
+            {
+                tracing::info!("scheduler loop stopping: shutdown signal received");
+                break;
+            }
             let mut tenants = match tick_store.list_tenants().await {
                 Ok(t) => t,
                 Err(e) => {
@@ -371,9 +415,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Background: prune dedupe cache using the configured late-delivery window.
     let prune_store = store.clone();
-    tokio::spawn(async move {
+    let mut prune_shutdown = shutdown_rx.clone();
+    let prune_handle = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            if !sleep_or_shutdown(std::time::Duration::from_secs(3600), &mut prune_shutdown).await {
+                tracing::info!("dedupe prune loop stopping: shutdown signal received");
+                break;
+            }
             match prune_store.prune_dedupe_cache(dedupe_retention_ms).await {
                 Ok(n) if n > 0 => tracing::info!(pruned = n, "Pruned dedupe cache"),
                 Err(e) => tracing::error!(error = %e, "Dedupe prune failed"),
@@ -446,7 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(unix)]
     let mut sigterm = {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         signal(SignalKind::terminate())?
     };
     let shutdown_signal = async move {
@@ -464,7 +512,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = ctrl_c.await;
         }
 
-        tracing::info!("shutdown signal received — draining in-flight requests");
+        tracing::info!("shutdown signal received — readiness false, draining in-flight requests");
+        // Phase 4 shutdown sequence step 1: readiness becomes false
+        // before anything else, so a load balancer stops routing new
+        // requests here while gRPC's own in-flight drain (below) and the
+        // background loops (via shutdown_tx) wind down concurrently.
+        health_reporter
+            .set_not_serving::<BpmnLiteServer<BpmnLiteService>>()
+            .await;
+        // Step 2: cancel acquisition loops — every background loop
+        // above stops taking on new work as soon as it next checks.
+        let _ = shutdown_tx.send(true);
     };
 
     Server::builder()
@@ -487,6 +545,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("BPMN-Lite gRPC server stopped");
 
+    // Step 4: drain in-flight commits for a configured bounded period.
+    // gRPC requests are already drained by serve_with_shutdown above;
+    // this bounds how long we wait for the background loops' current
+    // unit of work (a single claim/commit/release cycle each) to finish
+    // before step 6 (exit). A loop that doesn't finish in time is
+    // abandoned, not force-killed — whatever claim it held recovers via
+    // that work type's normal lease-expiry reclaim, same as any crash.
+    let drain_bound =
+        std::time::Duration::from_secs(parse_u64_env("BPMN_LITE_SHUTDOWN_DRAIN_SECS", 10));
+    match tokio::time::timeout(
+        drain_bound,
+        futures::future::join_all([
+            job_reclaim_handle,
+            activation_reclaim_handle,
+            scheduler_handle,
+            prune_handle,
+        ]),
+    )
+    .await
+    {
+        Ok(_) => tracing::info!("background loops drained cleanly"),
+        Err(_) => tracing::warn!(
+            drain_secs = drain_bound.as_secs(),
+            "background loops did not finish draining within the bound; \
+             any claim they held recovers via its normal reclaim window"
+        ),
+    }
+
     #[cfg(feature = "postgres")]
     if let Some(runtime) = bus_runtime {
         if let Err(e) = runtime.shutdown().await {
@@ -503,6 +589,21 @@ fn generate_scheduler_owner() -> String {
     match std::env::var("BPMN_LITE_SCHEDULER_OWNER") {
         Ok(label) => format!("{}-{}", label, Uuid::now_v7()),
         Err(_) => format!("bpmn-lite-{}", Uuid::now_v7()),
+    }
+}
+
+/// Waits out `duration` unless the shutdown broadcast fires first.
+/// Returns `true` if the caller should proceed with its next unit of
+/// work (the sleep elapsed normally), `false` if shutdown was signalled
+/// (or the sender was dropped, treated the same way — fail safe) and
+/// the caller's loop should exit instead.
+async fn sleep_or_shutdown(
+    duration: std::time::Duration,
+    shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => true,
+        _ = shutdown_rx.wait_for(|shutting_down| *shutting_down) => false,
     }
 }
 
@@ -706,6 +807,44 @@ mod tests_owner {
         assert!(owner_default.starts_with("bpmn-lite-"));
         let suffix_default = &owner_default["bpmn-lite-".len()..];
         assert!(uuid::Uuid::parse_str(suffix_default).is_ok());
+    }
+
+    // Phase 4 graceful shutdown: sleep_or_shutdown is what every
+    // background loop in main() polls instead of a blind sleep, so this
+    // is the one piece of the shutdown sequence that's unit-testable
+    // outside a running server process.
+
+    #[tokio::test]
+    async fn sleep_or_shutdown_returns_true_when_the_sleep_elapses_first() {
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let proceed = sleep_or_shutdown(std::time::Duration::from_millis(1), &mut rx).await;
+        assert!(
+            proceed,
+            "with no shutdown signalled, the loop must be told to proceed"
+        );
+    }
+
+    #[tokio::test]
+    async fn sleep_or_shutdown_returns_false_the_instant_shutdown_is_signalled() {
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        tx.send(true).unwrap();
+        let proceed = sleep_or_shutdown(std::time::Duration::from_secs(3600), &mut rx).await;
+        assert!(
+            !proceed,
+            "an already-signalled shutdown must short-circuit a long sleep, not wait it out"
+        );
+    }
+
+    #[tokio::test]
+    async fn sleep_or_shutdown_returns_false_if_the_sender_is_dropped() {
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        drop(tx);
+        let proceed = sleep_or_shutdown(std::time::Duration::from_secs(3600), &mut rx).await;
+        assert!(
+            !proceed,
+            "a dropped sender (channel closed without ever signalling true) must fail safe \
+             and stop the loop, not wait out the sleep as if nothing happened"
+        );
     }
 }
 
