@@ -3139,6 +3139,45 @@ impl RuntimeStore for PostgresWorkflowStore {
             }
         }
 
+        // Phase 3B dual-write (docs/todo/PHASE3-durable-activation-
+        // queue.md): atomic with this same commit, same DB transaction —
+        // a crash between commit and enqueue is impossible; either both
+        // land or neither does. Still shadow: claim_running_instances
+        // remains the live scheduler until 3C reads from this queue.
+        let resolved_state = transition.state_override().unwrap_or(&snapshot.state);
+        if matches!(resolved_state, ProcessState::Running) {
+            let has_running_fiber: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM fibers WHERE instance_id = $1 AND wait_state = '\"Running\"'::jsonb)",
+            )
+            .bind(claim.instance_id())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|error| CommitError::Unavailable(error.to_string()))?;
+            if has_running_fiber {
+                let command_id =
+                    activation_command_id_for_runnable(claim.instance_id(), new_revision);
+                let command_json = serde_json::to_value(Command::Tick { fiber_id: None })
+                    .map_err(|error| CommitError::Integrity(error.to_string()))?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO workflow_activations
+                        (tenant_id, activation_id, instance_id, command_id, command_kind,
+                         command_envelope)
+                    VALUES ($1, $2, $3, $4, 'tick', $5)
+                    ON CONFLICT (tenant_id, command_id) DO NOTHING
+                    "#,
+                )
+                .bind(claim.tenant_id().as_str())
+                .bind(Uuid::now_v7())
+                .bind(claim.instance_id())
+                .bind(command_id)
+                .bind(&command_json)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| CommitError::Unavailable(error.to_string()))?;
+            }
+        }
+
         tx.commit()
             .await
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
@@ -12505,6 +12544,134 @@ mod tests {
             1,
             "a claim past its persisted claim_expires_at must be reclaimable, \
              mirroring F-06's lesson: authority is the persisted deadline, not a caller timeout"
+        );
+    }
+
+    // ── Phase 3B: commit_transition dual-write ──
+
+    #[tokio::test]
+    async fn test_phase3b_commit_leaving_a_running_fiber_enqueues_an_activation() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3b-running").await;
+        let instance = store
+            .load_instance(&tenant, instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let none_yet = store
+            .claim_ready_activations(&tenant, "phase3b-running-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(none_yet.is_empty());
+
+        let claim = store
+            .claim_instance_for_transition(&tenant, instance_id, "apply", 30_000)
+            .await
+            .unwrap()
+            .unwrap();
+        let transition = TransitionBuilder::new(instance)
+            .upsert_fiber(Fiber::new(Uuid::now_v7(), 0u32))
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3b-running-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "a commit leaving a runnable fiber must enqueue exactly one activation"
+        );
+        assert_eq!(claimed[0].instance_id(), instance_id);
+    }
+
+    #[tokio::test]
+    async fn test_phase3b_commit_leaving_no_running_fiber_enqueues_nothing() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3b-parked").await;
+        let instance = store
+            .load_instance(&tenant, instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let claim = store
+            .claim_instance_for_transition(&tenant, instance_id, "apply", 30_000)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut parked = Fiber::new(Uuid::now_v7(), 0u32);
+        parked.wait = WaitState::Job {
+            job_key: "some-job".to_string(),
+        };
+        let transition = TransitionBuilder::new(instance)
+            .upsert_fiber(parked)
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3b-parked-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            claimed.is_empty(),
+            "a commit that only parks a fiber must not enqueue an activation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3b_repeated_commit_at_same_revision_does_not_double_enqueue() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("default").unwrap();
+        let instance_id = seed_running_instance(&store, "phase3b-dedupe").await;
+        let instance = store
+            .load_instance(&tenant, instance_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // seed_running_instance's own save_instance commit landed at
+        // revision 0 (is_start); the next commit lands at revision 1 —
+        // pre-seed that exact dedupe key directly to prove the SQL
+        // `ON CONFLICT (tenant_id, command_id) DO NOTHING` collapses a
+        // real commit's insert onto it, not just enqueue_activation's
+        // own idempotency path (already covered by 3A's test).
+        let command_id = activation_command_id_for_runnable(instance_id, 1);
+        let inserted = store
+            .enqueue_activation(
+                &tenant,
+                instance_id,
+                command_id,
+                "tick",
+                &Command::Tick { fiber_id: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(inserted);
+
+        let claim = store
+            .claim_instance_for_transition(&tenant, instance_id, "apply", 30_000)
+            .await
+            .unwrap()
+            .unwrap();
+        let transition = TransitionBuilder::new(instance)
+            .upsert_fiber(Fiber::new(Uuid::now_v7(), 0u32))
+            .build();
+        store.commit_transition(&claim, &transition).await.unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&tenant, "phase3b-dedupe-owner", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "same (instance_id, revision) dedupe key must collapse to one row"
         );
     }
 }

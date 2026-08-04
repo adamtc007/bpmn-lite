@@ -231,6 +231,46 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// Shared body for `RuntimeStore::enqueue_activation` and
+/// `commit_transition`'s Phase 3B dual-write, both of which already hold
+/// `Inner`'s write lock and must not re-acquire it. Returns whether this
+/// call actually inserted a new row (`false` on a duplicate command_id).
+fn enqueue_activation_locked(
+    w: &mut Inner,
+    tenant_id: &TenantId,
+    instance_id: Uuid,
+    command_id: Uuid,
+    command_kind: &str,
+    command: &Command,
+    available_at_ms: Option<u64>,
+) -> bool {
+    let dedupe_key = (tenant_id.to_string(), command_id);
+    if w.activation_dedupe.contains_key(&dedupe_key) {
+        return false;
+    }
+    let activation_id = Uuid::now_v7();
+    let seq = w.activation_seq_counter;
+    w.activation_seq_counter += 1;
+    w.activations.insert(
+        activation_id,
+        MemoryActivation {
+            tenant_id: tenant_id.clone(),
+            instance_id,
+            command_id,
+            command_kind: command_kind.to_string(),
+            command: command.clone(),
+            status: MemoryActivationStatus::Ready,
+            available_at_ms: available_at_ms.map(|ms| ms as i64).unwrap_or_else(now_ms),
+            priority: 0,
+            seq,
+            claim: None,
+            attempt_count: 0,
+        },
+    );
+    w.activation_dedupe.insert(dedupe_key, activation_id);
+    true
+}
+
 #[async_trait]
 impl RuntimeStore for MemoryStore {
     // ── Instance ──
@@ -1379,6 +1419,22 @@ impl RuntimeStore for MemoryStore {
             .any(|((id, _), fiber)| *id == instance_id && fiber.wait == WaitState::Running);
         if !matches!(snapshot.state, ProcessState::Running) || !has_running_fiber {
             w.transition_leases.remove(&instance_id);
+        } else {
+            // Phase 3B dual-write (docs/todo/PHASE3-durable-activation-
+            // queue.md): atomic with this same commit, in the same write
+            // lock — a crash here never leaves the commit durable with
+            // no matching activation. Still shadow: claim_running_
+            // instances remains the live scheduler until 3C.
+            let command_id = activation_command_id_for_runnable(instance_id, new_revision);
+            enqueue_activation_locked(
+                &mut w,
+                claim.tenant_id(),
+                instance_id,
+                command_id,
+                "tick",
+                &Command::Tick { fiber_id: None },
+                None,
+            );
         }
         Ok(CommitOutcome::Committed { new_revision })
     }
@@ -1629,31 +1685,15 @@ impl RuntimeStore for MemoryStore {
         available_at_ms: Option<u64>,
     ) -> StoreResult<bool> {
         let mut w = self.inner.write().await;
-        let dedupe_key = (tenant_id.to_string(), command_id);
-        if w.activation_dedupe.contains_key(&dedupe_key) {
-            return Ok(false);
-        }
-        let activation_id = Uuid::now_v7();
-        let seq = w.activation_seq_counter;
-        w.activation_seq_counter += 1;
-        w.activations.insert(
-            activation_id,
-            MemoryActivation {
-                tenant_id: tenant_id.clone(),
-                instance_id,
-                command_id,
-                command_kind: command_kind.to_string(),
-                command: command.clone(),
-                status: MemoryActivationStatus::Ready,
-                available_at_ms: available_at_ms.map(|ms| ms as i64).unwrap_or_else(now_ms),
-                priority: 0,
-                seq,
-                claim: None,
-                attempt_count: 0,
-            },
-        );
-        w.activation_dedupe.insert(dedupe_key, activation_id);
-        Ok(true)
+        Ok(enqueue_activation_locked(
+            &mut w,
+            tenant_id,
+            instance_id,
+            command_id,
+            command_kind,
+            command,
+            available_at_ms,
+        ))
     }
 
     async fn claim_ready_activations(
@@ -3844,6 +3884,103 @@ mod tests {
         assert!(
             again.is_empty(),
             "a dead-lettered activation must not resurface"
+        );
+    }
+
+    // ── Phase 3B: commit_transition dual-write ──
+
+    #[tokio::test]
+    async fn test_phase3b_commit_leaving_a_running_fiber_enqueues_an_activation() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+
+        // No fiber yet: the initial save_instance commit upserted none,
+        // so nothing should be ready.
+        let none_yet = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(none_yet.is_empty());
+
+        // A commit that upserts a fiber in WaitState::Running (the
+        // default from Fiber::new) must dual-write a matching activation
+        // in the same commit, atomically.
+        store
+            .save_fiber(instance_id, &Fiber::new(Uuid::now_v7(), 0u32))
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "a commit leaving a runnable fiber must enqueue exactly one activation"
+        );
+        assert_eq!(claimed[0].instance_id(), instance_id);
+    }
+
+    #[tokio::test]
+    async fn test_phase3b_commit_leaving_no_running_fiber_enqueues_nothing() {
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+
+        let mut parked = Fiber::new(Uuid::now_v7(), 0u32);
+        parked.wait = WaitState::Job {
+            job_key: "some-job".to_string(),
+        };
+        store.save_fiber(instance_id, &parked).await.unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert!(
+            claimed.is_empty(),
+            "a commit that only parks a fiber must not enqueue an activation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase3b_repeated_commit_at_same_revision_does_not_double_enqueue() {
+        // Guards the dedupe identity itself: activation_command_id_for_
+        // runnable is keyed on (instance_id, revision), so two distinct
+        // commits that each leave the SAME revision runnable (impossible
+        // in practice since revision is monotonic per commit, but the
+        // dedupe key must still hold under direct reuse) collapse to one
+        // ready row via enqueue_activation's uniqueness, not two.
+        let store = MemoryStore::new();
+        let instance_id = seed_running_instance_for_activation_tests(&store).await;
+        let command_id = activation_command_id_for_runnable(instance_id, 1);
+
+        let first = store
+            .enqueue_activation(
+                &TenantId::default(),
+                instance_id,
+                command_id,
+                "tick",
+                &Command::Tick { fiber_id: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(first);
+
+        store
+            .save_fiber(instance_id, &Fiber::new(Uuid::now_v7(), 0u32))
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_ready_activations(&TenantId::default(), "owner-a", 10, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "same (instance_id, revision) dedupe key must collapse to one row"
         );
     }
 }

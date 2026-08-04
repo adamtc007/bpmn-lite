@@ -1,12 +1,15 @@
-# Phase 3A — durable activation queue (schema + store primitives)
+# Phase 3 — durable activation queue
 
-Status: **done, unwired**. This closes the 3A slice only: a durable,
-tenant-scoped, per-instance-serialised ready-work table plus store
-primitives on every `RuntimeStore` implementer. Nothing in the engine
-enqueues to or dequeues from it yet — `claim_running_instances`'s
+Status: **3A + 3B done, unwired**. 3A built a durable, tenant-scoped,
+per-instance-serialised ready-work table plus store primitives on every
+`RuntimeStore` implementer. 3B makes `commit_transition` itself the
+producer: any commit that leaves a fiber in `WaitState::Running` writes
+a matching activation atomically, in the same database transaction —
+still nothing reads from the table. `claim_running_instances`'s
 full-population scan remains the live scheduler. F-01 (the scale defect
 this queue exists to fix) is not yet remediated in production behavior;
-this phase only proves the replacement mechanism works in isolation.
+this phase only proves the replacement mechanism works and is correctly
+populated in isolation.
 
 ## Why 3A only
 
@@ -17,16 +20,78 @@ red→green slice, and cutting the scheduler over before the new path has
 its own test receipts would mean debugging two unknowns (a new schema
 *and* a new dispatch path) at once. Splitting:
 
-- **3A (this phase):** schema, `RuntimeStore` trait methods, both
+- **3A (done):** schema, `RuntimeStore` trait methods, both
   implementations (`MemoryStore`, `PostgresWorkflowStore`), fault/test
   doubles, unit tests against each. Zero live behavior change.
-- **3B (future):** dual-write — engine enqueues an activation alongside
-  every existing scan-visible state change, shadow-verified against
-  `claim_running_instances`'s output, still not consumed.
+- **3B (done, this update):** dual-write — `commit_transition` enqueues
+  an activation atomically with the commit that creates the runnable
+  condition, for every command type (they all funnel through this one
+  function). Still shadow: nothing consumes from the table.
 - **3C (future):** scheduler cutover — dispatch claims from
   `claim_ready_activations` instead of `claim_running_instances`.
 - **3D (future):** remove the population-scan path once 3C has run
   clean for a bake period.
+
+## 3B — design fork and resolution
+
+The plan says: *"In the same transaction that creates the condition,
+enqueue the activation."* Two ways to get that atomicity were on the
+table:
+
+- **Option A (chosen):** thread the enqueue into `commit_transition`
+  itself — the single function every command type (`Tick`, `TimerFired`,
+  `MessageDelivered`, job completion, effect response, admin
+  cancel/resume) already funnels through via `apply_and_commit_command`.
+  `commit_transition` already computes a `has_running_fiber` boolean for
+  an existing purpose (clearing the transition lease when nothing is
+  left to do); 3B reuses that exact signal to decide whether to enqueue,
+  in the same DB transaction as the rest of the commit.
+- **Option B (rejected):** call `enqueue_activation` separately, right
+  after `commit_transition` returns, from `apply_and_commit_command`.
+  Smaller diff, but not atomic — a crash between the two calls would
+  silently reproduce the exact "runnable-with-no-activation" gap this
+  queue exists to close. Adam's call: *"option B is a frig and
+  shortcut"* — rejected outright, no partial credit for "the gap is
+  inert until 3C." Went with Option A.
+
+### Why one hook covers most of the plan's producer list
+
+3B's plan section lists several distinct "ready" conditions: new
+instance/start continuation, a transition leaving a fiber runnable, due
+timer delivery, correlated message delivery, job result, effect
+response, admin cancellation/resume/retry. These are not independent
+call sites to instrument one by one — every one of them is *resolved*
+inside the kernel as a `Transition` whose `fibers_upsert()` contains a
+fiber back in `WaitState::Running` (a timer firing sets the parked
+fiber's wait back to `Running` before advancing its PC; so does a job
+completion, a message delivery, a `V2Fork` spawning immediately-runnable
+children, and instance start's root fiber). Checking `fibers_upsert()`
+for `WaitState::Running` once, inside `commit_transition`, catches all
+of them in one mechanism, because `commit_transition` is the one place
+every one of those `Transition`s lands.
+
+What's *not* covered by this single hook, and is honestly out of 3B's
+tested scope: nothing currently distinguishes "this activation's
+underlying command was a timer vs. a message vs. an admin action" — the
+enqueued activation is always a generic `Command::Tick`. That's
+sufficient for 3C's purpose (the consumer just needs to know "tick this
+instance"), but if a future phase wants per-command-kind activations
+(e.g., to skip re-deriving what's runnable), that's a deferred
+refinement, not a 3B gap.
+
+### Idempotent dedupe identity
+
+`activation_command_id_for_runnable(instance_id, revision)`
+(`bpmn-lite-types/src/transition.rs`) is a `blake3`-domain-separated
+hash of `(instance_id, revision)`, mirroring the existing
+`EffectId::for_transition` pattern. Since `commit_transition` computes
+exactly one `new_revision` per successful commit, this key is
+naturally unique per commit — `enqueue_activation`'s
+`(tenant_id, command_id)` uniqueness (a `ON CONFLICT DO NOTHING` in
+Postgres, a `HashMap` dedupe index in `MemoryStore`) is what actually
+prevents a double-insert, not the hash's uniqueness alone; the hash just
+makes retries of the *same* commit collapse onto the *same* row instead
+of minting a distinct one every time.
 
 ## What's built
 
@@ -150,24 +215,44 @@ the negative half: it also asserts a `ClaimedActivation` reconstructed
 with a wrong `claim_token` is rejected by `renew_activation_claim`
 (returns `None`), not silently renewed.
 
-**Full workspace**, including the fuzz crate:
+### 3B
+
+**MemoryStore** (`cargo test -p bpmn-lite-store --lib test_phase3b`) — 3/3:
+
+```
+test_phase3b_commit_leaving_a_running_fiber_enqueues_an_activation ... ok
+test_phase3b_commit_leaving_no_running_fiber_enqueues_nothing ... ok
+test_phase3b_repeated_commit_at_same_revision_does_not_double_enqueue ... ok
+```
+
+**PostgresWorkflowStore** (`BPMN_LITE_TEST_DATABASE_URL=... cargo test
+-p bpmn-lite-store-postgres --lib test_phase3b -- --test-threads=1`) —
+3/3, same three cases: a commit with an upserted `Running` fiber
+enqueues exactly one activation claimable via `claim_ready_activations`;
+a commit that only parks a fiber (`WaitState::Job`) enqueues nothing;
+and a pre-seeded activation at the same `(instance_id, revision)`
+dedupe key collapses the real commit's `ON CONFLICT DO NOTHING` insert
+onto it rather than erroring or duplicating.
+
+**Full workspace**, including the fuzz crate, after both 3A and 3B:
 
 ```
 cargo build --workspace --tests                         → clean
 (cd bpmn-lite-engine/fuzz && cargo build --tests)        → clean
 cargo test -p bpmn-lite-kernel --lib                     → 49/49
 cargo test -p bpmn-lite-engine --lib                     → 77/77
-cargo test -p bpmn-lite-store --lib                      → 34/34
+cargo test -p bpmn-lite-store --lib                      → 37/37
 BPMN_LITE_TEST_DATABASE_URL=... cargo test \
-  -p bpmn-lite-store-postgres --lib -- --test-threads=1  → 93/94
+  -p bpmn-lite-store-postgres --lib -- --test-threads=1  → 96/97
 ```
 
 The one Postgres failure,
 `test_phase0_f03_active_active_recovery_aborts_on_busy_lease`, is the
 pre-existing F-03 baseline red test (startup recovery aborting the whole
 scan instead of skipping one busy-leased instance) — untouched by this
-phase, explicitly Phase 4 territory per the remediation plan. Not a
-regression.
+work, explicitly Phase 4 territory per the remediation plan. Not a
+regression, and unchanged in count from before 3B (still exactly one
+red test, the same one).
 
 `cargo clippy --lib --tests --no-deps` on every touched crate
 (`bpmn-lite-types`, `bpmn-lite-store`, `bpmn-lite-store-postgres`,
@@ -179,8 +264,19 @@ predating this phase's `apply_job_completion` edit).
 
 ## Deliberately deferred (not this phase)
 
-- **3B/3C/3D** as above — no producer enqueues an activation yet, no
-  consumer claims one, the old scan is untouched and still live.
+- **3C/3D** as above — `commit_transition` now enqueues on every commit
+  that leaves a fiber runnable, but no consumer claims one; the old
+  `claim_running_instances` population scan is untouched and still the
+  live scheduler.
+- **3B's reconciliation query** (runnable state with no ready/claimed
+  activation; ready activation whose instance is terminal/quarantined;
+  multiple authoritative claims for an instance; expired claimed
+  activations not reclaimable) — the plan calls for this as a
+  divergence check against the old scheduler. With enqueue now atomic
+  with the commit (Option A), the first two classes are structurally
+  impossible rather than merely rare, which weakens the case for
+  building the query now; still worth adding before 3C cutover as a
+  pre-flight sanity check, not before.
 - **`base_revision`** column exists in the schema (diagnostic) but no
   consumer checks it for staleness — that's a 3C concern once there's a
   real consumer to make the call against.
@@ -189,8 +285,15 @@ predating this phase's `apply_job_completion` edit).
   tick yet, same as the primitive existing without a scheduler wired to
   it.
 - **Priority** is a plain `INTEGER NOT NULL DEFAULT 0` column, always 0
-  today — no producer sets it. The ordering machinery (`ORDER BY
-  priority, available_at, seq` throughout) is proven correct against a
-  synthetic priority in none of these tests specifically, since nothing
-  sets a non-zero value yet; worth a dedicated test once 3B gives a
-  producer that can set it meaningfully.
+  today — 3B's enqueue always writes 0. The ordering machinery (`ORDER
+  BY priority, available_at, seq` throughout) is proven correct against
+  a synthetic priority in none of these tests specifically, since
+  nothing sets a non-zero value yet; worth a dedicated test if a future
+  phase gives a producer that can set it meaningfully.
+- **Per-command-kind activations** — every 3B-enqueued activation is a
+  generic `Command::Tick`, regardless of what actually made the fiber
+  runnable (timer, message, job, admin action). Sufficient for 3C's
+  purpose (the consumer re-derives what's runnable by ticking), but
+  means the activation's `command_kind`/`command` fields don't carry the
+  original triggering command — a deliberate simplification, not an
+  oversight.

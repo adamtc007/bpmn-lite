@@ -999,12 +999,34 @@ pub enum Command {
     },
 }
 
+/// Deterministic dedupe identity for the Phase 3B "this instance has a
+/// runnable fiber" activation `commit_transition` enqueues alongside a
+/// commit that leaves a fiber in `WaitState::Running`. Same
+/// `(instance_id, revision)` always yields the same command id, so a
+/// retried/duplicate commit of the same transition enqueues at most once
+/// — `enqueue_activation`'s `(tenant_id, command_id)` uniqueness does
+/// the rest.
+pub fn activation_command_id_for_runnable(instance_id: Uuid, revision: u64) -> Uuid {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"bpmn-lite/activation/runnable/v1");
+    hasher.update(instance_id.as_bytes());
+    hasher.update(&revision.to_be_bytes());
+    let hash = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash.as_bytes()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
 /// One claimed row from the durable ready-activation table (Phase 3A,
 /// `docs/todo/PHASE3-durable-activation-queue.md`). Mirrors
 /// `ClaimedTimer`/`ClaimedEffect`'s shape: the claim token is the unique
 /// per-acquisition identity a release/renew/consume must match, not the
-/// owner string. As of 3A nothing in the engine enqueues to or consumes
-/// from this table yet — it exists as a tested, unwired store primitive.
+/// owner string. As of 3B, `commit_transition` enqueues into this table
+/// whenever a commit leaves a fiber runnable (dual-write, still
+/// shadow — `claim_running_instances`'s population scan remains the
+/// live scheduler until 3C).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClaimedActivation {
     tenant_id: TenantId,
