@@ -3783,6 +3783,23 @@ fn v2_trigger_guard_changes_with_target(
         for fiber_id in &cancelled_fibers {
             changes.fibers_delete.push(*fiber_id);
         }
+        // A fiber unwound while parked on a job leaves that activation
+        // VOID — no fiber will ever consume its completion. Without this,
+        // the activation stayed live in the store and `dequeue_jobs`
+        // handed workers a ghost whose completion the kernel then refused
+        // (the exact structure-consulted-as-state gap surfaced by WS-D
+        // D3's timeout receipt, 2026-08-03). Emitted per cancelled fiber
+        // from its wait state — the kernel's own record of what the fiber
+        // was parked on — never inferred from queue contents.
+        for fiber_id in &cancelled_fibers {
+            if let Some(dead_fiber) = snapshot.fibers().get(fiber_id) {
+                if let WaitState::Job { job_key } = &dead_fiber.wait {
+                    changes
+                        .job_mutations
+                        .push(JobMutation::Cancel { job_key: job_key.clone() });
+                }
+            }
+        }
         // K-1 (V4.2): cancelled fibres may carry ancestor handles above
         // `record_id` (this guard nested inside another scope) — those
         // records aren't in `retire_order` (only `record_id` and its own
@@ -4070,6 +4087,21 @@ fn apply_v2_guard_timer_rollback(
     instance.flags = restored.flags;
     instance.join_expected = restored.join_expected;
     instance.session_stack = restored.session_stack;
+
+    // Same job-cancel rule as the interrupting-trigger path: every fiber
+    // this rollback unwound leaves any job it was parked on VOID. Emitted
+    // from the pre-rescue delete list deliberately — if the spanning-case
+    // rescue below un-deletes the trigger fibre, it re-parks it on an
+    // Incident, so its old job activation is void either way.
+    for fiber_id in changes.fibers_delete.clone() {
+        if let Some(dead_fiber) = snapshot.fibers().get(&fiber_id) {
+            if let WaitState::Job { job_key } = &dead_fiber.wait {
+                changes
+                    .job_mutations
+                    .push(JobMutation::Cancel { job_key: job_key.clone() });
+            }
+        }
+    }
 
     // §13 amendment (spanning case): identical computation to
     // `apply_job_failure`'s own branch of the same shape — see its
@@ -8946,6 +8978,119 @@ mod tests {
                 claim_token: Uuid::nil(),
             }]
         );
+    }
+
+    /// WS-D follow-up (Adam's "go ahead" ruling, 2026-08-03): an
+    /// interrupting guard firing while its member fibre is parked on a
+    /// JOB must emit `JobMutation::Cancel` for that job — the activation
+    /// is void the moment the fibre is unwound, and before this the
+    /// queued activation stayed live for `dequeue_jobs` to hand a worker
+    /// as a ghost (surfaced by WS-D D3's live timeout receipt). Same
+    /// harness as `v2_guard_timer_trigger_fires_the_same_cascade_as_
+    /// manual_v2_trigger_guard`, but the guarded body is `ExecNative`
+    /// (job-parked) instead of `V2WaitFor` (timer-parked) — the exact
+    /// shape the plan-path guard lowering (WS-D D2) emits around
+    /// `ExecDslTask`.
+    #[test]
+    fn interrupting_guard_fire_cancels_the_parked_job_activation() {
+        let program = bpmn_lite_types::legacy_program! {
+            bytecode_version: [23u8; 32],
+            program: vec![
+                /* 0 */ Instr::PushI64(5_000),
+                /* 1 */ Instr::V2Guard { handler: Addr::new(6) },
+                /* 2 */ Instr::V2GuardArmTimer,
+                /* 3 */ Instr::ExecNative { task_type: 0, argc: 0, retc: 0 },
+                /* 4 */ Instr::V2GuardEnd,
+                /* 5 */ Instr::End,
+                /* 6 */ Instr::ExecNative { task_type: 1, argc: 0, retc: 0 },
+                /* 7 */ Instr::End,
+            ],
+            debug_map: BTreeMap::new(),
+            join_plan: BTreeMap::new(),
+            wait_plan: BTreeMap::new(),
+            message_name_map: BTreeMap::new(),
+            write_set: BTreeMap::new(),
+            task_manifest: vec!["GuardedBody".to_string(), "Escalation".to_string()],
+            flag_symbol_table: BTreeMap::new(),
+            data_objects: BTreeMap::new(),
+            ffi_task_decls: BTreeMap::new(),
+        };
+        let workflow = ExecutableWorkflow::from_verified_envelope(
+            ArtifactEnvelope::from_legacy_program(program, "guard-cancels-parked-job").unwrap(),
+        )
+        .unwrap();
+        let (_, base_snapshot, _) = fixture();
+        let root_fiber_id = base_snapshot.fibers().values().next().unwrap().fiber_id;
+        let snapshot =
+            Snapshot::new(base_snapshot.instance().clone(), [Fiber::new(root_fiber_id, 0)]);
+        let genesis = SnapshotEnvelope::new(
+            workflow.envelope().abi_version(),
+            snapshot.instance().bytecode_version,
+            0,
+            PersistedSnapshotState::new(
+                snapshot.instance().clone(),
+                snapshot.fibers().values().cloned(),
+                BTreeMap::new(),
+                [],
+                bpmn_lite_types::ConcurrencyTable::new(),
+                [],
+            ),
+        );
+
+        // Tick 1: guard opens + arms, body ExecNative enqueues its job
+        // and parks the fibre on it.
+        let context1 = DeterministicContext::new(500, Uuid::from_u128(501), 1);
+        let t1 =
+            apply(&workflow, &snapshot, &Command::Tick { fiber_id: None }, &context1).unwrap();
+        let guard_handle = t1.fibers_upsert()[0].control_stack[0];
+        let WaitState::Job { job_key: parked_job_key } = t1.fibers_upsert()[0].wait.clone()
+        else {
+            panic!("guarded body must park on its job: {:?}", t1.fibers_upsert()[0].wait);
+        };
+        let after_t1 =
+            materialize_snapshot(genesis.state(), &t1, workflow.envelope().abi_version(), 1);
+
+        // Fire the guard's own timer while the job is still outstanding.
+        let context2 = DeterministicContext::new(502, Uuid::from_u128(503), 2);
+        let claimed_timer = bpmn_lite_types::ClaimedTimer::new(
+            bpmn_lite_types::ClaimedTimerIdentity::new(
+                bpmn_lite_types::TenantId::new("tenant-a").unwrap(),
+                EffectId::for_instruction(root_fiber_id, root_fiber_id, 2),
+                after_t1.state().instance().instance_id,
+                root_fiber_id,
+            ),
+            5_000,
+            TimerKind::V2GuardTimer { record_id: guard_handle },
+            None,
+            Uuid::nil(),
+        );
+        let snapshot2 = Snapshot::new(
+            after_t1.state().instance().clone(),
+            after_t1.state().fibers().values().cloned(),
+        )
+        .with_concurrency_table(after_t1.state().concurrency_table().clone());
+        let t2 = apply(
+            &workflow,
+            &snapshot2,
+            &Command::TimerFired { timer: claimed_timer, fired_at: 5_000 },
+            &context2,
+        )
+        .unwrap();
+
+        // The receipt: the unwound fibre's job activation is CANCELLED in
+        // the same transition — never left for dequeue as a ghost.
+        assert_eq!(t2.fibers_delete(), &[root_fiber_id]);
+        assert!(
+            t2.job_mutations().iter().any(|mutation| matches!(
+                mutation,
+                JobMutation::Cancel { job_key } if *job_key == parked_job_key
+            )),
+            "interrupting unwind must cancel the parked job; got {:?}",
+            t2.job_mutations()
+        );
+        // And the escalation handler still spawns exactly as before.
+        assert_eq!(t2.fibers_upsert().len(), 1);
+        assert_eq!(t2.fibers_upsert()[0].pc, Addr::new(6));
     }
 
     /// A guard's trigger is OPTIONAL, not mandatory — a `V2Guard` opened

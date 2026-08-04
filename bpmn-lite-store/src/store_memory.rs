@@ -907,6 +907,13 @@ impl RuntimeStore for MemoryStore {
                         return Err(CommitError::Conflict);
                     }
                 }
+                // Remove-everywhere, no Conflict on absence — see the
+                // variant's own doc comment for why this mirrors
+                // `jobs_ack` and not the claimed-only mutations.
+                JobMutation::Cancel { job_key } => {
+                    w.inflight_jobs.remove(job_key);
+                    w.job_queue.retain(|job| &job.job_key != job_key);
+                }
             }
         }
         if transition.terminal_cleanup().delete_all_fibers() {

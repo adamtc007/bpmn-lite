@@ -1741,6 +1741,22 @@ impl RuntimeStore for PostgresWorkflowStore {
                 .map_err(|error| CommitError::Unavailable(error.to_string()))?;
         }
         for mutation in transition.job_mutations() {
+            // `Cancel` sits outside the shared exactly-one-row postcondition
+            // below: the claimed-only mutations must hit precisely the row
+            // the worker holds (anything else is a lost-claim conflict), but
+            // a cancel targets an activation that may be pending, claimed,
+            // or — on an idempotent replay — already gone; absence is legal,
+            // not a conflict. Same DELETE shape as `jobs_ack`; see the
+            // variant's doc comment for the ack-vs-cancel distinction.
+            if let JobMutation::Cancel { job_key } = mutation {
+                sqlx::query("DELETE FROM job_queue WHERE tenant_id = $1 AND job_key = $2")
+                    .bind(claim.tenant_id().as_str())
+                    .bind(job_key)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|error| CommitError::Unavailable(error.to_string()))?;
+                continue;
+            }
             let result = match mutation {
                 JobMutation::RetryClaimed {
                     job_key,
@@ -1804,6 +1820,8 @@ impl RuntimeStore for PostgresWorkflowStore {
                     .execute(&mut *tx)
                     .await
                 }
+                // Handled by the early branch above this match.
+                JobMutation::Cancel { .. } => continue,
             }
             .map_err(|error| CommitError::Unavailable(error.to_string()))?;
             if result.rows_affected() != 1 {

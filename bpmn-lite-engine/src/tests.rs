@@ -4712,6 +4712,79 @@ async fn t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job() {
     );
 }
 
+/// WS-D follow-up (Adam's ruling 2026-08-03, `JobMutation::Cancel`): when
+/// the interrupting guard fires while the host task's job is still
+/// PENDING (enqueued, never dequeued — exactly the designer-advance
+/// scenario that surfaced this), the unwind must cancel the activation so
+/// `dequeue_jobs` NEVER hands it out as a ghost. Before the fix this
+/// dequeue returned two jobs — the escalation's AND the unwound host's,
+/// whose completion the kernel then refused ("completion has no parked
+/// fiber"). Same workflow as
+/// `t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job`;
+/// the only difference is the host job is left un-dequeued at fire time.
+#[tokio::test]
+async fn t_guard_fire_cancels_pending_host_job_activation() {
+    let store = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="proc_1" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="host"><bpmn:extensionElements><zeebe:taskDefinition type="long_work"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:boundaryEvent id="timeout" attachedToRef="host" cancelActivity="true">
+      <bpmn:timerEventDefinition><bpmn:timeDuration>PT2S</bpmn:timeDuration></bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="escalate"><bpmn:extensionElements><zeebe:taskDefinition type="escalate_work"/></bpmn:extensionElements></bpmn:serviceTask>
+    <bpmn:endEvent id="normal_end"/>
+    <bpmn:endEvent id="timeout_end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="host"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="host" targetRef="normal_end"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="timeout" targetRef="escalate"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="escalate" targetRef="timeout_end"/>
+  </bpmn:process>
+</bpmn:definitions>"#;
+    let graph = bpmn_lite_compiler::parse_bpmn(xml).unwrap();
+    let workflow = bpmn_lite_compiler::Compiler::lower_v2(&graph)
+        .expect("v2 boundary-timer lowering must verify");
+    store.store_artifact(&workflow).await.unwrap();
+    let bytecode_version = workflow.hash().into_bytes();
+
+    let instance_id = engine
+        .start("test", bytecode_version, "{}", compute_hash("{}"), "corr-v2-bt-cancel-1")
+        .await
+        .unwrap();
+
+    // Enqueue the host job (park the fibre on it) — but DO NOT dequeue.
+    engine.tick_instance(instance_id).await.unwrap();
+
+    // Fire the guard while the host activation is still pending.
+    assert_eq!(
+        engine
+            .tick_due_timers("timer-test", FAR_FUTURE_TIMER_MS, 10, 30_000)
+            .await
+            .unwrap(),
+        1,
+        "GUARD-TIMER>'s scheduled timer must fire"
+    );
+    engine.tick_instance(instance_id).await.unwrap();
+
+    // The receipt: dequeue over BOTH task types returns exactly the
+    // escalation job — the cancelled host activation is gone, not a ghost.
+    let jobs = engine
+        .activate_jobs(&["long_work".to_string(), "escalate_work".to_string()], 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs.len(),
+        1,
+        "only the escalation job may be activated; the unwound host's \
+         activation must have been cancelled: {jobs:?}"
+    );
+    assert_eq!(jobs[0].task_type, "escalate_work");
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Authoring Phase A: YAML → DTO → IR → Bytecode → Execute
 // ═══════════════════════════════════════════════════════════

@@ -1158,6 +1158,26 @@ pub enum JobMutation {
         error_message: String,
         incident_id: Uuid,
     },
+    /// The activation is VOID — its parked fiber was unwound (an
+    /// interrupting guard fired / GUARD-R rolled back), so no fiber will
+    /// ever consume its completion. Before this variant existed the
+    /// unwind left the queued activation live, and `dequeue_jobs` handed
+    /// workers a ghost whose completion the kernel then refused
+    /// ("completion has no parked fiber") — the queue claiming to hold
+    /// executable work that was cancelled, structure-consulted-as-state.
+    ///
+    /// Store contract: drop the activation wherever it sits — pending
+    /// queue or claimed/in-flight — the same remove-everywhere shape
+    /// `jobs_ack` applies, and deliberately NOT the claimed-only
+    /// Conflict-checked shape of `RetryClaimed`/`DeadLetterClaimed`: at
+    /// unwind time the job may be pending (never dequeued) or held by a
+    /// worker, and cancellation must not fail on either. A worker still
+    /// holding the claim gets the existing ghost-refusal on completion —
+    /// unchanged contract, but now the window is only "claimed before
+    /// the guard fired", never "dequeued after". Distinct from `jobs_ack`
+    /// (identical store effect) so the transition record says CANCELLED,
+    /// not finished — the audit trail must not pun the two.
+    Cancel { job_key: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
