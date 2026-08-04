@@ -21,7 +21,7 @@ mod rpst;
 
 pub use ast::{
     ConditionAst, EndAst, JoinAst, JoinModeAst, LoopAst, NodeAst, SplitAst, SplitFlowAst,
-    SplitModeAst, StartAst, TaskAst, WorkflowSource,
+    MessageWaitAst, SplitModeAst, StartAst, TaskAst, WorkflowSource,
 };
 pub use closure::{validate_path_family, Diagnostic};
 pub use dag::{validate_dag, DagError};
@@ -42,8 +42,9 @@ pub use pack_build::{
 pub use parser::{parse_node_str, parse_workflow_str};
 pub use plan::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, LoopExecNode,
-    PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode, SplitMode, StartExecNode,
-    TaskExecNode, WorkflowExecutionPlan, derive_delivery_mode,
+    MessageWaitExecNode, PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode,
+    SplitMode, StartExecNode, TaskExecNode, WaitExecNode, WorkflowExecutionPlan,
+    derive_delivery_mode,
 };
 pub use refactor::{AstMutator, ToSexpr};
 pub use rpst::verify_sese_nesting;

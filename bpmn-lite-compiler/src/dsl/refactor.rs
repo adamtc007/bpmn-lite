@@ -24,6 +24,7 @@ impl ToSexpr for NodeAst {
             Self::Start(n) => n.to_sexpr(indent),
             Self::End(n) => n.to_sexpr(indent),
             Self::Task(n) => n.to_sexpr(indent),
+            Self::MessageWait(n) => n.to_sexpr(indent),
             Self::Split(n) => n.to_sexpr(indent),
             Self::Join(n) => n.to_sexpr(indent),
             Self::Loop(n) => n.to_sexpr(indent),
@@ -81,6 +82,19 @@ impl ToSexpr for TaskAst {
         format!(
             "{}(service-task :id {} :verb {}{}{} :next {})",
             pad, self.id, self.plug, args_str, delivery_str, self.next
+        )
+    }
+}
+
+impl ToSexpr for MessageWaitAst {
+    fn to_sexpr(&self, indent: usize) -> String {
+        format!(
+            "{}(message-wait :id {} :name {} :correlation-source {} :next {})",
+            " ".repeat(indent),
+            self.id,
+            self.name,
+            self.correlation_source,
+            self.next
         )
     }
 }
@@ -199,6 +213,7 @@ impl<'a> AstMutator<'a> {
         match node {
             NodeAst::Start(st) => st.next = to_id.to_string(),
             NodeAst::Task(tk) => tk.next = to_id.to_string(),
+            NodeAst::MessageWait(wait) => wait.next = to_id.to_string(),
             NodeAst::Join(jn) => jn.next = to_id.to_string(),
             NodeAst::Loop(lp) => lp.next = to_id.to_string(),
             NodeAst::End(_) => return Err("Cannot rewire 'next' on an end event".into()),
@@ -224,6 +239,7 @@ impl<'a> AstMutator<'a> {
             match pred_node {
                 NodeAst::Start(st) => st.next.clone(),
                 NodeAst::Task(tk) => tk.next.clone(),
+                NodeAst::MessageWait(wait) => wait.next.clone(),
                 NodeAst::Join(jn) => jn.next.clone(),
                 NodeAst::Loop(lp) => lp.next.clone(),
                 NodeAst::Split(_) => {
@@ -237,6 +253,7 @@ impl<'a> AstMutator<'a> {
         match &mut new_node {
             NodeAst::Start(_) => return Err("Cannot insert a Start event".into()),
             NodeAst::Task(tk) => tk.next = orig_next,
+            NodeAst::MessageWait(wait) => wait.next = orig_next,
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
             NodeAst::End(_) => {}

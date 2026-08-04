@@ -194,6 +194,9 @@ impl Parser {
             "start-event" | "start" => self.parse_start(start_offset).map(NodeAst::Start),
             "end-event" | "end" => self.parse_end(start_offset).map(NodeAst::End),
             "service-task" => self.parse_service_task_old(start_offset).map(NodeAst::Task),
+            "message-wait" => self
+                .parse_message_wait(start_offset)
+                .map(NodeAst::MessageWait),
             "business-rule-task" => self
                 .parse_business_rule_task_old(start_offset)
                 .map(NodeAst::Task),
@@ -271,6 +274,22 @@ impl Parser {
             args,
             next,
             delivery_mode: None,
+            span,
+        })
+    }
+
+    fn parse_message_wait(&mut self, start_offset: usize) -> Option<MessageWaitAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let name = self.parse_kw_symbol("name")?;
+        let correlation_source = self.parse_kw_symbol("correlation-source")?;
+        let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(MessageWaitAst {
+            id,
+            name,
+            correlation_source,
+            next,
             span,
         })
     }

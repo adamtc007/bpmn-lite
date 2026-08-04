@@ -130,48 +130,31 @@ pub fn import_zeebe_bpmn(
                     .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("TimerWait node '{}' has no outgoing edges", id))?;
-                let duration_str = match spec {
-                    bpmn_lite_compiler::TimerSpec::Duration { ms } => {
-                        format!("PT{}M", ms / 60000)
-                    }
-                    _ => "PT15M".to_string(),
-                };
-                let mut static_args = HashMap::new();
-                static_args.insert("duration".to_string(), duration_str);
-                ExecutionNode::Task(TaskExecNode {
+                ExecutionNode::Wait(bpmn_lite_compiler::dsl::WaitExecNode {
                     id: id.clone(),
-                    plug: "bpmn:timer-wait".to_string(),
-                    // Blocking by construction, same reasoning as HumanWait
-                    // above.
-                    delivery_mode: DeliveryMode::Blocking,
-                    static_args,
+                    spec: spec.clone(),
                     next: ir[next_idx].id().to_string(),
-                    produces_placeholder: None,
-                    consumes_placeholders: vec![],
-                    guards: Vec::new(),
                     span: None,
                 })
             }
-            IRNode::MessageWait { id, name, .. } => {
+            IRNode::MessageWait {
+                id,
+                name,
+                corr_key_source,
+            } => {
                 let next_idx = ir
                     .neighbors_directed(idx, petgraph::Direction::Outgoing)
                     .next()
                     .ok_or_else(|| anyhow!("MessageWait node '{}' has no outgoing edges", id))?;
-                let mut static_args = HashMap::new();
-                static_args.insert("message_name".to_string(), name.clone());
-                ExecutionNode::Task(TaskExecNode {
+                ExecutionNode::MessageWait(
+                    bpmn_lite_compiler::dsl::MessageWaitExecNode {
                     id: id.clone(),
-                    plug: "bpmn:message-wait".to_string(),
-                    // Blocking by construction, same reasoning as HumanWait
-                    // above.
-                    delivery_mode: DeliveryMode::Blocking,
-                    static_args,
+                    name: name.clone(),
+                    correlation_key_source: corr_key_source.clone(),
                     next: ir[next_idx].id().to_string(),
-                    produces_placeholder: None,
-                    consumes_placeholders: vec![],
-                    guards: Vec::new(),
                     span: None,
-                })
+                },
+                )
             }
             IRNode::GatewayXor { id, .. } => {
                 if split_join_pairs.contains_key(&idx) {

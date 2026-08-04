@@ -387,6 +387,12 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 w.span,
             ),
+            ExecutionNode::MessageWait(w) => (
+                "message_wait".to_owned(),
+                format!("Wait for {} (correlate by {})", w.name, w.correlation_key_source),
+                None,
+                w.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -464,6 +470,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     from: id.clone(),
                     to: w.next.clone(),
                     condition: None,
+                });
+            }
+            ExecutionNode::MessageWait(w) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: w.next.clone(),
+                    condition: Some(format!("Message: {}", w.name)),
                 });
             }
             ExecutionNode::End(_) => {}
@@ -1401,6 +1414,11 @@ fn find_all_predecessors_id_rec(
             bpmn_lite_compiler::dsl::NodeAst::Task(t) => {
                 if t.next == target_id {
                     acc.push(t.id.clone());
+                }
+            }
+            bpmn_lite_compiler::dsl::NodeAst::MessageWait(wait) => {
+                if wait.next == target_id {
+                    acc.push(wait.id.clone());
                 }
             }
             bpmn_lite_compiler::dsl::NodeAst::Join(j) => {
@@ -3837,11 +3855,11 @@ mod tests {
         let diagnostics = res["diagnostics"].as_array().unwrap();
         assert!(diagnostics.iter().any(|d| d.as_str().unwrap().contains("Suggestion: Would you like me to import unknown-domain:unknown-verb to fix the unresolved verb error?")));
 
-        // Test BPMN compilation preview with valid bpmn:message-wait and ob-poc verbs
+        // First-class message waits are structural nodes, not invocation verbs.
         let bpmn_wait_src = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
           (service-task :id create-cbu :verb ob-poc:cbu.create :next message-wait)
-          (service-task :id message-wait :verb bpmn:message-wait :next type-decision)
+          (message-wait :id message-wait :name response-received :correlation-source case-id :next type-decision)
           (business-rule-task :id type-decision :decision dmn-lite:cbu_type_routing :next type-gateway)
           (exclusive-gateway :id type-gateway
             (flow :condition (= @cbu-type "fund")      :next add-fund)

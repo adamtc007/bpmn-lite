@@ -44,6 +44,12 @@ fn main() -> Result<()> {
             }
             pack_build_command(&args[1])
         }
+        "pack-check" => {
+            if args.len() < 2 {
+                bail!("missing domain argument. Usage: cargo xtask pack-check <domain>");
+            }
+            pack_check_command(&args[1])
+        }
         "run-pack" => run_pack_command(),
         "fuzz" => fuzz::fuzz_command(&workspace_root()?, &args[1..]),
         "help" | "--help" | "-h" => {
@@ -1283,6 +1289,87 @@ fn pack_build_command(domain: &str) -> Result<()> {
         .with_context(|| format!("write closure to {}", closure_path.display()))?;
     println!("Wrote closure manifest to {}", closure_path.display());
 
+    Ok(())
+}
+
+/// Verify checked-in pack artifacts without modifying them.
+///
+/// This is deliberately separate from `pack-build`: a generation command can
+/// make a stale checkout look green by overwriting the evidence under test.
+fn pack_check_command(domain: &str) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let manifests_dir = workspace_root.join("manifests");
+    let dag_path = manifests_dir.join(format!("{domain}.dag.yaml"));
+    let dag_content = std::fs::read_to_string(&dag_path)
+        .with_context(|| format!("read DAG at {}", dag_path.display()))?;
+    let dag: bpmn_lite_compiler::dsl::WorkflowPackDAG =
+        serde_yaml::from_str(&dag_content).context("parse DAG yaml")?;
+
+    let manifest_path = manifests_dir.join(format!("{}-{}.yaml", domain, dag.version));
+    let checked_manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read checked manifest at {}", manifest_path.display()))?;
+    let checked_manifest = dsl_manifest::Manifest::load_from_yaml(&checked_manifest_content)
+        .context("parse checked manifest")?;
+
+    bpmn_lite_compiler::dsl::validate_pack(&dag, &checked_manifest)
+        .map_err(|errors| anyhow!("checked pack validation failed: {errors:?}"))?;
+
+    let mut generated = bpmn_lite_compiler::dsl::generate_manifest(&dag)
+        .map_err(|error| anyhow!("generate_manifest error: {error}"))?;
+    generated.catalogue_version = bpmn_lite_compiler::dsl::derive_version(&generated, &dag);
+    let generated_yaml = generated
+        .to_yaml()
+        .map_err(|error| anyhow!("serialize generated manifest: {error}"))?;
+    let checked_yaml = checked_manifest
+        .to_yaml()
+        .map_err(|error| anyhow!("serialize checked manifest: {error}"))?;
+    if generated_yaml != checked_yaml {
+        bail!(
+            "checked manifest {} does not match the DAG-derived artifact; run `cargo xtask pack-build {domain}` and review the diff",
+            manifest_path.display()
+        );
+    }
+
+    let closure_path =
+        manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
+    let checked_closure_content = std::fs::read_to_string(&closure_path)
+        .with_context(|| format!("read checked closure at {}", closure_path.display()))?;
+    let checked_closure: bpmn_lite_compiler::dsl::PackClosureManifest =
+        serde_yaml::from_str(&checked_closure_content).context("parse checked closure")?;
+    let generated_closure = bpmn_lite_compiler::dsl::generate_closure(&generated, &dag);
+    if generated_closure != checked_closure {
+        bail!(
+            "checked closure {} does not match regeneration",
+            closure_path.display()
+        );
+    }
+
+    if domain == "bpmn" {
+        const HANDLER_BACKED: [&str; 6] = [
+            "define-template",
+            "spawn-instance",
+            "deliver-message",
+            "correlate-message",
+            "cancel-instance",
+            "inspect-instance",
+        ];
+        let declared = checked_manifest.verb_ids().collect::<std::collections::BTreeSet<_>>();
+        let handlers = HANDLER_BACKED.into_iter().collect::<std::collections::BTreeSet<_>>();
+        if declared != handlers {
+            bail!(
+                "BPMN invocation surface does not exactly match real BpmnLiteBusHandler routes: declared={declared:?}, handlers={handlers:?}"
+            );
+        }
+        for forbidden in ["message-wait", "timer-wait", "boundary-timer", "boundary-error"] {
+            if declared.contains(forbidden) {
+                bail!("structural BPMN node '{forbidden}' appears as an invocation verb");
+            }
+        }
+    }
+
+    println!(
+        "pack-check {domain}: checked DAG, manifest, closure, handler surface, and structural-node separation"
+    );
     Ok(())
 }
 

@@ -214,6 +214,7 @@ generated_at: "2026-06-04T12:00:00Z"
                         NodeAst::Start(_) => return Err("Cannot remove start event".to_string()),
                         NodeAst::End(_) => return Err("Cannot remove end event".to_string()),
                         NodeAst::Task(t) => t.next.clone(),
+                        NodeAst::MessageWait(wait) => wait.next.clone(),
                         NodeAst::Join(j) => j.next.clone(),
                         NodeAst::Loop(l) => l.next.clone(),
                         NodeAst::Split(_) => {
@@ -255,6 +256,11 @@ fn find_all_predecessors_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<S
             NodeAst::Task(t) => {
                 if t.next == target_id {
                     acc.push(t.id.clone());
+                }
+            }
+            NodeAst::MessageWait(wait) => {
+                if wait.next == target_id {
+                    acc.push(wait.id.clone());
                 }
             }
             NodeAst::Join(j) => {

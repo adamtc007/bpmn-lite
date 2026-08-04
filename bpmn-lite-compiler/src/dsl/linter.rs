@@ -424,6 +424,20 @@ impl<'a> Linter<'a> {
                     })
                 }
 
+                NodeAst::MessageWait(n) => {
+                    self.check_next_ref(id, &n.next, &node_ids);
+                    if n.name.is_empty() || n.correlation_source.is_empty() {
+                        self.err(id, "message wait requires non-empty name and correlation source");
+                    }
+                    ExecutionNode::MessageWait(MessageWaitExecNode {
+                        id: n.id.clone(),
+                        name: n.name.clone(),
+                        correlation_key_source: n.correlation_source.clone(),
+                        next: n.next.clone(),
+                        span: Some(n.span),
+                    })
+                }
+
                 NodeAst::Split(n) => {
                     if n.flows.is_empty() {
                         self.err(id, "split has no flows");
@@ -523,6 +537,7 @@ impl<'a> Linter<'a> {
                                 ExecutionNode::Join(j) => Some(j.next.clone()),
                                 ExecutionNode::Start(st) => Some(st.next.clone()),
                                 ExecutionNode::Wait(w) => Some(w.next.clone()),
+                                ExecutionNode::MessageWait(w) => Some(w.next.clone()),
                                 ExecutionNode::End(e) => Some(e.id.clone()),
                             };
                             if let Some(next_id) = next_of_target {
@@ -592,6 +607,11 @@ impl<'a> Linter<'a> {
                             }
                         }
                         ExecutionNode::Wait(w) => {
+                            if w.next == meet_id {
+                                w.next = join_id.clone();
+                            }
+                        }
+                        ExecutionNode::MessageWait(w) => {
                             if w.next == meet_id {
                                 w.next = join_id.clone();
                             }

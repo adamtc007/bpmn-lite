@@ -40,6 +40,8 @@ jobs:
         run: bash scripts/check-q9-capture-gate.sh --self-test
       - name: Q9 capture-gate guard
         run: bash scripts/check-q9-capture-gate.sh
+      - name: Checked BPMN invocation-pack gate
+        run: cargo run -p xtask -- pack-check bpmn
       - name: Clippy
         # DIR-004 Phase 1.2: NOT --all-features -- that would silently
         # compile the Q9-gated capture module into every clippy/build/
