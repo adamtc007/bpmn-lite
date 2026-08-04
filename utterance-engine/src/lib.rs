@@ -55,6 +55,7 @@ pub mod fixtures;
 // submodules, so it's test-only scaffolding, not a runtime dependency.
 #[cfg(test)]
 pub mod metrics;
+pub mod pair;
 pub mod policy;
 pub mod retrieval;
 #[cfg(feature = "candle-probe")]

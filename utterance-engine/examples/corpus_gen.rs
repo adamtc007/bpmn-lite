@@ -19,22 +19,24 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{anyhow, bail, Context, Result};
-use designer_graph::positional::PositionalLegality;
-use utterance_engine::board::{build_board, Board, EmptyUniverse, PolicyFilter};
+use sem_os_policy::decision_board::SemanticDecisionBoard;
+use utterance_engine::board::{InferenceBoard, PolicyFilter};
+use utterance_engine::bpmn_board::build_bpmn_semantic_board;
 use utterance_engine::context::{project_ir, ContextProjection};
 use utterance_engine::contract::NONE_OF_THE_ABOVE;
-use utterance_engine::corpus_schema::{BankEntry, BoardDump, Example};
+use utterance_engine::corpus_schema::{
+    BankEntry, BoardDump, Example, SemanticCorpusClosure,
+};
 use utterance_engine::fixtures::{enumeration_classes, ClassState};
 #[cfg(not(feature = "embed"))]
 use utterance_engine::retrieval::LexicalTier0;
-use utterance_engine::retrieval::{tier1_list, Tier0Retriever};
+use utterance_engine::retrieval::Tier0Retriever;
 
 // Spec S5 recorded K=8 as the trained configuration (historical, not edited);
 // Adam widened K 8->12 (ratified 2026-08-01) -- next corpus (corpus-v2 retrain)
 // generates at the ONE standing constant. Recorded in the card.
-const K: usize = utterance_engine::retrieval::TIER1_K;
 const OVERLAP_CAP: f64 = 0.5; // spec S4 A3.1
-const CORPUS_VERSION: &str = "synthetic-v2-beta";
+const CORPUS_VERSION: &str = "bpmn-semantic-v3-shadow";
 
 
 fn tokens(s: &str) -> BTreeSet<String> {
@@ -62,24 +64,28 @@ fn normalized(s: &str) -> String {
 fn main() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let bank_dir = root.join("seed/banks");
-    let out_dir = root.join("seed/corpus_v2");
+    let out_dir = root.join("seed/corpus_v3");
     std::fs::create_dir_all(&out_dir)?;
 
     // Build every class once; index by id.
     let classes = enumeration_classes()?;
-    let mut boards: BTreeMap<&str, (Board, ContextProjection, &ClassState)> = BTreeMap::new();
+    let mut boards: BTreeMap<&str, (SemanticDecisionBoard, ContextProjection, &ClassState)> =
+        BTreeMap::new();
     for c in &classes {
         let ir = c.dag.to_ir().map_err(|e| anyhow!("{}: {e}", c.class_id))?;
         let graph_identity = format!("class:{}", c.class_id);
-        let proj = project_ir(&ir, c.anchor_id, "pack.none", &graph_identity)?;
-        let oracle = PositionalLegality { dag: &c.dag };
-        let anchor_pair = c.anchor_key.as_ref().map(|k| (k, c.anchor_id.unwrap()));
-        let board = build_board(
-            &oracle,
+        let anchor_pair = c.anchor_key.zip(c.anchor_id);
+        let board = build_bpmn_semantic_board(
+            &c.dag,
             anchor_pair,
-            Some(&graph_identity),
-            &EmptyUniverse,
+            &graph_identity,
             &PolicyFilter::default(),
+        )?;
+        let proj = project_ir(
+            &ir,
+            c.anchor_id,
+            board.semantic_snapshot.as_str(),
+            &graph_identity,
         )?;
         boards.insert(c.class_id, (board, proj, c));
     }
@@ -132,7 +138,7 @@ fn main() -> Result<()> {
     let retriever = LexicalTier0;
     let mut examples: Vec<Example> = Vec::new();
     let mut dropped_overlap = 0u32;
-    let mut dropped_retrieval_miss = 0u32;
+    let dropped_retrieval_miss = 0u32;
     let mut dropped_duplicate = 0u32;
     let mut seen_norm: HashSet<(String, String)> = HashSet::new(); // (class, normalized utterance)
     let mut bad_labels: Vec<String> = Vec::new();
@@ -154,15 +160,14 @@ fn main() -> Result<()> {
         // Leakage cap (spec S4): vs correct description, or — NOTA rule —
         // vs EVERY boarded description.
         let utoks = tokens(&e.text);
+        let visible_candidates = board.inference_candidates();
         let breach = if e.label == NONE_OF_THE_ABOVE {
-            board
-                .candidates
+            visible_candidates
                 .iter()
                 .filter(|c| c.canonical_id != NONE_OF_THE_ABOVE)
                 .any(|c| jaccard(&utoks, &tokens(&c.description)) > OVERLAP_CAP)
         } else {
-            let desc = board
-                .candidates
+            let desc = visible_candidates
                 .iter()
                 .find(|c| c.canonical_id == e.label)
                 .expect("checked above")
@@ -183,15 +188,18 @@ fn main() -> Result<()> {
 
         // The ruled list: real tier-0 K-prefix + NOTA.
         let result = retriever.retrieve(&e.text, board)?;
-        let list = tier1_list(&result, K);
-        if e.label != NONE_OF_THE_ABOVE && !list.contains(&e.label) {
-            dropped_retrieval_miss += 1;
-            continue;
+        let list = board
+            .candidates
+            .iter()
+            .map(|candidate| candidate.canonical_id.as_str().to_string())
+            .collect::<Vec<_>>();
+        if !list.contains(&e.label) {
+            bail!("full-board corpus omitted legal gold candidate '{}'", e.label);
         }
 
         let family_id = format!("{}::{}", e.class_id, e.label);
         let mut pre = Vec::new();
-        pre.extend_from_slice(board.board_hash.as_bytes());
+        pre.extend_from_slice(board.board_hash.as_str().as_bytes());
         pre.extend_from_slice(e.label.as_bytes());
         pre.extend_from_slice(blake3::hash(e.text.as_bytes()).to_hex().as_bytes());
         pre.extend_from_slice(&e.paraphrase_seq.to_le_bytes());
@@ -201,20 +209,29 @@ fn main() -> Result<()> {
         examples.push(Example {
             example_id: blake3::hash(&pre).to_hex().to_string(),
             provenance: CORPUS_VERSION.to_string(),
-            board_hash: board.board_hash.clone(),
+            board_hash: board.board_hash.as_str().to_string(),
             context_projection: proj.serialize_canonical(),
             context_projection_hash: proj.hash(),
-            board: BoardDump::from_board(board),
+            board: BoardDump::from_inference_board(board),
             tier1_list: list,
             retrieved_subset_hash: result.retrieved_subset_hash.clone(),
             label: e.label.clone(),
-            family_id,
+            family_id: family_id.clone(),
             pair_group_id: e.pair_group.clone(),
             style_regime: e.regime.clone(),
             utterance: e.text.clone(),
             // Always true for training records: the retrieval-miss check
             // above already dropped this example otherwise.
             gold_in_tier1: true,
+            semantic_v3: Some(SemanticCorpusClosure::new(
+                board,
+                &e.text,
+                proj,
+                &e.label,
+                family_id.clone(),
+                e.regime.clone(),
+                e.pair_group.clone().unwrap_or_else(|| family_id.clone()),
+            )?),
         });
     }
 
@@ -266,9 +283,9 @@ fn main() -> Result<()> {
     let paired = examples.iter().filter(|e| e.pair_group_id.is_some()).count();
     let card = serde_json::json!({
         "corpus_version": CORPUS_VERSION,
-        "spec": "EOP-SPEC-SLM-TRAIN-001 v0.3",
+        "spec": "BPMN semantic mapper corpus v3 / Phase 6",
         "retriever": retriever.bundle_identity(),
-        "list_rule": format!("tier0 top-{K} + NOTA appended (Adam ruling 2026-07-27)"),
+        "list_rule": "complete position-legal semantic board plus abstention",
         "ctxproj_schema_version": utterance_engine::context::CONTEXT_PROJECTION_SCHEMA_VERSION,
         "overlap_cap": OVERLAP_CAP,
         "totals": {
@@ -285,7 +302,7 @@ fn main() -> Result<()> {
         "per_regime": regime_counts,
         "per_label": label_counts,
         "floors": {
-            "note": format!("{CORPUS_VERSION} is a pipeline/authoring-progress receipt; S3 floors (>=5000 etc.) are the release criterion for the eventual GA synthetic-v2 corpus, not any intermediate build"),
+            "note": format!("{CORPUS_VERSION} is a shadow pipeline/authoring receipt; promotion still requires independently authored evaluation and owner-ratified thresholds"),
             "total_floor_met": examples.len() >= 5000,
         },
     });

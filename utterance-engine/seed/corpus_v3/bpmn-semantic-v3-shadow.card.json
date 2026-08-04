@@ -1,0 +1,57 @@
+{
+  "corpus_version": "bpmn-semantic-v3-shadow",
+  "ctxproj_schema_version": 1,
+  "dropped": {
+    "duplicate": 2,
+    "overlap_cap": 0,
+    "pair_break": 13,
+    "retrieval_miss": 0
+  },
+  "floors": {
+    "note": "bpmn-semantic-v3-shadow is a shadow pipeline/authoring receipt; promotion still requires independently authored evaluation and owner-ratified thresholds",
+    "total_floor_met": false
+  },
+  "list_rule": "complete position-legal semantic board plus abstention",
+  "overlap_cap": 0.5,
+  "per_label": {
+    "abstain.none_of_the_above": 475,
+    "op.append_node": 10,
+    "op.attach_guard": 120,
+    "op.attach_rearming_guard": 114,
+    "op.connect": 151,
+    "op.create_branch": 79,
+    "op.create_inclusive_region": 149,
+    "op.create_multi_instance_region": 293,
+    "op.create_parallel_region": 273,
+    "op.delete_subgraph": 284,
+    "op.insert_after": 245,
+    "op.insert_before": 210,
+    "op.replace_node": 168,
+    "op.set_correlation_source": 91,
+    "op.set_guard_budget": 109,
+    "op.set_guard_trigger": 95,
+    "prod.interrupting_timeout": 111,
+    "prod.non_interrupting_notification": 87,
+    "prod.reminder_then_escalate": 101,
+    "prod.request_and_wait": 136
+  },
+  "per_regime": {
+    "dsl_shorthand": 893,
+    "esl_formal": 57,
+    "full_sentence": 97,
+    "question_form": 75,
+    "rushed_ops": 19,
+    "spoken": 321,
+    "telegraphic": 646,
+    "terse": 1193
+  },
+  "retriever": "tier0.lexical.v1",
+  "spec": "BPMN semantic mapper corpus v3 / Phase 6",
+  "totals": {
+    "context_pairs": 386,
+    "examples": 3301,
+    "nota": 475,
+    "nota_pct": 0.14389578915480158,
+    "pair_pct": 0.11693426234474402
+  }
+}

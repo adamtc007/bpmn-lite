@@ -84,6 +84,11 @@ pub fn build_bpmn_semantic_board(
     .map_err(BpmnBoardError::from)
 }
 
+/// Immutable identity required by model bundle compatibility cards.
+pub fn bpmn_semantic_snapshot_identity() -> String {
+    semantic_snapshot_identity().as_str().to_string()
+}
+
 fn position_context_hash(anchor: Option<(NodeKey, &str)>) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"bpmn-position-v1");

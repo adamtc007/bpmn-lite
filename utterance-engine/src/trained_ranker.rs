@@ -21,7 +21,7 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{Linear, Module, VarBuilder};
 use candle_transformers::models::{bert, modernbert, xlm_roberta};
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer};
+use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
 
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
 use crate::corpus_schema::Example;
@@ -149,6 +149,7 @@ impl TrainedRanker {
         let card: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
                 .context("training_card.json")?;
+        validate_bundle_card(&card, bundle_dir)?;
         let pooling = card["pooling"].as_str().context("card.pooling")?.to_string();
 
         let (repo_id, revision) = base.repo_and_revision();
@@ -184,7 +185,11 @@ impl TrainedRanker {
             ..Default::default()
         }));
         tokenizer
-            .with_truncation(None)
+            .with_truncation(Some(TruncationParams {
+                max_length: MAX_LENGTH,
+                strategy: TruncationStrategy::LongestFirst,
+                ..Default::default()
+            }))
             .map_err(|e| anyhow!("with_truncation: {e}"))?;
 
         Ok(TrainedRanker {
@@ -268,13 +273,23 @@ impl TrainedRanker {
             .iter()
             .map(|c| (query_text.to_string(), c.to_string()))
             .collect();
+        self.score_pairs(&pairs, cand_ids, board_hash, device)
+    }
+
+    fn score_pairs(
+        &self,
+        pairs: &[(String, String)],
+        cand_ids: &[String],
+        board_hash: &str,
+        device: &Device,
+    ) -> Result<SlmResult> {
         let encodings = self
             .tokenizer
-            .encode_batch(pairs, true)
+            .encode_batch(pairs.to_vec(), true)
             .map_err(|e| anyhow!("encode_batch: {e}"))?;
 
         let k = encodings.len();
-        let seq_len = encodings[0].get_ids().len().min(MAX_LENGTH);
+        let seq_len = encodings[0].get_ids().len();
         let mut ids = vec![0u32; k * seq_len];
         let mut mask = vec![0u32; k * seq_len];
         let mut ttype = vec![0u32; k * seq_len];
@@ -282,7 +297,7 @@ impl TrainedRanker {
             let e_ids = enc.get_ids();
             let e_mask = enc.get_attention_mask();
             let e_type = enc.get_type_ids();
-            let n = e_ids.len().min(seq_len);
+            let n = e_ids.len();
             ids[i * seq_len..i * seq_len + n].copy_from_slice(&e_ids[..n]);
             mask[i * seq_len..i * seq_len + n].copy_from_slice(&e_mask[..n]);
             ttype[i * seq_len..i * seq_len + n].copy_from_slice(&e_type[..n]);
@@ -320,6 +335,69 @@ impl TrainedRanker {
             evidence_trace: None,
         })
     }
+}
+
+fn validate_bundle_card(card: &serde_json::Value, bundle_dir: &std::path::Path) -> Result<()> {
+    let required = |name: &str| {
+        card[name]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .with_context(|| format!("bundle card missing '{name}'"))
+    };
+    let equal = |name: &str, expected: &str| -> Result<()> {
+        let actual = required(name)?;
+        if actual != expected {
+            anyhow::bail!("bundle card {name} mismatch: expected '{expected}', found '{actual}'");
+        }
+        Ok(())
+    };
+    equal("corpus_schema_id", crate::corpus_schema::CORPUS_SCHEMA_ID)?;
+    equal("corpus_schema_hash", &crate::corpus_schema::corpus_schema_hash())?;
+    if card["semantic_board_schema_version"].as_u64() != Some(1) {
+        anyhow::bail!("bundle card semantic_board_schema_version mismatch");
+    }
+    equal(
+        "semantic_pack_identity",
+        &crate::bpmn_board::bpmn_semantic_snapshot_identity(),
+    )?;
+    equal("turn_serializer_id", crate::pair::TURN_SERIALIZER_ID)?;
+    equal("turn_serializer_hash", &crate::pair::turn_serializer_hash())?;
+    equal("candidate_serializer_id", crate::exact::CANDIDATE_SERIALIZER_ID)?;
+    equal(
+        "candidate_serializer_hash",
+        &crate::exact::candidate_serializer_hash(),
+    )?;
+    equal("pair_serializer_id", crate::pair::PAIR_SERIALIZER_ID)?;
+    equal("pair_serializer_hash", &crate::pair::pair_serializer_hash())?;
+
+    let budget = crate::pair::PairTokenBudget::default();
+    if card["max_length"].as_u64() != Some(MAX_LENGTH as u64)
+        || card["side_a_tokens"].as_u64() != Some(budget.side_a_tokens as u64)
+        || card["side_b_tokens"].as_u64() != Some(budget.side_b_tokens as u64)
+    {
+        anyhow::bail!("bundle card token budgets do not match serving");
+    }
+    let tokenizer_path = bundle_dir.join("tokenizer.json");
+    equal("tokenizer_hash", &file_hash(&tokenizer_path)?)?;
+    let weights_path = bundle_dir.join("model.safetensors");
+    equal("model_weights_hash", &file_hash(&weights_path)?)?;
+    required("calibration_set_identity")?;
+    required("training_split_manifest_hash")?;
+    let temperature = card["temperature"]
+        .as_f64()
+        .context("bundle card missing 'temperature'")?;
+    if !temperature.is_finite() || temperature <= 0.0 {
+        anyhow::bail!("bundle card temperature must be finite and positive");
+    }
+    Ok(())
+}
+
+fn file_hash(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(path).with_context(|| format!("read {path:?}"))?)
+    ))
 }
 
 /// Temperature-calibrated listwise probabilities (spec §10.8: the
@@ -439,17 +517,33 @@ impl Tier1Ranker {
     pub fn rank_full_board(
         &self,
         utterance: &str,
-        context_projection: &str,
-        board: &dyn crate::board::InferenceBoard,
+        context: &crate::context::ContextProjection,
+        board: &sem_os_policy::decision_board::SemanticDecisionBoard,
     ) -> Result<SlmResult> {
         let list = board
-            .inference_candidates()
-            .into_iter()
-            .map(|candidate| candidate.canonical_id)
+            .candidates
+            .iter()
+            .map(|candidate| candidate.canonical_id.as_str().to_string())
             .collect::<Vec<_>>();
-        let raw = self
-            .ranker
-            .score_serving(utterance, context_projection, board, &list, &self.device)?;
+        let pairs = board
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let pair = crate::pair::serialize_candidate_pair(
+                    utterance,
+                    context,
+                    candidate,
+                    crate::pair::PairTokenBudget::default(),
+                )?;
+                Ok((pair.side_a, pair.side_b))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let raw = self.ranker.score_pairs(
+            &pairs,
+            &list,
+            board.board_hash.as_str(),
+            &self.device,
+        )?;
         let logits: Vec<f64> = raw.ranking.iter().map(|candidate| candidate.score.get()).collect();
         let probabilities = calibrated_probabilities(&logits, self.temperature)?;
         let mut ranking = raw
@@ -467,7 +561,7 @@ impl Tier1Ranker {
         Ok(SlmResult {
             ranking,
             retrieved_subset_hash: raw.retrieved_subset_hash,
-            board_hash: board.board_hash().to_string(),
+            board_hash: board.board_hash.as_str().to_string(),
             model_bundle_hash: self.model_bundle_hash.clone(),
             evidence_trace: None,
         })
@@ -477,6 +571,38 @@ impl Tier1Ranker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_with_old_candidate_serializer_is_refused_before_model_load() {
+        let dir = std::env::temp_dir().join(format!("bpmn-bundle-card-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"tokenizer").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"weights").unwrap();
+        let budget = crate::pair::PairTokenBudget::default();
+        let card = serde_json::json!({
+            "corpus_schema_id": crate::corpus_schema::CORPUS_SCHEMA_ID,
+            "corpus_schema_hash": crate::corpus_schema::corpus_schema_hash(),
+            "semantic_board_schema_version": 1,
+            "semantic_pack_identity": crate::bpmn_board::bpmn_semantic_snapshot_identity(),
+            "turn_serializer_id": crate::pair::TURN_SERIALIZER_ID,
+            "turn_serializer_hash": crate::pair::turn_serializer_hash(),
+            "candidate_serializer_id": "legacy.description.v2",
+            "candidate_serializer_hash": crate::exact::candidate_serializer_hash(),
+            "pair_serializer_id": crate::pair::PAIR_SERIALIZER_ID,
+            "pair_serializer_hash": crate::pair::pair_serializer_hash(),
+            "tokenizer_hash": file_hash(&dir.join("tokenizer.json")).unwrap(),
+            "max_length": MAX_LENGTH,
+            "side_a_tokens": budget.side_a_tokens,
+            "side_b_tokens": budget.side_b_tokens,
+            "model_weights_hash": file_hash(&dir.join("model.safetensors")).unwrap(),
+            "temperature": 1.0,
+            "calibration_set_identity": "calibration-test",
+            "training_split_manifest_hash": "split-test",
+        });
+        let error = validate_bundle_card(&card, &dir).unwrap_err();
+        assert!(error.to_string().contains("candidate_serializer_id mismatch"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Hermetic calibration receipts: temperature actually rescales the
     /// distribution (T>1 flattens), output is a probability simplex, and

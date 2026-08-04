@@ -38,6 +38,7 @@ blake3 = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = "0.1.24"
+sha2 = "0.10"
 sem_os_ontology = { workspace = true }
 sem_os_policy = { workspace = true }
 # candle-probe deps — same version pins as ob-semantic-matcher's Candle slice

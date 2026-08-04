@@ -19,6 +19,7 @@ training_card.json (in place -- the card is the bundle's receipt).
 Run: python3 train_py/calibrate.py [base-key|all]
 """
 import json
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -103,6 +104,9 @@ def main():
         print(f"  n_val={n}  T={t:.4f}  val_NLL {nll_uncal:.4f} -> {nll_cal:.4f}")
         card = json.loads(card_path.read_text())
         card["temperature"] = t
+        card["calibration_set_identity"] = hashlib.sha256(
+            (SPLIT_MANIFEST_PATH.read_bytes() + b":validation")
+        ).hexdigest()
         card["calibration"] = {
             "method": "temperature scaling, golden-section on log T, val-split NLL",
             "pack": "pack.none",

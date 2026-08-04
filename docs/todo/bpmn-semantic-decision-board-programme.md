@@ -152,7 +152,22 @@ No push is performed by this programme without owner approval.
   exact collision set and the full-board fact. Detailed evidence is in
   `docs/receipts/bpmn-semantic-serving-phase4-5.md`.
 
-### Phase 6 onward
+### Phase 6 — candidate-conditioned model and corpus v3
+
+- GREEN (structure): serving/training share one bounded pair serializer; v3
+  corpus generation reports 3,301 full-board records and zero retrieval misses.
+- GREEN (admission): legacy/mismatched bundle cards fail before model load and
+  serving degrades to an honestly identified tier-0 producer.
+- GREEN (data controls): family/pair leakage and all-NOTA-training splits are
+  refused; bundle cards close over every required schema, serializer, file,
+  budget, calibration and split identity.
+- BLOCKED (bundle): no compatible PyTorch environment is installed (the host
+  Python is 3.14), no v3 weights were trained, and independent promotion
+  evidence/threshold ratification remains an owner decision. Existing v2
+  weights are intentionally not relabelled. See
+  `docs/receipts/bpmn-candidate-pair-phase6.md`.
+
+### Phase 7 onward
 
 Receipts are appended here as each phase reaches green. A phase is not marked
 complete solely because it compiles.

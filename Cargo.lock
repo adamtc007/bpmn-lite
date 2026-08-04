@@ -5223,6 +5223,7 @@ dependencies = [
  "sem_os_policy",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokenizers",
  "unicode-normalization",

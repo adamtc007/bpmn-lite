@@ -92,12 +92,15 @@ pub fn candidate_serializer_hash() -> String {
 }
 
 /// Exact-lane result. A collision is evidence, never authority to choose.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum ExactMatch {
     None,
     Unique(String),
     Collision(Vec<String>),
 }
+
+/// Stable corpus representation of the governed exact result.
+pub type ExactMatchDump = ExactMatch;
 
 /// Normalize governed phrases using Unicode NFKC, Unicode lowercase and
 /// canonical whitespace. Punctuation is intentionally not fuzzily discarded.

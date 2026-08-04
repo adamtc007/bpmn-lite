@@ -167,6 +167,7 @@ fn main() -> Result<()> {
             style_regime: SUITE.to_string(),
             utterance: item.text.clone(),
             gold_in_tier1: true, // NOTA always served; non-NOTA labels validated above
+            semantic_v3: None,
         };
 
         let tier1_result = ranker.score(&example, &device)?;

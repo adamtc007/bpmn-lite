@@ -205,8 +205,8 @@ impl DesignerState {
             if let Some(semantic_board) = board.semantic_board() {
                 let result = t1.rank_full_board(
                     text,
-                    &context.serialize_canonical(),
-                    board,
+                    context,
+                    semantic_board,
                 )?;
                 let bundle = result.model_bundle_hash.clone();
                 return utterance_engine::exact::finalize_semantic_evidence(
