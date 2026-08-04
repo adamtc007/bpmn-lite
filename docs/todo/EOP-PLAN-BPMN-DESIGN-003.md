@@ -1221,8 +1221,16 @@ written request-driven; the loop would be additive.
 **Still open:** the request-driven-vs-background-tick sub-fork above,
 and the kernel job-cancel gap below.
 
-**Surfaced kernel gap (found by D3's timeout receipt, 2026-08-03 — NOT
-fixed in this phase, needs its own ruling):** an interrupting guard
+**RESOLVED (Adam's "go ahead", 2026-08-04, commit ba2221f):** option
+(a) implemented — `JobMutation::Cancel` emitted by both unwind paths
+for every cancelled fiber parked on a job; store contract is
+remove-everywhere (ack-shaped, replay-tolerant); RED→GREEN proven by
+stash-revert (pre-fix dequeue returned the ghost host activation
+alongside the escalation job). The designer's structural filter stays
+as defense in depth. Original finding kept below for the record.
+
+**Surfaced kernel gap (found by D3's timeout receipt, 2026-08-03 — NOW
+FIXED, see above; originally recorded as needs-its-own-ruling):** an interrupting guard
 unwind redirects the fiber but emits NO job-cancel mutation — the
 kernel's `JobMutation` enum has only `RetryClaimed`/`DeadLetterClaimed`,
 no `Cancel` — so the host's already-queued job activation stays live in
