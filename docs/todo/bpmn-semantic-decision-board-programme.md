@@ -225,10 +225,22 @@ No push is performed by this programme without owner approval.
 - RECEIPTS: `docs/receipts/bpmn-mapper-phase9.md` and
   `docs/receipts/bpmn-mapper-performance-2026-08-04.md`.
 
-### Phase 10 onward
+### Phase 10 — shadow rollout
 
-Shadow rollout and handoff receipts follow. A phase is not marked complete
-solely because it compiles.
+- GREEN: `BPMN_MAPPER_ROLLOUT` has exactly three conservative stages:
+  `shadow`, `suggest` and `workbook`; missing or unknown input is shadow.
+- GREEN: graph-backed evidence and the actual producer identity are always
+  recorded. Suggestions and workbooks are independently gated, legacy thin
+  boards remain legacy-session-only, ratification stays mandatory and no
+  auto-apply state exists.
+- GREEN: permanent tests prove shadow serves neither a suggestion nor a
+  workbook, suggest serves no workbook, and the existing workbook/ratification
+  suite remains green.
+- DECISION: remain shadow. Independent v3 metrics, a confusion matrix,
+  confident-wrong review, Candle latency/memory and owner thresholds are
+  absent; synthetic corpus facts are reported separately and do not authorize
+  promotion.
+- RECEIPT: `docs/receipts/bpmn-mapper-shadow-report-2026-08-04.md`.
 
 ## Fuzz assurance amendment
 

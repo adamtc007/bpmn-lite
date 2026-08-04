@@ -28,6 +28,54 @@ use bpmn_lite_types::TenantId;
 
 // ── Designer state ─────────────────────────────────────────────────────
 
+/// Explicit utterance-mapper rollout. Production defaults to `Shadow` and
+/// there is deliberately no auto-apply state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MapperRollout {
+    Shadow,
+    Suggest,
+    Workbook,
+}
+
+impl MapperRollout {
+    fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("suggest") => Self::Suggest,
+            Some("workbook") => Self::Workbook,
+            _ => Self::Shadow,
+        }
+    }
+
+    fn configured() -> Self {
+        #[cfg(test)]
+        {
+            // Endpoint tests exercise the complete staged-workbook surface;
+            // a separate test below cements the production default.
+            Self::Workbook
+        }
+        #[cfg(not(test))]
+        {
+            Self::parse(std::env::var("BPMN_MAPPER_ROLLOUT").ok().as_deref())
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Suggest => "suggest",
+            Self::Workbook => "workbook",
+        }
+    }
+
+    fn suggestions_enabled(self) -> bool {
+        matches!(self, Self::Suggest | Self::Workbook)
+    }
+
+    fn workbooks_enabled(self) -> bool {
+        matches!(self, Self::Workbook)
+    }
+}
+
 pub struct DesignerState {
     store: Arc<dyn WorkflowStore>,
     /// Save-as-template registry (2026-07-30): the lifecycle-bearing
@@ -50,6 +98,7 @@ pub struct DesignerState {
     /// demo mode only; not a precedent for merging the crates generally.
     engine: bpmn_lite_engine::BpmnLiteEngine,
     tenant_id: TenantId,
+    mapper_rollout: MapperRollout,
     /// Serializes each session's load→reconstruct→stage→append sequence
     /// (graph-edit and save-as-template) so two concurrent requests against
     /// the SAME session id can never both stage against the same base and
@@ -122,6 +171,14 @@ impl DesignerState {
         store: Arc<dyn WorkflowStore>,
         template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
     ) -> Result<Arc<Self>, anyhow::Error> {
+        Self::assemble_with_rollout(store, template_store, MapperRollout::configured())
+    }
+
+    fn assemble_with_rollout(
+        store: Arc<dyn WorkflowStore>,
+        template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
+        mapper_rollout: MapperRollout,
+    ) -> Result<Arc<Self>, anyhow::Error> {
         let tenant_id = TenantId::new("demo")?;
         let engine =
             bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(store.clone(), tenant_id.clone());
@@ -130,6 +187,7 @@ impl DesignerState {
             template_store,
             engine,
             tenant_id,
+            mapper_rollout,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
             proposals: Mutex::new(HashMap::new()),
@@ -149,9 +207,7 @@ impl DesignerState {
         // feature.  Loading weights is an explicit evaluation activity, not
         // an incidental side effect of constructing an in-memory test state.
         #[cfg(test)]
-        if std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS").is_none() {
-            return None;
-        }
+        std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS")?;
         let dir = match std::env::var("SLM_BUNDLE_DIR") {
             Ok(d) if !d.is_empty() => d,
             _ => {
@@ -188,9 +244,7 @@ impl DesignerState {
         // See `load_tier1_from_env`: ordinary all-feature tests exercise the
         // deterministic degraded path without network access or model loads.
         #[cfg(test)]
-        if std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS").is_none() {
-            return None;
-        }
+        std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS")?;
         match utterance_engine::retrieval::embed::EmbedTier0::new() {
             Ok(t) => Some(Arc::new(t)),
             Err(e) => {
@@ -288,6 +342,11 @@ impl DesignerState {
     ///   (mirrors the runner: fail closed rather than silently dropping
     ///   to a volatile store when persistence was explicitly requested).
     /// - Nothing set → memory (zero-env demo UX unchanged).
+    ///
+    /// Mapper rollout is independent of storage: `BPMN_MAPPER_ROLLOUT` accepts
+    /// `shadow`, `suggest`, or `workbook`; missing/unknown values are shadow.
+    /// Every stage records the actual evidence producer, and even `workbook`
+    /// requires explicit ratification. There is no auto-apply stage.
     pub async fn try_new_from_env() -> Result<Arc<Self>, anyhow::Error> {
         let store_mode = std::env::var("BPMN_LITE_STORE").unwrap_or_default();
         let force_memory = store_mode.eq_ignore_ascii_case("memory");
@@ -569,6 +628,11 @@ async fn designer_health(State(state): State<Arc<DesignerState>>) -> impl IntoRe
         "status": "ok",
         "service": "bpmn-lite-designer",
         "tier1_bundle": tier1_bundle,
+        "mapper_rollout": state.mapper_rollout.label(),
+        "mapper_suggestions_enabled": state.mapper_rollout.suggestions_enabled(),
+        "mapper_workbooks_enabled": state.mapper_rollout.workbooks_enabled(),
+        "mapper_ratification_required": true,
+        "mapper_auto_apply": false,
     }))
 }
 
@@ -3612,7 +3676,11 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
-    let mut message = render_disposition(&disposition, board.as_ref());
+    let mut message = if demo.mapper_rollout.suggestions_enabled() {
+        render_disposition(&disposition, board.as_ref())
+    } else {
+        "Mapper evidence recorded in shadow; no suggestion or workbook was served.".to_string()
+    };
 
     // ── Typed workbook + dry stage (propose half of the loop) ────────
     // Inference truth remains `disposition`; binding state is carried by
@@ -3620,10 +3688,14 @@ async fn session_utterance_endpoint(
     let mut staged_proposal: Option<PendingProposal> = None;
     let mut dry_run_diagnostics: Vec<String> = Vec::new();
     if let (
+        true,
         Some((dag, anchor_key, graph_identity, semantic_board)),
         utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
-    ) = (&graph_ctx, &disposition)
-    {
+    ) = (
+        demo.mapper_rollout.workbooks_enabled(),
+        &graph_ctx,
+        &disposition,
+    ) {
         let canonical_id =
             match sem_os_policy::decision_board::CanonicalCandidateId::new(candidate_id.clone()) {
                 Ok(candidate_id) => candidate_id,
@@ -3902,11 +3974,16 @@ async fn session_utterance_endpoint(
                         serde_json::Value::Null,
                     ),
                 };
+            let served_disposition = if demo.mapper_rollout.suggestions_enabled() {
+                serde_json::to_value(&disposition).unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            };
             Json(serde_json::json!({
                 "seq": seq,
                 "message": message,
-                "inference_disposition": disposition,
-                "disposition": disposition,
+                "inference_disposition": served_disposition.clone(),
+                "disposition": served_disposition,
                 "decision_record_hash": record.decision_record_hash,
                 "workbook": workbook_json,
                 "proposal_status": proposal_status,
@@ -3915,7 +3992,16 @@ async fn session_utterance_endpoint(
                 "board_hash": board.board_hash(),
                 "board_schema": board.schema_label(),
                 "board_pack_identity": board.pack_identity(),
-                "model_bundle_hash": record.model_bundle_hash,
+                "model_bundle_hash": record.model_bundle_hash.clone(),
+                "evidence_producer": record.model_bundle_hash,
+                "mapper_rollout": {
+                    "stage": demo.mapper_rollout.label(),
+                    "evidence_recorded": true,
+                    "suggestions_enabled": demo.mapper_rollout.suggestions_enabled(),
+                    "workbooks_enabled": demo.mapper_rollout.workbooks_enabled(),
+                    "ratification_required": true,
+                    "auto_apply": false,
+                },
                 "capture": capture_state,
                 "dev_capture": dev_capture_state,
                 "proposal": proposal_json,
@@ -4412,6 +4498,89 @@ mod tests {
     use axum::http::Request;
     use serde_json::Value;
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn mapper_rollout_defaults_conservatively_and_has_no_auto_apply_stage() {
+        assert_eq!(MapperRollout::parse(None), MapperRollout::Shadow);
+        assert_eq!(MapperRollout::parse(Some("unknown")), MapperRollout::Shadow);
+        assert_eq!(
+            MapperRollout::parse(Some("suggest")),
+            MapperRollout::Suggest
+        );
+        assert_eq!(
+            MapperRollout::parse(Some("workbook")),
+            MapperRollout::Workbook
+        );
+        assert!(!MapperRollout::Shadow.suggestions_enabled());
+        assert!(!MapperRollout::Suggest.workbooks_enabled());
+        assert!(MapperRollout::Workbook.suggestions_enabled());
+        assert!(MapperRollout::Workbook.workbooks_enabled());
+    }
+
+    async fn app_at_rollout(rollout: MapperRollout) -> axum::Router {
+        designer_router(
+            DesignerState::assemble_with_rollout(
+                Arc::new(MemoryStore::new()),
+                Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
+                rollout,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn shadow_records_evidence_without_serving_suggestion_or_workbook() {
+        let app = app_at_rollout(MapperRollout::Shadow).await;
+        let (session_id, _anchor) = seed_graph_backed_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Places a node on an existing route, after the selected node",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert!(body["inference_disposition"].is_null(), "{body:?}");
+        assert!(body["workbook"].is_null(), "{body:?}");
+        assert!(body["proposal"].is_null(), "{body:?}");
+        assert_eq!(body["mapper_rollout"]["stage"], "shadow");
+        assert_eq!(body["mapper_rollout"]["evidence_recorded"], true);
+        assert_eq!(body["mapper_rollout"]["ratification_required"], true);
+        assert_eq!(body["mapper_rollout"]["auto_apply"], false);
+        assert!(body["decision_record_hash"].is_string());
+        assert!(body["evidence_producer"].is_string());
+    }
+
+    #[tokio::test]
+    async fn suggest_serves_candidate_without_staging_workbook() {
+        let app = app_at_rollout(MapperRollout::Suggest).await;
+        let (session_id, _anchor) = seed_graph_backed_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Places a node on an existing route, after the selected node",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["inference_disposition"]["Candidate"]["candidate_id"],
+            "op.insert_after"
+        );
+        assert!(body["workbook"].is_null(), "{body:?}");
+        assert!(body["proposal"].is_null(), "{body:?}");
+        assert_eq!(body["mapper_rollout"]["stage"], "suggest");
+    }
 
     #[tokio::test]
     async fn test_compile_and_preview_endpoints() {
