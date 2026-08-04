@@ -45,6 +45,7 @@ pub mod corpus_schema;
 // structurally distinct from the Q9-gated path above (DIR-004 Phase 1,
 // Option B ruling). See `dev_capture.rs`'s module doc.
 pub mod dev_capture;
+pub mod exact;
 pub mod fixtures;
 // Gate-time evaluation harness (WS-C C-now item 5; V&S §10.7): measures
 // recall/precision decomposition over a labeled case set for a human to

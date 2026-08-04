@@ -127,7 +127,32 @@ No push is performed by this programme without owner approval.
 - KNOWN BASELINE: the exact Clippy gate without `--no-deps` reaches two
   unchanged `bpmn-lite-compiler` lints. No lint suppression was introduced.
 
-### Phase 4 onward
+### Phase 4 — graph-backed serving cutover
+
+- GREEN: the graph-backed endpoint now constructs and serves exactly one shared
+  semantic board; legacy DSL-source sessions remain explicitly labelled
+  `legacy_thin_v1`.
+- GREEN: response hashes change with resolved position, unknown anchors remain
+  HTTP 422, policy-hidden candidates never enter model input, and old thin-board
+  evidence is rejected by board hash.
+- GREEN: consented capture retains the full semantic board and the existing
+  proposal/ratification suite remains unchanged and green.
+
+### Phase 5 — exact evidence and full-board retrieval
+
+- GREEN: one versioned semantic candidate serializer feeds lexical, embedding
+  and Candle retrieval.
+- GREEN: Unicode-normalized governed exact matching expands collisions and
+  indexes only the filtered live board. The current profile has 52 normalized
+  phrase keys, all unique; collision rate is 0.000000.
+- GREEN: semantic evidence is rejected unless it covers the complete legal
+  board exactly once. Candle has a dedicated full-board serving entry point;
+  the K=12 helper remains compatibility/evaluation-only.
+- GREEN: evidence trace records serializer identity, lanes, bundle identities,
+  exact collision set and the full-board fact. Detailed evidence is in
+  `docs/receipts/bpmn-semantic-serving-phase4-5.md`.
+
+### Phase 6 onward
 
 Receipts are appended here as each phase reaches green. A phase is not marked
 complete solely because it compiles.

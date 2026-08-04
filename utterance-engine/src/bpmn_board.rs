@@ -124,6 +124,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::board::{build_board, EmptyUniverse};
+    use crate::policy::{decide, DispositionConfig};
+    use crate::retrieval::{LexicalTier0, Tier0Retriever};
 
     fn fixture() -> (DesignerDag, NodeKey, NodeKey) {
         let start = NodeKey(Uuid::from_u128(1));
@@ -203,6 +206,11 @@ mod tests {
         assert_ne!(base.board_hash, anchor.board_hash);
         assert_ne!(base.board_hash, policy.board_hash);
         assert!(policy.candidate("op.insert_after").is_none());
+        assert_eq!(
+            crate::exact::governed_exact(&policy, "insert after"),
+            crate::exact::ExactMatch::None,
+            "a phrase target removed by policy must not remain in collision analysis"
+        );
     }
 
     #[test]
@@ -216,6 +224,39 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, BpmnBoardError::InvalidAnchor { .. }));
+    }
+
+    #[test]
+    fn evidence_signed_for_the_legacy_thin_board_is_rejected() {
+        let (dag, _, task) = fixture();
+        let revision = "revision-1";
+        let semantic = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let oracle = PositionalLegality { dag: &dag };
+        let legacy = build_board(
+            &oracle,
+            Some((&task, "task-1")),
+            Some(revision),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let evidence = LexicalTier0.retrieve("insert after", &legacy).unwrap();
+        let context = crate::context::minimal(semantic.semantic_snapshot.as_str(), revision);
+
+        let error = decide(
+            &DispositionConfig::shadow_v1(),
+            &semantic,
+            &evidence,
+            &context,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("different board"));
     }
 
     #[test]

@@ -231,17 +231,17 @@ impl TrainedRanker {
         &self,
         utterance: &str,
         context_projection: &str,
-        board: &crate::board::Board,
+        board: &dyn crate::board::InferenceBoard,
         cand_ids: &[String],
         device: &Device,
     ) -> Result<SlmResult> {
         let query_text = format!("{utterance}\n\n{context_projection}");
-        let desc: HashMap<&str, &str> = board
-            .candidates
+        let candidates = board.inference_candidates();
+        let desc: HashMap<&str, &str> = candidates
             .iter()
             .map(|c| (c.canonical_id.as_str(), c.description.as_str()))
             .collect();
-        self.score_query(&query_text, cand_ids, &desc, &board.board_hash, device)
+        self.score_query(&query_text, cand_ids, &desc, board.board_hash(), device)
     }
 
     /// The ONE forward-pass core both `score_list` (corpus/eval) and
@@ -317,6 +317,7 @@ impl TrainedRanker {
             retrieved_subset_hash: blake3::hash(&pre).to_hex().to_string(),
             board_hash: board_hash.to_owned(),
             model_bundle_hash: self.bundle_identity.clone(),
+            evidence_trace: None,
         })
     }
 }
@@ -401,7 +402,7 @@ impl Tier1Ranker {
         tier0: &dyn crate::retrieval::Tier0Retriever,
         utterance: &str,
         context_projection: &str,
-        board: &crate::board::Board,
+        board: &dyn crate::board::InferenceBoard,
     ) -> Result<SlmResult> {
         let tier0_evidence = tier0.retrieve(utterance, board)?;
         let list = crate::retrieval::tier1_list(&tier0_evidence, crate::retrieval::TIER1_K);
@@ -426,8 +427,49 @@ impl Tier1Ranker {
         Ok(SlmResult {
             ranking,
             retrieved_subset_hash: raw.retrieved_subset_hash,
-            board_hash: board.board_hash.clone(),
+            board_hash: board.board_hash().to_string(),
             model_bundle_hash: self.model_bundle_hash.clone(),
+            evidence_trace: None,
+        })
+    }
+
+    /// BPMN production serving path: score every board candidate, including
+    /// abstention. Top-K remains available only through `rank` for legacy and
+    /// explicit evaluation adapters.
+    pub fn rank_full_board(
+        &self,
+        utterance: &str,
+        context_projection: &str,
+        board: &dyn crate::board::InferenceBoard,
+    ) -> Result<SlmResult> {
+        let list = board
+            .inference_candidates()
+            .into_iter()
+            .map(|candidate| candidate.canonical_id)
+            .collect::<Vec<_>>();
+        let raw = self
+            .ranker
+            .score_serving(utterance, context_projection, board, &list, &self.device)?;
+        let logits: Vec<f64> = raw.ranking.iter().map(|candidate| candidate.score.get()).collect();
+        let probabilities = calibrated_probabilities(&logits, self.temperature)?;
+        let mut ranking = raw
+            .ranking
+            .iter()
+            .zip(probabilities.iter())
+            .map(|(candidate, &probability)| {
+                Ok(RankedCandidate {
+                    candidate_id: candidate.candidate_id.clone(),
+                    score: FiniteScore::new(probability)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rank_canonically(&mut ranking);
+        Ok(SlmResult {
+            ranking,
+            retrieved_subset_hash: raw.retrieved_subset_hash,
+            board_hash: board.board_hash().to_string(),
+            model_bundle_hash: self.model_bundle_hash.clone(),
+            evidence_trace: None,
         })
     }
 }

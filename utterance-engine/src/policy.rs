@@ -15,8 +15,11 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::board::Board;
+use crate::board::InferenceBoard;
 use crate::contract::{SlmResult, NONE_OF_THE_ABOVE};
+
+#[cfg(test)]
+use crate::board::Board;
 
 /// E5: the versioned threshold config. Serialized (stable field order —
 /// serde struct order) and blake3-hashed into `disposition_policy_hash`.
@@ -107,6 +110,8 @@ pub struct DecisionRecord {
     /// reintroduce non-finite values on round-trip (review N5).
     pub ranking: Vec<(String, crate::contract::FiniteScore)>,
     pub disposition: ProposalDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
 /// THE disposition function. Fail-closed: a ranking naming any
@@ -114,16 +119,16 @@ pub struct DecisionRecord {
 /// the board is rejected), never a silent skip.
 pub fn decide(
     config: &DispositionConfig,
-    board: &Board,
+    board: &dyn InferenceBoard,
     result: &SlmResult,
     context: &crate::context::ContextProjection,
 ) -> Result<(ProposalDisposition, DecisionRecord)> {
-    if result.board_hash != board.board_hash {
+    if result.board_hash != board.board_hash() {
         return Err(anyhow!(
             "SlmResult board_hash {} does not match the presented board {} — evidence \
              from a different board is inadmissible (I28)",
             result.board_hash,
-            board.board_hash
+            board.board_hash()
         ));
     }
     for rc in &result.ranking {
@@ -132,7 +137,7 @@ pub fn decide(
                 "ranking names '{}' which is not on board {} — off-board model output \
                  is rejected (I15)",
                 rc.candidate_id,
-                board.board_hash
+                board.board_hash()
             ));
         }
     }
@@ -195,7 +200,7 @@ pub fn decide(
     };
 
     let record = DecisionRecord {
-        board_hash: board.board_hash.clone(),
+        board_hash: board.board_hash().to_string(),
         retrieved_subset_hash: result.retrieved_subset_hash.clone(),
         model_bundle_hash: result.model_bundle_hash.clone(),
         disposition_policy_hash: config.policy_hash(),
@@ -207,6 +212,7 @@ pub fn decide(
             .map(|rc| (rc.candidate_id.clone(), rc.score))
             .collect(),
         disposition: disposition.clone(),
+        evidence_trace: result.evidence_trace.clone(),
     };
     Ok((disposition, record))
 }
@@ -270,6 +276,7 @@ mod tests {
             retrieved_subset_hash: "subset0".into(),
             board_hash: board.board_hash.clone(),
             model_bundle_hash: "tier0.v1".into(),
+            evidence_trace: None,
         }
     }
 

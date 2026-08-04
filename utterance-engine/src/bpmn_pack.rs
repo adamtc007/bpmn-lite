@@ -671,6 +671,28 @@ mod tests {
     }
 
     #[test]
+    fn governed_phrase_index_metrics_are_reported() {
+        let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
+        for spec in all_specs() {
+            for phrase in spec.semantic.phrases {
+                owners
+                    .entry(crate::exact::normalize_phrase(&phrase.text))
+                    .or_default()
+                    .insert(spec.semantic.canonical_id.as_str().to_string());
+            }
+        }
+        let collision_keys = owners.values().filter(|ids| ids.len() > 1).count();
+        let unique_keys = owners.len() - collision_keys;
+        let collision_rate = collision_keys as f64 / owners.len() as f64;
+        println!(
+            "governed exact metrics: phrase_keys={} unique={} collisions={} collision_rate={:.6}",
+            owners.len(), unique_keys, collision_keys, collision_rate
+        );
+        assert!(unique_keys > 0);
+        assert!(collision_rate.is_finite());
+    }
+
+    #[test]
     fn every_model_visible_semantic_dimension_moves_the_board_hash() {
         let base_specs = all_specs();
         let base = board_from_specs(base_specs.clone());

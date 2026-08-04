@@ -75,6 +75,8 @@ pub struct DevSessionRecord {
     pub disposition_policy_hash: String,
     pub ranking: Vec<(String, FiniteScore)>,
     pub disposition: ProposalDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
 /// Per-event payload `DevSessionStore::capture` needs — everything the
@@ -91,6 +93,7 @@ pub struct DevSessionCaptureInput {
     pub disposition_policy_hash: String,
     pub ranking: Vec<(String, FiniteScore)>,
     pub disposition: ProposalDisposition,
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
 /// One open dev-testing session. The only constructor requires a
@@ -149,6 +152,7 @@ impl DevSessionStore {
             disposition_policy_hash: input.disposition_policy_hash,
             ranking: input.ranking,
             disposition: input.disposition,
+            evidence_trace: input.evidence_trace,
         };
         self.records.push(record);
         self.records.last().expect("just pushed")
@@ -196,6 +200,7 @@ mod tests {
             disposition_policy_hash: record.disposition_policy_hash.clone(),
             ranking: record.ranking.clone(),
             disposition,
+            evidence_trace: record.evidence_trace.clone(),
         }
     }
 

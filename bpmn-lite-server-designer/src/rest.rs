@@ -195,13 +195,28 @@ impl DesignerState {
     fn retrieve_utterance_evidence(
         &self,
         text: &str,
-        board: &utterance_engine::board::Board,
+        board: &dyn utterance_engine::board::InferenceBoard,
         context: &utterance_engine::context::ContextProjection,
     ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
         #[cfg(not(feature = "candle-probe"))]
         let _ = context; // context text is a tier-1 encoding input only
         #[cfg(feature = "candle-probe")]
         if let Some(t1) = &self.tier1 {
+            if let Some(semantic_board) = board.semantic_board() {
+                let result = t1.rank_full_board(
+                    text,
+                    &context.serialize_canonical(),
+                    board,
+                )?;
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::CandleCrossEncoder],
+                    vec![bundle],
+                );
+            }
             // Tier-0 front end for the K-subset: embed when available
             // (the retriever the corpus was generated on), else lexical.
             #[cfg(feature = "embed")]
@@ -218,11 +233,33 @@ impl DesignerState {
         #[cfg(feature = "embed")]
         if let Some(e0) = &self.embed_tier0 {
             use utterance_engine::retrieval::Tier0Retriever as _;
-            return e0.retrieve(text, board);
+            let result = e0.retrieve(text, board)?;
+            if let Some(semantic_board) = board.semantic_board() {
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::Embedding],
+                    vec![bundle],
+                );
+            }
+            return Ok(result);
         }
         {
             use utterance_engine::retrieval::Tier0Retriever as _;
-            utterance_engine::retrieval::LexicalTier0.retrieve(text, board)
+            let result = utterance_engine::retrieval::LexicalTier0.retrieve(text, board)?;
+            if let Some(semantic_board) = board.semantic_board() {
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::Lexical],
+                    vec![bundle],
+                );
+            }
+            Ok(result)
         }
     }
 
@@ -2931,17 +2968,14 @@ async fn list_proposals_endpoint(
 /// enumerates what the user cannot do.
 fn render_disposition(
     disposition: &utterance_engine::policy::ProposalDisposition,
-    board: &utterance_engine::board::Board,
+    board: &dyn utterance_engine::board::InferenceBoard,
 ) -> String {
     use utterance_engine::policy::ProposalDisposition as D;
     match disposition {
         D::Candidate { candidate_id } => {
             let desc = board
-                .candidates
-                .iter()
-                .find(|c| &c.canonical_id == candidate_id)
-                .map(|c| c.description.as_str())
-                .unwrap_or(candidate_id.as_str());
+                .candidate_description(candidate_id)
+                .unwrap_or_else(|| candidate_id.clone());
             format!("Proposed: {desc}. Stage and ratify to apply.")
         }
         D::OutOfScope => {
@@ -2973,7 +3007,7 @@ async fn session_utterance_endpoint(
     Path(id): Path<Uuid>,
     Json(body): Json<SessionUtteranceBody>,
 ) -> impl IntoResponse {
-    use utterance_engine::board::{build_board, EmptyUniverse, PolicyFilter};
+    use utterance_engine::board::{build_board, EmptyUniverse, InferenceBoard, PolicyFilter};
     #[cfg(feature = "q9-capture")]
     use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
     use utterance_engine::policy::{decide, DispositionConfig};
@@ -3044,26 +3078,30 @@ async fn session_utterance_endpoint(
         // content (here, the accumulated edit-log payloads — the DAG's
         // sole source of truth) rather than a Debug-formatted derivative.
         let graph_identity = graph_identity_hash(&record_session);
-        let oracle = designer_graph::positional::PositionalLegality { dag: &dag };
-        let anchor_pair = anchor_key.as_ref().zip(body.anchor.as_deref());
-        build_board(
-            &oracle,
+        let anchor_pair = anchor_key.zip(body.anchor.as_deref());
+        utterance_engine::bpmn_board::build_bpmn_semantic_board(
+            &dag,
             anchor_pair,
-            Some(&graph_identity),
-            &EmptyUniverse,
+            &graph_identity,
             &PolicyFilter::default(),
         )
+        .map_err(anyhow::Error::from)
         .and_then(|board| {
             let context = utterance_engine::context::project_ir(
                 &ir,
                 body.anchor.as_deref(),
-                &board.context.pack_identity,
+                board.semantic_snapshot.as_str(),
                 &graph_identity,
             )?;
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
             let (disposition, record) =
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
-            Ok((board, disposition, record, context))
+            Ok((
+                Box::new(board) as Box<dyn InferenceBoard>,
+                disposition,
+                record,
+                context,
+            ))
         })
         // Carry the reconstruction forward for binding extraction —
         // the proposal loop is strictly downstream of the disposition.
@@ -3112,7 +3150,12 @@ async fn session_utterance_endpoint(
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
             let (disposition, record) =
                 decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
-            Ok((board, disposition, record, context))
+            Ok((
+                Box::new(board) as Box<dyn InferenceBoard>,
+                disposition,
+                record,
+                context,
+            ))
         })
         // Legacy DSL-source sessions have no DesignerDag — no binding
         // extraction, no proposals (the graph-edit surface is the only
@@ -3129,7 +3172,7 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
-    let mut message = render_disposition(&disposition, &board);
+    let mut message = render_disposition(&disposition, board.as_ref());
 
     // ── Binding extraction + dry stage (propose half of the loop) ────
     // Strictly downstream of the disposition: policy already decided
@@ -3199,7 +3242,7 @@ async fn session_utterance_endpoint(
                         candidate_id: candidate_id.clone(),
                         missing,
                     };
-                message = render_disposition(&effective_disposition, &board);
+                message = render_disposition(&effective_disposition, board.as_ref());
             }
             Err(e) => {
                 return (
@@ -3257,7 +3300,9 @@ async fn session_utterance_endpoint(
                 store.capture(utterance_engine::dev_capture::DevSessionCaptureInput {
                     raw_utterance: body.text.clone(),
                     board_hash: record.board_hash.clone(),
-                    board: utterance_engine::corpus_schema::BoardDump::from_board(&board),
+                    board: utterance_engine::corpus_schema::BoardDump::from_inference_board(
+                        board.as_ref(),
+                    ),
                     context_projection: context.serialize_canonical(),
                     context_projection_hash: record.context_projection_hash.clone(),
                     retrieved_subset_hash: record.retrieved_subset_hash.clone(),
@@ -3265,6 +3310,7 @@ async fn session_utterance_endpoint(
                     disposition_policy_hash: record.disposition_policy_hash.clone(),
                     ranking: record.ranking.clone(),
                     disposition: disposition.clone(),
+                    evidence_trace: record.evidence_trace.clone(),
                 });
                 "captured"
             }
@@ -3312,7 +3358,9 @@ async fn session_utterance_endpoint(
                 "seq": seq,
                 "message": message,
                 "disposition": effective_disposition,
-                "board_hash": board.board_hash,
+                "board_hash": board.board_hash(),
+                "board_schema": board.schema_label(),
+                "board_pack_identity": board.pack_identity(),
                 "model_bundle_hash": record.model_bundle_hash,
                 "capture": capture_state,
                 "dev_capture": dev_capture_state,
@@ -4486,6 +4534,8 @@ mod tests {
         assert_eq!(r1["capture"], "not_compiled");
         #[cfg(feature = "q9-capture")]
         assert_eq!(r1["capture"], "suppressed_no_charter");
+        assert_eq!(r1["board_schema"], "legacy_thin_v1");
+        assert_eq!(r1["board_pack_identity"], "pack.none");
         let h1 = r1["board_hash"].as_str().unwrap().to_owned();
         assert_eq!(h1.len(), 64);
 
@@ -5175,6 +5225,18 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
+        // Enable the explicitly consented development capture so this
+        // endpoint test can prove the semantic board is retained in full.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "semantic board endpoint test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
         // Real anchor: training-grade projection.
         let response = app
             .clone()
@@ -5184,7 +5246,58 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        let response_status = response.status();
+        let utterance = body_json(response).await;
+        assert_eq!(response_status, StatusCode::OK, "{utterance:?}");
+        assert_eq!(utterance["board_schema"], "semantic_decision_board_v1");
+        assert_ne!(utterance["board_pack_identity"], "pack.none");
+        let anchored_hash = utterance["board_hash"].as_str().unwrap().to_owned();
+
+        // Position is part of semantic authority: the same graph at a
+        // whole-graph position must not reuse the anchored board hash.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "irrelevant" }),
+            ))
+            .await
+            .unwrap();
+        let whole_graph = body_json(response).await;
+        assert_ne!(anchored_hash, whole_graph["board_hash"]);
+
+        let capture = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/dev-capture"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let captured_board = &capture["records"][0]["board"];
+        assert_eq!(captured_board["schema"], "semantic_decision_board_v1");
+        assert!(
+            captured_board["semantic_board"]["candidates"].is_array(),
+            "capture must retain the full semantic candidate contracts: {captured_board:?}"
+        );
+        let captured_record = &capture["records"][0];
+        assert_eq!(
+            captured_record["ranking"].as_array().unwrap().len(),
+            captured_board["semantic_board"]["candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            "BPMN serving must score the complete legal board"
+        );
+        assert_eq!(captured_record["evidence_trace"]["served_full_board"], true);
+        assert_eq!(
+            captured_record["evidence_trace"]["candidate_serializer_hash"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
         let record = body_json(
             app.clone()
                 .oneshot(

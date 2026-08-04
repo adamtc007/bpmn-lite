@@ -23,7 +23,7 @@ use designer_graph::positional::PositionalLegality;
 use utterance_engine::board::{build_board, Board, EmptyUniverse, PolicyFilter};
 use utterance_engine::context::{project_ir, ContextProjection};
 use utterance_engine::contract::NONE_OF_THE_ABOVE;
-use utterance_engine::corpus_schema::{BankEntry, BoardDump, CandDump, Example};
+use utterance_engine::corpus_schema::{BankEntry, BoardDump, Example};
 use utterance_engine::fixtures::{enumeration_classes, ClassState};
 #[cfg(not(feature = "embed"))]
 use utterance_engine::retrieval::LexicalTier0;
@@ -204,21 +204,7 @@ fn main() -> Result<()> {
             board_hash: board.board_hash.clone(),
             context_projection: proj.serialize_canonical(),
             context_projection_hash: proj.hash(),
-            board: BoardDump {
-                candidates: board
-                    .candidates
-                    .iter()
-                    .map(|c| CandDump {
-                        canonical_id: c.canonical_id.to_owned(),
-                        description: c.description.to_owned(),
-                        schema_version: c.schema_version,
-                    })
-                    .collect(),
-                anchor: board.context.anchor.clone(),
-                graph_identity: board.context.graph_identity.clone().unwrap_or_default(),
-                pack_identity: board.context.pack_identity.clone(),
-                policy_denied: Vec::new(),
-            },
+            board: BoardDump::from_board(board),
             tier1_list: list,
             retrieved_subset_hash: result.retrieved_subset_hash.clone(),
             label: e.label.clone(),

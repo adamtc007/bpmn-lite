@@ -22,11 +22,15 @@ pub struct BankEntry {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoardDump {
+    #[serde(default = "legacy_board_schema")]
+    pub schema: String,
     pub candidates: Vec<CandDump>,
     pub anchor: Option<String>,
     pub graph_identity: String,
     pub pack_identity: String,
     pub policy_denied: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_board: Option<sem_os_policy::decision_board::SemanticDecisionBoard>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,22 +47,33 @@ impl BoardDump {
     /// fixture set" rule this module's header already applies to record
     /// shape, extended to this conversion.
     pub fn from_board(board: &crate::board::Board) -> Self {
+        Self::from_inference_board(board)
+    }
+
+    /// Capture either serving board without erasing semantic content.
+    pub fn from_inference_board(board: &dyn crate::board::InferenceBoard) -> Self {
         BoardDump {
+            schema: board.schema_label().to_string(),
             candidates: board
-                .candidates
-                .iter()
+                .inference_candidates()
+                .into_iter()
                 .map(|c| CandDump {
-                    canonical_id: c.canonical_id.to_owned(),
-                    description: c.description.to_owned(),
+                    canonical_id: c.canonical_id,
+                    description: c.description,
                     schema_version: c.schema_version,
                 })
                 .collect(),
-            anchor: board.context.anchor.clone(),
-            graph_identity: board.context.graph_identity.clone().unwrap_or_default(),
-            pack_identity: board.context.pack_identity.clone(),
+            anchor: board.anchor().map(str::to_string),
+            graph_identity: board.graph_identity().to_string(),
+            pack_identity: board.pack_identity().to_string(),
             policy_denied: Vec::new(),
+            semantic_board: board.semantic_board().cloned(),
         }
     }
+}
+
+fn legacy_board_schema() -> String {
+    "legacy_thin_v1".to_string()
 }
 
 #[derive(Serialize, Deserialize)]
