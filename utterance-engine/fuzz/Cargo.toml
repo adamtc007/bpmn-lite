@@ -1,0 +1,37 @@
+[package]
+name = "utterance-engine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+utterance-engine = { path = ".." }
+sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "fa51217ffd2218edea82c175e45ffa11d9eb7cf9" }
+
+[[bin]]
+name = "semantic_board_decode"
+path = "fuzz_targets/semantic_board_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "phrase_index"
+path = "fuzz_targets/phrase_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "workbook_transition"
+path = "fuzz_targets/workbook_transition.rs"
+test = false
+doc = false
+bench = false

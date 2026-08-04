@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 
 const DEFAULT_RUN_SECS: u64 = 300;
@@ -409,11 +409,22 @@ fn execute_and_record(
     mode: &'static str,
     results_dir: &Path,
 ) -> Result<TargetOutcome> {
+    let lock_path = project.fuzz_dir.join("Cargo.lock");
+    let lock_before = fs::read(&lock_path)
+        .with_context(|| format!("read fuzz lockfile {}", lock_path.display()))?;
     let started = Instant::now();
     let output = cmd
         .output()
         .context("failed to spawn cargo +nightly fuzz run")?;
     let duration_secs = started.elapsed().as_secs_f64();
+    let lock_after = fs::read(&lock_path)
+        .with_context(|| format!("re-read fuzz lockfile {}", lock_path.display()))?;
+    if lock_before != lock_after {
+        bail!(
+            "cargo-fuzz rewrote {} — regenerate and commit the fuzz lockfile; this run is not reproducible",
+            lock_path.display()
+        );
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -562,7 +573,7 @@ fn parse_bin_names(toml: &str) -> Vec<String> {
 }
 
 fn nightly_fuzz_cmd(
-    root: &Path,
+    _root: &Path,
     fuzz_dir: &Path,
     subcommand: &str,
     target: Option<&str>,
@@ -573,7 +584,12 @@ fn nightly_fuzz_cmd(
         .arg(subcommand)
         .arg("--fuzz-dir")
         .arg(fuzz_dir)
-        .current_dir(root);
+        // cargo-fuzz synthesizes workspace patches relative to its current
+        // directory. Running from either the repository root or the fuzz
+        // project can therefore rewrite an independently resolved lockfile
+        // even after `metadata --locked` succeeded. An external neutral
+        // directory plus the absolute `--fuzz-dir` is stable.
+        .current_dir(std::env::temp_dir());
     if let Some(target) = target {
         cmd.arg(target);
     }

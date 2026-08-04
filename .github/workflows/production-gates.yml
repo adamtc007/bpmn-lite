@@ -42,6 +42,18 @@ jobs:
         run: bash scripts/check-q9-capture-gate.sh
       - name: Checked BPMN invocation-pack gate
         run: cargo run -p xtask -- pack-check bpmn
+      - name: BPMN semantic mapper contract gates
+        run: |
+          cargo test -p utterance-engine property_tests
+          cargo test -p utterance-engine bpmn_pack::tests::semantic_registry_exhaustively_covers_designer_catalogue -- --exact
+          cargo test -p utterance-engine exact::tests::serializer_changes_with_semantic_fields_and_is_order_stable -- --exact
+          cargo test -p utterance-engine pair::tests::pair_hash_is_deterministic_and_budget_bound -- --exact
+          cargo test -p bpmn-lite-server-designer proposal::tests
+      - name: Hermetic mapper bundle compatibility gate
+        run: >-
+          cargo test -p utterance-engine --features candle-probe
+          trained_ranker::tests::bundle_with_old_candidate_serializer_is_refused_before_model_load
+          -- --exact
       - name: Clippy
         # DIR-004 Phase 1.2: NOT --all-features -- that would silently
         # compile the Q9-gated capture module into every clippy/build/
@@ -73,6 +85,16 @@ jobs:
         run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
       - name: Fiber persistence codec benchmark
         run: bash scripts/check-benchmark-regression.sh
+      - name: Generate BPMN mapper performance receipt
+        run: >-
+          cargo run --release -p utterance-engine
+          --example semantic_perf_receipt
+          > bpmn-mapper-performance.md
+      - name: Upload BPMN mapper performance receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpmn-mapper-performance
+          path: bpmn-mapper-performance.md
       - name: v2 frame perf suite (frame ∝ live tokens; encode latency)
         run: cargo bench -p bpmn-lite-types --bench v2_perf
       - name: Public API documentation surface

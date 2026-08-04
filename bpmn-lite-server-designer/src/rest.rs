@@ -145,6 +145,13 @@ impl DesignerState {
     /// tier-0 serving. The endpoint never 500s for a missing model.
     #[cfg(feature = "candle-probe")]
     fn load_tier1_from_env() -> Option<Arc<utterance_engine::trained_ranker::Tier1Ranker>> {
+        // Unit tests must remain hermetic even when CI compiles every named
+        // feature.  Loading weights is an explicit evaluation activity, not
+        // an incidental side effect of constructing an in-memory test state.
+        #[cfg(test)]
+        if std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS").is_none() {
+            return None;
+        }
         let dir = match std::env::var("SLM_BUNDLE_DIR") {
             Ok(d) if !d.is_empty() => d,
             _ => {
@@ -178,6 +185,12 @@ impl DesignerState {
 
     #[cfg(feature = "embed")]
     fn load_embed_tier0() -> Option<Arc<utterance_engine::retrieval::embed::EmbedTier0>> {
+        // See `load_tier1_from_env`: ordinary all-feature tests exercise the
+        // deterministic degraded path without network access or model loads.
+        #[cfg(test)]
+        if std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS").is_none() {
+            return None;
+        }
         match utterance_engine::retrieval::embed::EmbedTier0::new() {
             Ok(t) => Some(Arc::new(t)),
             Err(e) => {

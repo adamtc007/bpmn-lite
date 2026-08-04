@@ -69,7 +69,7 @@ fn end_node(id: String) -> IRNode {
     }
 }
 
-fn quoted_names(text: &str) -> Vec<String> {
+pub(crate) fn quoted_names(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(character) = chars.next() {
@@ -90,7 +90,7 @@ fn quoted_names(text: &str) -> Vec<String> {
     out
 }
 
-fn sanitize_identifier(value: &str) -> String {
+pub(crate) fn sanitize_identifier(value: &str) -> String {
     let mut out = String::new();
     let mut last_underscore = true;
     for character in value.to_lowercase().chars() {
@@ -167,12 +167,12 @@ fn iso8601_ms(word: &str) -> Option<u64> {
 }
 
 #[derive(Clone, Copy)]
-struct ParsedDuration {
+pub(crate) struct ParsedDuration {
     millis: u64,
     interval: bool,
 }
 
-fn durations(text: &str) -> Vec<ParsedDuration> {
+pub(crate) fn durations(text: &str) -> Vec<ParsedDuration> {
     let words = words(text);
     let mut out = Vec::new();
     for (index, word) in words.iter().enumerate() {
@@ -206,7 +206,7 @@ fn interval_ms(text: &str) -> Option<u64> {
         .map(|duration| duration.millis)
 }
 
-fn followed_count(text: &str, labels: &[&str]) -> Option<u32> {
+pub(crate) fn followed_count(text: &str, labels: &[&str]) -> Option<u32> {
     let words = words(text);
     words.iter().enumerate().find_map(|(index, word)| {
         let value = word.parse::<u32>().ok()?;
@@ -443,7 +443,7 @@ pub(crate) fn start_workbook(
     .map_err(|error| ProposalError::Contract(error.to_string()))
 }
 
-fn parse_condition(value: &str) -> Result<ConditionExpr, ProposalError> {
+pub(crate) fn parse_condition(value: &str) -> Result<ConditionExpr, ProposalError> {
     let value = value.trim();
     for (operator_text, operator) in [
         ("!=", ConditionOp::Neq),
@@ -1011,6 +1011,7 @@ mod tests {
     use super::*;
     use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
     use designer_graph::schema::Provenance;
+    use proptest::prelude::*;
     use utterance_engine::board::PolicyFilter;
     use utterance_engine::policy::{DecisionRecord, ProposalDisposition};
 
@@ -1027,6 +1028,74 @@ mod tests {
         let text = "\0 every 999999999999999999999999 weeks 999999999999 times \"\"";
         assert!(interval_ms(text).is_none());
         assert!(quoted_names(text).is_empty());
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_slot_answers_cannot_bypass_declared_identifier_type(
+            answer_name in ".{0,64}",
+            text in ".{0,256}",
+            number in any::<u64>(),
+            flag in any::<bool>(),
+            variant in 0u8..9,
+        ) {
+            let value = match variant {
+                0 => SlotValue::Text(text),
+                1 => SlotValue::Identifier(text),
+                2 => SlotValue::NodeReference(text),
+                3 => SlotValue::DataReference(text),
+                4 => SlotValue::Count(number as u32),
+                5 => SlotValue::DurationMillis(number),
+                6 => SlotValue::Condition(text),
+                7 => SlotValue::SubprocessReference(text),
+                _ => SlotValue::Boolean(flag),
+            };
+            let workbook = ProposalWorkbook::new(
+                1,
+                WorkbookId::new("property-workbook").unwrap(),
+                1,
+                sem_os_policy::decision_board::BoardHash::new("b".repeat(64)).unwrap(),
+                sem_os_policy::decision_board::GraphRevision::new("property-revision").unwrap(),
+                CanonicalCandidateId::new("op.append_node").unwrap(),
+                vec![WorkbookSlot {
+                    name: "name".into(),
+                    kind: ArgumentKind::Identifier,
+                    requirement: SlotRequirement::Required,
+                    value: SlotValueState::Missing,
+                    provenance: None,
+                    clarification_prompt: "Which name?".into(),
+                }],
+                EvidenceRecordHash::new("e".repeat(64)).unwrap(),
+            )
+            .unwrap();
+            let result = apply_explicit_answers(
+                &DesignerDag::new("property-answer"),
+                workbook,
+                vec![SlotAnswer { name: answer_name, value }],
+            );
+            if let Ok(workbook) = result {
+                prop_assert_eq!(workbook.status(), ProposalStatus::ReadyForDryRun);
+                let resolved = &workbook.slots()[0].value;
+                prop_assert!(matches!(
+                    resolved,
+                    SlotValueState::Resolved(SlotValue::Identifier(identifier))
+                        if valid_identifier(identifier)
+                ));
+            }
+        }
+
+        #[test]
+        fn arbitrary_text_never_panics_deterministic_extractors(text in ".{0,4096}") {
+            let _ = quoted_names(&text);
+            let _ = durations(&text);
+            let _ = followed_count(&text, &["times", "branches", "items"]);
+            let _ = parse_condition(&text);
+            let sanitized = sanitize_identifier(&text);
+            let identifier_alphabet = sanitized.chars().all(|character| {
+                character.is_alphanumeric() || character == '_'
+            });
+            prop_assert!(identifier_alphabet);
+        }
     }
 
     #[test]

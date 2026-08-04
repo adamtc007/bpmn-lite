@@ -49,6 +49,9 @@ candle-transformers = { version = "0.8", optional = true }
 hf-hub = { version = "0.4", default-features = false, features = ["ureq"], optional = true }
 tokenizers = { version = "0.20", optional = true }
 
+[dev-dependencies]
+proptest = "1"
+
 [[example]]
 name = "candle_loadability_probe"
 required-features = ["candle-probe"]

@@ -202,10 +202,33 @@ No push is performed by this programme without owner approval.
   consent; the default live-user capture path remains structurally absent.
 - RECEIPT: `docs/receipts/bpmn-disposition-audit-phase8.md`.
 
-### Phase 9 onward
+### Phase 9 — property/fuzz, CI and performance
 
-Receipts are appended here as each phase reaches green. A phase is not marked
-complete solely because it compiles.
+- GREEN (mapper): eight property families cover the required canonical,
+  collision, ordering, state-machine, parser and typed-answer boundaries.
+- GREEN (fuzz): four bounded mapper targets bring discovery from the corrected
+  baseline of 15 to 19. Each seed corpus completed 1,000 runs without a crash;
+  the per-target nightly budget remains 1,200 seconds in independent matrix
+  jobs.
+- GREEN (reproducibility): all seven fuzz projects now carry cargo-fuzz-resolved
+  locks. Runs use a neutral working directory and fail if a lockfile changes;
+  repeat regression replay was byte-stable and executed F8-COMPILER-001.
+- GREEN (CI): production gates explicitly cover mapper contracts, serializer
+  identity, hermetic bundle refusal, proposal tests, discovered regressions and
+  a generated performance receipt.
+- GREEN (named features): workspace build, serial test and documentation gates
+  pass with `postgres,database,embed,candle-probe`; model-dependent tests remain
+  explicit ignores and ordinary tests cannot initiate a model load.
+- BASELINE EXCEPTIONS: full-workspace formatting and `-D warnings` Clippy stop
+  in unchanged DMN/kernel/compiler sources. Changed files pass rustfmt and no
+  suppression or unrelated rewrite was introduced.
+- RECEIPTS: `docs/receipts/bpmn-mapper-phase9.md` and
+  `docs/receipts/bpmn-mapper-performance-2026-08-04.md`.
+
+### Phase 10 onward
+
+Shadow rollout and handoff receipts follow. A phase is not marked complete
+solely because it compiles.
 
 ## Fuzz assurance amendment
 
@@ -231,13 +254,15 @@ Mapper fuzz targets are added only after the nightly schedule is made complete.
   replay and runner-level rejection of an empty corpus.
 - GREEN: FT-07's compiler/server corpus and artifact persistence omission is
   closed by per-target paths derived from discovery.
-- GREEN (partial FT-10): every selected project receives an explicit locked
-  metadata preflight because cargo-fuzz 0.13 itself exposes no `--locked`
-  switch; all five committed fuzz lockfiles currently pass.
+- GREEN (FT-10 lock discipline): every selected project receives an explicit
+  locked metadata preflight; cargo-fuzz runs from a neutral directory and fail
+  if the lock changes. All seven fuzz lockfiles are resolved by cargo-fuzz and
+  a repeat regression run was byte-stable.
 - CORRECTION: current discovery is 15 targets; the source review's table also
   totals 15 despite stating 16. The old workload was 300 minutes in a
   180-minute job, so the verdict is unchanged.
 - RECEIPT: `docs/receipts/fuzz-critical-gates-2026-08-04.md`.
+- GREEN (mapper tranche): semantic-board decode, phrase-index collision,
+  workbook-transition and deterministic binding-extraction targets are added.
 - REMAINING: authority models, PostgreSQL crash cuts, native/Wasm corpus
   differential execution, resource limits and fuzz telemetry remain open.
-  Mapper-specific targets are not yet added.
