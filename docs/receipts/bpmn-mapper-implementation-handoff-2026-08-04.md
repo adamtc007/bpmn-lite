@@ -10,7 +10,8 @@
 
 The receipt itself follows the implementation code tip, so the repository HEAD
 containing this document is reported at final handoff rather than recursively
-embedded here. No BPMN or ob-poc push was performed.
+embedded here. The three reviewed implementation branches have since been
+published; no pull request or merge was created as part of the handoff.
 
 ## Phase commits
 
@@ -121,6 +122,10 @@ Ignored/external tests:
   independent evaluation/owner thresholds were supplied.
 
 ## Known gaps
+
+The governed [carry-over register](../todo/bpmn-semantic-mapper-carry-overs.md)
+assigns an ID, priority, owner role and objective completion condition to every
+item summarised here.
 
 - no admitted v3 model weights, independent confusion matrix, NOTA/ambiguity
   metrics, confident-wrong review or owner-ratified promotion thresholds;
