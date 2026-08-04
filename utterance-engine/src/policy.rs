@@ -343,7 +343,8 @@ mod tests {
             "shadow_v1 policy hash drifted — semantic or encoding change without a bump"
         );
         let b = board();
-        let table: Vec<(Vec<(&str, f64)>, fn(&ProposalDisposition) -> bool)> = vec![
+        type DecisionCase<'a> = (Vec<(&'a str, f64)>, fn(&ProposalDisposition) -> bool);
+        let table: Vec<DecisionCase<'_>> = vec![
             (vec![("op.append_node", 0.90), ("op.connect", 0.40)],
              |d| matches!(d, ProposalDisposition::Candidate { .. })),
             (vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],

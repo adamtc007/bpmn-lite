@@ -36,6 +36,9 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 blake3 = { workspace = true }
 uuid = { workspace = true }
+thiserror = { workspace = true }
+sem_os_ontology = { workspace = true }
+sem_os_policy = { workspace = true }
 # candle-probe deps — same version pins as ob-semantic-matcher's Candle slice
 # (matcher's Cargo.toml, ff3f12c) so cache/ABI stay aligned across features.
 candle-core = { version = "0.8", optional = true }

@@ -110,7 +110,24 @@ No push is performed by this programme without owner approval.
   an immutable remote revision/tag, so Phase 3 must not activate a local path or
   unpinned dependency.
 
-### Phase 3 onward
+### Phase 3 — BPMN semantic profile
+
+- GREEN: shared release `v0.1.6` / revision
+  `fa51217ffd2218edea82c175e45ffa11d9eb7cf9` is pinned in the workspace and
+  locked for all shared DSL/SemOS packages.
+- GREEN: `bpmn_pack` exhaustively maps all 26 Designer candidates into shared
+  semantic contracts with typed arguments, governed phrases, examples,
+  contrasts, risk/action classes and deterministic binder capability.
+- GREEN: `build_bpmn_semantic_board` uses `PositionalLegality`, refuses
+  mismatched anchors, filters policy before model visibility, excludes
+  unrepresentable candidates and delegates canonical hashing to shared SemOS.
+- GREEN: cold dependency resolution, 59 Designer tests, 41 utterance tests and
+  changed-package Clippy pass. Detailed evidence is in
+  `docs/receipts/bpmn-semantic-board-phase3.md`.
+- KNOWN BASELINE: the exact Clippy gate without `--no-deps` reaches two
+  unchanged `bpmn-lite-compiler` lints. No lint suppression was introduced.
+
+### Phase 4 onward
 
 Receipts are appended here as each phase reaches green. A phase is not marked
 complete solely because it compiles.

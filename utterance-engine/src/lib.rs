@@ -29,6 +29,8 @@
 //! into a crate-root facade without re-litigating that call.
 
 pub mod board;
+pub mod bpmn_board;
+mod bpmn_pack;
 pub mod context;
 // Q9-GATED user capture: compiled ONLY under `q9-capture` (off by
 // default, absent from every release build in this repo -- DIR-004
