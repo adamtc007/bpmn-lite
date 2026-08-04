@@ -3,9 +3,9 @@
   "ctxproj_schema_version": 1,
   "dropped": {
     "duplicate": 2,
-    "overlap_cap": 3,
-    "pair_break": 44,
-    "retrieval_miss": 230
+    "overlap_cap": 1,
+    "pair_break": 39,
+    "retrieval_miss": 177
   },
   "floors": {
     "note": "synthetic-v2-beta is a pipeline/authoring-progress receipt; S3 floors (>=5000 etc.) are the release criterion for the eventual GA synthetic-v2 corpus, not any intermediate build",
@@ -14,45 +14,44 @@
   "list_rule": "tier0 top-12 + NOTA appended (Adam ruling 2026-07-27)",
   "overlap_cap": 0.5,
   "per_label": {
-    "abstain.none_of_the_above": 453,
-    "op.attach_guard": 116,
-    "op.attach_rearming_guard": 109,
-    "op.connect": 150,
-    "op.create_branch": 77,
-    "op.create_inclusive_region": 143,
-    "op.create_multi_instance_region": 148,
-    "op.create_parallel_region": 130,
-    "op.delete_subgraph": 276,
-    "op.insert_after": 232,
-    "op.insert_before": 203,
-    "op.replace_node": 149,
+    "abstain.none_of_the_above": 469,
+    "op.append_node": 10,
+    "op.attach_guard": 119,
+    "op.attach_rearming_guard": 111,
+    "op.connect": 151,
+    "op.create_branch": 78,
+    "op.create_inclusive_region": 148,
+    "op.create_multi_instance_region": 285,
+    "op.create_parallel_region": 243,
+    "op.delete_subgraph": 283,
+    "op.insert_after": 242,
+    "op.insert_before": 206,
+    "op.replace_node": 164,
     "op.set_correlation_source": 56,
-    "op.set_guard_budget": 104,
-    "op.set_guard_trigger": 86,
-    "prod.for_each_with_ceiling": 118,
-    "prod.interrupting_timeout": 67,
+    "op.set_guard_budget": 109,
+    "op.set_guard_trigger": 94,
+    "prod.interrupting_timeout": 93,
     "prod.non_interrupting_notification": 58,
-    "prod.parallel_checks_and_join": 110,
-    "prod.reminder_then_escalate": 52,
-    "prod.request_and_wait": 104
+    "prod.reminder_then_escalate": 68,
+    "prod.request_and_wait": 110
   },
   "per_regime": {
-    "dsl_shorthand": 818,
-    "esl_formal": 1,
+    "dsl_shorthand": 846,
+    "esl_formal": 56,
     "full_sentence": 88,
-    "question_form": 63,
-    "rushed_ops": 16,
-    "spoken": 268,
-    "telegraphic": 591,
-    "terse": 1096
+    "question_form": 69,
+    "rushed_ops": 18,
+    "spoken": 286,
+    "telegraphic": 615,
+    "terse": 1119
   },
   "retriever": "tier0.lexical.v1",
   "spec": "EOP-SPEC-SLM-TRAIN-001 v0.3",
   "totals": {
-    "context_pairs": 312,
-    "examples": 2941,
-    "nota": 453,
-    "nota_pct": 0.15402924175450527,
-    "pair_pct": 0.10608636518191092
+    "context_pairs": 326,
+    "examples": 3097,
+    "nota": 469,
+    "nota_pct": 0.1514368743945754,
+    "pair_pct": 0.10526315789473684
   }
 }

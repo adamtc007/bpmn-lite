@@ -409,7 +409,10 @@ pub(crate) fn bind_candidate(
             }
         }
         // ── Multi-instance: anchor + name + R7 collection + R6 max ───
-        "op.create_multi_instance_region" | "prod.for_each_with_ceiling" => {
+        // (2026-08-04: absorbed the former prod.for_each_with_ceiling,
+        // which lowered to this exact Operation with no field
+        // difference -- collapsed to one route, Adam's ruling.)
+        "op.create_multi_instance_region" => {
             let a = need_anchor(&mut missing);
             let name = names.first().cloned();
             if name.is_none() {
@@ -428,26 +431,26 @@ pub(crate) fn bind_candidate(
                     description: format!(
                         "for each element of '{coll}' (max {max}): task '{name}'"
                     ),
-                    ops: productions::for_each_with_ceiling(
-                        productions::ForEachWithCeilingBindings {
-                            anchor: a,
-                            key: fresh_key(),
-                            node: IRNode::MultiInstance {
-                                id: name.clone(),
-                                name: name.clone(),
-                                task_type: "noop".into(), // R4
-                                collection_flag_name: coll,
-                                declared_max: max,
-                            },
-                            edge_id: format!("flow_{name}"),
+                    ops: vec![Operation::CreateMultiInstanceRegion {
+                        anchor: a,
+                        key: fresh_key(),
+                        node: IRNode::MultiInstance {
+                            id: name.clone(),
+                            name: name.clone(),
+                            task_type: "noop".into(), // R4
+                            collection_flag_name: coll,
+                            declared_max: max,
                         },
-                    ),
+                        edge_id: format!("flow_{name}"),
+                    }],
                 }),
                 _ => Missing(missing),
             }
         }
         // ── Parallel region: anchor + ≥2 quoted branch names ─────────
-        "op.create_parallel_region" | "prod.parallel_checks_and_join" => {
+        // (2026-08-04: absorbed the former prod.parallel_checks_and_join,
+        // same collapse.)
+        "op.create_parallel_region" => {
             let a = need_anchor(&mut missing);
             if names.len() < 2 {
                 missing.push("branch_names (quote at least two step names)".into());
@@ -467,17 +470,15 @@ pub(crate) fn bind_candidate(
                         .collect();
                     Bound(BoundProposal {
                         description: format!("parallel branches: {}", names.join(", ")),
-                        ops: productions::parallel_checks_and_join(
-                            productions::ParallelChecksAndJoinBindings {
-                                anchor: a,
-                                fork_key: fresh_key(),
-                                fork_node_id: format!("{base}_fork"),
-                                join_key: fresh_key(),
-                                join_node_id: format!("{base}_join"),
-                                entry_edge_id: format!("flow_{base}_entry"),
-                                branches,
-                            },
-                        ),
+                        ops: vec![Operation::CreateParallelRegion {
+                            anchor: a,
+                            fork_key: fresh_key(),
+                            fork_node_id: format!("{base}_fork"),
+                            join_key: fresh_key(),
+                            join_node_id: format!("{base}_join"),
+                            entry_edge_id: format!("flow_{base}_entry"),
+                            branches,
+                        }],
                     })
                 }
                 _ => Missing(missing),

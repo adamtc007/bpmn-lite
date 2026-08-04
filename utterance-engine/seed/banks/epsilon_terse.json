@@ -225,21 +225,21 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "launch the remaining screens together and continue once they've all landed",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "loop the review over each submission, ceiling seven",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "per-attachment repeat here, never past six",
   "paraphrase_seq": 2
@@ -400,21 +400,21 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run whatever vendor checks remain side by side in this lane, then rejoin",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "screen every counterparty on the list here, never past seven",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "repeat this check once per counterparty within the branch, six is the hard limit",
   "paraphrase_seq": 2
@@ -792,35 +792,35 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run whatever verification checks are left concurrently and hold until they've all reported back",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "everything still open runs at once; nothing proceeds till the last one lands",
   "paraphrase_seq": 2
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "run the chase per exhibit still outstanding, six is as far as it goes",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "chase applies once per open item, four is the fixed ceiling",
   "paraphrase_seq": 2
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "repeat this chase for every missing party, capped at five",
   "paraphrase_seq": 3
@@ -1093,21 +1093,21 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "kick off all the pending screens simultaneously; hold here until every result is in",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "treat each incoming attachment as its own pass, nine is the outer limit",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "each file gets handled on its own, capped hard at seven",
   "paraphrase_seq": 2
@@ -1331,21 +1331,21 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "the remaining checks all launch at once, we regroup once they're done",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "the analyst handles each attachment on its own, capped at nine",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "one review pass per item, hard-capped at seven",
   "paraphrase_seq": 2
@@ -1520,35 +1520,35 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "launch whatever confirmations are left at the same time, hold for the complete set",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "every open confirmation runs together; a barrier holds until they're all in",
   "paraphrase_seq": 2
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "send this notice once for each fund in scope, seven is the ceiling",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "dispatch separately to each recipient, five is the fixed cap",
   "paraphrase_seq": 2
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "one issue per holder on the list, nine is as far as it goes",
   "paraphrase_seq": 3
@@ -1716,35 +1716,35 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run every per-document screen simultaneously, hold until the whole batch reports",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "the batch's checks all run together; nothing continues until the last lands",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "apply this same pass to each certificate as well, nine at the outside",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "repeat once per annex, hard limit of seven",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "apply the same pass to every supporting exhibit too, nine is the outer bound",
   "paraphrase_seq": 3
@@ -1919,28 +1919,28 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "before this gateway fires, run whatever screens remain concurrently",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "checks run together ahead of the verdict, everything converges before deciding",
   "paraphrase_seq": 2
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "run this gateway's decision separately per sub-account, nine is the outer limit",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "the verdict repeats once per fund, hard-capped at seven",
   "paraphrase_seq": 2
@@ -2059,28 +2059,28 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "fire off every onboarding screen simultaneously, wait until they've all reported",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "run the entry checks together, don't move forward until they converge",
   "paraphrase_seq": 2
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "start this off once per entity in the batch, eight is the hard bound",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "kick off per-jurisdiction intake right away, never past six",
   "paraphrase_seq": 2

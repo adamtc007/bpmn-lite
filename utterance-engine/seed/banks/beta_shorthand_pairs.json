@@ -85,14 +85,14 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "screens: sanctions+pep, fanout/fanin",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach doc: verify, cap 10",
   "paraphrase_seq": 1
@@ -162,7 +162,7 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "per fund: chase, max 5",
   "paraphrase_seq": 1
@@ -246,7 +246,7 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "on receipt: foreach doc verify, <=10",
   "paraphrase_seq": 2
@@ -274,7 +274,7 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fan out: registry + sanctions, then join",
   "paraphrase_seq": 1
@@ -379,7 +379,7 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach entity: screen, cap 25",
   "paraphrase_seq": 1
@@ -442,7 +442,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "from Start: fanout screens, sync all",
   "paraphrase_seq": 2
@@ -503,7 +503,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "run one screening pass per document",
   "paraphrase_seq": 1,
@@ -519,7 +519,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "split here and run the screens at the same time",
   "paraphrase_seq": 1,
@@ -671,7 +671,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run sanctions and PEP side by side then regroup",
   "paraphrase_seq": 1,
@@ -687,7 +687,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "verify each holder on the register, twenty max",
   "paraphrase_seq": 1,
@@ -775,7 +775,7 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "docs in -> verify each, max 10",
   "paraphrase_seq": 1,
@@ -831,7 +831,7 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "sanctions, PEP, adverse media \u2014 all at once",
   "paraphrase_seq": 1,

@@ -66,7 +66,7 @@
 
   { "class_id": "message_wait", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "heartbeat ping while the wait is open, hold untouched", "paraphrase_seq": 40 },
 
-  { "class_id": "message_wait", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "once the batch lands, process each element with the declared max", "paraphrase_seq": 40 },
+  { "class_id": "message_wait", "label": "op.create_multi_instance_region", "regime": "terse", "text": "once the batch lands, process each element with the declared max", "paraphrase_seq": 40 },
 
   { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "terse", "text": "inject a fake message so the wait releases now", "paraphrase_seq": 40 },
   { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "have this wait accept two different message types at once", "paraphrase_seq": 41 },

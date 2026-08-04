@@ -358,7 +358,7 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "concurrent: registry + sanctions, wait for both",
   "paraphrase_seq": 1
@@ -855,7 +855,7 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "1 notice per fund, lid @ 6",
   "paraphrase_seq": 1
@@ -1016,7 +1016,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "per beneficiary: route check, max 9",
   "paraphrase_seq": 1
@@ -1191,7 +1191,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "add a per-exception recheck pass, lid 5",
   "paraphrase_seq": 1
@@ -1205,7 +1205,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "then authenticity + completeness together, sync both",
   "paraphrase_seq": 1
@@ -1324,7 +1324,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "front-load the screens concurrently, sync after",
   "paraphrase_seq": 1
@@ -1517,7 +1517,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "run every screen at once and regroup after",
   "paraphrase_seq": 2,
@@ -1541,7 +1541,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "do this once per document, ten max",
   "paraphrase_seq": 1,
@@ -1669,7 +1669,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "collect ID for every director, eight tops",
   "paraphrase_seq": 2,
@@ -1829,7 +1829,7 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "work through the register one holder at a time, cap twenty",
   "paraphrase_seq": 1,

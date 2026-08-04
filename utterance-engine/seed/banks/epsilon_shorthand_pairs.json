@@ -232,28 +232,28 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "Start: sanctions+pep in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run pep/adverse_media concurrently off Start, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "Start: for-each accounts, cap 4",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "iterate jurisdictions off Start, max 5",
   "paraphrase_seq": 2
@@ -386,21 +386,21 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "outcome: source_of_funds+beneficial_ownership in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run id_verification/address_verification concurrently off outcome, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "outcome: for-each documents, cap 2",
   "paraphrase_seq": 1
@@ -512,21 +512,21 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document: source_of_funds+beneficial_ownership in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run id_verification/address_verification concurrently off verify_each_document, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document: for-each accounts, cap 10",
   "paraphrase_seq": 1
@@ -638,21 +638,21 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "notify_client: source_of_funds+beneficial_ownership in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run id_verification/address_verification concurrently off notify_client, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "notify_client: for-each beneficial_owners, cap 2",
   "paraphrase_seq": 1
@@ -757,28 +757,28 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "chase_client: kyc_refresh+sanctions in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run source_of_funds/beneficial_ownership concurrently off chase_client, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "chase_client: for-each entities, cap 8",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "iterate funds off chase_client, max 10",
   "paraphrase_seq": 2
@@ -890,14 +890,14 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "review_documents: source_of_funds+beneficial_ownership in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_documents: for-each holders, cap 30",
   "paraphrase_seq": 1
@@ -1037,28 +1037,28 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions: pep+adverse_media in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run sanctions/adverse_media concurrently off screen_sanctions, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions: for-each entities, cap 20",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "iterate funds off screen_sanctions, max 25",
   "paraphrase_seq": 2
@@ -1247,21 +1247,21 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "await_documents: pep+adverse_media in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run sanctions/adverse_media concurrently off await_documents, sync after",
   "paraphrase_seq": 2
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "await_documents: for-each entities, cap 5",
   "paraphrase_seq": 1
@@ -1429,14 +1429,14 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "review_evidence: kyc_refresh+sanctions in parallel, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_evidence: for-each accounts, cap 6",
   "paraphrase_seq": 1
@@ -1696,7 +1696,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "make sure none of the legal outcomes get missed",
   "paraphrase_seq": 1,
@@ -1712,7 +1712,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "spoken",
   "text": "somebody needs to eyeball every one of these, cap it though",
   "paraphrase_seq": 1,
@@ -1752,7 +1752,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "whoever's needed signs off, in parallel",
   "paraphrase_seq": 1,
@@ -1840,7 +1840,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "bundle the evidence checks and move only when they're all through",
   "paraphrase_seq": 1,
@@ -1888,7 +1888,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "spoken",
   "text": "keep drilling until every document's checked off",
   "paraphrase_seq": 1,
@@ -2056,7 +2056,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "cap it so only a couple run at once",
   "paraphrase_seq": 1,
@@ -2192,7 +2192,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "full_sentence",
   "text": "wait for all of them to check in before moving on",
   "paraphrase_seq": 1,
@@ -2200,7 +2200,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "full_sentence",
   "text": "wait for all of them to check in before moving on",
   "paraphrase_seq": 1,

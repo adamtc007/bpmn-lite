@@ -149,8 +149,6 @@ impl<'a> PositionalLegality<'a> {
         let mut out = Vec::new();
         if is_flow(ir) && !is_end(ir) {
             out.push(ProductionId::RequestAndWait);
-            out.push(ProductionId::ParallelChecksAndJoin);
-            out.push(ProductionId::ForEachWithCeiling);
         }
         if is_guard_host(ir) {
             out.push(ProductionId::ReminderThenEscalate);

@@ -1,0 +1,28 @@
+[
+  { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "give the vendor call thirty minutes; past that, kill it and hand the case to compliance", "paraphrase_seq": 90 },
+  { "class_id": "ffi_service_task", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "check on the vendor call every thirty minutes; after the third check, hand the case to compliance", "paraphrase_seq": 90 },
+
+  { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "this outbound call gets ten minutes flat — miss it and escalate straight to the ops desk, call's dead", "paraphrase_seq": 91 },
+  { "class_id": "ffi_service_task", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "ping the outbound call every ten minutes, and once we're out of pings, escalate to the ops desk", "paraphrase_seq": 91 },
+
+  { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "question_form", "text": "can we give this call a twenty-minute cap that kills it and escalates to compliance on breach?", "paraphrase_seq": 92 },
+  { "class_id": "ffi_service_task", "label": "prod.reminder_then_escalate", "regime": "question_form", "text": "can we check on this call every twenty minutes, escalating to compliance once the checks run out?", "paraphrase_seq": 92 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "this step gets two hours; blow past it and it's cancelled, case escalates to the risk team", "paraphrase_seq": 90 },
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "check this step every two hours; once we run out of checks, escalate the case to the risk team", "paraphrase_seq": 90 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "terse", "text": "cap this at fifteen minutes — over the cap it's killed and escalated to the duty manager", "paraphrase_seq": 91 },
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "terse", "text": "poke this every fifteen minutes, last poke escalates to the duty manager", "paraphrase_seq": 91 },
+
+  { "class_id": "mid_sequence_task", "label": "prod.interrupting_timeout", "regime": "question_form", "text": "could this step get a one-hour cap that cancels it and escalates to the risk desk?", "paraphrase_seq": 92 },
+  { "class_id": "mid_sequence_task", "label": "prod.reminder_then_escalate", "regime": "question_form", "text": "could this step get pinged every hour, escalating to the risk desk on the last ping?", "paraphrase_seq": 92 },
+
+  { "class_id": "guarded_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "chase_client gets one business day; overrun and the chase is cancelled, escalate to collections", "paraphrase_seq": 90 },
+  { "class_id": "guarded_task", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "chase_client every business day; when the chases run out, escalate to collections", "paraphrase_seq": 90 },
+
+  { "class_id": "human_wait", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "give the reviewer four hours flat; miss it and the review is pulled, escalate to the backup approver", "paraphrase_seq": 90 },
+  { "class_id": "human_wait", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "remind the reviewer every four hours; once reminders are spent, escalate to the backup approver", "paraphrase_seq": 90 },
+
+  { "class_id": "message_wait", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "hold for this message twenty minutes only; nothing by then and we cancel, escalate to the ops queue", "paraphrase_seq": 90 },
+  { "class_id": "message_wait", "label": "prod.reminder_then_escalate", "regime": "spoken", "text": "chase for this message every twenty minutes; last chase escalates to the ops queue", "paraphrase_seq": 90 }
+]

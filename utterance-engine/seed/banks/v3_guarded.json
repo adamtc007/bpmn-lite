@@ -37,9 +37,9 @@
   { "class_id": "guarded_task", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "periodic status ping off this step, work untouched", "paraphrase_seq": 40 },
   { "class_id": "guarded_task", "label": "prod.non_interrupting_notification", "regime": "spoken", "text": "send a heads-up on a schedule while this keeps grinding away", "paraphrase_seq": 41 },
 
-  { "class_id": "guarded_task", "label": "prod.parallel_checks_and_join", "regime": "terse", "text": "launch all the checks at once after this and join on completion", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.create_parallel_region", "regime": "terse", "text": "launch all the checks at once after this and join on completion", "paraphrase_seq": 40 },
 
-  { "class_id": "guarded_task", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "run it once per entry in 'targets', with the mandatory cap", "paraphrase_seq": 40 },
+  { "class_id": "guarded_task", "label": "op.create_multi_instance_region", "regime": "terse", "text": "run it once per entry in 'targets', with the mandatory cap", "paraphrase_seq": 40 },
 
   { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "make the reminders run forever until someone answers", "paraphrase_seq": 40 },
   { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "change what this step actually executes under the hood", "paraphrase_seq": 41 },

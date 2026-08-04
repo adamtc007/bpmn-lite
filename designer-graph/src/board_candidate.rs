@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever any canonical id or model-facing description changes.
 /// Rides every `BoardCandidate` so recorded board hashes stay
 /// interpretable across schema evolution (I28).
-const CANDIDATE_SCHEMA_VERSION: u32 = 2;
+const CANDIDATE_SCHEMA_VERSION: u32 = 3;
 
 /// The §12.1 atomic graph-operation set. Variant set mirrors the V&S
 /// verbatim; the three guard operations mirror the opcode trichotomy.
@@ -48,17 +48,27 @@ pub enum OperationKind {
 
 /// The §12.2 production catalogue (Q4's candidate set; pruned/extended
 /// only via a schema-version bump).
+///
+/// `ParallelChecksAndJoin`/`ForEachWithCeiling` retired 2026-08-04
+/// (schema v2 -> v3, Adam's ruling): both were single-op compositions
+/// that lowered to the EXACT SAME `Operation` as their op-level sibling
+/// (`CreateParallelRegion`/`CreateMultiInstanceRegion` respectively;
+/// verified against `productions.rs`'s own bodies before the ruling —
+/// no field, binding, or downstream BPMN differs). Offering both as
+/// distinct board candidates asked the classifier to discriminate a
+/// distinction with no behavioral difference; `proposal.rs`'s
+/// deterministic binder had already treated the two ids as one arm
+/// each. Collapsed to the op-level id as the single route; all
+/// utterances now resolve there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ProductionId {
     RequestAndWait,
     TimerMessageRace,
     ReminderThenEscalate,
-    ParallelChecksAndJoin,
     InterruptingTimeout,
     NonInterruptingNotification,
     HumanReviewWithRework,
     CallDurableSubprocess,
-    ForEachWithCeiling,
 }
 
 /// Stable, content-hashable candidate identity.
@@ -147,16 +157,14 @@ impl OperationKind {
 }
 
 impl ProductionId {
-    pub const ALL: [ProductionId; 9] = [
+    pub const ALL: [ProductionId; 7] = [
         ProductionId::RequestAndWait,
         ProductionId::TimerMessageRace,
         ProductionId::ReminderThenEscalate,
-        ProductionId::ParallelChecksAndJoin,
         ProductionId::InterruptingTimeout,
         ProductionId::NonInterruptingNotification,
         ProductionId::HumanReviewWithRework,
         ProductionId::CallDurableSubprocess,
-        ProductionId::ForEachWithCeiling,
     ];
 
     pub fn canonical_id(self) -> &'static str {
@@ -164,12 +172,10 @@ impl ProductionId {
             ProductionId::RequestAndWait => "prod.request_and_wait",
             ProductionId::TimerMessageRace => "prod.timer_message_race",
             ProductionId::ReminderThenEscalate => "prod.reminder_then_escalate",
-            ProductionId::ParallelChecksAndJoin => "prod.parallel_checks_and_join",
             ProductionId::InterruptingTimeout => "prod.interrupting_timeout",
             ProductionId::NonInterruptingNotification => "prod.non_interrupting_notification",
             ProductionId::HumanReviewWithRework => "prod.human_review_with_rework",
             ProductionId::CallDurableSubprocess => "prod.call_durable_subprocess",
-            ProductionId::ForEachWithCeiling => "prod.for_each_with_ceiling",
         }
     }
 
@@ -179,12 +185,10 @@ impl ProductionId {
             ProductionId::RequestAndWait => "Send a request and wait for its correlated response",
             ProductionId::TimerMessageRace => "Race a message arrival against a timer deadline",
             ProductionId::ReminderThenEscalate => "Non-interrupting bounded reminder cycle with an escalation continuation",
-            ProductionId::ParallelChecksAndJoin => "Run declared checks in parallel and join on all",
             ProductionId::InterruptingTimeout => "Interrupting timeout guard around the anchored work",
             ProductionId::NonInterruptingNotification => "Fire a notification on a schedule without interrupting the work",
             ProductionId::HumanReviewWithRework => "Human review with bounded, attempt-counted forward rework",
             ProductionId::CallDurableSubprocess => "Invoke a durable subprocess and await its typed outcome",
-            ProductionId::ForEachWithCeiling => "For each element of a bounded collection, under a mandatory declared maximum",
         }
     }
 }
@@ -282,7 +286,7 @@ mod tests {
             .collect();
         let unique: BTreeSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "duplicate canonical id");
-        assert_eq!(ids.len(), 28);
+        assert_eq!(ids.len(), 26);
 
         let golden: BTreeSet<&str> = [
             "op.append_node",
@@ -307,17 +311,15 @@ mod tests {
             "prod.request_and_wait",
             "prod.timer_message_race",
             "prod.reminder_then_escalate",
-            "prod.parallel_checks_and_join",
             "prod.interrupting_timeout",
             "prod.non_interrupting_notification",
             "prod.human_review_with_rework",
             "prod.call_durable_subprocess",
-            "prod.for_each_with_ceiling",
         ]
         .into_iter()
         .collect();
         assert_eq!(unique, golden, "canonical id set drifted from golden");
-        assert_eq!(CANDIDATE_SCHEMA_VERSION, 2);
+        assert_eq!(CANDIDATE_SCHEMA_VERSION, 3);
     }
 
     /// CEMENT (review F6): descriptions are board-hash inputs — a
@@ -353,7 +355,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_DESCRIPTION_HASH: &str = "d6b84d029b4fe6c419cd6a64dbe9e16693e2442243eaf133db114609c9c12097";
+    const GOLDEN_DESCRIPTION_HASH: &str = "0a97db72ebdac007adee70c89ca1a46c70c2337cb1ad0959304e2a9ae0116bc6";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]
@@ -370,7 +372,7 @@ mod tests {
         }
         let a = Everything.legal_candidates(None);
         let b = Everything.legal_candidates(None);
-        assert_eq!(a.len(), 28);
+        assert_eq!(a.len(), 26);
         let ids_a: Vec<&str> = a.iter().map(|c| c.canonical_id.as_str()).collect();
         let ids_b: Vec<&str> = b.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(ids_a, ids_b);

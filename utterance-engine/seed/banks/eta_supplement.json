@@ -64,7 +64,7 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "full_sentence",
   "text": "For every director on file, run the identity check, but never exceed eight in a single pass.",
   "paraphrase_seq": 1
@@ -148,7 +148,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "kick off sanctions and adverse-media together, join when both land",
   "paraphrase_seq": 1

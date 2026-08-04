@@ -1,0 +1,33 @@
+[
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "terse", "text": "when it fires, run 'notify_ops' next", "paraphrase_seq": 1 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "spoken", "text": "the trigger needs somewhere to go — put 'log_nudge' right after it fires", "paraphrase_seq": 2 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "telegraphic", "text": "guard fire -> 'ping_team'", "paraphrase_seq": 3 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "question_form", "text": "can we give this trigger a first step, 'flag_reviewer', once it goes off?", "paraphrase_seq": 4 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "rushed_ops", "text": "trigger has nowhere to go yet, wire 'escalate_owner' onto it now", "paraphrase_seq": 5 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "full_sentence", "text": "Now that the guard is attached, open its escape path with a single step named 'reassign_case'.", "paraphrase_seq": 6 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "esl_formal", "text": "please to add 'notify_manager' as what happens after this trigger fires", "paraphrase_seq": 7 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "spoken", "text": "start the fired path off with a 'freeze_account' step", "paraphrase_seq": 8 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "terse", "text": "add 'record_breach' as the first thing this trigger does", "paraphrase_seq": 9 },
+  { "class_id": "guard_node_no_escape", "label": "op.append_node", "regime": "dsl_shorthand", "text": "trigger.escape += 'audit_note'", "paraphrase_seq": 10 },
+
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_trigger", "regime": "spoken", "text": "swap this to fire every two hours instead of the current schedule", "paraphrase_seq": 1 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_trigger", "regime": "terse", "text": "change the cycle to every 90 minutes", "paraphrase_seq": 2 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_trigger", "regime": "question_form", "text": "can this fire off a single duration cap instead of repeating?", "paraphrase_seq": 3 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_trigger", "regime": "esl_formal", "text": "kindly change this to fire only once, after four hours", "paraphrase_seq": 4 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_trigger", "regime": "rushed_ops", "text": "widen the cycle interval to six hrs", "paraphrase_seq": 5 },
+
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_budget", "regime": "spoken", "text": "cap this trigger at six fires before it stops rearming", "paraphrase_seq": 1 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_budget", "regime": "terse", "text": "drop the fire budget to two", "paraphrase_seq": 2 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_budget", "regime": "question_form", "text": "could we widen how many times this is allowed to fire?", "paraphrase_seq": 3 },
+  { "class_id": "guard_node_no_escape", "label": "op.set_guard_budget", "regime": "esl_formal", "text": "please to give this trigger a higher failure budget, ten instead of four", "paraphrase_seq": 4 },
+
+  { "class_id": "guard_node_no_escape", "label": "op.delete_subgraph", "regime": "terse", "text": "drop this trigger entirely", "paraphrase_seq": 1 },
+  { "class_id": "guard_node_no_escape", "label": "op.delete_subgraph", "regime": "spoken", "text": "we don't need this watcher anymore, take it off the task", "paraphrase_seq": 2 },
+  { "class_id": "guard_node_no_escape", "label": "op.delete_subgraph", "regime": "question_form", "text": "can this guard just be removed before it's ever wired up?", "paraphrase_seq": 3 },
+  { "class_id": "guard_node_no_escape", "label": "op.delete_subgraph", "regime": "esl_formal", "text": "kindly take away this trigger, it was added by mistake", "paraphrase_seq": 4 },
+
+  { "class_id": "guard_node_no_escape", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "just tell me the last time this trigger actually fired", "paraphrase_seq": 1 },
+  { "class_id": "guard_node_no_escape", "label": "abstain.none_of_the_above", "regime": "terse", "text": "who gets notified when this fires currently", "paraphrase_seq": 2 },
+  { "class_id": "guard_node_no_escape", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to explain what a rearming trigger even means here", "paraphrase_seq": 3 },
+  { "class_id": "guard_node_no_escape", "label": "abstain.none_of_the_above", "regime": "question_form", "text": "is this the same kind of trigger as the one on the other task?", "paraphrase_seq": 4 }
+]

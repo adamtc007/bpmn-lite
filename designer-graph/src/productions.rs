@@ -21,7 +21,7 @@
 //! `Serialize`/`Deserialize` (`ops.rs`) — no new serde plumbing is added
 //! here, only exercised by a receipt test below.
 
-use crate::ops::{apply, GuardTrigger, Operation, RegionBranch, StagedCandidate};
+use crate::ops::{apply, GuardTrigger, Operation, StagedCandidate};
 use crate::schema::{DesignerDag, NodeKey, Provenance};
 use anyhow::Result;
 use bpmn_lite_compiler::IRNode;
@@ -59,58 +59,6 @@ pub fn request_and_wait(b: RequestAndWaitBindings) -> Vec<Operation> {
             edge_id: b.wait_edge_id,
         },
     ]
-}
-
-/// `prod.parallel_checks_and_join` (§12.2): a `CreateParallelRegion` with
-/// N `ServiceTask` branches after `anchor`. A single-op production —
-/// `CreateParallelRegion` already constructs the region CLOSED (slice 3),
-/// so there is nothing else to compose.
-pub struct ParallelChecksAndJoinBindings {
-    pub anchor: NodeKey,
-    pub fork_key: NodeKey,
-    pub fork_node_id: String,
-    pub join_key: NodeKey,
-    pub join_node_id: String,
-    pub entry_edge_id: String,
-    /// Each branch's `condition` must be `None` (parallel, not
-    /// inclusive) — `CreateParallelRegion` itself refuses otherwise.
-    pub branches: Vec<RegionBranch>,
-}
-
-pub fn parallel_checks_and_join(b: ParallelChecksAndJoinBindings) -> Vec<Operation> {
-    vec![Operation::CreateParallelRegion {
-        anchor: b.anchor,
-        fork_key: b.fork_key,
-        fork_node_id: b.fork_node_id,
-        join_key: b.join_key,
-        join_node_id: b.join_node_id,
-        entry_edge_id: b.entry_edge_id,
-        branches: b.branches,
-    }]
-}
-
-/// `prod.for_each_with_ceiling` (§12.2): a `CreateMultiInstanceRegion`
-/// after `anchor`. The collection flag name, declared max, and inner
-/// task type all live on the `IRNode::MultiInstance` node the caller
-/// supplies (I24 — the mandatory declaration arrives in the bindings,
-/// never defaulted here). A single-op production: the MI node IS the
-/// region (ruling K), nothing else to compose.
-pub struct ForEachWithCeilingBindings {
-    pub anchor: NodeKey,
-    pub key: NodeKey,
-    /// Must be `IRNode::MultiInstance`; `CreateMultiInstanceRegion`
-    /// itself refuses any other kind.
-    pub node: IRNode,
-    pub edge_id: String,
-}
-
-pub fn for_each_with_ceiling(b: ForEachWithCeilingBindings) -> Vec<Operation> {
-    vec![Operation::CreateMultiInstanceRegion {
-        anchor: b.anchor,
-        key: b.key,
-        node: b.node,
-        edge_id: b.edge_id,
-    }]
 }
 
 /// `prod.reminder_then_escalate` (§12.2): a non-interrupting, re-arming
@@ -375,16 +323,6 @@ mod tests {
         }
     }
 
-    fn mi_node(id: &str) -> IRNode {
-        IRNode::MultiInstance {
-            id: id.into(),
-            name: id.into(),
-            task_type: "noop".into(),
-            collection_flag_name: "items".into(),
-            declared_max: 5,
-        }
-    }
-
     /// Receipt: `request_and_wait` -> apply_production -> full-chain
     /// admit() green.
     #[test]
@@ -420,56 +358,6 @@ mod tests {
         let staged = apply_production(&base, ops, Provenance::default())
             .expect("request_and_wait production must apply");
         staged.candidate.admit().expect("request_and_wait must admit");
-    }
-
-    /// Receipt: `parallel_checks_and_join` -> apply_production ->
-    /// full-chain admit() green.
-    #[test]
-    fn parallel_checks_and_join_admits() {
-        let (base, _s, t1, _e) = linear("prod-pcj");
-        let ops = parallel_checks_and_join(ParallelChecksAndJoinBindings {
-            anchor: t1,
-            fork_key: key(),
-            fork_node_id: "pcj_fork".into(),
-            join_key: key(),
-            join_node_id: "pcj_join".into(),
-            entry_edge_id: "pcj_entry".into(),
-            branches: vec![
-                RegionBranch {
-                    key: key(),
-                    node: task("check_a"),
-                    in_edge_id: "in_a".into(),
-                    out_edge_id: "out_a".into(),
-                    condition: None,
-                },
-                RegionBranch {
-                    key: key(),
-                    node: task("check_b"),
-                    in_edge_id: "in_b".into(),
-                    out_edge_id: "out_b".into(),
-                    condition: None,
-                },
-            ],
-        });
-        let staged = apply_production(&base, ops, Provenance::default())
-            .expect("parallel_checks_and_join production must apply");
-        staged.candidate.admit().expect("parallel_checks_and_join must admit");
-    }
-
-    /// Receipt: `for_each_with_ceiling` -> apply_production -> full-chain
-    /// admit() green.
-    #[test]
-    fn for_each_with_ceiling_admits() {
-        let (base, _s, t1, _e) = linear("prod-fewc");
-        let ops = for_each_with_ceiling(ForEachWithCeilingBindings {
-            anchor: t1,
-            key: key(),
-            node: mi_node("mi_fewc"),
-            edge_id: "e_mi".into(),
-        });
-        let staged = apply_production(&base, ops, Provenance::default())
-            .expect("for_each_with_ceiling production must apply");
-        staged.candidate.admit().expect("for_each_with_ceiling must admit");
     }
 
     /// Receipt: `reminder_then_escalate` -> apply_production -> full-chain

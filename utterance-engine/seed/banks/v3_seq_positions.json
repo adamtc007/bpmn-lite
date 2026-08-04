@@ -72,11 +72,11 @@
   { "class_id": "mid_sequence_task", "label": "prod.non_interrupting_notification", "regime": "terse", "text": "ping 'notify_channel' on a schedule while this keeps running untouched", "paraphrase_seq": 40 },
   { "class_id": "mid_sequence_task", "label": "prod.non_interrupting_notification", "regime": "spoken", "text": "fire a periodic heads-up off this step without ever pausing the work", "paraphrase_seq": 41 },
 
-  { "class_id": "mid_sequence_task", "label": "prod.parallel_checks_and_join", "regime": "terse", "text": "run the declared checks in parallel here and join on all of them", "paraphrase_seq": 40 },
-  { "class_id": "mid_sequence_task", "label": "prod.parallel_checks_and_join", "regime": "spoken", "text": "kick off every check at once after this and wait till they've all landed", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "terse", "text": "run the declared checks in parallel here and join on all of them", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "spoken", "text": "kick off every check at once after this and wait till they've all landed", "paraphrase_seq": 41 },
 
-  { "class_id": "mid_sequence_task", "label": "prod.for_each_with_ceiling", "regime": "terse", "text": "for every element of 'entries' run the step, mandatory cap of twelve", "paraphrase_seq": 40 },
-  { "class_id": "mid_sequence_task", "label": "prod.for_each_with_ceiling", "regime": "spoken", "text": "do this once per item in the list, but never more than the declared max", "paraphrase_seq": 41 },
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "terse", "text": "for every element of 'entries' run the step, mandatory cap of twelve", "paraphrase_seq": 40 },
+  { "class_id": "mid_sequence_task", "label": "op.create_multi_instance_region", "regime": "spoken", "text": "do this once per item in the list, but never more than the declared max", "paraphrase_seq": 41 },
 
   { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "terse", "text": "rename this step to 'final_pass'", "paraphrase_seq": 40 },
   { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "loop this back to the step before it whenever the result is a redo", "paraphrase_seq": 41 },

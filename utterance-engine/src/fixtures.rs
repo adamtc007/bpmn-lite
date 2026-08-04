@@ -164,6 +164,55 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
         });
     }
 
+    // guard_node_no_escape: guard_node's sibling state, one AppendNode
+    // short of the fixture above — the guard is attached but its escape
+    // flow has not been opened yet (no outgoing edge). This is the ONE
+    // place `op.append_node` is legal (positional.rs: "flow (non-End) or
+    // a guard opening its escape path; only where no outgoing edge
+    // exists"), and until this fixture existed no enumeration class ever
+    // left a guard/dead-end in that state — guard_node's own fixture
+    // above was fixed 2026-08-03 to always carry the continuation for
+    // admission, which correctly closed the money-receipt skew but also
+    // orphaned AppendNode: zero training coverage anywhere in the corpus
+    // (2026-08-04 gap, found via bottom-up verb/synonym/utterance trace).
+    {
+        let (dag, start) = base(false)?;
+        let t = key();
+        let guard = key();
+        let mut g = dag;
+        for op in [
+            Operation::AppendNode {
+                anchor: start,
+                key: t,
+                node: task("verify_claim"),
+                edge_id: "f1".into(),
+            },
+            Operation::AppendNode {
+                anchor: t,
+                key: key(),
+                node: IRNode::End { id: "end".into(), terminate: false },
+                edge_id: "f2".into(),
+            },
+            Operation::AttachRearmingGuard {
+                host: t,
+                key: guard,
+                guard_id: "g_fresh".into(),
+                trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                    interval_ms: 3_600_000,
+                    max_fires: 4,
+                }),
+            },
+        ] {
+            g = apply(&g, op, p())?.candidate;
+        }
+        out.push(ClassState {
+            class_id: "guard_node_no_escape",
+            dag: g,
+            anchor_key: Some(guard),
+            anchor_id: Some("g_fresh"),
+        });
+    }
+
     // human_wait: start→prep→human review→end, anchored on the review.
     {
         let (dag, start) = base(true)?;

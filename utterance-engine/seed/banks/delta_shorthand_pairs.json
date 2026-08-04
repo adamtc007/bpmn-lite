@@ -365,42 +365,42 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "review_documents: fanout sanctions+pep, sync",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "run checks in par off review_documents, join-all",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "sanctions || pep || media, then merge",
   "paraphrase_seq": 3
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach doc off review_documents, cap 10",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_documents loop: per-elem, max 10",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "iterate docs[], ceiling 10",
   "paraphrase_seq": 3
@@ -512,28 +512,28 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "chase_client || verify_docs, join after",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout chase_client + id_check, sync",
   "paraphrase_seq": 2
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach fund off chase_client, cap 5",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "per-holder chase, ceiling 20",
   "paraphrase_seq": 2
@@ -610,28 +610,28 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "await_documents || registry_check, join",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off await_documents: sanctions+pep",
   "paraphrase_seq": 2
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach doc off await_documents, cap 10",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "await_documents loop per-elem, ceiling 10",
   "paraphrase_seq": 2
@@ -750,28 +750,28 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "review_evidence || registry_lookup, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off review_evidence: sanctions+adverse_media",
   "paraphrase_seq": 2
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach item off review_evidence, cap 8",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_evidence loop per-elem, ceiling 8",
   "paraphrase_seq": 2
@@ -876,28 +876,28 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "notify_client || log_dispatch, join",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off notify_client: email+portal",
   "paraphrase_seq": 2
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach recipient off notify_client, cap 6",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "notify_client loop per-elem, ceiling 6",
   "paraphrase_seq": 2
@@ -1030,28 +1030,28 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "outcome || secondary_check, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off outcome: sanctions+pep, sync",
   "paraphrase_seq": 2
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach arm off outcome, cap 5",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "outcome loop per-result, ceiling 5",
   "paraphrase_seq": 2
@@ -1142,28 +1142,28 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions || screen_pep, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off screen_sanctions: media+adverse, sync",
   "paraphrase_seq": 2
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach entity off screen_sanctions, cap 25",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions loop per-elem, ceiling 25",
   "paraphrase_seq": 2
@@ -1268,28 +1268,28 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document || cross_check, join-all",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fanout off verify_each_document: ocr+manual, sync",
   "paraphrase_seq": 2
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach page off verify_each_document, cap 5",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document loop per sub-elem, ceiling 5",
   "paraphrase_seq": 2
@@ -1394,28 +1394,28 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "Start || fanout: kyc_check+aml_check, join",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "from Start: sanctions+pep in par, sync",
   "paraphrase_seq": 2
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "foreach applicant off Start, cap 15",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "Start loop per-elem, ceiling 15",
   "paraphrase_seq": 2
@@ -1518,7 +1518,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "loop this over the list",
   "paraphrase_seq": 3,
@@ -1590,7 +1590,7 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run both checks together",
   "paraphrase_seq": 4,
@@ -1614,7 +1614,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "spoken",
   "text": "chase whoever hasn't answered yet",
   "paraphrase_seq": 3,
@@ -1766,7 +1766,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "spoken",
   "text": "spin off a copy of this for every fund",
   "paraphrase_seq": 3,
@@ -1846,7 +1846,7 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "farm this out to each entity on the list, twelve max",
   "paraphrase_seq": 3,
@@ -1926,7 +1926,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "keep the paperwork from piling up unanswered",
   "paraphrase_seq": 4,
@@ -1966,7 +1966,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "batch process every applicant, no more than thirty though",
   "paraphrase_seq": 4,

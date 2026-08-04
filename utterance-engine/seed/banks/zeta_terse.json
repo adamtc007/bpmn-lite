@@ -358,21 +358,21 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "fire every onboarding screen the moment we open, hold for the full set",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "entry screens fired together, wait till every one clears",
   "paraphrase_seq": 2
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "begin this once per guarantor in the batch, eight is the outer bound",
   "paraphrase_seq": 1
@@ -484,14 +484,14 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "launch whatever screens are still open alongside this review, hold for the full set",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "repeat this pass once per attachment on file, never past seven",
   "paraphrase_seq": 1
@@ -652,21 +652,21 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run whatever screens are still pending alongside this chase, wait for the lot",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "remaining checks concurrent from the chase; barrier before moving on",
   "paraphrase_seq": 2
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "repeat the chase for every outstanding guarantor, capped at six",
   "paraphrase_seq": 1
@@ -1058,14 +1058,14 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "start every pending screen at once from here, hold for the full set",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "handle every arriving file on its own, never past nine",
   "paraphrase_seq": 1
@@ -1233,14 +1233,14 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "start the remaining verification checks together, sync once they clear",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "have the analyst redo this per trust deed too, ceiling nine",
   "paraphrase_seq": 1
@@ -1415,14 +1415,14 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "issue this dispatch per trustee within scope, capped at eight",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "launch the remaining confirmations together and hold for the complete set",
   "paraphrase_seq": 1
@@ -1576,21 +1576,21 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "ahead of this verdict, get every outstanding screen running concurrently",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "apply this verdict once per guarantor, never past eight",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "per-trust verdict, mandatory cap seven",
   "paraphrase_seq": 2
@@ -1709,14 +1709,14 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "the remaining lane checks fire together; nothing advances till all clear",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "loop this check across every counterparty inside the branch, ceiling of six",
   "paraphrase_seq": 1
@@ -1884,21 +1884,21 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "launch every per-document screen simultaneously, don't move on till they've all reported",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "apply this same pass across every trust deed as well, nine is the outer bound",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "annex-by-annex repeat, hard ceiling of eight",
   "paraphrase_seq": 2

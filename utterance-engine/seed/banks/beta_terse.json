@@ -155,14 +155,14 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "kick off screenings together; proceed once every one lands",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "run this once per exhibit, never more than ten",
   "paraphrase_seq": 1
@@ -267,14 +267,14 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "launch remaining screenings side by side; gate on completion of each",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "repeat the chase for every missing document, capped at three",
   "paraphrase_seq": 1
@@ -442,14 +442,14 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "start every screening at once and continue when they finish",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "process every arriving file separately, cap ten",
   "paraphrase_seq": 1
@@ -533,14 +533,14 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "fire the outstanding checks together, meet when they clear",
   "paraphrase_seq": 1
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "per-exhibit review pass, ceiling of 8",
   "paraphrase_seq": 1
@@ -624,14 +624,14 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "run the compliance screens concurrently and sync on completion",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "repeat per outstanding recipient, max 5",
   "paraphrase_seq": 1
@@ -722,14 +722,14 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "screenings side by side; converge before verdict",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "apply this once per holding, ten at most",
   "paraphrase_seq": 1
@@ -827,14 +827,14 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "vendor checks simultaneously; barrier till done",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "screen every listed entity one by one, never past ten",
   "paraphrase_seq": 1
@@ -932,14 +932,14 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "telegraphic",
   "text": "per-doc screens concurrent; proceed when every one lands",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "redo this per attachment too, ceiling stays ten",
   "paraphrase_seq": 1
@@ -1058,14 +1058,14 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "begin with the screenings at once, gate on the full set",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "telegraphic",
   "text": "immediately per-entity onboarding pass, cap 10",
   "paraphrase_seq": 1

@@ -194,6 +194,38 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Per-item miss dump (round-4 authoring diagnostic): `<base-key> errors`.
+    // Prints every eval record the model gets wrong -- utterance, gold,
+    // top1 pick, and the full ranked list with scores -- so the next
+    // authoring round targets the ACTUAL confusion pairs instead of
+    // guessing from aggregate per-class accuracy alone. Read-only against
+    // the cemented eval set; writes nothing, changes no receipted number.
+    if std::env::args().nth(2).as_deref() == Some("errors") {
+        let base = bases[0];
+        let bundle_dir = root.join("train_py/bundles").join(base.key());
+        let ranker = TrainedRanker::load(base, &bundle_dir, &device)?;
+        let mut n_wrong = 0u32;
+        for record in &eval_records {
+            let result = ranker.score(record, &device)?;
+            let top1 = &result.ranking[0].candidate_id;
+            if *top1 != record.label {
+                n_wrong += 1;
+                let class = record.family_id.split("::").next().unwrap_or("unknown");
+                println!("--- MISS #{n_wrong} [{class}] gold={} predicted={}", record.label, top1);
+                println!("    utterance: {:?}", record.utterance);
+                let ranked: Vec<String> = result
+                    .ranking
+                    .iter()
+                    .take(4)
+                    .map(|rc| format!("{}={:.3}", rc.candidate_id, rc.score.get()))
+                    .collect();
+                println!("    top4: {}", ranked.join(", "));
+            }
+        }
+        println!("\n{n_wrong}/{} eval items misclassified", eval_records.len());
+        return Ok(());
+    }
+
     let mut summary = Vec::new();
     for base in bases {
         let bundle_dir = root.join("train_py/bundles").join(base.key());

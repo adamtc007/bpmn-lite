@@ -12,7 +12,7 @@
   { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "spoken", "text": "give the callout a fuse — burns down and the call's dead, flow takes the miss route", "paraphrase_seq": 50 },
   { "class_id": "ffi_service_task", "label": "prod.interrupting_timeout", "regime": "question_form", "text": "can the integration call get a duration bound that cancels it and diverts on breach?", "paraphrase_seq": 51 },
   { "class_id": "ffi_service_task", "label": "prod.request_and_wait", "regime": "terse", "text": "follow the callout with a request-and-hold for the correlated result", "paraphrase_seq": 50 },
-  { "class_id": "ffi_service_task", "label": "prod.parallel_checks_and_join", "regime": "terse", "text": "fan the checks out around this call and join on all", "paraphrase_seq": 50 },
+  { "class_id": "ffi_service_task", "label": "op.create_parallel_region", "regime": "terse", "text": "fan the checks out around this call and join on all", "paraphrase_seq": 50 },
   { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "spoken", "text": "bump the priority of this call so it jumps the vendor's queue", "paraphrase_seq": 50 },
   { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "telegraphic", "text": "callout creds -> rotate", "paraphrase_seq": 51 },
 

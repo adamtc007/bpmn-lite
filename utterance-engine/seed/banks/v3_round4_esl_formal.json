@@ -1,0 +1,64 @@
+[
+  { "class_id": "mid_sequence_task", "label": "op.insert_after", "regime": "esl_formal", "text": "please to add one more step called 'verify_signature' right after this one, on the same route", "paraphrase_seq": 90 },
+  { "class_id": "mid_sequence_task", "label": "op.insert_before", "regime": "esl_formal", "text": "kindly put a 'gather_evidence' step just before this one starts", "paraphrase_seq": 91 },
+  { "class_id": "mid_sequence_task", "label": "op.replace_node", "regime": "esl_formal", "text": "kindly substitute this task with 'run_auto_scan', don't touch the links either side", "paraphrase_seq": 92 },
+  { "class_id": "mid_sequence_task", "label": "op.create_parallel_region", "regime": "esl_formal", "text": "is it possible that 'notify_ops' and 'log_event' run together after this, then come back as one?", "paraphrase_seq": 93 },
+  { "class_id": "mid_sequence_task", "label": "op.attach_guard", "regime": "esl_formal", "text": "please to put a hard stop on this step, kill it if it runs too long", "paraphrase_seq": 94 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make this step run twice as fast somehow", "paraphrase_seq": 95 },
+  { "class_id": "mid_sequence_task", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "kindly trigger the review this moment and get me the outcome afterwards", "paraphrase_seq": 96 },
+  { "class_id": "mid_sequence_task", "label": "op.delete_subgraph", "regime": "esl_formal", "text": "kindly take this step out of the flow completely", "paraphrase_seq": 97 },
+
+  { "class_id": "ffi_service_task", "label": "op.attach_guard", "regime": "esl_formal", "text": "please to hard stop the vendor call if it hangs too long, no escalation needed", "paraphrase_seq": 90 },
+  { "class_id": "ffi_service_task", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add 'log_response' right after the external call finishes", "paraphrase_seq": 91 },
+  { "class_id": "ffi_service_task", "label": "op.delete_subgraph", "regime": "esl_formal", "text": "please to remove this outside call from the route entirely", "paraphrase_seq": 92 },
+  { "class_id": "ffi_service_task", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to run_verify_identity with vendor set to backup_provider", "paraphrase_seq": 93 },
+  { "class_id": "ffi_service_task", "label": "prod.reminder_then_escalate", "regime": "esl_formal", "text": "please to keep nudging the vendor on a schedule, and after the last nudge, escalate it to compliance", "paraphrase_seq": 94 },
+  { "class_id": "ffi_service_task", "label": "prod.request_and_wait", "regime": "esl_formal", "text": "kindly send the request to the vendor and then hold for their correlated reply", "paraphrase_seq": 95 },
+
+  { "class_id": "parallel_branch_interior", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly slot a PEP check in right after the sanctions screening, staying inside this same branch", "paraphrase_seq": 90 },
+  { "class_id": "parallel_branch_interior", "label": "op.insert_before", "regime": "esl_formal", "text": "kindly place a 'dedupe_check' step just ahead of this one, same branch only", "paraphrase_seq": 91 },
+  { "class_id": "parallel_branch_interior", "label": "prod.interrupting_timeout", "regime": "esl_formal", "text": "please to cut this branch loose after a fixed wait, and send it down the fallback path", "paraphrase_seq": 92 },
+  { "class_id": "parallel_branch_interior", "label": "op.replace_node", "regime": "esl_formal", "text": "kindly replace this step with the alternate vendor's call, don't disturb what it connects to", "paraphrase_seq": 93 },
+  { "class_id": "parallel_branch_interior", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make the cheaper branch go first instead", "paraphrase_seq": 94 },
+
+  { "class_id": "message_wait", "label": "op.set_correlation_source", "regime": "esl_formal", "text": "kindly switch what these incoming messages match against, use the fund id instead of the case reference", "paraphrase_seq": 90 },
+  { "class_id": "message_wait", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add 'log_arrival' right after the message shows up", "paraphrase_seq": 91 },
+  { "class_id": "message_wait", "label": "prod.interrupting_timeout", "regime": "esl_formal", "text": "please to cap how long we hold for this message, and take the fallback if nothing arrives", "paraphrase_seq": 92 },
+  { "class_id": "message_wait", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to have the whole process kick off the moment this kind of message shows up", "paraphrase_seq": 93 },
+  { "class_id": "message_wait", "label": "prod.reminder_then_escalate", "regime": "esl_formal", "text": "kindly keep chasing on a bounded schedule while we wait, and escalate on the last chase", "paraphrase_seq": 94 },
+
+  { "class_id": "xor_gateway", "label": "op.create_branch", "regime": "esl_formal", "text": "please to add one more route out of here for the deferred outcome", "paraphrase_seq": 90 },
+  { "class_id": "xor_gateway", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add a 'stamp_decision' step right after this decision, same route", "paraphrase_seq": 91 },
+  { "class_id": "xor_gateway", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "kindly send anything that was rejected all the way back to where the flow began", "paraphrase_seq": 92 },
+  { "class_id": "xor_gateway", "label": "op.connect", "regime": "esl_formal", "text": "please to wire this decision straight into the existing 'express_lane' step", "paraphrase_seq": 93 },
+  { "class_id": "xor_gateway", "label": "op.delete_subgraph", "regime": "esl_formal", "text": "kindly take this whole decision out of the graph", "paraphrase_seq": 94 },
+
+  { "class_id": "or_gateway_node", "label": "op.create_inclusive_region", "regime": "esl_formal", "text": "kindly open up one more route here that only fires for the medium-risk group", "paraphrase_seq": 90 },
+  { "class_id": "or_gateway_node", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add a 'trace_choice' step right after this split, on its own route", "paraphrase_seq": 91 },
+  { "class_id": "or_gateway_node", "label": "op.replace_node", "regime": "esl_formal", "text": "please to swap this split out, keep every route it already has", "paraphrase_seq": 92 },
+  { "class_id": "or_gateway_node", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make the cheap branch evaluate first", "paraphrase_seq": 93 },
+
+  { "class_id": "mi_node", "label": "op.insert_before", "regime": "esl_formal", "text": "kindly insert a document-check step right before this per-element pass begins", "paraphrase_seq": 90 },
+  { "class_id": "mi_node", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add a 'rank_results' step once every iteration is finished", "paraphrase_seq": 91 },
+  { "class_id": "mi_node", "label": "op.replace_node", "regime": "esl_formal", "text": "please to swap the per-element step for 'bulk_import', keep the same cap and links", "paraphrase_seq": 92 },
+  { "class_id": "mi_node", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make this loop run faster somehow", "paraphrase_seq": 93 },
+
+  { "class_id": "guarded_task", "label": "op.attach_rearming_guard", "regime": "esl_formal", "text": "kindly put a repeating watcher on this step that never interrupts it", "paraphrase_seq": 90 },
+  { "class_id": "guarded_task", "label": "prod.interrupting_timeout", "regime": "esl_formal", "text": "please to put a hard deadline on this whole step, kill it and take the failure route on overrun", "paraphrase_seq": 91 },
+  { "class_id": "guarded_task", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "kindly stop trying after the fifth failed attempt", "paraphrase_seq": 92 },
+
+  { "class_id": "guard_node", "label": "op.set_guard_budget", "regime": "esl_formal", "text": "kindly give up on this once it has failed enough times", "paraphrase_seq": 90 },
+  { "class_id": "guard_node", "label": "op.set_guard_trigger", "regime": "esl_formal", "text": "please to change this guard to fire every six hours instead", "paraphrase_seq": 91 },
+
+  { "class_id": "human_wait", "label": "op.insert_after", "regime": "esl_formal", "text": "please to add a 'countersign' step right after the manual approval, same lane", "paraphrase_seq": 90 },
+  { "class_id": "human_wait", "label": "prod.reminder_then_escalate", "regime": "esl_formal", "text": "kindly nudge the assignee on a bounded cycle, and escalate to 'notify_lead' on the last one", "paraphrase_seq": 91 },
+  { "class_id": "human_wait", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make the reviewer decide more quickly somehow", "paraphrase_seq": 92 },
+
+  { "class_id": "send_task", "label": "op.insert_after", "regime": "esl_formal", "text": "kindly add 'mark_dispatched' right after the notice goes out", "paraphrase_seq": 90 },
+  { "class_id": "send_task", "label": "prod.request_and_wait", "regime": "esl_formal", "text": "please to send the notice and then hold for the client's correlated reply", "paraphrase_seq": 91 },
+  { "class_id": "send_task", "label": "op.create_parallel_region", "regime": "esl_formal", "text": "kindly have the notification and the audit logging fire at the same time here, meeting back up once both are done", "paraphrase_seq": 92 },
+
+  { "class_id": "start_anchor", "label": "op.insert_after", "regime": "esl_formal", "text": "please to open the flow with an 'acquire_lock' step right after start", "paraphrase_seq": 90 },
+  { "class_id": "start_anchor", "label": "op.create_multi_instance_region", "regime": "esl_formal", "text": "please to open this process with a bounded sweep over the intake documents, no more than ten at once", "paraphrase_seq": 91 },
+  { "class_id": "start_anchor", "label": "abstain.none_of_the_above", "regime": "esl_formal", "text": "please to make the whole flow start earlier in the day", "paraphrase_seq": 92 }
+]

@@ -78,14 +78,14 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "fan review_documents into 3 chks, don't proceed til all clear",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_documents loops the doc_pack coll, hard ceiling=10",
   "paraphrase_seq": 1
@@ -204,14 +204,14 @@
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "chase_client splits into par chks, join blocks til both done",
   "paraphrase_seq": 1
  },
  {
   "class_id": "guarded_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "chase_client foreach signatory, hard max=5, no more",
   "paraphrase_seq": 1
@@ -442,14 +442,14 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "await_documents fans to 2 par chks, join before advance",
   "paraphrase_seq": 1
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "await_documents loops incoming batch, ceil=15 items",
   "paraphrase_seq": 1
@@ -582,7 +582,7 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "review_evidence loops director_list, ceil=6 per pass",
   "paraphrase_seq": 1
@@ -673,14 +673,14 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "notify_client fans to par legs, join before continuing",
   "paraphrase_seq": 1
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "notify_client loops recipient batch, hard ceil=20",
   "paraphrase_seq": 1
@@ -778,14 +778,14 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "outcome fans into 2 chks pre-decision, join required",
   "paraphrase_seq": 1
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "outcome loops flagged_list, ceil=10 per pass",
   "paraphrase_seq": 1
@@ -911,14 +911,14 @@
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions splits to sub-chks, join before exit leg",
   "paraphrase_seq": 1
  },
  {
   "class_id": "parallel_branch_interior",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "screen_sanctions loops counterparty_list, ceil=25",
   "paraphrase_seq": 1
@@ -1009,14 +1009,14 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document fans each item to 2 chks, join item-wise",
   "paraphrase_seq": 1
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "verify_each_document: reconfirm ceil stays hard-capped @10",
   "paraphrase_seq": 1
@@ -1170,14 +1170,14 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "dsl_shorthand",
   "text": "front-load off Start: par screens, sync before advance",
   "paraphrase_seq": 1
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "dsl_shorthand",
   "text": "Start loops applicant_batch, hard ceil=30",
   "paraphrase_seq": 1
@@ -1318,7 +1318,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "split into two lanes that both have to finish",
   "pair_group": "pg_z1_two_lanes",
@@ -1334,7 +1334,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "terse",
   "text": "stop at three, don't go past it",
   "pair_group": "pg_z1_stop_at_three",
@@ -1430,7 +1430,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "clear this out, the parallel screens already cover it",
   "pair_group": "pg_z1_clear_and_cover",
@@ -1510,7 +1510,7 @@
  },
  {
   "class_id": "send_task",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "full_sentence",
   "text": "scale this up to run once for every entity in the group",
   "pair_group": "pg_z1_scale_to_group",
@@ -1542,7 +1542,7 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "terse",
   "text": "only let it go once every check is through",
   "pair_group": "pg_z1_bundle_and_release",
@@ -1622,7 +1622,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "spoken",
   "text": "hold everything back until we've got the whole batch",
   "pair_group": "pg_z1_park_and_batch",
@@ -1822,7 +1822,7 @@
  },
  {
   "class_id": "mid_sequence_task",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "spoken",
   "text": "let every branch run without waiting on the others",
   "pair_group": "pg_z1_open_the_floodgates",

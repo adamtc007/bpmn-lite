@@ -253,6 +253,17 @@ def run_epoch(model, tokenizer, records, device, train, opt=None, grad_accum=16,
 def train_base(base_key, records, split, device, epochs, lr, grad_accum):
     cfg = BASES[base_key]
     print(f"=== {base_key} ({cfg['repo']}@{cfg['revision'][:8]}) pooling={POOLING[base_key]} ===")
+    # SEED governs the batch-shuffle rng below, but until this call it
+    # never touched torch's own global rng -- the freshly-initialized
+    # nn.Linear head (ListwiseReranker.__init__) and every dropout draw
+    # during training both come from torch's RNG, so two runs against the
+    # identical corpus were silently producing different checkpoints
+    # (2026-08-04: observed val_loss 0.78 vs 1.43 across two back-to-back
+    # runs on one corpus version -- a round-to-round eval score is not a
+    # real signal without this). Reset before each base so every base
+    # starts from the same draw, matching this file's own doc header
+    # ("never reseeded per base" -- always the same seed, not a drifting one).
+    torch.manual_seed(SEED)
     tokenizer = AutoTokenizer.from_pretrained(cfg["repo"], revision=cfg["revision"])
     encoder = AutoModel.from_pretrained(cfg["repo"], revision=cfg["revision"])
     hidden_size = encoder.config.hidden_size

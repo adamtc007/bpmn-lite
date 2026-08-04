@@ -211,7 +211,7 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "esl_formal",
   "text": "after documents arrive, please to process every file one by one, maximum ten pieces",
   "paraphrase_seq": 1
@@ -225,7 +225,7 @@
  },
  {
   "class_id": "message_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "question_form",
   "text": "once the docs show up, could all three verifications kick off together and we move on only when each is back?",
   "paraphrase_seq": 1
@@ -260,7 +260,7 @@
  },
  {
   "class_id": "human_wait",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "verbose_manager",
   "text": "Given reviewers end up waiting on sanctions and registry results anyway, my preference is that both of those fire simultaneously here and we hold until the pair has finished.",
   "paraphrase_seq": 1
@@ -337,7 +337,7 @@
  },
  {
   "class_id": "xor_gateway",
-  "label": "prod.for_each_with_ceiling",
+  "label": "op.create_multi_instance_region",
   "regime": "verbose_manager",
   "text": "Given the outcome depends on the full document pack, I'd like every document to receive its own pass before this decision fires, with a stated cap of ten.",
   "paraphrase_seq": 1
@@ -407,7 +407,7 @@
  },
  {
   "class_id": "mi_node",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "rushed_ops",
   "text": "after MI block run sancions + registry together, gate on both done",
   "paraphrase_seq": 1
@@ -470,7 +470,7 @@
  },
  {
   "class_id": "start_anchor",
-  "label": "prod.parallel_checks_and_join",
+  "label": "op.create_parallel_region",
   "regime": "indirect",
   "text": "the intake checks run one after another and the whole onboarding crawls",
   "paraphrase_seq": 1

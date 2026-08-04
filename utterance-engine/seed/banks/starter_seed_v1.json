@@ -165,7 +165,7 @@
     "seq": 19,
     "category": "mi_collections",
     "class_id": "mid_sequence_task",
-    "label": "prod.for_each_with_ceiling",
+    "label": "op.create_multi_instance_region",
     "text": "one request per signatory, cap it at ten",
     "disputed": false,
     "dispute_note": ""

@@ -354,7 +354,7 @@ mod tests {
             board.candidates.last().unwrap().canonical_id,
             crate::contract::NONE_OF_THE_ABOVE
         );
-        assert_eq!(board.candidates.len(), 28);
+        assert_eq!(board.candidates.len(), 26);
     }
 
     /// Canonical ordering regardless of emission order (reproducibility,
