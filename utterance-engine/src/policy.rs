@@ -802,6 +802,7 @@ mod tests {
         let mut result = semantic_result(&visible, vec![("op.attach_guard", 0.90)]);
         result.evidence_trace = Some(crate::contract::EvidenceTrace {
             candidate_serializer_hash: "serializer-v1".into(),
+            turn_serializer_hash: "turn-serializer-v1".into(),
             lanes: vec![sem_os_policy::decision_board::EvidenceLane::Lexical],
             bundle_identities: vec!["lexical-v1".into()],
             exact_collision: Vec::new(),
@@ -889,6 +890,25 @@ mod tests {
         assert_ne!(
             baseline.decision_record_hash,
             trace_record.decision_record_hash
+        );
+
+        let mut different_turn_serializer = result.clone();
+        different_turn_serializer
+            .evidence_trace
+            .as_mut()
+            .unwrap()
+            .turn_serializer_hash = "turn-serializer-v2".into();
+        let (_, turn_serializer_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_turn_serializer,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            turn_serializer_record.decision_record_hash,
+            "turn_serializer_hash must move the per-utterance audit hash, not only the corpus/bundle hashes it was previously sealed into"
         );
 
         let different_board = semantic_board_at(&PolicyFilter::default(), "rev-policy-v3");

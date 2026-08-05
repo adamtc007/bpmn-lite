@@ -190,6 +190,7 @@ pub fn finalize_semantic_evidence(
     bundle_identities.dedup();
     result.evidence_trace = Some(EvidenceTrace {
         candidate_serializer_hash: candidate_serializer_hash(),
+        turn_serializer_hash: crate::pair::turn_serializer_hash(),
         lanes,
         bundle_identities,
         exact_collision: match exact {

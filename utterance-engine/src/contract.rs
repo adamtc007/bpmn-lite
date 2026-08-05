@@ -68,6 +68,11 @@ pub struct RankedCandidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceTrace {
     pub candidate_serializer_hash: String,
+    /// `pair::turn_serializer_hash()` — sealed in the corpus closure and
+    /// bundle card, but until now absent from the per-utterance audit
+    /// record itself; a turn-serializer change would move corpus/bundle
+    /// hashes without the live decision record showing why.
+    pub turn_serializer_hash: String,
     pub lanes: Vec<EvidenceLane>,
     pub bundle_identities: Vec<String>,
     pub exact_collision: Vec<String>,
