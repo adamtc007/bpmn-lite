@@ -648,7 +648,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/api/dsl/diagnostics/resolve",
             post(resolve_dsl_diagnostics),
         )
-        .route("/api/dsl/sage/utter", post(sage_utterance_gate))
+        .route(
+            "/api/dsl/sage/utter",
+            post(designer_utterance_compat_endpoint),
+        )
         .route(
             "/api/dsl/sessions",
             get(list_design_sessions_endpoint).post(create_design_session_endpoint),
@@ -1645,6 +1648,10 @@ async fn resolve_dsl_diagnostics(Json(body): Json<DiagnosticsResolveRequest>) ->
 pub(crate) struct UtteranceRequest {
     utterance: String,
     _current_dsl: String,
+    #[serde(default)]
+    target_node_id: Option<String>,
+    #[serde(default)]
+    unresolved_verb: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1656,14 +1663,32 @@ pub(crate) struct UtteranceResponse {
     action_payload: Option<serde_json::Value>,
 }
 
-async fn sage_utterance_gate(Json(body): Json<UtteranceRequest>) -> impl IntoResponse {
-    Json(utterance_intent(&body.utterance))
+#[derive(Clone, Copy, Default)]
+struct DesignerUtteranceContext<'a> {
+    target_node_id: Option<&'a str>,
+    unresolved_verb: Option<&'a str>,
 }
 
-/// Keyword intent gate (T0 ruling: the v1 REPL contract). Pure so both
-/// the stateless endpoint and the session-scoped endpoint share it.
-fn utterance_intent(utterance: &str) -> UtteranceResponse {
-    let body_utterance = utterance;
+/// Compatibility endpoint for the legacy route name.
+///
+/// This is a local deterministic designer classifier, not the shared Sage
+/// runtime. Optional node and diagnostic identities are supplied by the BPMN
+/// host so the classifier never fabricates application commands.
+async fn designer_utterance_compat_endpoint(
+    Json(body): Json<UtteranceRequest>,
+) -> impl IntoResponse {
+    let context = DesignerUtteranceContext {
+        target_node_id: non_empty(body.target_node_id.as_deref()),
+        unresolved_verb: non_empty(body.unresolved_verb.as_deref()),
+    };
+    Json(classify_designer_utterance(&body.utterance, context))
+}
+
+/// Classify the small set of legacy designer navigation and authoring hints.
+fn classify_designer_utterance(
+    utterance: &str,
+    context: DesignerUtteranceContext<'_>,
+) -> UtteranceResponse {
     let text = utterance.trim().to_lowercase();
 
     let is_escape = text.contains("exit")
@@ -1693,43 +1718,49 @@ fn utterance_intent(utterance: &str) -> UtteranceResponse {
             None,
         )
     } else if text.contains("retry loop") || text.contains("wrap") || text.contains("retry") {
-        let mut params = serde_json::Map::new();
-        params.insert(
-            "target_node_id".to_string(),
-            serde_json::Value::String("create-cbu".to_string()),
-        );
-        params.insert(
-            "ceiling".to_string(),
-            serde_json::Value::String("3".to_string()),
-        );
-        (
-            "apply_macro",
-            "We can wrap your task in a retry loop. Apply macro?",
-            Some(serde_json::json!({
-                "macro_type": "BoundedRetry",
-                "parameters": params
-            })),
-        )
+        match context.target_node_id {
+            Some(target_node_id) => {
+                let mut params = serde_json::Map::new();
+                params.insert(
+                    "target_node_id".to_string(),
+                    serde_json::Value::String(target_node_id.to_string()),
+                );
+                params.insert(
+                    "ceiling".to_string(),
+                    serde_json::Value::String("3".to_string()),
+                );
+                (
+                    "apply_macro",
+                    "We can wrap your selected task in a retry loop. Apply macro?",
+                    Some(serde_json::json!({
+                        "macro_type": "BoundedRetry",
+                        "parameters": params
+                    })),
+                )
+            }
+            None => (
+                "none",
+                "Select the BPMN task to wrap before requesting a retry loop.",
+                None,
+            ),
+        }
     } else if text.starts_with("import ") || text.contains("unknown verb") {
-        let verb = if text.starts_with("import ") {
-            body_utterance.trim()[7..].to_string()
-        } else {
-            "ob-poc:cbu.create".to_string()
-        };
-        let domain = if verb.contains(':') {
-            verb.split(':').collect::<Vec<&str>>()[0].to_string()
-        } else {
-            "ob-poc".to_string()
-        };
-        (
-            "resolve_diagnostic",
-            "Resolving unresolved symbol by adding signature stub to manifest.",
-            Some(serde_json::json!({
-                "type": "AddVerbStub",
-                "domain": domain,
-                "verb": verb
-            })),
-        )
+        match explicit_import_candidate(utterance, &text, context.unresolved_verb) {
+            Some((domain, verb)) => (
+                "resolve_diagnostic",
+                "Resolving unresolved symbol by adding signature stub to manifest.",
+                Some(serde_json::json!({
+                    "type": "AddVerbStub",
+                    "domain": domain,
+                    "verb": verb
+                })),
+            ),
+            None => (
+                "none",
+                "Provide the exact unresolved verb before adding a manifest stub.",
+                None,
+            ),
+        }
     } else {
         ("none", "Utterance processed. Continues editing mode.", None)
     };
@@ -1740,6 +1771,34 @@ fn utterance_intent(utterance: &str) -> UtteranceResponse {
         message: msg.to_string(),
         action_payload: payload,
     }
+}
+
+fn explicit_import_candidate(
+    utterance: &str,
+    normalized: &str,
+    unresolved_verb: Option<&str>,
+) -> Option<(String, String)> {
+    let candidate = if normalized.starts_with("import ") {
+        utterance.trim().get("import ".len()..)?.trim()
+    } else {
+        unresolved_verb?.trim()
+    };
+    if candidate.is_empty() {
+        return None;
+    }
+
+    match candidate.split_once(':') {
+        Some((domain, verb)) if !domain.trim().is_empty() && !verb.trim().is_empty() => Some((
+            domain.trim().to_string(),
+            format!("{}:{}", domain.trim(), verb.trim()),
+        )),
+        Some(_) => None,
+        None => Some(("bpmn".to_string(), format!("bpmn:{candidate}"))),
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -4518,6 +4577,82 @@ mod tests {
         assert!(MapperRollout::Workbook.workbooks_enabled());
     }
 
+    #[test]
+    fn legacy_designer_request_remains_backward_compatible() {
+        let request: UtteranceRequest = serde_json::from_value(serde_json::json!({
+            "utterance": "exit",
+            "_current_dsl": "(workflow draft)"
+        }))
+        .unwrap();
+
+        assert!(request.target_node_id.is_none());
+        assert!(request.unresolved_verb.is_none());
+    }
+
+    #[test]
+    fn retry_hint_requires_an_injected_bpmn_target() {
+        let missing = classify_designer_utterance(
+            "wrap this in a retry loop",
+            DesignerUtteranceContext::default(),
+        );
+        assert_eq!(missing.suggested_action, "none");
+        assert!(missing.action_payload.is_none());
+
+        let selected = classify_designer_utterance(
+            "wrap this in a retry loop",
+            DesignerUtteranceContext {
+                target_node_id: Some("review_documents"),
+                unresolved_verb: None,
+            },
+        );
+        assert_eq!(selected.suggested_action, "apply_macro");
+        assert_eq!(
+            selected.action_payload.as_ref().unwrap()["parameters"]["target_node_id"],
+            "review_documents"
+        );
+    }
+
+    #[test]
+    fn diagnostic_hint_uses_only_explicit_or_injected_verbs() {
+        let explicit = classify_designer_utterance(
+            "import define-template",
+            DesignerUtteranceContext::default(),
+        );
+        assert_eq!(explicit.suggested_action, "resolve_diagnostic");
+        assert_eq!(explicit.action_payload.as_ref().unwrap()["domain"], "bpmn");
+        assert_eq!(
+            explicit.action_payload.as_ref().unwrap()["verb"],
+            "bpmn:define-template"
+        );
+
+        let external =
+            classify_designer_utterance("import acme:submit", DesignerUtteranceContext::default());
+        assert_eq!(external.action_payload.as_ref().unwrap()["domain"], "acme");
+        assert_eq!(
+            external.action_payload.as_ref().unwrap()["verb"],
+            "acme:submit"
+        );
+
+        let injected = classify_designer_utterance(
+            "resolve the unknown verb",
+            DesignerUtteranceContext {
+                target_node_id: None,
+                unresolved_verb: Some("bpmn:deliver-message"),
+            },
+        );
+        assert_eq!(
+            injected.action_payload.as_ref().unwrap()["verb"],
+            "bpmn:deliver-message"
+        );
+
+        let missing = classify_designer_utterance(
+            "resolve the unknown verb",
+            DesignerUtteranceContext::default(),
+        );
+        assert_eq!(missing.suggested_action, "none");
+        assert!(missing.action_payload.is_none());
+    }
+
     async fn app_at_rollout(rollout: MapperRollout) -> axum::Router {
         designer_router(
             DesignerState::assemble_with_rollout(
@@ -4832,10 +4967,13 @@ mod tests {
         let fixed_dsl = res["source_code"].as_str().unwrap();
         assert!(fixed_dsl.contains("(service-task :id my-task :verb ob-poc:cbu.create :next end)"));
 
-        // 3. Test /api/dsl/sage/utter (Global Intent Escape & Fallback)
+        // 3. The legacy route remains a compatibility alias for the local
+        // deterministic designer classifier.
         let utter_body = UtteranceRequest {
             utterance: "exit and go back".to_string(),
             _current_dsl: source.to_string(),
+            target_node_id: None,
+            unresolved_verb: None,
         };
 
         let response = app
