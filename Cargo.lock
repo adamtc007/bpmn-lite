@@ -1391,7 +1391,7 @@ dependencies = [
 [[package]]
 name = "dsl-core"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1423,11 +1423,12 @@ dependencies = [
 [[package]]
 name = "dsl_types"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3872,7 +3873,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 [[package]]
 name = "sem_os_core"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3898,7 +3899,7 @@ dependencies = [
 [[package]]
 name = "sem_os_ontology"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3917,11 +3918,12 @@ dependencies = [
 [[package]]
 name = "sem_os_policy"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dsl_types",
  "hex",
  "sem_os_core",
  "sem_os_ontology",
@@ -3942,7 +3944,7 @@ dependencies = [
 [[package]]
 name = "sem_os_types"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "chrono",
  "serde",
@@ -3954,7 +3956,7 @@ dependencies = [
 [[package]]
 name = "semantic-decision-contracts"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "hex",
  "serde",
@@ -3965,7 +3967,7 @@ dependencies = [
 [[package]]
 name = "semantic-embedder"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -3975,6 +3977,22 @@ dependencies = [
  "thiserror 1.0.69",
  "tokenizers",
  "tracing",
+]
+
+[[package]]
+name = "semantic-pack"
+version = "0.2.0"
+source = "git+https://github.com/adamtc007/dsl?rev=9ca621bbdbb512b13762f3a67a595300fd5874b2#9ca621bbdbb512b13762f3a67a595300fd5874b2"
+dependencies = [
+ "dsl_types",
+ "hex",
+ "semantic-decision-contracts",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_yaml",
+ "sha2",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5175,6 +5193,7 @@ dependencies = [
  "sem_os_policy",
  "semantic-decision-contracts",
  "semantic-embedder",
+ "semantic-pack",
  "serde",
  "serde_json",
  "sha2",

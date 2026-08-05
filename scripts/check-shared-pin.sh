@@ -38,7 +38,7 @@
 set -uo pipefail
 
 SHARED_REPO_URL="https://github.com/adamtc007/dsl"
-SHARED_PACKAGES=(semantic-decision-contracts semantic-embedder sem_os_ontology sem_os_policy dsl-core dsl_types sem_os_core sem_os_types)
+SHARED_PACKAGES=(semantic-decision-contracts semantic-pack semantic-embedder sem_os_ontology sem_os_policy dsl-core dsl_types sem_os_core sem_os_types)
 
 fail=0
 note() { printf '  \033[31mSHARED-PIN VIOLATION\033[0m  %s\n' "$1"; fail=1; }
@@ -231,6 +231,7 @@ EOF
 sem_os_ontology = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
+semantic-pack = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 semantic-embedder = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 EOF
   cat > "$tmp5/Cargo.lock" <<'EOF'
@@ -253,6 +254,11 @@ source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
 [[package]]
 name = "semantic-embedder"
+version = "0.2.0"
+source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee#eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+[[package]]
+name = "semantic-pack"
 version = "0.2.0"
 source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee#eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
@@ -306,7 +312,7 @@ if ! check_no_unused_patch; then
 fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "  OK — semantic-decision-contracts, semantic-embedder, sem_os_ontology, sem_os_policy, dsl-core, dsl_types, sem_os_core and sem_os_types all resolve from the single pinned $SHARED_REPO_URL revision, with no unused-patch fallback."
+  echo "  OK — semantic-decision-contracts, semantic-pack, semantic-embedder, sem_os_ontology, sem_os_policy, dsl-core, dsl_types, sem_os_core and sem_os_types all resolve from the single pinned $SHARED_REPO_URL revision, with no unused-patch fallback."
 else
   echo ""
   echo "== Shared-pin guard FAILED =="

@@ -1,0 +1,38 @@
+schema_version: 1
+compiler_version: semantic-pack/0.2.0
+source:
+  path: utterance-engine/config/bpmn-semantic-pack.yaml
+  sha256: 343fdb2fd9fa2b09e1aea4ae11f7ff869f651cb5fe34c08a1078e96eb37435a7
+pack:
+  id: bpmn.designer
+  version: 1.0.0
+  canonicalization_version: 1
+  artifact_sha256: ca698f442c4aa7eb1a80bddcf55a280fd44dc8fe6ccc4745b00ebac459d8d1ef
+dependencies: []
+adapter_bindings:
+  - bpmn.designer.op.append_node
+  - bpmn.designer.op.attach_guard
+  - bpmn.designer.op.attach_rearming_guard
+  - bpmn.designer.op.attach_rollback_guard
+  - bpmn.designer.op.call_subprocess
+  - bpmn.designer.op.close_parallel_region
+  - bpmn.designer.op.connect
+  - bpmn.designer.op.create_branch
+  - bpmn.designer.op.create_inclusive_region
+  - bpmn.designer.op.create_multi_instance_region
+  - bpmn.designer.op.create_parallel_region
+  - bpmn.designer.op.create_race
+  - bpmn.designer.op.delete_subgraph
+  - bpmn.designer.op.insert_after
+  - bpmn.designer.op.insert_before
+  - bpmn.designer.op.replace_node
+  - bpmn.designer.op.set_correlation_source
+  - bpmn.designer.op.set_guard_budget
+  - bpmn.designer.op.set_guard_trigger
+  - bpmn.designer.prod.call_durable_subprocess
+  - bpmn.designer.prod.human_review_with_rework
+  - bpmn.designer.prod.interrupting_timeout
+  - bpmn.designer.prod.non_interrupting_notification
+  - bpmn.designer.prod.reminder_then_escalate
+  - bpmn.designer.prod.request_and_wait
+  - bpmn.designer.prod.timer_message_race

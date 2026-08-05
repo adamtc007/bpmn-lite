@@ -41,6 +41,7 @@ unicode-normalization = "0.1.24"
 sha2 = "0.10"
 sem_os_ontology = { workspace = true }
 semantic-decision-contracts = { workspace = true }
+semantic-pack = { workspace = true }
 # candle-probe deps — same major/minor pins as semantic-embedder's Candle slice
 # so cache/ABI stay aligned across features.
 candle-core = { version = "0.8", optional = true }
