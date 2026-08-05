@@ -1,10 +1,10 @@
 # Zed implementation plan: standalone DSL, SemOS, embedding, and Sage boundaries
 
-**Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`  
-**Shared source workspace:** `/Users/adamtc007/dev/dsl`  
-**Host application:** `/Users/adamtc007/Developer/ob-poc`  
-**Reviewed:** 5 August 2026  
-**Amended:** 5 August 2026 — factual corrections and structural fixes from the verification review against dsl@edded43, bpmn-lite@745b4ea, ob-poc@d76d8be9. Open decisions live in §20 (fork register).  
+**Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
+**Shared source workspace:** `/Users/adamtc007/dev/dsl`
+**Host application:** `/Users/adamtc007/Developer/ob-poc`
+**Reviewed:** 5 August 2026
+**Amended:** 5 August 2026 — factual corrections and structural fixes from the verification review against dsl@edded43, bpmn-lite@745b4ea, ob-poc@d76d8be9. Open decisions live in §20 (fork register).
 **Purpose:** remove `ob-poc` application coupling from the Rust crates shared with `bpmn-lite`, establish independently testable and releasable crate boundaries, and cut both applications over without changing their business behaviour.
 
 ## 1. Instructions to the Zed implementation session
@@ -139,7 +139,7 @@ Existing crate names may be retained where a rename would add risk. The capabili
 
 The actual workspace today contains exactly seven crates: `dsl_types`, `dsl-core`, `sem_os_types`, `sem_os_core`, `sem_os_ontology`, `sem_os_policy`, `dsl-integration-tests`. Every name in the target layout above is new; the Phase 0 ledger must map each real crate to its target destination explicitly rather than treating the layout as partially existing.
 
-Known defect in the shared workspace itself: the repo root contains a `config` symlink pointing into `/Users/adamtc007/Developer/ob-poc/rust/config`, relied on by roughly 30 `#[ignore]`d integration tests ("requires ob-poc config/"). This is a physical host coupling of the shared workspace and is in scope: Phase 0 records it; Phases 2/5 eliminate it (host fixtures become versioned pack fixtures compiled through the public API).
+Known defect in the shared workspace itself: the repo root contains an untracked, gitignored `config` symlink pointing into `/Users/adamtc007/Developer/ob-poc/rust/config`, relied on by 59 `#[ignore]`d tests ("requires ob-poc config/"). This is a physical host coupling of the shared workspace and is in scope: Phase 0 records it; Phases 2/5 eliminate it (host fixtures become versioned pack fixtures compiled through the public API).
 
 ### 4.2 `ob-poc`
 
@@ -206,6 +206,7 @@ The ledger must additionally record these already-verified facts (2026-08-05):
 - **The ob-poc → bpmn-lite crate edge** (13 crates at tag v0.2.0, see §2).
 - **The `embed` path's third repository:** `utterance-engine` imports `ob-semantic-matcher` from `github.com/adamtc007/ob-poc-rust` @ `ff3f12c7` (default-off feature) — a pin not covered by `scripts/check-shared-pin.sh`.
 - **Live concurrent branch (stop condition §18):** `bpmn-lite` has active work on `feat/dir-002-phase-c-slm-training` touching `utterance-engine`; the DIR-002 serving loop is in flight. Coordinate before touching those contracts.
+- **BPMN worktree split:** the coordinating checkout is currently `feat/dir-002-phase-c-slm-training` at `ddd143e` and does not contain the semantic-board files (`utterance-engine/src/bpmn_pack.rs` and `bpmn_board.rs`). Those files and the shared DSL pins are present in the separate clean `main` worktree at `745b4ea`. Select and record the integration base before changing BPMN consumer contracts; do not implement against the training branch by accident.
 - **Dev-override mechanism:** local development uses a user-global `[patch]` in `~/.cargo/config.toml`, which pollutes consumer `Cargo.lock` files on ordinary builds (stripped git-source lines, `[[patch.unused]]` entries). This, not committed path overrides, is the real hygiene risk (fork F5).
 
 Classify every shared production symbol as one of:
@@ -256,7 +257,7 @@ Add or reconcile:
 - a committed lockfile policy appropriate to the workspace;
 - dependency licence/advisory policy using the repository-standard tool.
 
-Do not claim a licence without owner confirmation if the current repository has no authoritative licence record. Record that as an explicit blocker rather than inventing one. **This blocker is live now:** the dsl repo has no LICENSE, README, or CHANGELOG, and every crate is `version = "0.1.0"` while repo tags run to `v0.1.6` — tags do not track Cargo versions. Phase 1 cannot close without the owner's licence and versioning decisions.
+Do not claim a licence without owner confirmation if the current repository has no authoritative licence record. Record that as an explicit blocker rather than inventing one. **Resolved 2026-08-05:** the owner selected MIT, shared crate version `0.2.0`, and MSRV Rust 1.95. Phase 1 applies those rulings consistently; the earlier absence of licence and versioning records remains captured in the Phase 0 baseline receipt.
 
 **Fork F5 — ruled: per-repo (2026-08-05).** This phase removes the dsl/bpmn-lite `[patch]` blocks from `~/.cargo/config.toml` and replaces them with per-repo, uncommitted, gitignored root `.cargo/config.toml` files carrying only the patches that repo needs, present only while actively co-developing. Note ob-poc already commits `rust/.cargo/config.toml` (aliases/env) — the patch file goes at the repo *root* so Cargo's hierarchical merge keeps the committed file untouched. This scopes lockfile pollution to opted-in repos; it does not eliminate it — `git checkout -- Cargo.lock` discipline and the pin gate remain the defense.
 
@@ -877,3 +878,5 @@ Surfaced, not silently decided. Rulings recorded here as they land.
 | F3 | §2.4 `SlotType` closed enum → pack-validated IDs resolves the map-root fork deferred under the R1 ruling (`SlotType::Workspace` / phantom `bpmn_dags`) | Ratify: slot kinds become pack-declared; workspace-rooted maps legal iff a pack declares the kind; DAG refs become compiler-validated pack cross-refs | **Ruled: ratified** (2026-08-05). The deferred R1 map-root fork is resolved by the generic mechanism; no closed-set carve-out in §2.4 |
 | F4 | Tag dsl `edded43` as `v0.1.7` first (closes CO-01) so Phase 0 baselines against a tagged rev | Yes | **Ruled: yes; executed** — annotated tag `v0.1.7` at `edded43` pushed 2026-08-05 |
 | F5 | Global `~/.cargo/config.toml` `[patch]`: keep with lockfile-restore discipline, or move to per-repo uncommitted `.cargo/config.toml` | Per-repo: delete the dsl/bpmn-lite patch blocks from the global config; each consumer repo carries an uncommitted, gitignored root `.cargo/config.toml` with only the patches it needs, present only while co-developing | **Ruled: per-repo** (2026-08-05). Caveat stands: this scopes lockfile pollution, it does not eliminate it — restore discipline + the pin gate remain the defense. Phase 1 implements the switch |
+| F6 | Which BPMN history is the consumer base: the active DIR-002 training branch (`ddd143e`) or semantic-board `main` (`745b4ea`)? | Base the remediation on semantic-board `main`, then rebase/merge the DIR-002 work under its own owner before touching shared utterance contracts | **Ruled: semantic-board `main`** (2026-08-05). The remediation branch starts at `745b4ea`; DIR-002 remains separately owned |
+| F7 | Shared workspace licence, crate version, and MSRV | MIT, `0.2.0`, Rust 1.95 | **Ruled as recommended** (2026-08-05); Phase 1 implements the metadata and policy |
