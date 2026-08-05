@@ -28,7 +28,14 @@ reopened as generic carry-over work:
 - compiler and server fuzz projects participate in discovery, caching and
   artifact handling;
 - quiet-phase recovery inspection fails closed;
-- the mapper has four bounded fuzz targets and reproducible fuzz lockfiles.
+- the mapper has four bounded fuzz targets.
+
+The "reproducible fuzz lockfiles" claim from the original handoff did NOT
+hold on a machine with local-dev `~/.cargo/config.toml` patches (a normal,
+deliberate cross-repo dev setup) — `cargo xtask fuzz regress` was red there.
+Fixed 2026-08-05 via a scratch `CARGO_HOME` in the fuzz runner
+(`xtask/src/fuzz.rs::neutral_cargo_home`); re-verified byte-stable across two
+independent runs. See the programme document's Remediation section (R3).
 
 ## Carry-over summary
 
@@ -49,16 +56,29 @@ reopened as generic carry-over work:
 
 ## CO-01 — Integrate the three repository branches in dependency order
 
-Published branches and immutable handoff commits are:
+Updated 2026-08-05 after a six-agent review found `ob-poc`'s handoff commit
+unbuildable (see the programme document's Remediation section, R1) and
+reworked it. Current published branches:
 
-1. shared DSL/SemOS: `feature/sem-os-decision-board` at `fa51217`, with tag
-   `v0.1.6`;
-2. `ob-poc`: `fix/bpmn-pack-truth` at `342fdd37`;
-3. `bpmn-lite`: `feature/bpmn-semantic-decision-board` at `eb1b48b`.
+1. shared DSL/SemOS: `feature/sem-os-decision-board` at `edded43` — the
+   tagged `v0.1.6` (`fa51217`) plus an additive test-only commit
+   (missing Phase 2 red receipts, R5) NOT yet included in that tag. Decide
+   whether to cut `v0.1.7` before integrating, or integrate at `fa51217` and
+   land `edded43`'s tests separately.
+2. `ob-poc`: `fix/bpmn-pack-truth` at `d2afc0c4` (force-pushed 2026-08-05,
+   superseding `342fdd37`) — scope-narrowed to the authorized yaml/registry
+   surgery only; the stateless constellation-map-root fix is a separate,
+   still-open, surfaced fork (see R1 and finding P7), not resolved by this
+   commit.
+3. `bpmn-lite`: `feature/bpmn-semantic-decision-board` at `f4fa613` (was
+   `eb1b48b` at original handoff; nine remediation commits since, closing
+   R2–R9 and part of R11/R12 — see the programme document's Remediation
+   section for the full list).
 
-No pull requests or merges were created during implementation. Integrate the
-shared contract first, then the pack-truth change, then the BPMN mapper. Do not
-replace the reviewed shared revision with an unreviewed moving branch.
+No pull requests or merges were created. Integrate the shared contract first
+(after the `v0.1.6`/`v0.1.7` decision above), then the pack-truth change,
+then the BPMN mapper. Do not replace the reviewed shared revision with an
+unreviewed moving branch.
 
 **Owner:** repository maintainers.
 
