@@ -1345,7 +1345,12 @@ fn pack_check_command(domain: &str) -> Result<()> {
     }
 
     if domain == "bpmn" {
-        const HANDLER_BACKED: [&str; 6] = [
+        // The checked BPMN invocation manifest declares exactly this
+        // business-scoped subset of `BpmnLiteBusHandler`'s routed verbs
+        // (excluding its two read-only catalogue verbs, `list-templates`
+        // and `get-template-version`, which are not part of the
+        // per-instance invocation surface this manifest governs).
+        const INVOCATION_VERBS: [&str; 6] = [
             "define-template",
             "spawn-instance",
             "deliver-message",
@@ -1354,10 +1359,31 @@ fn pack_check_command(domain: &str) -> Result<()> {
             "inspect-instance",
         ];
         let declared = checked_manifest.verb_ids().collect::<std::collections::BTreeSet<_>>();
-        let handlers = HANDLER_BACKED.into_iter().collect::<std::collections::BTreeSet<_>>();
-        if declared != handlers {
+        let expected = INVOCATION_VERBS
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if declared != expected {
             bail!(
-                "BPMN invocation surface does not exactly match real BpmnLiteBusHandler routes: declared={declared:?}, handlers={handlers:?}"
+                "BPMN invocation manifest does not declare exactly the expected invocation verb subset: declared={declared:?}, expected={expected:?}"
+            );
+        }
+        // Resolve against the handler crate's own exported verb list
+        // (`bpmn_lite_bus_handler::HANDLED_VERBS`, declared next to its
+        // real dispatch match and proven not to drift from it by
+        // `handled_verbs_matches_every_dispatch_arm` in that crate) rather
+        // than a copy of the verb strings kept here. A hand-maintained
+        // copy would stay green even after a match arm was renamed or
+        // deleted upstream — this resolves against the live source.
+        let handled: std::collections::BTreeSet<&str> =
+            bpmn_lite_bus_handler::HANDLED_VERBS.iter().copied().collect();
+        let unresolved: Vec<&str> = expected
+            .iter()
+            .copied()
+            .filter(|verb| !handled.contains(verb))
+            .collect();
+        if !unresolved.is_empty() {
+            bail!(
+                "BPMN invocation manifest declares verbs with no real BpmnLiteBusHandler route (checked against bpmn_lite_bus_handler::HANDLED_VERBS, not a hand-copied list): {unresolved:?}"
             );
         }
         for forbidden in ["message-wait", "timer-wait", "boundary-timer", "boundary-error"] {

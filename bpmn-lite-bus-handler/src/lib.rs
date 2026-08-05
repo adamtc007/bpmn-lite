@@ -402,6 +402,30 @@ impl ResultDispatcher for BpmnLiteBusHandler {
     }
 }
 
+/// The exact set of local verb ids `InvocationDispatcher::dispatch` below
+/// routes to a real match arm, in source order. Every other verb id falls
+/// through to `_ => Err(BusServerError::UnknownVerb(..))`.
+///
+/// This is the single source of truth other crates must consult instead of
+/// hand-copying verb strings (`cargo xtask pack-check bpmn` used to keep an
+/// independent `HANDLER_BACKED` list in `xtask/src/main.rs`, which could
+/// silently go stale if a match arm here were renamed or removed — the
+/// pack-check gate would keep reporting green against a verb the handler no
+/// longer serves). `tests::handled_verbs_matches_every_dispatch_arm` proves
+/// this const cannot drift from the match itself: it dispatches every entry
+/// and asserts none of them hits the `UnknownVerb` fallback, and dispatches
+/// one id NOT in this list and asserts it does.
+pub const HANDLED_VERBS: &[&str] = &[
+    "define-template",
+    "spawn-instance",
+    "list-templates",
+    "get-template-version",
+    "deliver-message",
+    "correlate-message",
+    "cancel-instance",
+    "inspect-instance",
+];
+
 #[async_trait]
 impl InvocationDispatcher for BpmnLiteBusHandler {
     async fn dispatch(

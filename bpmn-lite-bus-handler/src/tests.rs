@@ -98,6 +98,75 @@ async fn malformed_advancer_error_maps_to_malformed() {
     assert!(matches!(err, BusServerError::Malformed(_)));
 }
 
+fn invocation_ctx(local_verb_id: &str) -> InvocationContext {
+    InvocationContext {
+        idempotency_key: Uuid::now_v7(),
+        source_domain: "ob-poc".into(),
+        catalogue_version: "test".into(),
+        local_verb_id: local_verb_id.into(),
+        result_callback_endpoint: "bus://ob-poc/result".into(),
+        authority: Some(dsl_bus_protocol::v1::AuthorityContext {
+            service_identity: "ob-poc".into(),
+            user_identity: "test".into(),
+            // Every role any dispatch arm's `assert_scope` might require, so
+            // this test proves whether a verb id reaches a real match arm,
+            // not whether it happens to hold the right scope.
+            roles: vec![
+                "bpmn.template.write".into(),
+                "bpmn.template.read".into(),
+                "bpmn.instance.write".into(),
+                "bpmn.instance.read".into(),
+            ],
+            signed_token: vec![],
+        }),
+        tenant_id: "default".into(),
+        snapshot_pin: None,
+    }
+}
+
+/// `HANDLED_VERBS` (declared next to the dispatch match in `lib.rs`) must
+/// name exactly the verb ids the match actually routes, no more and no
+/// less — see that const's doc comment for why: `cargo xtask pack-check
+/// bpmn` trusts it instead of an independently hand-maintained copy, so a
+/// silent drift here would make that gate meaningless.
+///
+/// This handler is built with `engine: None, pool: None` (`BpmnLiteBusHandler::new`),
+/// so every real arm fails deep inside on a missing-engine/missing-binding
+/// error once past authority -- the discriminator this test needs is only
+/// "did we reach a real arm at all", i.e. anything other than
+/// `BusServerError::UnknownVerb`.
+#[tokio::test]
+async fn handled_verbs_matches_every_dispatch_arm() {
+    struct NoopAdvancer;
+    #[async_trait]
+    impl ProcessAdvancer for NoopAdvancer {
+        async fn advance(&self, _i: ProcessAdvanceInput) -> Result<(), ProcessAdvancerError> {
+            Ok(())
+        }
+    }
+    let handler = BpmnLiteBusHandler::new(NoopAdvancer);
+
+    for verb in HANDLED_VERBS {
+        let result =
+            InvocationDispatcher::dispatch(&handler, invocation_ctx(verb), Vec::new()).await;
+        assert!(
+            !matches!(result, Err(BusServerError::UnknownVerb(_))),
+            "HANDLED_VERBS lists '{verb}' but dispatch fell through to the \
+             UnknownVerb fallback -- the match arm for it is gone; remove it \
+             from HANDLED_VERBS (and from cargo xtask pack-check's expected \
+             invocation surface if it was a real handler-backed verb)"
+        );
+    }
+
+    let result =
+        InvocationDispatcher::dispatch(&handler, invocation_ctx("not-a-real-verb"), Vec::new())
+            .await;
+    assert!(
+        matches!(&result, Err(BusServerError::UnknownVerb(id)) if id == "not-a-real-verb"),
+        "an id absent from every match arm must fall through to UnknownVerb, got {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn outcome_kind_unspecified_when_proto_value_unknown() {
     // Concrete advancer captures the input.
