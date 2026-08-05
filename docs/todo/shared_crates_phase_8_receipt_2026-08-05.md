@@ -1,7 +1,9 @@
 # Shared crates standalone remediation — Phase 8 receipt
 
-**Date:** 5 August 2026  
-**Status:** local release qualification complete; external promotion held  
+**Date:** 5 August 2026
+
+**Status:** local release qualification complete; external promotion held
+
 **Shared release:** `v0.2.1` / `586431f81e2bb9101578af5167b8a35335f5a09e`
 
 ## Decision
