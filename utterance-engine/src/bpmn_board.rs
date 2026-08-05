@@ -1,10 +1,11 @@
 //! Position-legal BPMN semantic decision-board construction.
 
-use designer_graph::board_candidate::LegalityOracle;
+use designer_graph::board_candidate::{CandidateId, LegalityOracle};
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use sem_os_policy::decision_board::{
-    DecisionBoardError, DomainIdentity, GraphRevision, ResolvedPosition, SemanticDecisionBoard,
+    CandidateSemanticSlice, DecisionBoardError, DomainIdentity, GraphRevision, ResolvedPosition,
+    SemanticDecisionBoard,
 };
 use thiserror::Error;
 
@@ -17,6 +18,17 @@ pub enum BpmnBoardError {
     /// The public BPMN id and stable node key do not identify the same node.
     #[error("anchor '{bpmn_id}' does not resolve to the supplied Designer node key")]
     InvalidAnchor { bpmn_id: String },
+    /// `PositionalLegality` returned a candidate the semantic registry has
+    /// no spec for. Every `OperationKind`/`ProductionId` is required to
+    /// have exactly one entry (`bpmn_pack::validate_registry_coverage`
+    /// enforces this at snapshot construction), so reaching this state
+    /// means the registry and the legality oracle have fallen out of sync
+    /// — fail closed with the offending id rather than silently shrinking
+    /// the board by one candidate.
+    #[error(
+        "legal candidate '{canonical_id}' has no BPMN semantic contract; the registry and PositionalLegality have drifted out of sync"
+    )]
+    MissingSemanticContract { canonical_id: &'static str },
     /// A shared semantic invariant rejected the adapter output.
     #[error(transparent)]
     Shared(#[from] DecisionBoardError),
@@ -58,15 +70,9 @@ pub fn build_bpmn_semantic_board(
     let oracle = PositionalLegality { dag };
     let mut candidates = Vec::new();
     for raw in oracle.legal_candidates(anchor.as_ref().map(|(key, _)| key)) {
-        let Some(spec) = candidate_spec(raw.id) else {
-            continue;
-        };
-        if spec.binder_support == BinderSupport::NotRepresentable
-            || policy.denied.contains(spec.semantic.canonical_id.as_str())
-        {
-            continue;
+        if let Some(semantic) = map_legal_candidate(raw.id, policy)? {
+            candidates.push(semantic);
         }
-        candidates.push(spec.semantic);
     }
 
     SemanticDecisionBoard::new(
@@ -82,6 +88,40 @@ pub fn build_bpmn_semantic_board(
         policy_fingerprint(policy),
     )
     .map_err(BpmnBoardError::from)
+}
+
+/// Map one position-legal raw candidate id to its model-visible semantic
+/// slice, or `Ok(None)` if it is deliberately excluded from the board.
+///
+/// Two distinct outcomes share this function's `None`-adjacent shape, and
+/// they must not be conflated:
+///
+/// - **`Err(MissingSemanticContract)`**: the registry has no spec for this
+///   id at all. `PositionalLegality` and the semantic registry are supposed
+///   to be drawn from the exact same `designer-graph` catalogue
+///   (`bpmn_pack::validate_registry_coverage` enforces 26/26 coverage at
+///   snapshot construction), so this can only happen if the two have
+///   drifted out of sync — a defect, not a legitimate exclusion. Fail
+///   closed rather than silently shrinking the board by one candidate.
+/// - **`Ok(None)`**: the id has a real spec, but is deliberately withheld —
+///   either `BinderSupport::NotRepresentable` (invariant 13's ratified
+///   deviation: the binder/engine cannot execute these seven actions yet,
+///   so the mapper must not offer them even though they are position-legal
+///   and semantically described; see the programme doc and CO-05) or
+///   policy-denied for this position.
+fn map_legal_candidate(
+    id: CandidateId,
+    policy: &PolicyFilter,
+) -> Result<Option<CandidateSemanticSlice>, BpmnBoardError> {
+    let spec = candidate_spec(id).ok_or(BpmnBoardError::MissingSemanticContract {
+        canonical_id: id.canonical_id(),
+    })?;
+    if spec.binder_support == BinderSupport::NotRepresentable
+        || policy.denied.contains(spec.semantic.canonical_id.as_str())
+    {
+        return Ok(None);
+    }
+    Ok(Some(spec.semantic))
 }
 
 /// Immutable identity required by model bundle compatibility cards.
@@ -123,6 +163,7 @@ fn put(hasher: &mut blake3::Hasher, value: &str) {
 #[cfg(test)]
 mod tests {
     use bpmn_lite_compiler::IRNode;
+    use designer_graph::board_candidate::OperationKind;
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::Provenance;
     use sem_os_policy::decision_board::ABSTENTION_CANDIDATE_ID;
@@ -285,5 +326,40 @@ mod tests {
         ] {
             assert!(board.candidate(id).is_none(), "{id} leaked onto the board");
         }
+    }
+
+    #[test]
+    fn missing_semantic_contract_fails_closed_instead_of_shrinking_the_board() {
+        // `PositionalLegality` never actually emits `CandidateId::Abstain`
+        // (it's owned by the board constructor, not any oracle), which
+        // makes it the one real `CandidateId` guaranteed to have no
+        // registry spec (`bpmn_pack::candidate_spec` returns `None` for it
+        // by construction) -- exactly the "registry and oracle have
+        // drifted" shape `map_legal_candidate` must refuse rather than
+        // silently drop.
+        let error = map_legal_candidate(CandidateId::Abstain, &PolicyFilter::default())
+            .expect_err("a candidate id absent from the registry must error, not silently drop");
+        assert!(matches!(
+            error,
+            BpmnBoardError::MissingSemanticContract { canonical_id } if canonical_id == "abstain.none_of_the_above"
+        ));
+    }
+
+    #[test]
+    fn not_representable_and_policy_denied_are_silently_excluded_not_errors() {
+        // Contrast with the fail-closed case above: a real, registered
+        // candidate that is deliberately withheld (NotRepresentable, or
+        // policy-denied) must return `Ok(None)`, not an error -- these are
+        // the one ratified deviation from invariant 13, not a defect.
+        let excluded =
+            map_legal_candidate(CandidateId::Operation(OperationKind::CreateRace), &PolicyFilter::default())
+                .expect("a NotRepresentable candidate must not error");
+        assert!(excluded.is_none());
+
+        let mut denied = PolicyFilter::default();
+        denied.denied.insert("op.append_node".into());
+        let excluded = map_legal_candidate(CandidateId::Operation(OperationKind::AppendNode), &denied)
+            .expect("a policy-denied candidate must not error");
+        assert!(excluded.is_none());
     }
 }
