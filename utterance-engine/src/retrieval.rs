@@ -5,9 +5,9 @@
 //! (§10.6: tier-0 is high-recall retrieval; tier-1 ranks the retrieved
 //! subset). Producers registered here supply EVIDENCE ONLY (I27) — the
 //! output is an `SlmResult` fed to `policy::decide`, never a
-//! disposition. The Candle embed-and-score producer (ruling E3, matcher
-//! pinned at ob-poc-rust `ff3f12c`, `default-features = false`) plugs
-//! in behind this same trait; per the programme ruling, the retired
+//! disposition. The Candle embed-and-score producer (ruling E3, shared
+//! embedder pinned at DSL `5ac7da7`, default-off) plugs in behind this
+//! same trait; per the programme ruling, the retired
 //! keyword gate's successor is THIS lexical producer, retired in turn
 //! when the embedder lands.
 
@@ -228,15 +228,15 @@ mod tests {
 /// candidates embedded ON THE FLY, cosine in memory — the pgvector
 /// ranking path is not used for Designer boards. Deterministic by
 /// construction: BGE weights pinned to an immutable HF revision inside
-/// the matcher crate, CPU device, no RNG/dropout, L2-normalised
+/// the shared embedder crate, CPU device, no RNG/dropout, L2-normalised
 /// outputs (so cosine = dot product).
 #[cfg(feature = "embed")]
 pub mod embed {
     use super::*;
-    use ob_semantic_matcher::Embedder;
+    use semantic_embedder::CandleEmbedder;
 
     pub struct EmbedTier0 {
-        embedder: Embedder,
+        embedder: CandleEmbedder,
         // Performance finding (plan §F, 2026-07-27 corpus-gen receipt):
         // every board's candidate set was re-embedded on EVERY retrieve()
         // call — a corpus run reuses the same small set of enumeration-
@@ -256,7 +256,7 @@ pub mod embed {
         /// hf-hub — network on cold cache; deterministic thereafter.
         pub fn new() -> Result<Self> {
             Ok(EmbedTier0 {
-                embedder: Embedder::new()?,
+                embedder: CandleEmbedder::new()?,
                 target_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             })
         }
@@ -289,7 +289,7 @@ pub mod embed {
             // to an immutable HF commit; the consuming rev is pinned in
             // Cargo.toml. Both named so records are attributable.
             format!(
-                "tier0.embed.{}@ob-semantic-matcher:ff3f12c7",
+                "tier0.embed.{}@semantic-embedder:5ac7da7",
                 self.embedder.model_name()
             )
         }

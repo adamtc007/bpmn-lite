@@ -24,7 +24,7 @@
 #      to the EXACT SAME revision, and that revision matches the rev pinned
 #      in Cargo.toml for sem_os_ontology. The direct decision-contract and
 #      policy pins plus all transitive shared crates must follow that checkout.
-#   2. Cargo.lock contains no `[[patch.unused]]` block naming any of the seven
+#   2. Cargo.lock contains no `[[patch.unused]]` block naming any of the eight
 #      known shared-crate package names. An unused-patch entry for one of
 #      these means Cargo resolved that dependency from somewhere other than
 #      the declared git pin (typically a local path patch) -- exactly the
@@ -38,7 +38,7 @@
 set -uo pipefail
 
 SHARED_REPO_URL="https://github.com/adamtc007/dsl"
-SHARED_PACKAGES=(semantic-decision-contracts sem_os_ontology sem_os_policy dsl-core dsl_types sem_os_core sem_os_types)
+SHARED_PACKAGES=(semantic-decision-contracts semantic-embedder sem_os_ontology sem_os_policy dsl-core dsl_types sem_os_core sem_os_types)
 
 fail=0
 note() { printf '  \033[31mSHARED-PIN VIOLATION\033[0m  %s\n' "$1"; fail=1; }
@@ -99,7 +99,7 @@ check_pinned_revision() {
   return "$any"
 }
 
-# Check 2: no `[[patch.unused]]` entry names one of the six shared package
+# Check 2: no `[[patch.unused]]` entry names one of the eight shared package
 # names. Cargo emits this section in Cargo.lock when a [patch] table
 # (typically a local path override) was configured but its target was
 # never selected by resolution -- if that happens for one of OUR packages,
@@ -231,6 +231,7 @@ EOF
 sem_os_ontology = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
+semantic-embedder = { git = "https://github.com/adamtc007/dsl", rev = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
 EOF
   cat > "$tmp5/Cargo.lock" <<'EOF'
 version = 4
@@ -247,6 +248,11 @@ source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
 [[package]]
 name = "semantic-decision-contracts"
+version = "0.2.0"
+source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee#eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+[[package]]
+name = "semantic-embedder"
 version = "0.2.0"
 source = "git+https://github.com/adamtc007/dsl?rev=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee#eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
@@ -300,7 +306,7 @@ if ! check_no_unused_patch; then
 fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "  OK — semantic-decision-contracts, sem_os_ontology, sem_os_policy, dsl-core, dsl_types, sem_os_core and sem_os_types all resolve from the single pinned $SHARED_REPO_URL revision, with no unused-patch fallback."
+  echo "  OK — semantic-decision-contracts, semantic-embedder, sem_os_ontology, sem_os_policy, dsl-core, dsl_types, sem_os_core and sem_os_types all resolve from the single pinned $SHARED_REPO_URL revision, with no unused-patch fallback."
 else
   echo ""
   echo "== Shared-pin guard FAILED =="

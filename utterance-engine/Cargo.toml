@@ -9,11 +9,11 @@ description = "WS-C (EOP-PLAN-BPMN-DESIGN-003): board construction, stable SLM c
 # it pulls the BGE model weights via hf-hub on first use (~130MB cache) —
 # CI and default builds stay network-free; enable for the embedder
 # producer and its #[ignore] integration test.
-embed = ["dep:ob-semantic-matcher"]
+embed = ["dep:semantic-embedder", "semantic-embedder/huggingface-download"]
 # DIR-002 Phase C, step 0: T3.4a shortlist loadability receipts ("verified
 # not assumed" per the plan). Independent of `embed` — probes candle-transformers
-# directly against each shortlisted base's real HF checkpoint, no ob-semantic-matcher
-# involvement (that crate only ever loads BGE). Off by default: pulls each base's
+# directly against each shortlisted base's real HF checkpoint, independently of
+# the BGE semantic-embedder dependency. Off by default: pulls each base's
 # weights via hf-hub on first use.
 candle-probe = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
 # DIR-004 Phase 1 ruling (Option B, structural separation, 2026-07-29):
@@ -25,8 +25,8 @@ candle-probe = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "
 q9-capture = []
 
 [dependencies]
-# GOV.2 pattern: exact rev pin, never path/[patch]; Candle-only slice.
-ob-semantic-matcher = { git = "https://github.com/adamtc007/ob-poc-rust", rev = "ff3f12c7c0dfa4ac9c8a7bc086162fc2bcecb67e", default-features = false, optional = true }
+# GOV.2 pattern: exact workspace pin, never a host-application matcher.
+semantic-embedder = { workspace = true, optional = true }
 designer-graph = { path = "../designer-graph" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-types = { path = "../bpmn-lite-types" }
@@ -41,8 +41,8 @@ unicode-normalization = "0.1.24"
 sha2 = "0.10"
 sem_os_ontology = { workspace = true }
 semantic-decision-contracts = { workspace = true }
-# candle-probe deps — same version pins as ob-semantic-matcher's Candle slice
-# (matcher's Cargo.toml, ff3f12c) so cache/ABI stay aligned across features.
+# candle-probe deps — same major/minor pins as semantic-embedder's Candle slice
+# so cache/ABI stay aligned across features.
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
 candle-transformers = { version = "0.8", optional = true }

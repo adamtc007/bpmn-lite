@@ -1321,15 +1321,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "document-features"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
-dependencies = [
- "litrs",
-]
-
-[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1400,7 +1391,7 @@ dependencies = [
 [[package]]
 name = "dsl-core"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1432,7 +1423,7 @@ dependencies = [
 [[package]]
 name = "dsl_types"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "serde",
  "serde_json",
@@ -1499,26 +1490,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
 dependencies = [
  "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "enum-iterator"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4549325971814bda7a44061bf3fe7e487d447cba01e4220a4b454d630d7a016"
-dependencies = [
- "enum-iterator-derive",
-]
-
-[[package]]
-name = "enum-iterator-derive"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "685adfa4d6f3d765a26bc5dbc936577de9abf756c1feeb3089b01dd395034842"
-dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -2632,12 +2603,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
-name = "litrs"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2954,35 +2919,6 @@ name = "number_prefix"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
-
-[[package]]
-name = "ob-semantic-matcher"
-version = "0.1.0"
-source = "git+https://github.com/adamtc007/ob-poc-rust?rev=ff3f12c7c0dfa4ac9c8a7bc086162fc2bcecb67e#ff3f12c7c0dfa4ac9c8a7bc086162fc2bcecb67e"
-dependencies = [
- "anyhow",
- "async-trait",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "chrono",
- "clap",
- "hex",
- "hf-hub",
- "once_cell",
- "rayon",
- "regex",
- "rphonetic",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 1.0.69",
- "tokenizers",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "once_cell"
@@ -3778,21 +3714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rphonetic"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "183080412f8b28f57fee48e9ed21c793088cb838d74ee59b302749610ecfaf63"
-dependencies = [
- "document-features",
- "either",
- "enum-iterator",
- "lazy_static",
- "nom",
- "regex",
- "serde",
-]
-
-[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3951,7 +3872,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 [[package]]
 name = "sem_os_core"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3977,7 +3898,7 @@ dependencies = [
 [[package]]
 name = "sem_os_ontology"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3996,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "sem_os_policy"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4021,7 +3942,7 @@ dependencies = [
 [[package]]
 name = "sem_os_types"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "chrono",
  "serde",
@@ -4033,12 +3954,27 @@ dependencies = [
 [[package]]
 name = "semantic-decision-contracts"
 version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=ca006a785e1545cf71e2870c4dffe9d7bb5147e8#ca006a785e1545cf71e2870c4dffe9d7bb5147e8"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
 dependencies = [
  "hex",
  "serde",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "semantic-embedder"
+version = "0.2.0"
+source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "hf-hub",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokenizers",
+ "tracing",
 ]
 
 [[package]]
@@ -5233,12 +5169,12 @@ dependencies = [
  "candle-transformers",
  "designer-graph",
  "hf-hub",
- "ob-semantic-matcher",
  "petgraph 0.6.5",
  "proptest",
  "sem_os_ontology",
  "sem_os_policy",
  "semantic-decision-contracts",
+ "semantic-embedder",
  "serde",
  "serde_json",
  "sha2",
