@@ -804,6 +804,16 @@ See
 
 ## 14. Phase 9 — Remove compatibility scaffolding
 
+**Execution status (5 August 2026): readiness complete; destructive cleanup
+deferred by the phase precondition.** `ob-poc` production and test source now
+imports canonical `sem_os_types` and `dsl_types` values directly, both
+consumers resolve the immutable shared `v0.2.1` revision, and the permanent
+local dependency/reproducibility gates pass. Public shims, persisted readers,
+and the BPMN compatibility sentinel remain because Gate 8 external promotion
+has not occurred and the rollback window has not closed. The eventual removal
+must be a new breaking shared release, not a mutation of `v0.2.1`. See
+[`shared_crates_phase_9_readiness_2026-08-05.md`](shared_crates_phase_9_readiness_2026-08-05.md).
+
 Only after both consumers have shipped and the rollback window has closed:
 
 - remove deprecated re-exports;

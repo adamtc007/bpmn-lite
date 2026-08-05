@@ -25,7 +25,7 @@ deployment.
 
 | Repository | Branch | Phase 8 start | Phase 8 end |
 |---|---|---|---|
-| `/Users/adamtc007/dev/dsl` | `main` | `586431f81e2bb9101578af5167b8a35335f5a09e` | unchanged; annotated tag `v0.2.1` |
+| `/Users/adamtc007/dev/dsl` | `refactor/sem-os-pack-policy` | `586431f81e2bb9101578af5167b8a35335f5a09e` | unchanged; annotated tag `v0.2.1` |
 | `/Users/adamtc007/dev/bpmn-lite-semantic-decision-board` | `refactor/bpmn-semantic-pack` | `de48b8cfa1370bbad32b9c62d99a1e3c4086ba1a` | `d598d7e3c0eda7bac1e1379af2d635bca7bfeca2` |
 | `/Users/adamtc007/Developer/ob-poc` | `refactor/semantic-policy-consumer` | `e51dda11a02f4993e8023b934c4fd1df4293b983` | `40587c9863c7bcccb427cef3600033768816fcf5` |
 | `/Users/adamtc007/dev/bpmn-lite` | `feat/dir-002-phase-c-slm-training` | `5cb176f` | this receipt commit |
