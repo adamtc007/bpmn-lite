@@ -419,6 +419,50 @@ pub fn calibrated_probabilities(logits: &[f64], temperature: f64) -> Result<Vec<
     Ok(exps.iter().map(|e| e / sum).collect())
 }
 
+/// Sentinels `pair::serialize_candidate_pair` guarantees survive its OWN
+/// word-budget truncation (see that function's doc comment) — checked here
+/// against what the real tokenizer keeps after `LongestFirst` pair
+/// truncation at `MAX_LENGTH` subword tokens.
+const REQUIRED_SIDE_B_SENTINELS: [&str; 2] = ["[EFFECT]", "[END_CANDIDATE]"];
+
+/// `PairTokenBudget` bounds whitespace WORDS, not subword tokens. A
+/// turn/candidate pair that fits comfortably inside the word budget can
+/// still expand past `MAX_LENGTH` subword tokens once real tokenized (most
+/// natural-language words split into more than one subword piece), and
+/// `TruncationStrategy::LongestFirst` truncates from the tail of whichever
+/// side is longer post-tokenization — which can silently cut side B's
+/// trailing `[EFFECT]`/`[CONTRASTS]`/`[END_CANDIDATE]` sentinels even
+/// though the word-level serializer never would.
+///
+/// Encode the pair exactly as `score_pairs` will, decode the resulting
+/// (possibly truncated) ids back to text with the same tokenizer, and fail
+/// closed if a required sentinel did not survive — rather than silently
+/// serving the model a candidate pair whose effect/contrast text vanished.
+fn verify_pair_survives_tokenization(
+    tokenizer: &Tokenizer,
+    candidate_id: &str,
+    pair: &crate::pair::SerializedCandidatePair,
+) -> Result<()> {
+    let encoding = tokenizer
+        .encode((pair.side_a.clone(), pair.side_b.clone()), true)
+        .map_err(|error| anyhow!("verify pair tokenization for '{candidate_id}': {error}"))?;
+    let decoded = tokenizer
+        .decode(encoding.get_ids(), true)
+        .map_err(|error| anyhow!("verify pair decode for '{candidate_id}': {error}"))?;
+    for sentinel in REQUIRED_SIDE_B_SENTINELS {
+        if !decoded.contains(sentinel) {
+            anyhow::bail!(
+                "candidate pair for '{candidate_id}' lost its '{sentinel}' sentinel under real \
+                 tokenizer truncation at {MAX_LENGTH} tokens — the word-level pair budget \
+                 (side_a={}, side_b={} words) is not sufficient on its own",
+                pair.side_a.split_whitespace().count(),
+                pair.side_b.split_whitespace().count(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The tier-1 SERVING producer (DIR-002 serving integration, ruled
 /// 2026-08-01): tier-0 retrieve → `tier1_list` K-subset (+NOTA) →
 /// trained-bundle listwise scoring → calibrated probabilities. Output is
@@ -534,6 +578,11 @@ impl Tier1Ranker {
                     context,
                     candidate,
                     crate::pair::PairTokenBudget::default(),
+                )?;
+                verify_pair_survives_tokenization(
+                    &self.ranker.tokenizer,
+                    candidate.canonical_id.as_str(),
+                    &pair,
                 )?;
                 Ok((pair.side_a, pair.side_b))
             })
@@ -681,5 +730,129 @@ mod tests {
         assert!((sum - 1.0).abs() < 1e-9, "calibrated probabilities must sum to 1, got {sum}");
         assert_eq!(ev.board_hash, board.board_hash);
         assert_eq!(ev.model_bundle_hash, t1.model_bundle_hash());
+    }
+
+    /// Build a real (not simulated) `tokenizers::Tokenizer` for the
+    /// `verify_pair_survives_tokenization` tests: `WordLevel` model over a
+    /// vocabulary built from the exact whitespace-delimited words the test
+    /// will encode, so every word round-trips through encode/decode
+    /// unchanged (default no-decoder join is `""`, so decoded words stay
+    /// contiguous substrings even without spaces between them — sufficient
+    /// for the sentinel substring check under test). This exercises the
+    /// production `Tokenizer::encode`/`truncate`/`decode` pipeline, not a
+    /// hand-simulated approximation of it.
+    fn word_level_tokenizer(vocabulary_source: &[&str], max_length: usize) -> Tokenizer {
+        use tokenizers::models::wordlevel::WordLevelBuilder;
+        use tokenizers::pre_tokenizers::split::{Split, SplitPattern};
+        use tokenizers::SplitDelimiterBehavior;
+
+        let mut vocab = HashMap::new();
+        vocab.insert("[UNK]".to_string(), 0u32);
+        let mut next_id = 1u32;
+        for text in vocabulary_source {
+            for word in text.split_whitespace() {
+                vocab.entry(word.to_string()).or_insert_with(|| {
+                    let id = next_id;
+                    next_id += 1;
+                    id
+                });
+            }
+        }
+        let model = WordLevelBuilder::new()
+            .vocab(vocab)
+            .unk_token("[UNK]".to_string())
+            .build()
+            .expect("WordLevel model builds from a non-empty vocab");
+        let pre_tokenizer = Split::new(
+            SplitPattern::Regex(r"\s+".to_string()),
+            SplitDelimiterBehavior::Removed,
+            false,
+        )
+        .expect("whitespace-run split pattern is valid");
+        let mut tokenizer = Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length,
+                strategy: TruncationStrategy::LongestFirst,
+                ..Default::default()
+            }))
+            .expect("truncation params are valid");
+        tokenizer
+    }
+
+    fn candidate() -> sem_os_policy::decision_board::CandidateSemanticSlice {
+        use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
+        use sem_os_policy::decision_board::{CanonicalCandidateId, NegativeContrast};
+
+        sem_os_policy::decision_board::CandidateSemanticSlice {
+            canonical_id: CanonicalCandidateId::new("op.insert_after").unwrap(),
+            schema_version: 1,
+            title: "Insert after".into(),
+            intent_summary: "insert a node after an anchor".into(),
+            action_class: ActionClass::Create,
+            applicability: "normal flow".into(),
+            effect: "rewires the existing route".into(),
+            arguments: vec![],
+            phrases: vec![],
+            positive_examples: vec![],
+            negative_contrasts: vec![NegativeContrast {
+                candidate_id: CanonicalCandidateId::new("op.append_node").unwrap(),
+                distinction: "append extends an open route".into(),
+            }],
+            risk: HarmClass::Reversible,
+            adapter_payload_hash: "payload".into(),
+        }
+    }
+
+    #[test]
+    fn word_budget_alone_can_still_lose_the_sentinel_under_real_tokenization() {
+        // A turn long enough that PairTokenBudget's word-level truncation
+        // keeps it under budget, but the REAL tokenizer (small max_length
+        // here, standing in for "many words expand to more than one
+        // subword token in the real MiniLM/BERT tokenizer") truncates the
+        // pair and cuts side B's tail before verify() can save it.
+        let turn = crate::context::ContextProjection::new(
+            "pack",
+            (0..40).map(|i| format!("ctx{i}")).collect::<Vec<_>>().join(" "),
+            None,
+            vec![],
+        )
+        .unwrap();
+        let candidate = candidate();
+        let pair = crate::pair::serialize_candidate_pair(
+            "insert something here please",
+            &turn,
+            &candidate,
+            crate::pair::PairTokenBudget::default(),
+        )
+        .unwrap();
+
+        // max_length small enough that side_a alone (turn + utterance)
+        // consumes the whole budget under LongestFirst, cutting all of
+        // side_b including its sentinel suffix.
+        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], 10);
+        let error =
+            verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair).unwrap_err();
+        assert!(
+            error.to_string().contains("lost its"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn sentinel_survives_when_the_real_tokenizer_has_room() {
+        let turn = crate::context::ContextProjection::new("pack", "graph", None, vec![]).unwrap();
+        let candidate = candidate();
+        let pair = crate::pair::serialize_candidate_pair(
+            "insert something",
+            &turn,
+            &candidate,
+            crate::pair::PairTokenBudget::default(),
+        )
+        .unwrap();
+        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], MAX_LENGTH);
+        verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair)
+            .expect("a pair well inside the real tokenizer's budget must pass");
     }
 }
