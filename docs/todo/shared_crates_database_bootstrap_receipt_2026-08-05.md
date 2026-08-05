@@ -100,8 +100,8 @@ checkout.
 - The end-to-end deployment dashboard remains undeclared (P8-07).
 - Phase 9 compatibility deletion remains blocked until both consumers ship and
   the rollback window closes.
-- `ob-poc` retains the pre-existing strict Clippy warning above, broad
-  formatting debt, and the `block 0.1.6` future-incompatibility warning.
+- The strict Clippy warning is resolved by `ob-poc` commit `ccc14fa3`; broad
+  formatting debt and the `block 0.1.6` future-incompatibility warning remain.
 
 The pre-existing `.cargo/config.toml.example` edit in `ob-poc` and unrelated
 dirty files in the coordinating `bpmn-lite` checkout were not staged or

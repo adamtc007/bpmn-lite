@@ -162,7 +162,7 @@ prevents Gate 9 closure even though the technical readiness checks pass.
 | P9-06 | Persisted v1 hashes/readers have no approved retirement period or v2 migration. | semantic-contract and data-retention owners | explicit schema/hash migration release, independent of source shim removal |
 | P9-07 | The shared domain-token allowlist still contains reviewed host-shaped examples, fixtures, comments, and generic governance vocabulary. | shared DSL/SemOS maintainers | classify and shrink in `v0.3.0`; semantic behaviour may move only with parity tests |
 | P9-08 | In-source migration comments refer to older Phase 9/12 numbering. | shared documentation owner | correct alongside the cleanup release so the immutable `v0.2.1` source remains traceable |
-| P9-09 | `ob-poc` full-workspace formatting debt and `block 0.1.6` future-incompatibility warning remain. | `ob-poc` maintenance owner | next Rust/dependency hygiene release |
+| P9-09 | **Partially resolved:** strict workspace Clippy is green at `ccc14fa3`. Full-workspace formatting debt and the `block 0.1.6` future-incompatibility warning remain. | `ob-poc` maintenance owner | strict lint closed 2026-08-05; formatting and dependency upgrade remain for the next Rust hygiene release |
 | P9-10 | BPMN broad formatting/Clippy debt remains outside this programme diff. | BPMN maintenance owner | separate hygiene release |
 
 ## Preservation and conclusion
