@@ -673,6 +673,15 @@ Do not call the local keyword classifier the shared Sage engine if it does not e
 - Shared protocol tests prove serialization compatibility.
 - Each host can run independently with its own adapter.
 
+**Execution status (5 August 2026): complete and integrated.** The orphan
+`dsl-sage` retirement commit `4ad0e338ddbb393111d0f116bcb4d53b9ef8054d` is an
+ancestor of the active `ob-poc` consumer branch. The reviewed BPMN host-boundary
+change was integrated into the coordinating branch as `3e3ecf1`: the legacy
+route and request shape remain compatible, but retry and diagnostic actions now
+require explicit caller context and cannot invent `create-cbu` or an `ob-poc`
+command. No shared REPL crate was created under ruling F2. See
+[`shared_crates_phase_6_receipt_2026-08-05.md`](shared_crates_phase_6_receipt_2026-08-05.md).
+
 ## 12. Phase 7 — Consumer cutover and dependency narrowing
 
 ### Shared release candidate

@@ -2,7 +2,44 @@
 
 **Date:** 5 August 2026
 **Gate:** Phase 6 — Sage/REPL ownership and host-adapter cleanup
-**Result:** complete with pre-existing repository-wide gate debt recorded below
+**Result:** complete, integrated into the coordinating branch, with pre-existing repository-wide gate debt recorded below
+
+## Coordinating-branch integration amendment
+
+The original receipt below records the dedicated implementation branches and
+their exact gates. The implementation has now been reconciled with the active
+repositories:
+
+- active `ob-poc` at `ec0ba7ddfe4100520a151c58ab9edbef11d45437`
+  already contains retirement commit
+  `4ad0e338ddbb393111d0f116bcb4d53b9ef8054d`; current locked metadata and
+  repository search contain no `dsl-sage` package or reference;
+- the reviewed BPMN change `506e931b122014b0e2bdaf44d5ed296b2bcf7f2e`
+  was replayed onto `feat/dir-002-phase-c-slm-training` as `3e3ecf1`, resolving
+  only the test-module context conflict and preserving the newer utterance
+  mapper implementation;
+- the separate `/Users/adamtc007/dev/rust` checkout is a historical clone at
+  `ff3f12c7` and still contains the retired package. It is not the active
+  shared workspace or active `ob-poc` application checkout. The coordinating
+  BPMN branch still selects `ob-semantic-matcher` from that exact Git revision;
+  removing that remaining repository edge is the already-planned Phase 7
+  consumer cutover, not a reason to revive or share `dsl-sage`.
+
+Current-branch verification after integration:
+
+| Gate | Outcome |
+|---|---|
+| `cargo test -p bpmn-lite-server-designer --all-features --locked --lib` | pass — 43 passed, 0 failed, 1 model-bundle test ignored |
+| `cargo check -p bpmn-lite-server-designer --all-targets --all-features --locked` | pass |
+| production library Clippy (`--lib --no-deps`, `-D warnings`) | pass; dependency emits its pre-existing non-denied capture warning |
+| source search over the compatibility classifier | pass — no `create-cbu`, `ob-poc:cbu.create` or default `ob-poc` value |
+| active `ob-poc` locked metadata and source search | pass — no `dsl-sage`; retirement commit is an ancestor |
+
+The current all-target designer Clippy gate has one pre-existing test-only
+`needless_borrows_for_generic_args` finding at `rest.rs:7146`, introduced by
+commit `0ce7ed2e` and untouched by the Phase 6 diff. This supersedes the older
+branch-specific broad-Clippy description below without changing the Phase 6
+result.
 
 ## Outcome
 
@@ -145,4 +182,6 @@ Full ob-poc `cargo fmt --all -- --check` also remains red across extensive pre-e
 
 The pre-existing ob-poc `.cargo/config.toml.example` modification was neither edited, staged nor committed. The coordinating DIR-002 worktree, model artifacts, runner edit, `.DS_Store` files and earlier programme documents were not staged or committed. Ignored development patch files were restored after exact-revision checks. No user-owned modification was reverted.
 
-Phase 6 stops here. The next programme phase is Phase 2 and requires its own fresh baseline and full-block blueprint review before code changes.
+Phase 6 stops here. Phase 7 has not started in this integration session and
+requires its own fresh baseline and full-block blueprint review before code
+changes.

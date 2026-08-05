@@ -6,6 +6,14 @@
 **BPMN base:** `2665c06ad42ef51a54e42c7739546edfc6ccbf49` on `refactor/semantic-embedder`
 **ob-poc base:** `333975b7c453758f5fabfdba76b2a0875df5da05` on `refactor/semantic-embedder-adapter`
 
+> **Integration note (5 August 2026):** This blueprint records the dedicated
+> implementation branches used for the original gate. The `dsl-sage`
+> retirement is now an ancestor of the active `ob-poc` branch, and the BPMN
+> classifier change was replayed onto the coordinating branch as `3e3ecf1`.
+> The separate `/Users/adamtc007/dev/rust` checkout remains at the historical
+> pre-retirement revision `ff3f12c7`; it is not the active `ob-poc` workspace
+> and must not be treated as the shared-crate source of truth.
+
 ## Forensic ruling
 
 Sage is currently an `ob-poc` application UI/runtime, not a transport-neutral shared protocol. The live request, session, persona, persistence, route and response types are owned by `ob-poc` in `rust/src/api/repl_routes_v2.rs`, `rust/src/repl/` and `rust/crates/ob-poc-sage`. Cargo metadata proves that `rust/crates/dsl-sage` has no consumer other than its own integration-test self-dependency.
