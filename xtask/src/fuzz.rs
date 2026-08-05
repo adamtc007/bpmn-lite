@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 const DEFAULT_RUN_SECS: u64 = 300;
@@ -249,7 +249,7 @@ fn smoke(root: &Path) -> Result<()> {
     for project in &projects {
         verify_fuzz_lock(root, &project.fuzz_dir)?;
         println!("== building all fuzz targets in {} ==", project.crate_name);
-        let status = nightly_fuzz_cmd(root, &project.fuzz_dir, "build", None)
+        let status = nightly_fuzz_cmd(root, &project.fuzz_dir, "build", None)?
             .status()
             .context("failed to spawn cargo +nightly fuzz build")?;
         if !status.success() {
@@ -354,7 +354,7 @@ fn run_one(
     fs::create_dir_all(&corpus_dir).context("create corpus dir")?;
     let seeds_dir = project.fuzz_dir.join("seeds").join(target);
 
-    let mut cmd = nightly_fuzz_cmd(root, &project.fuzz_dir, "run", Some(target));
+    let mut cmd = nightly_fuzz_cmd(root, &project.fuzz_dir, "run", Some(target))?;
     cmd.arg(&corpus_dir);
     if seeds_dir.is_dir() && count_files(&seeds_dir) > 0 {
         cmd.arg(&seeds_dir);
@@ -387,7 +387,7 @@ fn regress_one(
         );
         return Ok(None);
     }
-    let mut cmd = nightly_fuzz_cmd(root, &project.fuzz_dir, "run", Some(target));
+    let mut cmd = nightly_fuzz_cmd(root, &project.fuzz_dir, "run", Some(target))?;
     cmd.arg(&regressions_dir)
         .arg("--")
         .arg("-runs=0")
@@ -572,14 +572,61 @@ fn parse_bin_names(toml: &str) -> Vec<String> {
     names
 }
 
+/// A per-machine `~/.cargo/config.toml` may carry local-dev `[patch]` blocks
+/// that retarget shared-repo dependencies at path checkouts (see the
+/// repository README / working-notes on multi-repo development). Those
+/// patches are correct for ordinary builds, but they make fuzz lockfile
+/// content machine-dependent: cargo-fuzz resolves and writes a lockfile that
+/// reflects whichever local checkout happens to be on disk, so the same
+/// command produces different committed bytes on different machines (or on
+/// the same machine at a different time). Fuzz lockfiles must be
+/// environment-independent so `verify_fuzz_lock` in CI and the same command
+/// run locally agree.
+///
+/// Build a scratch `CARGO_HOME` that shares the real registry/git caches
+/// (so this does not force a cold re-download) but excludes the global
+/// `config.toml`, so cargo-fuzz always resolves against the committed
+/// manifest pins (crates.io / the pinned git revisions), never a local
+/// patch redirect.
+fn neutral_cargo_home(root: &Path) -> Result<PathBuf> {
+    let home = root.join("target").join("fuzz-cargo-home-neutral");
+    fs::create_dir_all(&home)
+        .with_context(|| format!("create neutral CARGO_HOME at {}", home.display()))?;
+
+    let real_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs_home().map(|h| h.join(".cargo")))
+        .context("could not resolve the real CARGO_HOME to source registry/git caches from")?;
+
+    for shared in ["registry", "git"] {
+        let link = home.join(shared);
+        if link.exists() || link.is_symlink() {
+            continue;
+        }
+        let target = real_home.join(shared);
+        if target.exists() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &link)
+                .with_context(|| format!("symlink {} -> {}", link.display(), target.display()))?;
+        }
+    }
+    Ok(home)
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
 fn nightly_fuzz_cmd(
-    _root: &Path,
+    root: &Path,
     fuzz_dir: &Path,
     subcommand: &str,
     target: Option<&str>,
-) -> Command {
+) -> Result<Command> {
+    let cargo_home = neutral_cargo_home(root)?;
     let mut cmd = Command::new("cargo");
-    cmd.arg("+nightly")
+    cmd.env("CARGO_HOME", &cargo_home)
+        .arg("+nightly")
         .arg("fuzz")
         .arg(subcommand)
         .arg("--fuzz-dir")
@@ -593,14 +640,16 @@ fn nightly_fuzz_cmd(
     if let Some(target) = target {
         cmd.arg(target);
     }
-    cmd
+    Ok(cmd)
 }
 
 /// cargo-fuzz 0.13 does not expose Cargo's `--locked` switch. Perform an
 /// explicit locked metadata resolution before every selected fuzz project so a
 /// stale independently-resolved fuzz lockfile fails before build or execution.
 fn verify_fuzz_lock(root: &Path, fuzz_dir: &Path) -> Result<()> {
+    let cargo_home = neutral_cargo_home(root)?;
     let status = Command::new("cargo")
+        .env("CARGO_HOME", &cargo_home)
         .arg("+nightly")
         .arg("metadata")
         .arg("--locked")

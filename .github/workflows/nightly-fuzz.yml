@@ -35,7 +35,12 @@ jobs:
       - name: Validate governed regression inputs
         run: python3 scripts/check_fuzz_regressions.py
       - uses: dtolnay/rust-toolchain@stable
-      - uses: dtolnay/rust-toolchain@nightly
+      # Pinned (not floating @nightly): cargo-fuzz's synthesized workspace
+      # patches depend on the exact nightly's Cargo/rustc metadata output;
+      # a moving nightly can silently reintroduce fuzz lockfile drift.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-03
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -63,7 +68,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: dtolnay/rust-toolchain@nightly
+      # Pinned (not floating @nightly): cargo-fuzz's synthesized workspace
+      # patches depend on the exact nightly's Cargo/rustc metadata output;
+      # a moving nightly can silently reintroduce fuzz lockfile drift.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-03
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
