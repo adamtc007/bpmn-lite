@@ -201,7 +201,7 @@ Record the exact public APIs used by each application. At minimum trace:
 
 The ledger must additionally record these already-verified facts (2026-08-05):
 
-- **Three-way pin skew:** ob-poc pins the six dsl crates by mutable git **tag** `v0.1.5`; bpmn-lite pins by rev `fa51217` (= tag v0.1.6); dsl `main` is at `edded43`, ahead of both and untagged (open CO-01 v0.1.7 question, fork F4). Tag pins violate the settled "exact pins (hash), never floors" decision and Phase 7's own rule.
+- **Three-way pin skew:** ob-poc pins the six dsl crates by mutable git **tag** `v0.1.5`; bpmn-lite pins by rev `fa51217` (= tag v0.1.6); dsl `main` is at `edded43`, now tagged `v0.1.7` (F4 executed 2026-08-05, closing CO-01). Tag pins violate the settled "exact pins (hash), never floors" decision and Phase 7's own rule; Phase 7 converts both consumers to exact-rev pins at the shared release candidate.
 - **The dsl `config` symlink into ob-poc** (see §4.1).
 - **The ob-poc → bpmn-lite crate edge** (13 crates at tag v0.2.0, see §2).
 - **The `embed` path's third repository:** `utterance-engine` imports `ob-semantic-matcher` from `github.com/adamtc007/ob-poc-rust` @ `ff3f12c7` (default-off feature) — a pin not covered by `scripts/check-shared-pin.sh`.
@@ -258,7 +258,7 @@ Add or reconcile:
 
 Do not claim a licence without owner confirmation if the current repository has no authoritative licence record. Record that as an explicit blocker rather than inventing one. **This blocker is live now:** the dsl repo has no LICENSE, README, or CHANGELOG, and every crate is `version = "0.1.0"` while repo tags run to `v0.1.6` — tags do not track Cargo versions. Phase 1 cannot close without the owner's licence and versioning decisions.
 
-This phase must also take an explicit stance on the `~/.cargo/config.toml` global `[patch]` dev-override (fork F5): either keep it with documented lockfile-restore discipline enforced by the pin gate, or replace it with per-repo uncommitted `.cargo/config.toml` overrides. Silence is not an option — it is the mechanism that erodes pins today.
+**Fork F5 — ruled: per-repo (2026-08-05).** This phase removes the dsl/bpmn-lite `[patch]` blocks from `~/.cargo/config.toml` and replaces them with per-repo, uncommitted, gitignored root `.cargo/config.toml` files carrying only the patches that repo needs, present only while actively co-developing. Note ob-poc already commits `rust/.cargo/config.toml` (aliases/env) — the patch file goes at the repo *root* so Cargo's hierarchical merge keeps the committed file untouched. This scopes lockfile pollution to opted-in repos; it does not eliminate it — `git checkout -- Cargo.lock` discipline and the pin gate remain the defense.
 
 ### CI
 
@@ -389,7 +389,7 @@ Replace closed host-specific production variants and defaults. Verified inventor
 
 (MIC/BIC/pricing exists only as one doc comment at `ast.rs:1052` — there are no such variants; the original draft overstated this.)
 
-**Fork F3 (open — do not decide silently):** replacing `SlotType`'s closed enum with pack-validated identifiers is the principled resolution of the map-root fork that was explicitly *deferred* in the R1 ruling (the dropped `SlotType::Workspace` runtime change / phantom `bpmn_dags` table). This sub-step requires the owner's ruling before implementation.
+**Fork F3 — ruled: ratified (2026-08-05).** Replacing `SlotType`'s closed enum with pack-validated identifiers is the resolution of the map-root fork deferred under the R1 ruling (the dropped `SlotType::Workspace` runtime change / phantom `bpmn_dags` table). Ratified: slot kinds are pack-declared; a workspace-rooted map is legal iff a pack declares the kind, and the DAG reference becomes a compiler-validated pack cross-reference. No closed-set carve-out.
 
 Use validated identifiers backed by pack declarations, for example:
 
@@ -646,7 +646,7 @@ Determine whether Sage represents:
 
 Only the first category automatically belongs in the shared workspace. A reusable server runtime may be shared only if it has no host routes, assets, policy, database assumptions, or domain vocabulary.
 
-The forensic evidence is already in (2026-08-05): `dsl-sage` is an **orphan crate** — zero consumers anywhere (only its workspace-member entry and its own dev-dep reference it); the live REPL protocol types are declared inline in ob-poc's `src/api/repl_routes_v2.rs` (~5.8k lines) and `crates/ob-poc-sage/`, with hard-coded persona/phase literals. This points squarely at category 3 (application UI). **Fork F2 (recommended ruling): no shared `repl-contracts` crate; record as ruled and revisit only if a second Sage consumer materializes.** If ruled that way, this phase reduces to the host-adapter cleanup below plus retiring or clearly quarantining the orphan `dsl-sage` crate.
+The forensic evidence is already in (2026-08-05): `dsl-sage` is an **orphan crate** — zero consumers anywhere (only its workspace-member entry and its own dev-dep reference it); the live REPL protocol types are declared inline in ob-poc's `src/api/repl_routes_v2.rs` (~5.8k lines) and `crates/ob-poc-sage/`, with hard-coded persona/phase literals. This is category 3 (application UI). **Fork F2 — ruled (2026-08-05): no shared `repl-contracts` crate; revisit only if a second Sage consumer materializes.** This phase therefore reduces to the host-adapter cleanup below plus retiring or clearly quarantining the orphan `dsl-sage` crate.
 
 ### Shared contract, if justified
 
@@ -872,8 +872,8 @@ Surfaced, not silently decided. Rulings recorded here as they land.
 
 | Fork | Question | Recommendation | Status |
 |---|---|---|---|
-| F1 | Re-sequence phases: 0 → 1 → 3 → 4 → 6 (forensic) → 2 → 5 → 7+ | Yes — Phases 3/4 don't depend on Phase 2's schema unification | **Ruled: yes** (plan-approval, 2026-08-05) |
-| F2 | Shared `repl-contracts` crate, given `dsl-sage` is an orphan and the live protocol is inline application code | No shared crate; revisit only on a second Sage consumer | Open |
-| F3 | §2.4 `SlotType` closed enum → pack-validated IDs resolves the map-root fork deferred under the R1 ruling (`SlotType::Workspace` / phantom `bpmn_dags`) | Rule it as part of Phase 2.4 design, before implementation | Open |
-| F4 | Tag dsl `edded43` as `v0.1.7` first (closes CO-01) so Phase 0 baselines against a tagged rev | Yes | Open |
-| F5 | Global `~/.cargo/config.toml` `[patch]`: keep with lockfile-restore discipline, or move to per-repo uncommitted `.cargo/config.toml` | Needs owner ruling for Phase 1; per-repo override is cleaner but changes every repo's dev loop | Open |
+| F1 | Re-sequence phases: 0 → 1 → 3 → 4 → 6 (forensic) → 2 → 5 → 7+ | Yes — Phases 3/4 don't depend on Phase 2's schema unification | **Ruled: yes** (2026-08-05) |
+| F2 | Shared `repl-contracts` crate, given `dsl-sage` is an orphan and the live protocol is inline application code | No shared crate; revisit only on a second Sage consumer | **Ruled: no shared crate** (2026-08-05). Phase 6 reduces to host-adapter cleanup + retiring/quarantining `dsl-sage` |
+| F3 | §2.4 `SlotType` closed enum → pack-validated IDs resolves the map-root fork deferred under the R1 ruling (`SlotType::Workspace` / phantom `bpmn_dags`) | Ratify: slot kinds become pack-declared; workspace-rooted maps legal iff a pack declares the kind; DAG refs become compiler-validated pack cross-refs | **Ruled: ratified** (2026-08-05). The deferred R1 map-root fork is resolved by the generic mechanism; no closed-set carve-out in §2.4 |
+| F4 | Tag dsl `edded43` as `v0.1.7` first (closes CO-01) so Phase 0 baselines against a tagged rev | Yes | **Ruled: yes; executed** — annotated tag `v0.1.7` at `edded43` pushed 2026-08-05 |
+| F5 | Global `~/.cargo/config.toml` `[patch]`: keep with lockfile-restore discipline, or move to per-repo uncommitted `.cargo/config.toml` | Per-repo: delete the dsl/bpmn-lite patch blocks from the global config; each consumer repo carries an uncommitted, gitignored root `.cargo/config.toml` with only the patches it needs, present only while co-developing | **Ruled: per-repo** (2026-08-05). Caveat stands: this scopes lockfile pollution, it does not eliminate it — restore discipline + the pin gate remain the defense. Phase 1 implements the switch |
