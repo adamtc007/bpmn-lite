@@ -202,27 +202,33 @@ No registry, non-production deployment target, captured traffic source,
 promotion policy, owner-approved tolerance, or dashboard destination is
 declared. **Owner:** release/platform owner. **Target:** before Gate 8 sign-off.
 
-### P8-02 — `ob-poc` cannot bootstrap a clean database through SQLx migrations
+### P8-02 — Resolved: `ob-poc` clean-database bootstrap contract
 
-`cargo sqlx migrate run --source rust/migrations` applied migrations `000` and
+The original finding was reproduced: the SQLx migration runner over
+`rust/migrations` applied migrations `000` and
 `006`, then failed at `073` because `"ob-poc".entities` did not exist. The
 canonical schema dump requires PostgreSQL 18 and pgvector; PostgreSQL 16 fails
 on `transaction_timeout`, then `uuidv7()`. A supported bootstrap/migration
-contract and tested database image are required. **Owner:** `ob-poc` persistence
-owner. **Target:** next deployment-hardening release, before external shadow.
+contract and tested database image were delivered and pushed in `ob-poc`
+commit `1b852343`; see
+`shared_crates_database_bootstrap_receipt_2026-08-05.md`. **Status:** resolved
+locally before external shadow.
 
-### P8-03 — canonical `ob-poc` schema artifacts have drifted
+### P8-03 — Resolved: canonical `ob-poc` schema artifact drift
 
-`migrations/master-schema.sql` and `schema_export.sql` are not byte-identical,
-despite repository guidance. The canonical dump also omitted
+The reviewed `migrations/master-schema.sql` and `schema_export.sql` were not
+byte-identical, despite repository guidance. The canonical dump also omitted
 `control_plane_audit`, envelope `entry_id`, shadow `execution_path`, and shadow
 `decision_id`; the metrics endpoint returned HTTP 500 until migrations
 `20260713_control_plane_audit`,
 `20260713_control_plane_envelopes_entry_id`,
 `20260713_control_plane_shadow_decisions_execution_path`, and
 `20260714_control_plane_shadow_decisions_decision_id` were applied manually in
-the isolated database. **Owner:** `ob-poc` schema owner. **Target:** same as
-P8-02.
+the isolated database. Commit `1b852343` regenerated and reconciled the
+artifacts, added drift/bootstrap CI, and bound schema hash
+`03cf81f96ee59040bbb608c434be7cbf6e2e44344419c336679d96df09f43a5a`
+to the release image. **Status:** resolved locally; see the database bootstrap
+receipt.
 
 ### P8-04 — the prior `ob-poc` RC is read-compatible but not new-work capable
 

@@ -155,7 +155,7 @@ prevents Gate 9 closure even though the technical readiness checks pass.
 | ID | Carry-over | Owner | Intended release / closure condition |
 |---|---|---|---|
 | P9-01 | Gate 8 has no external registry, non-production target, captured traffic source, tolerance approval, or dashboard destination. | release/platform owner | before external shadow and before the rollback clock starts |
-| P9-02 | `ob-poc` clean-database bootstrap and canonical schema artifacts remain drifted. | `ob-poc` persistence/schema owner | next deployment-hardening release, before external shadow |
+| P9-02 | **Resolved locally:** `ob-poc` commit `1b852343` adds the PG18 clean-bootstrap contract, reconciles canonical artifacts, adds CI, and binds the schema hash into the RC receipt. | `ob-poc` persistence/schema owner | closed 2026-08-05; see `shared_crates_database_bootstrap_receipt_2026-08-05.md` |
 | P9-03 | The three public shared compatibility modules and two deprecated embed aliases remain. | shared-crate API owner | breaking shared release after both consumers ship and rollback closes; earliest `v0.3.0` |
 | P9-04 | Both consumers use `CandleEmbedder::new`, which resolves the pinned default bundle rather than a deployment-owned local bundle. | model/deployment owners | model deployment cutover release; retain constructor until both consumers migrate |
 | P9-05 | BPMN retains `/api/dsl/sage/utter`. | BPMN API owner | separately versioned API removal after external caller telemetry is empty |
