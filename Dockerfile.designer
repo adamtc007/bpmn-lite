@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 FROM rust:1.95-bookworm AS chef
-RUN cargo install cargo-chef --locked
+RUN cargo install cargo-chef --locked \
+    && cargo install cargo-auditable --version 0.7.5 --locked
 WORKDIR /build
 
 FROM chef AS planner
@@ -15,7 +16,7 @@ RUN apt-get update \
 COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --release -p bpmn-lite-server-designer --recipe-path recipe.json
 COPY . .
-RUN cargo build --release -p bpmn-lite-server-designer --bin bpmn-lite-demo-designer \
+RUN cargo auditable build --release -p bpmn-lite-server-designer --bin bpmn-lite-demo-designer \
     && mkdir -p /build/out \
     && cp target/release/bpmn-lite-demo-designer /build/out/bpmn-lite-demo-designer \
     && strip /build/out/bpmn-lite-demo-designer
