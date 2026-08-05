@@ -635,6 +635,11 @@ Replace public `anyhow::Result` in reusable libraries with typed errors. Preserv
 - Application Rust code registers technical capability implementations but contains no duplicate semantic decision table.
 - Shared tests run without an `ob-poc` checkout or ignored host-dependent test.
 
+**Execution status (5 August 2026): complete.** Shared revision
+`9b76c951a084cca6af4885609d46f8dc02637b00` and `ob-poc` consumer revision
+`ec0ba7ddfe4100520a151c58ab9edbef11d45437` satisfy Gate 5. See
+[`shared_crates_phase_5_gate_receipt_2026-08-05.md`](shared_crates_phase_5_gate_receipt_2026-08-05.md).
+
 ## 11. Phase 6 — Define the Sage/REPL boundary
 
 ### Forensic decision first
