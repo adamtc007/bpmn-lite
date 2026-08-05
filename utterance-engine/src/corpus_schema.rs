@@ -36,7 +36,7 @@ pub struct BoardDump {
     pub pack_identity: String,
     pub policy_denied: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic_board: Option<sem_os_policy::decision_board::SemanticDecisionBoard>,
+    pub semantic_board: Option<semantic_decision_contracts::SemanticDecisionBoard>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -127,11 +127,11 @@ pub struct SemanticCorpusClosure {
     pub full_served_list: Vec<String>,
     pub board_inclusion_truth: bool,
     pub exact_match: crate::exact::ExactMatchDump,
-    pub evidence_lanes: Vec<sem_os_policy::decision_board::EvidenceLane>,
+    pub evidence_lanes: Vec<semantic_decision_contracts::EvidenceLane>,
     pub semantic_family: String,
     pub author_provenance: String,
     pub split_group: String,
-    pub binding_requirements: Vec<sem_os_policy::decision_board::ArgumentSpec>,
+    pub binding_requirements: Vec<semantic_decision_contracts::ArgumentSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,7 +145,7 @@ pub struct ScoredCandidatePair {
 impl SemanticCorpusClosure {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        board: &sem_os_policy::decision_board::SemanticDecisionBoard,
+        board: &semantic_decision_contracts::SemanticDecisionBoard,
         utterance: &str,
         turn: &crate::context::ContextProjection,
         gold: &str,
@@ -204,7 +204,7 @@ impl SemanticCorpusClosure {
             exact_match: crate::exact::ExactMatchDump::from(crate::exact::governed_exact(
                 board, utterance,
             )),
-            evidence_lanes: vec![sem_os_policy::decision_board::EvidenceLane::Lexical],
+            evidence_lanes: vec![semantic_decision_contracts::EvidenceLane::Lexical],
             semantic_family,
             author_provenance,
             split_group,

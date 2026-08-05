@@ -15,7 +15,7 @@ bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
 bpmn-lite-types = { path = "../../bpmn-lite-types" }
 designer-graph = { path = "../../designer-graph" }
 utterance-engine = { path = "../../utterance-engine" }
-sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "fa51217ffd2218edea82c175e45ffa11d9eb7cf9" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "ca006a785e1545cf71e2870c4dffe9d7bb5147e8" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }

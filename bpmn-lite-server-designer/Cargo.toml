@@ -30,7 +30,7 @@ bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 designer-graph = { path = "../designer-graph" }
 utterance-engine = { path = "../utterance-engine" }
-sem_os_policy = { workspace = true }
+semantic-decision-contracts = { workspace = true }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
 sqlx = { workspace = true, optional = true }

@@ -9,7 +9,7 @@ use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, T
 use designer_graph::ops::{GuardTrigger, Operation, RegionBranch};
 use designer_graph::productions;
 use designer_graph::schema::{DesignerDag, NodeKey};
-use sem_os_policy::decision_board::{
+use semantic_decision_contracts::{
     ArgumentKind, BindingProvenance, CanonicalCandidateId, EvidenceRecordHash, ProposalStatus,
     ProposalWorkbook, SemanticDecisionBoard, SlotRequirement, SlotValue, SlotValueState,
     WorkbookId, WorkbookSlot,
@@ -1054,8 +1054,8 @@ mod tests {
                 1,
                 WorkbookId::new("property-workbook").unwrap(),
                 1,
-                sem_os_policy::decision_board::BoardHash::new("b".repeat(64)).unwrap(),
-                sem_os_policy::decision_board::GraphRevision::new("property-revision").unwrap(),
+                semantic_decision_contracts::BoardHash::new("b".repeat(64)).unwrap(),
+                semantic_decision_contracts::GraphRevision::new("property-revision").unwrap(),
                 CanonicalCandidateId::new("op.append_node").unwrap(),
                 vec![WorkbookSlot {
                     name: "name".into(),

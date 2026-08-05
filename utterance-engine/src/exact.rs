@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use sem_os_policy::decision_board::{CandidateSemanticSlice, SemanticDecisionBoard};
-pub use sem_os_policy::decision_board::EvidenceLane;
+use semantic_decision_contracts::{CandidateSemanticSlice, SemanticDecisionBoard};
+pub use semantic_decision_contracts::EvidenceLane;
 use serde::Serialize;
 use unicode_normalization::UnicodeNormalization;
 
@@ -204,10 +204,9 @@ pub fn finalize_semantic_evidence(
 
 #[cfg(test)]
 mod tests {
-    use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
-    use sem_os_policy::decision_board::{
-        CanonicalCandidateId, DomainIdentity, GraphRevision, PhraseEvidence, PhraseRole,
-        ResolvedPosition, SnapshotIdentity,
+    use semantic_decision_contracts::{
+        ActionClass, CanonicalCandidateId, DomainIdentity, GraphRevision, HarmClass,
+        PhraseEvidence, PhraseRole, ResolvedPosition, SnapshotIdentity,
     };
 
     use super::*;

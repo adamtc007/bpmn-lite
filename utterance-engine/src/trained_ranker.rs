@@ -562,7 +562,7 @@ impl Tier1Ranker {
         &self,
         utterance: &str,
         context: &crate::context::ContextProjection,
-        board: &sem_os_policy::decision_board::SemanticDecisionBoard,
+        board: &semantic_decision_contracts::SemanticDecisionBoard,
     ) -> Result<SlmResult> {
         let list = board
             .candidates
@@ -781,11 +781,12 @@ mod tests {
         tokenizer
     }
 
-    fn candidate() -> sem_os_policy::decision_board::CandidateSemanticSlice {
-        use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
-        use sem_os_policy::decision_board::{CanonicalCandidateId, NegativeContrast};
+    fn candidate() -> semantic_decision_contracts::CandidateSemanticSlice {
+        use semantic_decision_contracts::{
+            ActionClass, CanonicalCandidateId, HarmClass, NegativeContrast,
+        };
 
-        sem_os_policy::decision_board::CandidateSemanticSlice {
+        semantic_decision_contracts::CandidateSemanticSlice {
             canonical_id: CanonicalCandidateId::new("op.insert_after").unwrap(),
             schema_version: 1,
             title: "Insert after".into(),

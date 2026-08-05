@@ -3,7 +3,7 @@
 use designer_graph::board_candidate::{CandidateId, LegalityOracle};
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
-use sem_os_policy::decision_board::{
+use semantic_decision_contracts::{
     CandidateSemanticSlice, DecisionBoardError, DomainIdentity, GraphRevision, ResolvedPosition,
     SemanticDecisionBoard,
 };
@@ -166,7 +166,7 @@ mod tests {
     use designer_graph::board_candidate::OperationKind;
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::Provenance;
-    use sem_os_policy::decision_board::ABSTENTION_CANDIDATE_ID;
+    use semantic_decision_contracts::ABSTENTION_CANDIDATE_ID;
     use uuid::Uuid;
 
     use super::*;

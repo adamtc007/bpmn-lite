@@ -5,7 +5,7 @@
 //! high-precision form `<governed exact phrase>; <governed exact phrase>`.
 
 use crate::exact::{governed_exact, ExactMatch};
-use sem_os_policy::decision_board::SemanticDecisionBoard;
+use semantic_decision_contracts::SemanticDecisionBoard;
 
 pub const NO_ACTION_SPAN_PRODUCER_ID: &str = "bpmn.action-span.none.v1";
 pub const STRICT_ACTION_SPAN_PRODUCER_ID: &str =

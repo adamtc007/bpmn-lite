@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sem_os_policy::decision_board::{
+use semantic_decision_contracts::{
     BoardHash, CanonicalCandidateId, EvidenceRecordHash, GraphRevision, ProposalStatus,
     ProposalWorkbook, WorkbookId,
 };

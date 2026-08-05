@@ -10,3 +10,4 @@ sem_os_types = { path = "../../dsl/crates/sem_os_types" }
 sem_os_core = { path = "../../dsl/crates/sem_os_core" }
 sem_os_ontology = { path = "../../dsl/crates/sem_os_ontology" }
 sem_os_policy = { path = "../../dsl/crates/sem_os_policy" }
+semantic-decision-contracts = { path = "../../dsl/crates/semantic-decision-contracts" }

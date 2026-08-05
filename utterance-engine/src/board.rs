@@ -19,7 +19,7 @@
 //! becomes a drop-in provider behind the same trait when T3 lands.
 
 use designer_graph::board_candidate::{BoardCandidate, LegalityOracle};
-use sem_os_policy::decision_board::SemanticDecisionBoard;
+use semantic_decision_contracts::SemanticDecisionBoard;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 

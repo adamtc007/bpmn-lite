@@ -4,7 +4,7 @@
 //! producer (Q7 ruled option (a): deterministic resolvers).
 
 use anyhow::{anyhow, Result};
-use sem_os_policy::decision_board::EvidenceLane;
+use semantic_decision_contracts::EvidenceLane;
 use serde::{Deserialize, Serialize};
 
 /// The explicit abstention candidate present on EVERY board (R2-r1).

@@ -1,6 +1,6 @@
 //! Candidate-conditioned pair serialization shared by serving and corpora.
 
-use sem_os_policy::decision_board::CandidateSemanticSlice;
+use semantic_decision_contracts::CandidateSemanticSlice;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -142,9 +142,8 @@ fn hash(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
-    use sem_os_policy::decision_board::{
-        CanonicalCandidateId, NegativeContrast,
+    use semantic_decision_contracts::{
+        ActionClass, CanonicalCandidateId, HarmClass, NegativeContrast,
     };
 
     use super::*;

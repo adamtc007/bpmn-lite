@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{anyhow, bail, Context, Result};
-use sem_os_policy::decision_board::SemanticDecisionBoard;
+use semantic_decision_contracts::SemanticDecisionBoard;
 use utterance_engine::board::{InferenceBoard, PolicyFilter};
 use utterance_engine::bpmn_board::build_bpmn_semantic_board;
 use utterance_engine::context::{project_ir, ContextProjection};

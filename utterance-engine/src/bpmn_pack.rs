@@ -7,11 +7,10 @@
 use std::collections::BTreeSet;
 
 use designer_graph::board_candidate::{CandidateId, OperationKind, ProductionId};
-use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
-use sem_os_policy::decision_board::{
-    ArgumentKind, ArgumentSpec, CandidateSemanticSlice, CanonicalCandidateId, DomainIdentity,
-    GraphRevision, NegativeContrast, PhraseEvidence, PhraseRole, ResolvedPosition,
-    SemanticDecisionBoard, SnapshotIdentity,
+use semantic_decision_contracts::{
+    ActionClass, ArgumentKind, ArgumentSpec, CandidateSemanticSlice, CanonicalCandidateId,
+    DomainIdentity, GraphRevision, HarmClass, NegativeContrast, PhraseEvidence, PhraseRole,
+    ResolvedPosition, SemanticDecisionBoard, SnapshotIdentity,
 };
 
 pub(crate) const BPMN_SEMANTIC_SCHEMA_VERSION: u32 = 1;
@@ -705,7 +704,7 @@ pub(crate) fn semantic_snapshot_identity() -> SnapshotIdentity {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use sem_os_policy::decision_board::{
+    use semantic_decision_contracts::{
         DomainIdentity, GraphRevision, ResolvedPosition, SemanticDecisionBoard,
     };
 

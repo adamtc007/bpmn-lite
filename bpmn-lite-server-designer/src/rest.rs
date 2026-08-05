@@ -148,7 +148,7 @@ pub struct DesignerState {
 #[derive(Clone)]
 pub(crate) struct PendingProposal {
     session_id: Uuid,
-    workbook: sem_os_policy::decision_board::ProposalWorkbook,
+    workbook: semantic_decision_contracts::ProposalWorkbook,
     bound: Option<crate::proposal::BoundProposal>,
     source_utterance_text: String,
     staged_against_hash: String,
@@ -2934,7 +2934,7 @@ async fn answer_proposal_endpoint(
         let mut expired = pending.clone();
         if let Err(error) = expired
             .workbook
-            .transition(sem_os_policy::decision_board::ProposalStatus::Expired)
+            .transition(semantic_decision_contracts::ProposalStatus::Expired)
         {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2992,7 +2992,7 @@ async fn answer_proposal_endpoint(
             }
         };
 
-    if workbook.status() == sem_os_policy::decision_board::ProposalStatus::NeedsArguments {
+    if workbook.status() == semantic_decision_contracts::ProposalStatus::NeedsArguments {
         let mut updated = PendingProposal {
             workbook: workbook.clone(),
             bound: None,
@@ -3048,7 +3048,7 @@ async fn answer_proposal_endpoint(
         Ok(staged) => match staged.candidate.admit() {
             Ok(_) => {
                 if let Err(error) = workbook
-                    .transition(sem_os_policy::decision_board::ProposalStatus::ReadyForRatification)
+                    .transition(semantic_decision_contracts::ProposalStatus::ReadyForRatification)
                 {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -3060,7 +3060,7 @@ async fn answer_proposal_endpoint(
             Err(errors) => {
                 diagnostics = errors.iter().map(|error| error.message.clone()).collect();
                 if let Err(error) = workbook
-                    .transition(sem_os_policy::decision_board::ProposalStatus::DryRunRefused)
+                    .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
                 {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -3073,7 +3073,7 @@ async fn answer_proposal_endpoint(
         Err(error) => {
             diagnostics.push(error.to_string());
             if let Err(error) =
-                workbook.transition(sem_os_policy::decision_board::ProposalStatus::DryRunRefused)
+                workbook.transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -3091,7 +3091,7 @@ async fn answer_proposal_endpoint(
         ..pending
     };
     let outcome = if workbook.status()
-        == sem_os_policy::decision_board::ProposalStatus::ReadyForRatification
+        == semantic_decision_contracts::ProposalStatus::ReadyForRatification
     {
         "dry_run_admitted"
     } else {
@@ -3159,7 +3159,7 @@ async fn ratify_proposal_endpoint(
             .remove(&pid);
     };
     if pending.workbook.status()
-        != sem_os_policy::decision_board::ProposalStatus::ReadyForRatification
+        != semantic_decision_contracts::ProposalStatus::ReadyForRatification
     {
         let status = pending.workbook.status();
         consume();
@@ -3213,7 +3213,7 @@ async fn ratify_proposal_endpoint(
         let mut expired = pending.clone();
         if let Err(error) = expired
             .workbook
-            .transition(sem_os_policy::decision_board::ProposalStatus::Expired)
+            .transition(semantic_decision_contracts::ProposalStatus::Expired)
         {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3321,7 +3321,7 @@ async fn ratify_proposal_endpoint(
         Ok(seq) => {
             let mut workbook = pending.workbook;
             let transition =
-                workbook.transition(sem_os_policy::decision_board::ProposalStatus::Ratified);
+                workbook.transition(semantic_decision_contracts::ProposalStatus::Ratified);
             consume();
             match transition {
                 Ok(()) => Json(serde_json::json!({
@@ -3373,7 +3373,7 @@ async fn reject_proposal_endpoint(
     let mut rejected = pending;
     if let Err(error) = rejected
         .workbook
-        .transition(sem_os_policy::decision_board::ProposalStatus::Rejected)
+        .transition(semantic_decision_contracts::ProposalStatus::Rejected)
     {
         return (
             StatusCode::CONFLICT,
@@ -3698,7 +3698,7 @@ async fn session_utterance_endpoint(
         &disposition,
     ) {
         let canonical_id =
-            match sem_os_policy::decision_board::CanonicalCandidateId::new(candidate_id.clone()) {
+            match semantic_decision_contracts::CanonicalCandidateId::new(candidate_id.clone()) {
                 Ok(candidate_id) => candidate_id,
                 Err(error) => {
                     return (
@@ -3729,7 +3729,7 @@ async fn session_utterance_endpoint(
             }
         };
         let mut bound = None;
-        if workbook.status() == sem_os_policy::decision_board::ProposalStatus::ReadyForDryRun {
+        if workbook.status() == semantic_decision_contracts::ProposalStatus::ReadyForDryRun {
             let materialized = match crate::proposal::materialize_operations(dag, &workbook) {
                 Ok(materialized) => materialized,
                 Err(error) => {
@@ -3749,7 +3749,7 @@ async fn session_utterance_endpoint(
                 Ok(staged) => match staged.candidate.admit() {
                     Ok(_) => {
                         if let Err(error) = workbook.transition(
-                            sem_os_policy::decision_board::ProposalStatus::ReadyForRatification,
+                            semantic_decision_contracts::ProposalStatus::ReadyForRatification,
                         ) {
                             return (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3766,7 +3766,7 @@ async fn session_utterance_endpoint(
                         dry_run_diagnostics =
                             errors.iter().map(|error| error.message.clone()).collect();
                         if let Err(error) = workbook.transition(
-                            sem_os_policy::decision_board::ProposalStatus::DryRunRefused,
+                            semantic_decision_contracts::ProposalStatus::DryRunRefused,
                         ) {
                             return (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3782,7 +3782,7 @@ async fn session_utterance_endpoint(
                 Err(error) => {
                     dry_run_diagnostics = vec![error.to_string()];
                     if let Err(error) = workbook
-                        .transition(sem_os_policy::decision_board::ProposalStatus::DryRunRefused)
+                        .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
                     {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3801,10 +3801,10 @@ async fn session_utterance_endpoint(
                 .slots()
                 .iter()
                 .filter(|slot| {
-                    slot.requirement == sem_os_policy::decision_board::SlotRequirement::Required
+                    slot.requirement == semantic_decision_contracts::SlotRequirement::Required
                         && matches!(
                             slot.value,
-                            sem_os_policy::decision_board::SlotValueState::Missing
+                            semantic_decision_contracts::SlotValueState::Missing
                         )
                 })
                 .map(|slot| slot.clarification_prompt.as_str())

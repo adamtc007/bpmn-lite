@@ -397,7 +397,7 @@ mod tests {
     fn semantic_board_at(
         policy: &PolicyFilter,
         revision: &str,
-    ) -> sem_os_policy::decision_board::SemanticDecisionBoard {
+    ) -> semantic_decision_contracts::SemanticDecisionBoard {
         let state = crate::fixtures::enumeration_classes()
             .unwrap()
             .into_iter()
@@ -414,12 +414,12 @@ mod tests {
 
     fn semantic_board(
         policy: &PolicyFilter,
-    ) -> sem_os_policy::decision_board::SemanticDecisionBoard {
+    ) -> semantic_decision_contracts::SemanticDecisionBoard {
         semantic_board_at(policy, "rev-policy-v2")
     }
 
     fn semantic_result(
-        board: &sem_os_policy::decision_board::SemanticDecisionBoard,
+        board: &semantic_decision_contracts::SemanticDecisionBoard,
         ranking: Vec<(&str, f64)>,
     ) -> SlmResult {
         let mut ranking = ranking
@@ -803,7 +803,7 @@ mod tests {
         result.evidence_trace = Some(crate::contract::EvidenceTrace {
             candidate_serializer_hash: "serializer-v1".into(),
             turn_serializer_hash: "turn-serializer-v1".into(),
-            lanes: vec![sem_os_policy::decision_board::EvidenceLane::Lexical],
+            lanes: vec![semantic_decision_contracts::EvidenceLane::Lexical],
             bundle_identities: vec!["lexical-v1".into()],
             exact_collision: Vec::new(),
             served_full_board: true,

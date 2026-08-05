@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sem_os_policy::decision_board::SemanticDecisionBoard;
+use semantic_decision_contracts::SemanticDecisionBoard;
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 

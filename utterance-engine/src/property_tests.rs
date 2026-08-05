@@ -1,12 +1,11 @@
 //! Property cements for the deterministic mapper contracts.
 
 use proptest::prelude::*;
-use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
-use sem_os_policy::decision_board::{
-    ArgumentKind, BoardHash, CandidateSemanticSlice, CanonicalCandidateId, DomainIdentity,
-    EvidenceRecordHash, GraphRevision, PhraseEvidence, PhraseRole, ProposalStatus,
-    ProposalWorkbook, ResolvedPosition, SlotRequirement, SlotValueState, SnapshotIdentity,
-    WorkbookId, WorkbookSlot,
+use semantic_decision_contracts::{
+    ActionClass, ArgumentKind, BoardHash, CandidateSemanticSlice, CanonicalCandidateId,
+    DomainIdentity, EvidenceRecordHash, GraphRevision, HarmClass, PhraseEvidence, PhraseRole,
+    ProposalStatus, ProposalWorkbook, ResolvedPosition, SlotRequirement, SlotValueState,
+    SnapshotIdentity, WorkbookId, WorkbookSlot,
 };
 
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate};
@@ -37,8 +36,8 @@ fn candidate(id: &str, phrase: &str) -> CandidateSemanticSlice {
 
 fn board(
     candidates: Vec<CandidateSemanticSlice>,
-) -> sem_os_policy::decision_board::SemanticDecisionBoard {
-    sem_os_policy::decision_board::SemanticDecisionBoard::new(
+) -> semantic_decision_contracts::SemanticDecisionBoard {
+    semantic_decision_contracts::SemanticDecisionBoard::new(
         1,
         DomainIdentity::new("bpmn.property").unwrap(),
         SnapshotIdentity::new("snapshot-property").unwrap(),
