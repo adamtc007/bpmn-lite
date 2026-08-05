@@ -787,6 +787,21 @@ Rollback must be possible by reverting each consumer to its previous exact share
 - Both application artifacts identify the shared source revision at runtime or in build metadata.
 - Operational dashboards distinguish contract-version errors from model or host-adapter failures.
 
+**Execution status (5 August 2026): local release qualification complete;
+external promotion held.** Immutable application release candidates, SBOMs,
+dependency receipts, isolated PostgreSQL-backed shadow probes, and rollback
+rehearsals exist for both consumers. BPMN's three-case decision replay was
+strictly identical across the candidate and rollback artifact. `ob-poc`'s
+canonical ACP policy and persisted V2 session semantics were identical across
+its candidate and exact prior RC, and the candidate now packages all runtime
+YAML packs and snapshots. Gate 8 is not declared complete because no external
+registry/non-production target, captured production traffic set, owner-approved
+tolerance policy, or dashboard destination has been supplied. The rehearsal
+also found that `ob-poc`'s SQLx migration set cannot bootstrap an empty database
+and that its canonical schema export omits current control-plane tail migrations.
+See
+[`shared_crates_phase_8_receipt_2026-08-05.md`](shared_crates_phase_8_receipt_2026-08-05.md).
+
 ## 14. Phase 9 — Remove compatibility scaffolding
 
 Only after both consumers have shipped and the rollback window has closed:
