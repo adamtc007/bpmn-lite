@@ -281,18 +281,19 @@ impl DesignerState {
                     vec![bundle],
                 );
             }
-            // Tier-0 front end for the K-subset: embed when available
-            // (the retriever the corpus was generated on), else lexical.
-            #[cfg(feature = "embed")]
-            if let Some(e0) = &self.embed_tier0 {
-                return t1.rank(e0.as_ref(), text, &context.serialize_canonical(), board);
-            }
-            return t1.rank(
-                &utterance_engine::retrieval::LexicalTier0,
-                text,
-                &context.serialize_canonical(),
-                board,
-            );
+            // Deliberately do NOT call `t1.rank(...)` here. Every loadable
+            // tier-1 bundle's card is required (`validate_bundle_card`) to
+            // declare `pair_serializer_id`/`pair_serializer_hash` matching
+            // `pair::serialize_candidate_pair` — i.e. every live bundle was
+            // trained on that sentinel-laden pair text. `Tier1Ranker::rank`
+            // routes through `score_serving`, which builds an entirely
+            // different `"{utterance}\n\n{context}"` + plain description
+            // textualisation the bundle was never trained on. A legacy/thin
+            // board has no `CandidateSemanticSlice`s to serialize a real
+            // pair from in the first place, so there is no correct way to
+            // route it through tier-1 at all — degrade to tier-0 with an
+            // honest producer identity instead of silently scoring on
+            // untrained text.
         }
         #[cfg(feature = "embed")]
         if let Some(e0) = &self.embed_tier0 {
