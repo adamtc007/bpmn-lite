@@ -731,6 +731,17 @@ Cut over to the same shared release while loading its YAML packs and composing p
 - Focused, workspace, integration, and replay tests pass.
 - Compatibility differences are either zero or owner-approved and versioned.
 
+**Execution status (5 August 2026): complete.** The qualified shared release is
+the annotated tag `v0.2.1` at
+`586431f81e2bb9101578af5167b8a35335f5a09e`. BPMN consumes that exact
+revision at `de48b8cfa1370bbad32b9c62d99a1e3c4086ba1a`; `ob-poc` consumes
+both exact revisions at `e51dda11a02f4993e8023b934c4fd1df4293b983`.
+Locked metadata contains one shared source and one BPMN source, and the three
+full workspace suites are green. The earlier `v0.2.0` tag remains immutable but
+is superseded because final CI qualification exposed a warnings-as-errors
+Clippy failure. See
+[`shared_crates_phase_7_receipt_2026-08-05.md`](shared_crates_phase_7_receipt_2026-08-05.md).
+
 ## 13. Phase 8 — Deployment and rollback
 
 The shared crates are libraries, so deployment means releasing immutable source artifacts, rebuilding consumers, and promoting the resulting application artifacts. Do not treat a local workspace build as deployment.
