@@ -4,6 +4,11 @@
 
 **Status:** strict workspace Clippy restored; formatting and dependency carry-overs remain
 
+**Subsequent closure:** the `block 0.1.6` carry-over was removed in shared
+release `v0.2.2`; see
+`shared_crates_v0_2_2_candle_release_receipt_2026-08-05.md`. The formatting
+carry-over remains.
+
 ## Decision
 
 The `ob-poc` strict lint gate is green at commit
