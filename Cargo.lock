@@ -1390,8 +1390,8 @@ dependencies = [
 
 [[package]]
 name = "dsl-core"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1422,8 +1422,8 @@ dependencies = [
 
 [[package]]
 name = "dsl_types"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "serde",
  "serde_json",
@@ -3872,8 +3872,8 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sem_os_core"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3898,8 +3898,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_ontology"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3917,8 +3917,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_policy"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3944,8 +3944,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_types"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "chrono",
  "serde",
@@ -3956,8 +3956,8 @@ dependencies = [
 
 [[package]]
 name = "semantic-decision-contracts"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "hex",
  "serde",
@@ -3967,8 +3967,8 @@ dependencies = [
 
 [[package]]
 name = "semantic-embedder"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -3982,8 +3982,8 @@ dependencies = [
 
 [[package]]
 name = "semantic-pack"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=f2c81aabe3939f695d7126c2b7d5fd1380617374#f2c81aabe3939f695d7126c2b7d5fd1380617374"
+version = "0.2.1"
+source = "git+https://github.com/adamtc007/dsl?rev=586431f81e2bb9101578af5167b8a35335f5a09e#586431f81e2bb9101578af5167b8a35335f5a09e"
 dependencies = [
  "dsl_types",
  "hex",
