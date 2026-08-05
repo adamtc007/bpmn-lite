@@ -14,9 +14,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libprotobuf-dev protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release -p bpmn-lite-server-designer --recipe-path recipe.json
+RUN cargo chef cook --release -p bpmn-lite-server-designer --features postgres --recipe-path recipe.json
 COPY . .
-RUN cargo auditable build --release -p bpmn-lite-server-designer --bin bpmn-lite-demo-designer \
+RUN cargo auditable build --release -p bpmn-lite-server-designer --features postgres --bin bpmn-lite-demo-designer \
     && mkdir -p /build/out \
     && cp target/release/bpmn-lite-demo-designer /build/out/bpmn-lite-demo-designer \
     && strip /build/out/bpmn-lite-demo-designer
