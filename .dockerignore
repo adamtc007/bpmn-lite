@@ -1,5 +1,6 @@
 target/
 .git/
+.cargo/config.toml
 docs/
 *.md
 **/*.md
