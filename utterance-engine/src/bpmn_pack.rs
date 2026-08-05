@@ -4,6 +4,8 @@
 //! the model-visible BPMN meaning of every identity and maps it into the shared
 //! SemOS contracts without introducing a second candidate taxonomy.
 
+use std::collections::BTreeSet;
+
 use designer_graph::board_candidate::{CandidateId, OperationKind, ProductionId};
 use sem_os_ontology::verb_contract::{ActionClass, HarmClass};
 use sem_os_policy::decision_board::{
@@ -608,7 +610,74 @@ pub(crate) fn all_specs() -> Vec<BpmnCandidateSpec> {
         .collect()
 }
 
+/// The Phase 1 coverage rule: every `OperationKind` and `ProductionId` in
+/// `designer-graph`'s candidate catalogue must have exactly one semantic
+/// spec, no more and no less. Returns the missing and/or extra canonical
+/// ids on failure so a caller (a future startup check, a test, or a CLI
+/// gate) gets a localized diagnostic rather than a bare boolean.
+pub(crate) fn validate_registry_coverage(
+    specs: &[BpmnCandidateSpec],
+) -> Result<(), RegistryCoverageError> {
+    let registered = specs
+        .iter()
+        .map(|spec| spec.semantic.canonical_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let catalogue = OperationKind::ALL
+        .iter()
+        .map(|candidate| candidate.canonical_id())
+        .chain(
+            ProductionId::ALL
+                .iter()
+                .map(|candidate| candidate.canonical_id()),
+        )
+        .collect::<BTreeSet<_>>();
+
+    let missing = catalogue
+        .difference(&registered)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>();
+    let extra = registered
+        .difference(&catalogue)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>();
+    if missing.is_empty() && extra.is_empty() {
+        Ok(())
+    } else {
+        Err(RegistryCoverageError { missing, extra })
+    }
+}
+
+/// Diagnostic for [`validate_registry_coverage`]: names exactly which
+/// catalogue ids the registry is missing a spec for, and which registered
+/// ids do not correspond to any real `OperationKind`/`ProductionId`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistryCoverageError {
+    pub missing: Vec<String>,
+    pub extra: Vec<String>,
+}
+
+impl std::fmt::Display for RegistryCoverageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BPMN semantic registry does not exactly cover the designer-graph catalogue: missing={:?}, extra={:?}",
+            self.missing, self.extra
+        )
+    }
+}
+
+impl std::error::Error for RegistryCoverageError {}
+
 pub(crate) fn semantic_snapshot_identity() -> SnapshotIdentity {
+    let specs = all_specs();
+    // Fail closed rather than silently serving a shrunken/widened board:
+    // a coverage regression here means either a new designer-graph
+    // candidate has no semantic contract yet (would be silently absent
+    // from every future board) or the registry carries a phantom id (would
+    // be silently offered as if it were real). Both are startup-fatal, not
+    // a degraded-mode condition.
+    validate_registry_coverage(&specs)
+        .expect("BPMN semantic registry must exactly cover the designer-graph candidate catalogue");
     let profile = SemanticDecisionBoard::new(
         BPMN_SEMANTIC_SCHEMA_VERSION,
         DomainIdentity::new("bpmn.designer.semantic-profile")
@@ -621,7 +690,7 @@ pub(crate) fn semantic_snapshot_identity() -> SnapshotIdentity {
             anchor: None,
             context_hash: "full-bpmn-semantic-profile".to_string(),
         },
-        all_specs().into_iter().map(|spec| spec.semantic).collect(),
+        specs.into_iter().map(|spec| spec.semantic).collect(),
         "semantic-profile-content-address-v1".to_string(),
     )
     .expect("the exhaustive BPMN semantic profile is valid");
@@ -661,22 +730,13 @@ mod tests {
     #[test]
     fn semantic_registry_exhaustively_covers_designer_catalogue() {
         let specs = all_specs();
-        let ids = specs
-            .iter()
-            .map(|spec| spec.semantic.canonical_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let catalogue = OperationKind::ALL
-            .iter()
-            .map(|candidate| candidate.canonical_id())
-            .chain(
-                ProductionId::ALL
-                    .iter()
-                    .map(|candidate| candidate.canonical_id()),
-            )
-            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            validate_registry_coverage(&specs),
+            Ok(()),
+            "the real coverage rule must admit the full registry"
+        );
 
         assert_eq!(specs.len(), 26);
-        assert_eq!(ids, catalogue);
         assert!(specs.iter().all(|spec| {
             !spec.semantic.title.is_empty()
                 && !spec.semantic.intent_summary.is_empty()
@@ -774,15 +834,37 @@ mod tests {
 
     #[test]
     fn test_only_incomplete_registry_is_refused_by_coverage_rule() {
+        // Red receipt for the Phase 1 gate: a registry missing one
+        // candidate must be refused by the SAME validator the green case
+        // above depends on -- not by an inline assertion that happens to
+        // agree with it. Popping the last entry (sorted by insertion,
+        // i.e. `OperationKind::ALL` then `ProductionId::ALL`) removes the
+        // final `ProductionId` spec.
         let mut incomplete = all_specs();
-        incomplete.pop();
-        let ids = incomplete
-            .iter()
-            .map(|spec| spec.semantic.canonical_id.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_ne!(
-            ids.len(),
-            OperationKind::ALL.len() + ProductionId::ALL.len()
+        let removed = incomplete.pop().expect("registry is non-empty");
+
+        let error = validate_registry_coverage(&incomplete)
+            .expect_err("a registry missing a real candidate must be refused");
+        assert_eq!(error.extra, Vec::<String>::new());
+        assert_eq!(
+            error.missing,
+            vec![removed.semantic.canonical_id.as_str().to_string()],
+            "the diagnostic must name exactly the missing candidate"
         );
+
+        // The same validator must also catch a registered id that does
+        // not correspond to any real catalogue entry -- not just a
+        // short registry.
+        let mut extra = all_specs();
+        let mut phantom = extra[0].clone();
+        phantom.semantic = CandidateSemanticSlice {
+            canonical_id: CanonicalCandidateId::new("op.not_a_real_candidate").unwrap(),
+            ..phantom.semantic
+        };
+        extra.push(phantom);
+        let error = validate_registry_coverage(&extra)
+            .expect_err("a registered id absent from the real catalogue must be refused");
+        assert_eq!(error.missing, Vec::<String>::new());
+        assert_eq!(error.extra, vec!["op.not_a_real_candidate".to_string()]);
     }
 }
