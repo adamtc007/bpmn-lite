@@ -36,6 +36,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Layering and deterministic capability gate
         run: bash scripts/check-layering.sh
+      - name: Shared-pin guard self-test
+        run: bash scripts/check-shared-pin.sh --self-test
+      - name: Shared-pin guard (dsl/sem_os revision, invariant 19)
+        run: bash scripts/check-shared-pin.sh
       - name: Q9 capture-gate guard self-test
         run: bash scripts/check-q9-capture-gate.sh --self-test
       - name: Q9 capture-gate guard

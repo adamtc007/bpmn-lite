@@ -15,25 +15,32 @@ normative design; this programme records live-base deltas and receipts.
 
 ## Absolute invariants
 
-1. The model never creates, widens, or edits the legal candidate board.
-2. The model returns finite, board-bound ranking evidence only. It never returns a disposition, DSL string, operation, binding, or ratification decision.
-3. The BPMN graph and positional legality oracle remain the authority for what is meaningfully proposable.
-4. Unknown anchors, arguments, graph identities, and semantic snapshots fail closed. They never downgrade to whole-graph or default values.
-5. Every model-visible semantic field is content-addressed. A semantic change requires a schema/version change and moves the board hash.
-6. Training, evaluation, and live serving call the same canonical turn and candidate serializers. No duplicate textualisation is permitted.
-7. Binding remains deterministic and downstream of candidate selection. Missing values become workbook slots, not guessed values.
-8. A bound plan must pass the existing `apply_production` and `admit` path before it can be previewed.
-9. Ratification remains the only utterance-derived mutation door and must recheck graph revision and restage the plan.
-10. Real-user capture remains structurally gated. Do not enable, widen, or work around `q9-capture`.
-11. `designer-graph` remains utterance/model agnostic. Do not add Candle, tokenization, phrase, or model concepts to it.
-12. The existing shared DSL/SemOS crates contain no `DesignerDag`, BPMN compiler, Candle, pgvector, Postgres, Axum, or host event-store dependency.
-13. BPMN V1 scores the complete position-legal board unless benchmark evidence and an owner-approved decision introduce retrieval truncation.
-14. The SLM never generates textual DSL. Typed `Operation` values are the authority; any text form is a deterministic view.
-15. Outside the explicitly listed Phase 0 BPMN pack files and compatibility pin/fixture, do not edit `ob-poc`.
-16. Authoring, service invocation, runtime operations, and infrastructure control are separate semantic planes.
-17. Structural BPMN elements cannot be registered as successful no-op executable verbs.
-18. Do not introduce `utterance-mapper-core` or a parallel ontology/policy/workbook crate.
-19. BPMN depends on an immutable shared revision in committed manifests; local patches are development-only.
+Restored verbatim from the source plan (`zed_bpmn_utterance_mapper_implementation_plan.md`
+§3) on 2026-08-05 — a prior copy of this list abridged #16, #17 and #19 in ways that
+dropped exactly the clause each invariant's later enforcement work turned out to need
+(see the shared-pin guard note under #19 and the deferred ob-poc map-root fork under
+#17). Per CLAUDE.md, "Zed must preserve these verbatim throughout all phases" — treat
+any future paraphrase of this list as a defect, not a style choice.
+
+1. **The model never creates, widens, or edits the legal candidate board.**
+2. **The model returns finite, board-bound ranking evidence only. It never returns a disposition, DSL string, operation, binding, or ratification decision.**
+3. **The BPMN graph and positional legality oracle remain the authority for what is meaningfully proposable.**
+4. **Unknown anchors, arguments, graph identities, and semantic snapshots fail closed. They never downgrade to whole-graph or default values.**
+5. **Every model-visible semantic field is content-addressed. A semantic change requires a schema/version change and moves the board hash.**
+6. **Training, evaluation, and live serving call the same canonical turn and candidate serializers. No duplicate textualisation is permitted.**
+7. **Binding remains deterministic and downstream of candidate selection. Missing values become workbook slots, not guessed values.**
+8. **A bound plan must pass the existing `apply_production` and `admit` path before it can be previewed.**
+9. **Ratification remains the only utterance-derived mutation door and must recheck graph revision and restage the plan.**
+10. **Real-user capture remains structurally gated. Do not enable, widen, or work around `q9-capture`.**
+11. **`designer-graph` remains utterance/model agnostic. Do not add Candle, tokenization, phrase, or model concepts to it.**
+12. **The existing shared DSL/SemOS crates contain no `DesignerDag`, BPMN compiler, Candle, pgvector, Postgres, Axum, or host event-store dependency.**
+13. **BPMN V1 scores the complete position-legal board unless benchmark evidence and an owner-approved decision introduce retrieval truncation.** (Deviation ratified 2026-08-05: seven `NotRepresentable` candidates are excluded from production boards by deliberate binder-coverage limits, not benchmark/retrieval truncation — see "R8 ruling" below and carry-over CO-05. That exclusion is a different, narrower thing than what this invariant guards against and is recorded here rather than silently folded into "unless... introduce retrieval truncation.")
+14. **The SLM never generates textual DSL. Typed `Operation` values are the authority; any text form is a deterministic view.**
+15. **Outside the explicitly listed Phase 0 BPMN pack files and compatibility pin/fixture, do not edit `ob-poc`. Reuse is proven through the shared crates, not by a simultaneous host migration.**
+16. **Authoring, service invocation, runtime operations, and infrastructure control are separate semantic planes. A verb or phrase cannot cross those planes without an explicit typed bridge.**
+17. **Structural BPMN elements such as waits and boundary events cannot be registered as successful no-op executable verbs. They must compile into typed graph/IR operations or be absent from the executable registry.** (ob-poc side: the constellation-map/family fix that would make the `bpmn.workspace` root truthfully stateless without the phantom `bpmn_dags` table needs a stateless root slot type not present in the ob-poc-pinned dsl v0.1.5 ontology — deferred fork, not decided; see the ob-poc rework commit message and carry-over CO-01/CO-12.)
+18. **Do not introduce `utterance-mapper-core` or any parallel ontology/policy/workbook crate. Extend the existing `sem_os_ontology`, `sem_os_policy`, `dsl_types`, and `dsl-core` ownership boundaries.**
+19. **BPMN depends on a pinned shared release/revision in committed manifests. Local path patches are development-only; CI must prove the shared dependencies are active and not listed as unused patches.** Enforced by `scripts/check-shared-pin.sh` (added 2026-08-05, wired into `production-gates.yml`): a pure static check of the committed `Cargo.lock` — every one of `sem_os_ontology`, `sem_os_policy`, `dsl-core`, `dsl_types`, `sem_os_core`, `sem_os_types` must resolve from the single git revision pinned in `Cargo.toml`, and none may appear under `[[patch.unused]]`. Deliberately does not invoke `cargo` at all, so it cannot be fooled by this developer's global `~/.cargo/config.toml` local-dev patches the way an on-machine `cargo metadata` run can be (see `scripts/check-shared-pin.sh` header and the fuzz-lockfile fix under `xtask/src/fuzz.rs::neutral_cargo_home`, which hit the identical failure mode).
 
 ## Ownership matrix
 
