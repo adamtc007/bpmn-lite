@@ -95,6 +95,10 @@ The estate is currently three unmerged refactor branches plus a decoupled SLM li
 - **6.3** ACP lexical resolver retained as deterministic fallback and diagnostics, not a second source of truth.
 - **Gate 6:** one resolver path in production; replay parity receipts archived; residual special cases enumerated with owners or deleted.
 
+## 4b. Scope ruling — SemOS is the design plane only (Adam, 2026-08-06)
+
+BPMN in SemOS is the **design of a workflow template**, not the runtime. The lifecycle has two separate states: (1) **design** — the hard one — authoring the template graph under the semantic board, ending in save-as-template (compile-validated, hash-frozen, Draft→Published); (2) **instantiation** — resolve a template instance's variables against the template graph, persist to DB, from where the runtime execution engine picks it up. SemOS's job ends at the template. Consequences: the `bpmn_dag` stateless-menu posture is **correct by design** (no instance lifecycle state machine will be added — the fork surfaced 2026-08-06 is closed "no"); runtime verbs (`bpmn.signal/cancel/...`) are engine-plane, outside the SLM's semantic concern, so WS-2.B's 8-vs-13 reconciliation is bridge hygiene, not semantic coverage; all remaining hit-rate effort concentrates on the design plane (WS-2.C candidates, projection v2, staged retrain, captured design sessions).
+
 ## 5. Cross-cutting cement fixtures
 
 The review's ten risks become permanent tests, distributed: 1–3 → WS-5; 4 (exact collision across legal verbs) → WS-3; 5 (correct phrase below K) → WS-4.4; 6 (candidate text drift without corpus regen) → WS-3.2/4.2 drift gate; 7 (context truncates candidate side) → WS-4.3; 8 (template-step boost overrules explicit deviation) → WS-4.4 boost removal; 9 (absent state read as unrestricted legality) → WS-2.D admission reject; 10 (NOTA on fluent out-of-domain) → WS-4.2 corpus + Gate 4.
