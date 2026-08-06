@@ -52,3 +52,29 @@ Control (old wording), component split, test n=340: top1 0.7588;
 gateway classes: or_gateway_node 11/18, xor_gateway 12/13,
 and_gateway_node 10/12; weakest: boundary_error 1/7.
 Artifacts: /tmp/retrain-step1/control-out/ (weights, card, per-class).
+
+## Result (2026-08-06): treatment NOT adopted per the pre-registered rule
+
+Identical component split, identical recipe/seed, stored-pair test
+split (n=340), control (old wording) vs treatment (FK-E adopted
+wording):
+
+| | control | treatment |
+|---|---|---|
+| overall top-1 | **0.7588** | 0.7382 (−2.1pp) |
+| or_gateway_node (target) | 11/18 | **10/18** (−1) |
+| xor_gateway | 12/13 | 13/13 (+1) |
+| guard_node_no_escape | 14/23 | 11/23 (−3) |
+| start_anchor | 10/17 | 8/17 (−2) |
+| timer_wait / boundary_error | 6/7, 1/7 | 7/7, 2/7 (+1 each) |
+| val_loss (trainer) | 0.7561 | 0.8748 |
+
+The targeted class did not improve and overall regressed. Rule:
+"adopted iff or_gateway_node improves without net overall regression"
+— **both conditions failed**. Honest caveats: single-seed, n=18 for
+the target class (±1 is noise); the directional xor↑/or↓ pattern
+weakly matches the FK-D asymmetry hypothesis but the OR-wording fix
+did not correct it. Disposition returns to Adam: revert the pack
+wording (+ ob-poc pin), keep it on clarity grounds despite no
+measured gain, or fund a multi-seed replication before deciding.
+Artifacts: /tmp/retrain-step1/{control-out,treatment-out}/.
