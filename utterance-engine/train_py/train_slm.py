@@ -103,21 +103,33 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             )
         family_split = manifest["family_split"]
     else:
-        families = sorted({r["family_id"] for r in records})
-        rng = random.Random(seed)
-        rng.shuffle(families)
-        n = len(families)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
-        family_split = {}
-        for fam in families[:n_train]:
-            family_split[fam] = "train"
-        for fam in families[n_train : n_train + n_val]:
-            family_split[fam] = "val"
-        for fam in families[n_train + n_val :]:
-            family_split[fam] = "test"
-        # Context-pair groups can span two semantic families. Collapse their
-        # assignments deterministically so neither side leaks across splits.
+        # Context-pair groups span families, and the pair waves chain
+        # families TRANSITIVELY (measured 2026-08-06: 97/165 families in
+        # >1 group, welding a 95-family / 79%-of-records component). The
+        # old single-pass group collapse silently broke isolation on any
+        # chained overlap — the validator caught it. The only assignment
+        # satisfying "semantic-family/split-group isolation" is by
+        # CONNECTED COMPONENT of the family∪group graph: union-find,
+        # then whole components assigned to one side. The giant
+        # component goes to train (it fits nowhere else); the small
+        # components fill val/test by record count. Trainer val/test are
+        # therefore structurally small-component-only — acceptable, the
+        # promotion measurements are the held-out eval slice and
+        # starter-seed, not trainer-val.
+        parent = {}
+
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
         grouped_families = {}
         for record in records:
             grouped_families.setdefault(
@@ -125,20 +137,83 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             ).add(record["family_id"])
         for group in sorted(grouped_families):
             members = sorted(grouped_families[group])
-            assigned = family_split[members[0]]
             for family in members[1:]:
-                family_split[family] = assigned
+                union(members[0], family)
+        components = {}
+        for family in sorted({r["family_id"] for r in records}):
+            components.setdefault(find(family), set()).add(family)
+
+        records_per_family = {}
+        nota_families = set()
+        for r in records:
+            records_per_family[r["family_id"]] = (
+                records_per_family.get(r["family_id"], 0) + 1
+            )
+            if r["label"] == "abstain.none_of_the_above":
+                nota_families.add(r["family_id"])
+
+        comps = []
+        for root in sorted(components):
+            fams = sorted(components[root])
+            comps.append(
+                {
+                    "families": fams,
+                    "n_records": sum(records_per_family[f] for f in fams),
+                    "has_nota": any(f in nota_families for f in fams),
+                }
+            )
+        # Largest component -> train, deterministically; remaining
+        # components shuffled by the pinned seed and dealt to val until
+        # its record quota fills, then test, remainder train.
+        comps.sort(key=lambda c: (-c["n_records"], c["families"][0]))
+        giant, rest = comps[0], comps[1:]
+        rng = random.Random(seed)
+        rng.shuffle(rest)
+        total = len(records)
+        val_quota = int(total * val_frac)
+        test_quota = int(total * (1.0 - train_frac - val_frac))
+        family_split = {f: "train" for f in giant["families"]}
+        val_n = test_n = 0
+        for comp in rest:
+            if val_n < val_quota:
+                side, val_n = "val", val_n + comp["n_records"]
+            elif test_n < test_quota:
+                side, test_n = "test", test_n + comp["n_records"]
+            else:
+                side = "train"
+            for f in comp["families"]:
+                family_split[f] = side
+        # NOTA must exist in >=2 splits (validator). The giant component
+        # carries NOTA into train; guarantee one NOTA-bearing small
+        # component outside train by swapping if the deal missed.
+        holdout_has_nota = any(
+            family_split[f] != "train" for f in nota_families
+        )
+        if not holdout_has_nota:
+            for comp in rest:
+                if comp["has_nota"]:
+                    for f in comp["families"]:
+                        family_split[f] = "val"
+                    break
+        sides = {"train": 0, "val": 0, "test": 0}
+        for fam, side in family_split.items():
+            sides[side] += 1
         manifest = {
             "seed": seed,
             "train_frac": train_frac,
             "val_frac": val_frac,
-            "n_families": n,
-            "n_train_families": n_train,
-            "n_val_families": n_val,
-            "n_test_families": n - n_train - n_val,
+            "n_families": len(family_split),
+            "n_train_families": sides["train"],
+            "n_val_families": sides["val"],
+            "n_test_families": sides["test"],
+            "n_components": len(comps),
+            "giant_component_families": len(giant["families"]),
+            "giant_component_records": giant["n_records"],
             "corpus_version": records[0]["provenance"] if records else None,
             "n_records": len(records),
-            "split_policy": "semantic-family/split-group isolation; distinct NOTA train and holdout",
+            "split_policy": "component-level semantic-family/split-group isolation "
+            "(union-find over family∪group graph; giant component pinned to train); "
+            "distinct NOTA train and holdout",
             "family_split": family_split,
         }
         SPLIT_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
