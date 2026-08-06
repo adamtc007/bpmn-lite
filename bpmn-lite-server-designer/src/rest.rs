@@ -725,6 +725,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             get(dev_capture_status_endpoint),
         )
         .route(
+            "/api/dsl/sessions/:id/adjudication",
+            post(session_adjudication_endpoint),
+        )
+        .route(
             "/api/dsl/sessions/:id/graph-edit",
             post(session_graph_edit_endpoint),
         )
@@ -3593,6 +3597,84 @@ fn render_disposition(
 /// policy → I28 record. The record is written to the session event log
 /// (operational data); CORPUS capture stays suppressed until the Q9
 /// charter (D17) — the response reports that state honestly.
+/// WS-1.2 (charter §6): record one operator adjudication of a captured
+/// turn — the label loop. The join key is `decision_record_hash` (every
+/// utterance response carries it); the session id scopes the call to a
+/// real session but the ledger joins by hash. Reporting mirrors the
+/// capture state contract exactly: `stored` / `suppressed_no_charter` /
+/// `refused` (422) / `persist_failed` (500) / `not_compiled`.
+async fn session_adjudication_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("design session {id} not found") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("session load failed: {e}") })),
+            )
+                .into_response();
+        }
+    }
+    #[cfg(feature = "q9-capture")]
+    {
+        use utterance_engine::capture::{AdjudicationEvent, AdjudicationRecordOutcome};
+        let event: AdjudicationEvent = match serde_json::from_value(body) {
+            Ok(event) => event,
+            Err(e) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "adjudication": "refused",
+                        "reason": format!("invalid adjudication body: {e}"),
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let outcome = match demo.q9_capture.as_ref() {
+            Some(pipeline) => pipeline.lock().unwrap().adjudicate(event),
+            None => utterance_engine::capture::CapturePipeline::off().adjudicate(event),
+        };
+        match outcome {
+            AdjudicationRecordOutcome::Stored => {
+                (StatusCode::OK, Json(serde_json::json!({ "adjudication": "stored" })))
+                    .into_response()
+            }
+            AdjudicationRecordOutcome::SuppressedNoCharter => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "adjudication": "suppressed_no_charter" })),
+            )
+                .into_response(),
+            AdjudicationRecordOutcome::Refused(reason) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "adjudication": "refused", "reason": reason })),
+            )
+                .into_response(),
+            AdjudicationRecordOutcome::PersistFailed => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "adjudication": "persist_failed" })),
+            )
+                .into_response(),
+        }
+    }
+    #[cfg(not(feature = "q9-capture"))]
+    {
+        let _ = body;
+        (StatusCode::OK, Json(serde_json::json!({ "adjudication": "not_compiled" })))
+            .into_response()
+    }
+}
+
 async fn session_utterance_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path(id): Path<Uuid>,
@@ -4776,6 +4858,58 @@ mod tests {
         assert!(body["workbook"].is_null(), "{body:?}");
         assert!(body["proposal"].is_null(), "{body:?}");
         assert_eq!(body["mapper_rollout"]["stage"], "suggest");
+    }
+
+    /// WS-1.2: the adjudication endpoint scopes to a real session,
+    /// mirrors the capture-state honesty contract (hermetically OFF in
+    /// tests), and structurally refuses a correction without its
+    /// candidate.
+    #[tokio::test]
+    async fn adjudication_endpoint_is_charter_gated_and_validates() {
+        let app = designer_router(DesignerState::try_new().unwrap());
+        let (session_id, _anchor) = seed_graph_backed_session(&app).await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{}/adjudication", Uuid::new_v4()),
+                serde_json::json!({ "decision_record_hash": "abc", "outcome": "accepted" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/adjudication"),
+                serde_json::json!({ "decision_record_hash": "abc", "outcome": "accepted" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        #[cfg(feature = "q9-capture")]
+        assert_eq!(body["adjudication"], "suppressed_no_charter");
+        #[cfg(not(feature = "q9-capture"))]
+        assert_eq!(body["adjudication"], "not_compiled");
+
+        #[cfg(feature = "q9-capture")]
+        {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/adjudication"),
+                    serde_json::json!({ "decision_record_hash": "abc", "outcome": "corrected" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "a correction without its candidate must be unrepresentable"
+            );
+        }
     }
 
     #[tokio::test]

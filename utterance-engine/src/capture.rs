@@ -62,6 +62,35 @@ pub struct CaptureEvent {
     pub dataset: DatasetClass,
 }
 
+/// Operator adjudication of one captured turn (charter §6 — the label
+/// source). Variants are structured so an outcome cannot be recorded
+/// without the data that makes it a label: a correction without the
+/// correct candidate is unrepresentable, not merely invalid.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum AdjudicationOutcome {
+    /// The served top candidate was what the operator meant.
+    Accepted,
+    /// The served top candidate was wrong; this one was meant.
+    Corrected { correct_candidate_id: String },
+    /// The operator picked a candidate from the served list themselves.
+    ExplicitlySelected { candidate_id: String },
+    /// The operator walked away — no candidate was right or wanted.
+    Abandoned,
+}
+
+/// One adjudication, linked to its captured turn by the decision-record
+/// hash. Lives in its own ledger (`adjudications.jsonl`), NOT in a
+/// dataset class: the turn stays Evaluation-class (§3); corpus builds
+/// join this ledger against captured events, and only then do
+/// corrections enter Training with `corrected_user` provenance (§6).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdjudicationEvent {
+    pub decision_record_hash: String,
+    #[serde(flatten)]
+    pub outcome: AdjudicationOutcome,
+}
+
 /// What happened to a capture call — the caller always learns the
 /// truth; suppression is visible, never silent success.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +227,60 @@ impl CapturePipeline {
     pub(crate) fn dataset(&self, class: DatasetClass) -> &[CaptureEvent] {
         self.sinks.get(&class).map(Vec::as_slice).unwrap_or(&[])
     }
+
+    /// Record one operator adjudication (charter §6). Same gate and
+    /// same honesty as `capture`: OFF → visibly suppressed; a failed
+    /// durable write records nothing and says so. An empty or
+    /// whitespace decision-record hash, or an empty corrected/selected
+    /// candidate id, is refused as `PersistFailed` — a label that
+    /// cannot be joined back to its turn is not a label.
+    pub fn adjudicate(&mut self, event: AdjudicationEvent) -> AdjudicationRecordOutcome {
+        let Some(charter) = self.charter.clone() else {
+            return AdjudicationRecordOutcome::SuppressedNoCharter;
+        };
+        if event.decision_record_hash.trim().is_empty() {
+            return AdjudicationRecordOutcome::Refused(
+                "adjudication refused: empty decision_record_hash cannot be joined to a turn"
+                    .into(),
+            );
+        }
+        let named_candidate = match &event.outcome {
+            AdjudicationOutcome::Corrected { correct_candidate_id } => {
+                Some(correct_candidate_id)
+            }
+            AdjudicationOutcome::ExplicitlySelected { candidate_id } => Some(candidate_id),
+            AdjudicationOutcome::Accepted | AdjudicationOutcome::Abandoned => None,
+        };
+        if named_candidate.is_some_and(|c| c.trim().is_empty()) {
+            return AdjudicationRecordOutcome::Refused(
+                "adjudication refused: corrected/selected outcome names an empty candidate id"
+                    .into(),
+            );
+        }
+        let Some(dir) = &self.durable_dir else {
+            return AdjudicationRecordOutcome::Refused(
+                "adjudication refused: no durable ledger (in-memory pipelines take no labels)"
+                    .into(),
+            );
+        };
+        match append_adjudication(dir, &charter, &event) {
+            Ok(()) => AdjudicationRecordOutcome::Stored,
+            Err(e) => {
+                tracing::error!("q9 adjudication persist failed (label NOT stored): {e}");
+                AdjudicationRecordOutcome::PersistFailed
+            }
+        }
+    }
+}
+
+/// Outcome of recording an adjudication — same visibility contract as
+/// [`CaptureOutcome`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdjudicationRecordOutcome {
+    SuppressedNoCharter,
+    Stored,
+    Refused(String),
+    PersistFailed,
 }
 
 /// Per-class file name — the on-disk half of the physical dataset
@@ -213,19 +296,45 @@ fn class_file_name(class: DatasetClass) -> &'static str {
 fn append_durable(dir: &Path, charter: &str, event: &CaptureEvent) -> anyhow::Result<()> {
     let line = DurableCaptureLine {
         charter: charter.to_owned(),
-        captured_at_epoch_s: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        captured_at_epoch_s: epoch_s(),
         event: event.clone(),
     };
-    let mut serialized = serde_json::to_string(&line)?;
-    serialized.push('\n');
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(class_file_name(event.dataset)))?;
+    append_jsonl(&dir.join(class_file_name(event.dataset)), &serde_json::to_string(&line)?)
+}
+
+/// One durable adjudication-ledger line (charter §6/§7 lineage).
+#[derive(Serialize, Deserialize)]
+struct DurableAdjudicationLine {
+    charter: String,
+    adjudicated_at_epoch_s: u64,
+    #[serde(flatten)]
+    event: AdjudicationEvent,
+}
+
+/// The label ledger — deliberately NOT a dataset-class file (§3: one
+/// event, one class; labels are a join surface, not a dataset).
+const ADJUDICATION_LEDGER: &str = "adjudications.jsonl";
+
+fn append_adjudication(dir: &Path, charter: &str, event: &AdjudicationEvent) -> anyhow::Result<()> {
+    let line = DurableAdjudicationLine {
+        charter: charter.to_owned(),
+        adjudicated_at_epoch_s: epoch_s(),
+        event: event.clone(),
+    };
+    append_jsonl(&dir.join(ADJUDICATION_LEDGER), &serde_json::to_string(&line)?)
+}
+
+fn epoch_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn append_jsonl(path: &Path, serialized: &str) -> anyhow::Result<()> {
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(serialized.as_bytes())?;
+    file.write_all(b"\n")?;
     file.flush()?;
     Ok(())
 }
@@ -315,6 +424,63 @@ mod tests {
 
         assert!(!dir.join("training.jsonl").exists(), "training sink must not exist");
         assert!(!dir.join("audit.jsonl").exists(), "audit sink must not exist");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter §6: adjudications are gated exactly like capture (OFF →
+    /// visibly suppressed), refuse un-joinable or candidate-less labels,
+    /// and land in the ledger — not in any dataset-class file.
+    #[test]
+    fn adjudication_is_charter_gated_validated_and_ledgered() {
+        let mut off = CapturePipeline::off();
+        assert_eq!(
+            off.adjudicate(AdjudicationEvent {
+                decision_record_hash: "abc123".into(),
+                outcome: AdjudicationOutcome::Accepted,
+            }),
+            AdjudicationRecordOutcome::SuppressedNoCharter
+        );
+
+        let dir = scratch_dir("adj");
+        let mut p = CapturePipeline::under_ratified_charter(RATIFIED_CHARTER_REF, &dir).unwrap();
+
+        assert!(matches!(
+            p.adjudicate(AdjudicationEvent {
+                decision_record_hash: "   ".into(),
+                outcome: AdjudicationOutcome::Accepted,
+            }),
+            AdjudicationRecordOutcome::Refused(_)
+        ));
+        assert!(matches!(
+            p.adjudicate(AdjudicationEvent {
+                decision_record_hash: "abc123".into(),
+                outcome: AdjudicationOutcome::Corrected { correct_candidate_id: " ".into() },
+            }),
+            AdjudicationRecordOutcome::Refused(_)
+        ));
+
+        assert_eq!(
+            p.adjudicate(AdjudicationEvent {
+                decision_record_hash: "abc123".into(),
+                outcome: AdjudicationOutcome::Corrected {
+                    correct_candidate_id: "op.insert_after".into()
+                },
+            }),
+            AdjudicationRecordOutcome::Stored
+        );
+        let ledger = std::fs::read_to_string(dir.join("adjudications.jsonl")).unwrap();
+        let lines: Vec<&str> = ledger.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let parsed: DurableAdjudicationLine = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(parsed.charter, RATIFIED_CHARTER_REF);
+        assert_eq!(parsed.event.decision_record_hash, "abc123");
+        assert_eq!(
+            parsed.event.outcome,
+            AdjudicationOutcome::Corrected { correct_candidate_id: "op.insert_after".into() }
+        );
+        for class_file in ["evaluation.jsonl", "training.jsonl", "audit.jsonl"] {
+            assert!(!dir.join(class_file).exists(), "{class_file} must not receive labels");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
