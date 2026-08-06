@@ -52,4 +52,4 @@ Rationale anchors: the settled OR-gateway decision (named-subset output types, e
 
 Per the standing rule, adopting any of this text obligates corpus regeneration at the retrain — which is exactly step 1 of the ruled single-variable protocol.
 
-**Adjudication:** ☐ adopt as drafted / ☐ adopt with edits (record inline) / ☐ reject, keep current OR text
+**Adjudication:** ☑ **adopted as drafted** (Adam, 2026-08-06) / ☐ adopt with edits / ☐ reject. Retrain step 1 (wording-only, committed 178-family split) is unlocked; corpus regeneration obligation applies.

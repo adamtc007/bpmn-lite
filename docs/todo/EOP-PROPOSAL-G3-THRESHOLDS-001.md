@@ -1,6 +1,6 @@
 # EOP-PROPOSAL-G3-THRESHOLDS-001 — G3 promotion thresholds (WS-1.5, for FK-B ruling)
 
-**Status: PROPOSED — awaiting Adam's values. Nothing promotes until this is ruled; the ladder stays shadow.**
+**Status: RULED — adopted as proposed (Adam, 2026-08-06; closes FK-B). These are now the G3 values. The ladder stays shadow until the funnel measures them on adjudicated real turns; thresholds ratchet up only.**
 **Measured by:** the WS-1.3 funnel (`funnel_report`) over charter-captured, operator-adjudicated turns — real data only. Synthetic evals remain development instruments and can never satisfy a G3 criterion (I-4).
 **Ladder (D18, unchanged):** shadow → suggest-only → workbook/staged-patch. `MapperRollout` already implements exactly these stages with no auto-apply.
 

@@ -1,6 +1,6 @@
 # EOP-SPEC-CONTEXT-PROJECTION-V2-001 — the context side of the candidate-conditioned contract
 
-**Status: SPEC for Adam's review. Implementation follows review; adoption obligates corpus regeneration and lands inside the staged retrain protocol (§5), never as a silent serving change.**
+**Status: APPROVED as spec'd (Adam, 2026-08-06) — F1–F5, N=3 (budget-degradable to 1), §5 staging confirmed. Implementation lands inside retrain step 2, never as a silent serving change.**
 **Closes:** the left-hand side of the review's target contract `[utterance + state + dialogue] × [candidate slice + transition + neighbourhood]`. The right-hand side (v3 candidate serializer) is implemented and awaiting weights (CO-02 receipt 2026-08-06).
 
 ## 1. What v1 carries (and why it starves the model)
