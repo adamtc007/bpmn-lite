@@ -218,12 +218,13 @@ dependencies = [
 
 [[package]]
 name = "dsl_types"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+version = "0.2.2"
+source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
 dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -486,8 +487,8 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sem_os_ontology"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+version = "0.2.2"
+source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
 dependencies = [
  "anyhow",
  "chrono",
@@ -505,8 +506,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_types"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+version = "0.2.2"
+source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
 dependencies = [
  "chrono",
  "serde",
@@ -517,13 +518,30 @@ dependencies = [
 
 [[package]]
 name = "semantic-decision-contracts"
-version = "0.2.0"
-source = "git+https://github.com/adamtc007/dsl?rev=5ac7da7a513744e907ca110484c3a6a9472ae985#5ac7da7a513744e907ca110484c3a6a9472ae985"
+version = "0.2.2"
+source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
 dependencies = [
  "hex",
  "serde",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "semantic-pack"
+version = "0.2.2"
+source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+dependencies = [
+ "dsl_types",
+ "hex",
+ "semantic-decision-contracts",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_yaml",
+ "sha2",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
@@ -567,6 +585,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -780,6 +809,7 @@ dependencies = [
  "petgraph",
  "sem_os_ontology",
  "semantic-decision-contracts",
+ "semantic-pack",
  "serde",
  "serde_json",
  "sha2",
