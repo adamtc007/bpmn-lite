@@ -108,7 +108,7 @@ The review's ten risks become permanent tests, distributed: 1–3 → WS-5; 4 (e
 | FK-C | `bpmn.compile`(XML) vs `define-template`(DSL plan body): one bridge contract | WS-2.B | Open |
 | FK-D | Uncommitted 2026-08-04 retrain disposition | WS-0.3, I-3 | **Disposed 2026-08-06** — investigated, discarded with receipt `docs/receipts/fk-d-retrain-2026-08-04-comparison.md` |
 | FK-E | Gateway wording adjudication (bake-off §10.2) before corpus regeneration | WS-4.2 | **Ruled 2026-08-06: option (a)** — extend audit to OR family + single-variable retrain; OR-family text drafted in the brief, awaiting Adam's adjudication |
-| FK-F | DSL-coverage scope: which constructs get new designer-graph operations vs pack-only candidates vs ruled out of authoring scope | WS-2.C | Open |
+| FK-F | DSL-coverage scope for WS-2.C | WS-2.C | **Ruled 2026-08-06: two-stage.** Stage 1: author `not_representable` candidates for every uncovered construct (loop, start/end, join-mode, DMN decision, plug/args, standalone message-wait/timer, flow conditions, reroute) so utterances match honestly and accrue funnel evidence. Stage 2: promote to executable designer-graph ops in demand order, driven by which not_representable candidates real turns hit |
 | FK-G | Merge the three refactor branches to main now vs hold | WS-0.1 | **Ruled + executed 2026-08-06** — all three mains at the v0.2.2 baseline; ob-poc pin-alignment merged (9daf876c) |
 | FK-H | External promotion prerequisites (P8-01: registry, non-prod env, traffic corpus, tolerance policy, dashboards) — also the sole blocker on shared-crates Gates 8/9 and the v0.3.0 shim deletion | Deployment legs only | Open — infra decision |
 
