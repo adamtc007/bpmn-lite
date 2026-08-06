@@ -128,10 +128,10 @@ pub struct CapturePipeline {
 /// (charter §7 — every stored event names the charter it was captured
 /// under).
 #[derive(Serialize, Deserialize)]
-struct DurableCaptureLine {
-    charter: String,
-    captured_at_epoch_s: u64,
-    event: CaptureEvent,
+pub(crate) struct DurableCaptureLine {
+    pub(crate) charter: String,
+    pub(crate) captured_at_epoch_s: u64,
+    pub(crate) event: CaptureEvent,
 }
 
 impl CapturePipeline {
@@ -285,7 +285,7 @@ pub enum AdjudicationRecordOutcome {
 
 /// Per-class file name — the on-disk half of the physical dataset
 /// separation. One class, one file; never a shared stream.
-fn class_file_name(class: DatasetClass) -> &'static str {
+pub(crate) fn class_file_name(class: DatasetClass) -> &'static str {
     match class {
         DatasetClass::Evaluation => "evaluation.jsonl",
         DatasetClass::Training => "training.jsonl",
@@ -304,16 +304,16 @@ fn append_durable(dir: &Path, charter: &str, event: &CaptureEvent) -> anyhow::Re
 
 /// One durable adjudication-ledger line (charter §6/§7 lineage).
 #[derive(Serialize, Deserialize)]
-struct DurableAdjudicationLine {
-    charter: String,
-    adjudicated_at_epoch_s: u64,
+pub(crate) struct DurableAdjudicationLine {
+    pub(crate) charter: String,
+    pub(crate) adjudicated_at_epoch_s: u64,
     #[serde(flatten)]
-    event: AdjudicationEvent,
+    pub(crate) event: AdjudicationEvent,
 }
 
 /// The label ledger — deliberately NOT a dataset-class file (§3: one
 /// event, one class; labels are a join surface, not a dataset).
-const ADJUDICATION_LEDGER: &str = "adjudications.jsonl";
+pub(crate) const ADJUDICATION_LEDGER: &str = "adjudications.jsonl";
 
 fn append_adjudication(dir: &Path, charter: &str, event: &AdjudicationEvent) -> anyhow::Result<()> {
     let line = DurableAdjudicationLine {

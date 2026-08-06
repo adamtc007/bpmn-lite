@@ -39,6 +39,10 @@ pub mod context;
 // let alone accidentally enable. See `capture.rs`'s module doc.
 #[cfg(feature = "q9-capture")]
 pub mod capture;
+// WS-1.3: the decomposed quality funnel over captured+adjudicated turns
+// — meaningless without the capture module, so it shares the gate.
+#[cfg(feature = "q9-capture")]
+pub mod funnel;
 pub mod contract;
 pub mod corpus_schema;
 // Dev-session capture: Adam's own testing only, always compiled,
