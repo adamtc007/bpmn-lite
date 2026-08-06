@@ -73,8 +73,12 @@ pub struct DevSessionRecord {
     pub retrieved_subset_hash: String,
     pub model_bundle_hash: String,
     pub disposition_policy_hash: String,
+    pub action_span_producer_hash: String,
+    pub decision_record_hash: String,
     pub ranking: Vec<(String, FiniteScore)>,
     pub disposition: ProposalDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
 /// Per-event payload `DevSessionStore::capture` needs — everything the
@@ -89,8 +93,11 @@ pub struct DevSessionCaptureInput {
     pub retrieved_subset_hash: String,
     pub model_bundle_hash: String,
     pub disposition_policy_hash: String,
+    pub action_span_producer_hash: String,
+    pub decision_record_hash: String,
     pub ranking: Vec<(String, FiniteScore)>,
     pub disposition: ProposalDisposition,
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
 /// One open dev-testing session. The only constructor requires a
@@ -147,8 +154,11 @@ impl DevSessionStore {
             retrieved_subset_hash: input.retrieved_subset_hash,
             model_bundle_hash: input.model_bundle_hash,
             disposition_policy_hash: input.disposition_policy_hash,
+            action_span_producer_hash: input.action_span_producer_hash,
+            decision_record_hash: input.decision_record_hash,
             ranking: input.ranking,
             disposition: input.disposition,
+            evidence_trace: input.evidence_trace,
         };
         self.records.push(record);
         self.records.last().expect("just pushed")
@@ -179,8 +189,14 @@ mod tests {
     }
 
     fn one_input() -> DevSessionCaptureInput {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let context = crate::context::minimal("pack.none", "g-test");
         let evidence = LexicalTier0.retrieve("connect the nodes", &board).unwrap();
         let (disposition, record) =
@@ -194,8 +210,11 @@ mod tests {
             retrieved_subset_hash: record.retrieved_subset_hash.clone(),
             model_bundle_hash: record.model_bundle_hash.clone(),
             disposition_policy_hash: record.disposition_policy_hash.clone(),
+            action_span_producer_hash: record.action_span_producer_hash.clone(),
+            decision_record_hash: record.decision_record_hash.clone(),
             ranking: record.ranking.clone(),
             disposition,
+            evidence_trace: record.evidence_trace.clone(),
         }
     }
 
@@ -221,8 +240,14 @@ mod tests {
         assert_eq!(record.subject, DevSessionSubject::Adam);
         assert_eq!(record.provenance, DEV_SESSION_PROVENANCE);
         assert_eq!(record.provenance, "dev-session-adam-v1");
-        assert!(!record.board.candidates.is_empty(), "board dump must carry real candidates, not just a hash");
-        assert!(!record.context_projection.is_empty(), "context text must be present, not hash-only");
+        assert!(
+            !record.board.candidates.is_empty(),
+            "board dump must carry real candidates, not just a hash"
+        );
+        assert!(
+            !record.context_projection.is_empty(),
+            "context text must be present, not hash-only"
+        );
         assert_eq!(store.records().len(), 1);
         assert_eq!(store.session_id(), "sess-1");
     }

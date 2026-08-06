@@ -1,0 +1,28 @@
+[package]
+name = "bpmn-lite-server-designer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
+bpmn-lite-types = { path = "../../bpmn-lite-types" }
+designer-graph = { path = "../../designer-graph" }
+utterance-engine = { path = "../../utterance-engine" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "a38eefe1e8d039bd8b52e52477ffd58ba39c3058" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[[bin]]
+name = "bpmn_binding_extract"
+path = "fuzz_targets/bpmn_binding_extract.rs"
+test = false
+doc = false
+bench = false

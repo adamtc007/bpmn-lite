@@ -16,17 +16,16 @@ Training a fresh head uniformly on all four keeps the bake-off apples-to-
 apples: encoder transfer learning kept, head never advantaged by an
 unrelated pretraining task.
 
-Objective (A4): listwise over the board -- softmax cross-entropy across
-the exact `tier1_list` (tier-0 top-K + NONE_OF_THE_ABOVE, Adam's finding-5
-ruling) recorded in each training record, because that is the real
-inference shape. Input encoding (A4): utterance + A1's serializer output
-as segment A, candidate description as segment B, per candidate.
+Objective (A4): listwise over the complete semantic board. Rust corpus
+generation stores the exact bounded pair sides serving consumes; Python never
+re-derives candidate text or silently truncates a combined front slice.
 
 Split (A3.4): by board-state family (`family_id`), pinned seed -- never
 by individual utterance, so sibling paraphrases of one intent on one
 board never straddle train/val/test.
 """
 import argparse
+import hashlib
 import json
 import random
 import time
@@ -37,12 +36,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import save_file
 from transformers import AutoModel, AutoTokenizer
+from split_validation import validate_record_split
 
 ROOT = Path(__file__).parent.parent
-CORPUS_PATH = ROOT / "seed/corpus_v2/synthetic-v2-beta.jsonl"
+CORPUS_PATH = ROOT / "seed/corpus_v3/bpmn-semantic-v3-shadow.jsonl"
 TRAIN_PY_DIR = Path(__file__).parent
 BUNDLE_DIR = TRAIN_PY_DIR / "bundles"
-SPLIT_MANIFEST_PATH = TRAIN_PY_DIR / "split_manifest.json"
+SPLIT_MANIFEST_PATH = TRAIN_PY_DIR / "split_manifest_v3.json"
 
 # Pinned once, recorded in every bundle's training_card.json (A4: "seeds...
 # feeding the SS10.8 sealed bundle"). Never reseeded per base -- the bake-off
@@ -77,7 +77,15 @@ def load_corpus():
     records = []
     with open(CORPUS_PATH) as f:
         for line in f:
-            records.append(json.loads(line))
+            record = json.loads(line)
+            closure = record.get("semantic_v3")
+            if not closure or closure.get("corpus_schema_id") != "bpmn.semantic-corpus.v3":
+                raise SystemExit("v3 training refuses a legacy or incomplete corpus record")
+            if not closure.get("board_inclusion_truth"):
+                raise SystemExit("v3 corpus contains a gold candidate outside its board")
+            if record["label"] not in closure.get("full_served_list", []):
+                raise SystemExit("v3 full served list omitted the gold candidate")
+            records.append(record)
     return records
 
 
@@ -108,27 +116,18 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             family_split[fam] = "val"
         for fam in families[n_train + n_val :]:
             family_split[fam] = "test"
-        # Split-policy amendment (2026-08-03, from the money-receipt
-        # regression root-cause): NOTA families ALWAYS train. For a real
-        # candidate, holding its class::label family out measures
-        # generalization to unseen phrasings of that operation. A NOTA
-        # family is not a lexical family -- it is the complement of every
-        # other candidate at that position; holding it out guarantees the
-        # model never learns what NOT to do at that class, and it tears
-        # contrast pairs apart (measured: guard_node::op.set_guard_budget
-        # landed in train while its paired guarded_task::abstain half
-        # landed in val -- the pair's entire teaching purpose destroyed by
-        # the shuffle). Reseeding until the lottery comes out right would
-        # be receipt-gaming; this rule is the principled fix. Eval
-        # integrity is unaffected: the reported eval set (eval_disjoint)
-        # is a separate held-out bank, never derived from this split; val
-        # is checkpoint selection + calibration only.
-        forced_to_train = [
-            fam for fam, s in family_split.items()
-            if s != "train" and fam.endswith("::abstain.none_of_the_above")
-        ]
-        for fam in forced_to_train:
-            family_split[fam] = "train"
+        # Context-pair groups can span two semantic families. Collapse their
+        # assignments deterministically so neither side leaks across splits.
+        grouped_families = {}
+        for record in records:
+            grouped_families.setdefault(
+                record["semantic_v3"]["split_group"], set()
+            ).add(record["family_id"])
+        for group in sorted(grouped_families):
+            members = sorted(grouped_families[group])
+            assigned = family_split[members[0]]
+            for family in members[1:]:
+                family_split[family] = assigned
         manifest = {
             "seed": seed,
             "train_frac": train_frac,
@@ -139,14 +138,14 @@ def build_or_load_split(records, seed=SEED, train_frac=0.8, val_frac=0.1):
             "n_test_families": n - n_train - n_val,
             "corpus_version": records[0]["provenance"] if records else None,
             "n_records": len(records),
-            "split_policy": "family-level shuffle; NOTA families forced to train (2026-08-03 amendment)",
-            "nota_families_forced_to_train": sorted(forced_to_train),
+            "split_policy": "semantic-family/split-group isolation; distinct NOTA train and holdout",
             "family_split": family_split,
         }
         SPLIT_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
         print(f"split manifest written: {SPLIT_MANIFEST_PATH}")
 
     split = {r["example_id"]: family_split[r["family_id"]] for r in records}
+    validate_record_split(records, split)
     return split, manifest
 
 
@@ -186,21 +185,15 @@ POOLING = {
 }
 
 
-def candidate_descriptions(record):
-    return {c["canonical_id"]: c["description"] for c in record["board"]["candidates"]}
-
-
 def encode_example(tokenizer, record, device, max_length=MAX_LENGTH):
-    # A1: the SAME serializer used at inference (ctxproj.v1, already
-    # embedded in `context_projection` by the Rust corpus generator) --
-    # never a provisional Python re-derivation of board context.
-    query_text = f"{record['utterance']}\n\n{record['context_projection']}"
-    desc_lookup = candidate_descriptions(record)
-    cand_ids = record["tier1_list"]
-    cand_texts = [desc_lookup[c] for c in cand_ids]
+    closure = record["semantic_v3"]
+    pairs = {item["candidate_id"]: item["pair"] for item in closure["candidate_pairs"]}
+    cand_ids = closure["full_served_list"]
+    side_a = [pairs[c]["side_a"] for c in cand_ids]
+    side_b = [pairs[c]["side_b"] for c in cand_ids]
     enc = tokenizer(
-        [query_text] * len(cand_ids),
-        cand_texts,
+        side_a,
+        side_b,
         truncation=True,
         max_length=max_length,
         padding=True,
@@ -351,6 +344,26 @@ def export_bundle(base_key, model, tokenizer, recipe_card, corpus_manifest):
     save_file(state, str(out_dir / "model.safetensors"))
     tokenizer.save_pretrained(out_dir)
     card = dict(recipe_card)
+    records = load_corpus()
+    closure = records[0]["semantic_v3"]
+    digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    card.update({
+        "corpus_schema_id": closure["corpus_schema_id"],
+        "corpus_schema_hash": closure["corpus_schema_hash"],
+        "semantic_board_schema_version": closure["semantic_board_schema_version"],
+        "semantic_pack_identity": closure["semantic_pack_identity"],
+        "turn_serializer_id": closure["turn_serializer_id"],
+        "turn_serializer_hash": closure["turn_serializer_hash"],
+        "candidate_serializer_id": closure["candidate_serializer_id"],
+        "candidate_serializer_hash": closure["candidate_serializer_hash"],
+        "pair_serializer_id": closure["pair_serializer_id"],
+        "pair_serializer_hash": closure["pair_serializer_hash"],
+        "side_a_tokens": 128,
+        "side_b_tokens": 128,
+        "tokenizer_hash": digest(out_dir / "tokenizer.json"),
+        "model_weights_hash": digest(out_dir / "model.safetensors"),
+        "training_split_manifest_hash": digest(SPLIT_MANIFEST_PATH),
+    })
     card["corpus_manifest"] = {
         "corpus_version": corpus_manifest.get("corpus_version"),
         "seed": corpus_manifest.get("seed"),

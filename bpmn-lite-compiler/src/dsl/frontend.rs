@@ -6,8 +6,8 @@ use crate::ir::TimerSpec;
 use crate::lowering::timer_spec_duration_ms;
 use crate::VerifiedWorkflow;
 use bpmn_lite_types::{
-    legacy_program, Addr, ArtifactEnvelope, ExecutableWorkflow, Instr, PayloadRouteBranch,
-    ScopeFailureBudget,
+    legacy_program, Addr, ArtifactEnvelope, BindingSource, ExecutableWorkflow, Instr,
+    PayloadRouteBranch, ScopeFailureBudget,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -131,6 +131,9 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     let mut debug_map = BTreeMap::new();
     let mut task_manifest = Vec::new();
     let mut task_ids = BTreeMap::new();
+    let mut message_ids = BTreeMap::new();
+    let mut message_name_map = BTreeMap::new();
+    let mut v2_corr_sources = BTreeMap::new();
     let join_plan = BTreeMap::new();
     let mut fork_pairing: BTreeMap<String, Addr> = BTreeMap::new();
     let mut v2_guard_budgets: BTreeMap<Addr, ScopeFailureBudget> = BTreeMap::new();
@@ -265,6 +268,30 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     target: target(&addresses, &node.next)?,
                 });
             }
+            ExecutionNode::MessageWait(node) => {
+                let name = intern_message_name(
+                    &node.name,
+                    &mut message_ids,
+                    &mut message_name_map,
+                )?;
+                let wait_addr = Addr::new(instructions.len() as u32);
+                instructions.push(Instr::V2WaitMsg { name });
+                let path = node
+                    .correlation_key_source
+                    .split('.')
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if path.is_empty() || path.iter().any(String::is_empty) {
+                    return Err(FrontendError::UnsupportedPlanConstruct(format!(
+                        "message wait '{}' has an empty or malformed correlation source",
+                        node.id
+                    )));
+                }
+                v2_corr_sources.insert(wait_addr, BindingSource::DomainPayloadRef(path));
+                instructions.push(Instr::Jump {
+                    target: target(&addresses, &node.next)?,
+                });
+            }
             ExecutionNode::Split(node) => {
                 if let Some(operation) = &node.routing_socket {
                     let task_type = intern_task(operation, &mut task_ids, &mut task_manifest);
@@ -394,7 +421,7 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         debug_map: debug_map,
         join_plan: join_plan,
         wait_plan: BTreeMap::new(),
-        message_name_map: BTreeMap::new(),
+        message_name_map: message_name_map,
         write_set: BTreeMap::new(),
         task_manifest: task_manifest,
         flag_symbol_table: BTreeMap::new(),
@@ -404,7 +431,8 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     // WS-D D2: same budget side-table attachment as the XML path; the
     // plan format has no workflow-level default-budget annotation, so the
     // conservative default applies to guards without an explicit budget.
-    .with_v2_guard_budgets(v2_guard_budgets, ScopeFailureBudget::conservative_default());
+    .with_v2_guard_budgets(v2_guard_budgets, ScopeFailureBudget::conservative_default())
+    .with_v2_corr_sources(v2_corr_sources);
     let envelope = ArtifactEnvelope::from_legacy_program(legacy, env!("CARGO_PKG_VERSION"))
         .map_err(|error| FrontendError::Artifact(error.to_string()))?;
     ExecutableWorkflow::from_verified_envelope(envelope)
@@ -496,6 +524,7 @@ fn instruction_count(
         ExecutionNode::Task(_) => Ok(2),
         // WS-D D2: PushI64 + V2WaitFor/V2WaitUntil + Jump.
         ExecutionNode::Wait(_) => Ok(3),
+        ExecutionNode::MessageWait(_) => Ok(2),
         // WS-D D2: +1 for the V2GuardNEnd a non-interrupting guard's
         // escape terminal emits before its own End.
         ExecutionNode::End(node) if guardn_close_ends.contains(&node.id) => Ok(2),
@@ -709,8 +738,32 @@ fn outgoing(node: &ExecutionNode) -> Vec<&str> {
             .chain(std::iter::once(node.next.as_str()))
             .collect(),
         ExecutionNode::Wait(node) => vec![&node.next],
+        ExecutionNode::MessageWait(node) => vec![&node.next],
         ExecutionNode::End(_) => Vec::new(),
     }
+}
+
+fn intern_message_name(
+    name: &str,
+    ids: &mut BTreeMap<String, u32>,
+    names: &mut BTreeMap<u32, String>,
+) -> Result<u32, FrontendError> {
+    if let Some(id) = ids.get(name) {
+        return Ok(*id);
+    }
+    let mut id = u32::from_le_bytes(blake3::hash(name.as_bytes()).as_bytes()[..4].try_into().map_err(
+        |_| FrontendError::Artifact("message-name hash could not be narrowed".to_string()),
+    )?);
+    while let Some(existing) = names.get(&id) {
+        if existing == name {
+            ids.insert(name.to_string(), id);
+            return Ok(id);
+        }
+        id = id.wrapping_add(1);
+    }
+    ids.insert(name.to_string(), id);
+    names.insert(id, name.to_string());
+    Ok(id)
 }
 
 fn topological_order(plan: &WorkflowExecutionPlan) -> Result<Vec<String>, FrontendError> {

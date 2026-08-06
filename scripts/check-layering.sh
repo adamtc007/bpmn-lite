@@ -46,6 +46,18 @@ $unexpected_dependencies"
 $forbidden_kernel_source"
 fi
 
+# Shared-contract ownership: BPMN may import these names from SemOS after the
+# pinned release, but must never define a local shadow contract/crate.
+shadow_contracts="$(rg -n '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(struct|enum)[[:space:]]+(CandidateSemanticSlice|SemanticDecisionBoard|InferenceEvidence|InferenceDisposition|ProposalWorkbook|WorkbookSlot|FiniteScore)[[:space:]{]' \
+  --glob '*.rs' . 2>/dev/null \
+  | rg -v '^utterance-engine/src/contract.rs:.*struct FiniteScore' || true)"
+[ -n "$shadow_contracts" ] && note "BPMN defines a shared SemOS contract locally:
+$shadow_contracts"
+
+if [ -d "utterance-mapper-core" ] || rg -n 'name[[:space:]]*=[[:space:]]*"utterance-mapper-core"' --glob Cargo.toml . >/dev/null 2>&1; then
+  note "forbidden parallel crate utterance-mapper-core exists"
+fi
+
 # T10 — engine code that constructs DeterministicContext must obtain ambient
 # values through runtime_context.rs, which has deterministic test adapters.
 engine_apply_source="bpmn-lite-engine/src/engine.rs"

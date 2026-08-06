@@ -4,6 +4,7 @@
 //! producer (Q7 ruled option (a): deterministic resolvers).
 
 use anyhow::{anyhow, Result};
+use semantic_decision_contracts::EvidenceLane;
 use serde::{Deserialize, Serialize};
 
 /// The explicit abstention candidate present on EVERY board (R2-r1).
@@ -63,6 +64,21 @@ pub struct RankedCandidate {
     pub score: FiniteScore,
 }
 
+/// Auditable evidence metadata for the semantic serving path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceTrace {
+    pub candidate_serializer_hash: String,
+    /// `pair::turn_serializer_hash()` — sealed in the corpus closure and
+    /// bundle card, but until now absent from the per-utterance audit
+    /// record itself; a turn-serializer change would move corpus/bundle
+    /// hashes without the live decision record showing why.
+    pub turn_serializer_hash: String,
+    pub lanes: Vec<EvidenceLane>,
+    pub bundle_identities: Vec<String>,
+    pub exact_collision: Vec<String>,
+    pub served_full_board: bool,
+}
+
 /// V&S §10.3 verbatim shape. Hashes are hex-encoded blake3.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SlmResult {
@@ -75,6 +91,9 @@ pub struct SlmResult {
     /// The sealed model bundle (§10.8). Tier-0-only results use the
     /// tier-0 identity string until a tier-1 bundle exists.
     pub model_bundle_hash: String,
+    /// Present on the semantic path; absent on compatibility evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_trace: Option<EvidenceTrace>,
 }
 
 /// THE canonical ordering (R2-3): descending score; equal scores break

@@ -16,6 +16,7 @@ pub enum NodeAst {
     Start(StartAst),
     End(EndAst),
     Task(TaskAst),
+    MessageWait(MessageWaitAst),
     Split(SplitAst),
     Join(JoinAst),
     Loop(LoopAst),
@@ -27,6 +28,7 @@ impl NodeAst {
             Self::Start(n) => &n.id,
             Self::End(n) => &n.id,
             Self::Task(n) => &n.id,
+            Self::MessageWait(n) => &n.id,
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
@@ -38,6 +40,7 @@ impl NodeAst {
             Self::Start(n) => n.span,
             Self::End(n) => n.span,
             Self::Task(n) => n.span,
+            Self::MessageWait(n) => n.span,
             Self::Split(n) => n.span,
             Self::Join(n) => n.span,
             Self::Loop(n) => n.span,
@@ -66,6 +69,15 @@ pub struct TaskAst {
     pub args: Vec<(String, String)>,
     pub next: String,
     pub delivery_mode: Option<String>,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub struct MessageWaitAst {
+    pub id: String,
+    pub name: String,
+    pub correlation_source: String,
+    pub next: String,
     pub span: bpmn_lite_types::SourceSpan,
 }
 

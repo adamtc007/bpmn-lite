@@ -21,7 +21,7 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{Linear, Module, VarBuilder};
 use candle_transformers::models::{bert, modernbert, xlm_roberta};
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer};
+use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
 
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
 use crate::corpus_schema::Example;
@@ -149,6 +149,7 @@ impl TrainedRanker {
         let card: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
                 .context("training_card.json")?;
+        validate_bundle_card(&card, bundle_dir)?;
         let pooling = card["pooling"].as_str().context("card.pooling")?.to_string();
 
         let (repo_id, revision) = base.repo_and_revision();
@@ -184,7 +185,11 @@ impl TrainedRanker {
             ..Default::default()
         }));
         tokenizer
-            .with_truncation(None)
+            .with_truncation(Some(TruncationParams {
+                max_length: MAX_LENGTH,
+                strategy: TruncationStrategy::LongestFirst,
+                ..Default::default()
+            }))
             .map_err(|e| anyhow!("with_truncation: {e}"))?;
 
         Ok(TrainedRanker {
@@ -231,17 +236,17 @@ impl TrainedRanker {
         &self,
         utterance: &str,
         context_projection: &str,
-        board: &crate::board::Board,
+        board: &dyn crate::board::InferenceBoard,
         cand_ids: &[String],
         device: &Device,
     ) -> Result<SlmResult> {
         let query_text = format!("{utterance}\n\n{context_projection}");
-        let desc: HashMap<&str, &str> = board
-            .candidates
+        let candidates = board.inference_candidates();
+        let desc: HashMap<&str, &str> = candidates
             .iter()
             .map(|c| (c.canonical_id.as_str(), c.description.as_str()))
             .collect();
-        self.score_query(&query_text, cand_ids, &desc, &board.board_hash, device)
+        self.score_query(&query_text, cand_ids, &desc, board.board_hash(), device)
     }
 
     /// The ONE forward-pass core both `score_list` (corpus/eval) and
@@ -268,13 +273,23 @@ impl TrainedRanker {
             .iter()
             .map(|c| (query_text.to_string(), c.to_string()))
             .collect();
+        self.score_pairs(&pairs, cand_ids, board_hash, device)
+    }
+
+    fn score_pairs(
+        &self,
+        pairs: &[(String, String)],
+        cand_ids: &[String],
+        board_hash: &str,
+        device: &Device,
+    ) -> Result<SlmResult> {
         let encodings = self
             .tokenizer
-            .encode_batch(pairs, true)
+            .encode_batch(pairs.to_vec(), true)
             .map_err(|e| anyhow!("encode_batch: {e}"))?;
 
         let k = encodings.len();
-        let seq_len = encodings[0].get_ids().len().min(MAX_LENGTH);
+        let seq_len = encodings[0].get_ids().len();
         let mut ids = vec![0u32; k * seq_len];
         let mut mask = vec![0u32; k * seq_len];
         let mut ttype = vec![0u32; k * seq_len];
@@ -282,7 +297,7 @@ impl TrainedRanker {
             let e_ids = enc.get_ids();
             let e_mask = enc.get_attention_mask();
             let e_type = enc.get_type_ids();
-            let n = e_ids.len().min(seq_len);
+            let n = e_ids.len();
             ids[i * seq_len..i * seq_len + n].copy_from_slice(&e_ids[..n]);
             mask[i * seq_len..i * seq_len + n].copy_from_slice(&e_mask[..n]);
             ttype[i * seq_len..i * seq_len + n].copy_from_slice(&e_type[..n]);
@@ -317,8 +332,72 @@ impl TrainedRanker {
             retrieved_subset_hash: blake3::hash(&pre).to_hex().to_string(),
             board_hash: board_hash.to_owned(),
             model_bundle_hash: self.bundle_identity.clone(),
+            evidence_trace: None,
         })
     }
+}
+
+fn validate_bundle_card(card: &serde_json::Value, bundle_dir: &std::path::Path) -> Result<()> {
+    let required = |name: &str| {
+        card[name]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .with_context(|| format!("bundle card missing '{name}'"))
+    };
+    let equal = |name: &str, expected: &str| -> Result<()> {
+        let actual = required(name)?;
+        if actual != expected {
+            anyhow::bail!("bundle card {name} mismatch: expected '{expected}', found '{actual}'");
+        }
+        Ok(())
+    };
+    equal("corpus_schema_id", crate::corpus_schema::CORPUS_SCHEMA_ID)?;
+    equal("corpus_schema_hash", &crate::corpus_schema::corpus_schema_hash())?;
+    if card["semantic_board_schema_version"].as_u64() != Some(1) {
+        anyhow::bail!("bundle card semantic_board_schema_version mismatch");
+    }
+    equal(
+        "semantic_pack_identity",
+        &crate::bpmn_board::bpmn_semantic_snapshot_identity(),
+    )?;
+    equal("turn_serializer_id", crate::pair::TURN_SERIALIZER_ID)?;
+    equal("turn_serializer_hash", &crate::pair::turn_serializer_hash())?;
+    equal("candidate_serializer_id", crate::exact::CANDIDATE_SERIALIZER_ID)?;
+    equal(
+        "candidate_serializer_hash",
+        &crate::exact::candidate_serializer_hash(),
+    )?;
+    equal("pair_serializer_id", crate::pair::PAIR_SERIALIZER_ID)?;
+    equal("pair_serializer_hash", &crate::pair::pair_serializer_hash())?;
+
+    let budget = crate::pair::PairTokenBudget::default();
+    if card["max_length"].as_u64() != Some(MAX_LENGTH as u64)
+        || card["side_a_tokens"].as_u64() != Some(budget.side_a_tokens as u64)
+        || card["side_b_tokens"].as_u64() != Some(budget.side_b_tokens as u64)
+    {
+        anyhow::bail!("bundle card token budgets do not match serving");
+    }
+    let tokenizer_path = bundle_dir.join("tokenizer.json");
+    equal("tokenizer_hash", &file_hash(&tokenizer_path)?)?;
+    let weights_path = bundle_dir.join("model.safetensors");
+    equal("model_weights_hash", &file_hash(&weights_path)?)?;
+    required("calibration_set_identity")?;
+    required("training_split_manifest_hash")?;
+    let temperature = card["temperature"]
+        .as_f64()
+        .context("bundle card missing 'temperature'")?;
+    if !temperature.is_finite() || temperature <= 0.0 {
+        anyhow::bail!("bundle card temperature must be finite and positive");
+    }
+    Ok(())
+}
+
+fn file_hash(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(path).with_context(|| format!("read {path:?}"))?)
+    ))
 }
 
 /// Temperature-calibrated listwise probabilities (spec §10.8: the
@@ -338,6 +417,50 @@ pub fn calibrated_probabilities(logits: &[f64], temperature: f64) -> Result<Vec<
         return Err(anyhow!("calibrated softmax degenerate (sum {sum})"));
     }
     Ok(exps.iter().map(|e| e / sum).collect())
+}
+
+/// Sentinels `pair::serialize_candidate_pair` guarantees survive its OWN
+/// word-budget truncation (see that function's doc comment) — checked here
+/// against what the real tokenizer keeps after `LongestFirst` pair
+/// truncation at `MAX_LENGTH` subword tokens.
+const REQUIRED_SIDE_B_SENTINELS: [&str; 2] = ["[EFFECT]", "[END_CANDIDATE]"];
+
+/// `PairTokenBudget` bounds whitespace WORDS, not subword tokens. A
+/// turn/candidate pair that fits comfortably inside the word budget can
+/// still expand past `MAX_LENGTH` subword tokens once real tokenized (most
+/// natural-language words split into more than one subword piece), and
+/// `TruncationStrategy::LongestFirst` truncates from the tail of whichever
+/// side is longer post-tokenization — which can silently cut side B's
+/// trailing `[EFFECT]`/`[CONTRASTS]`/`[END_CANDIDATE]` sentinels even
+/// though the word-level serializer never would.
+///
+/// Encode the pair exactly as `score_pairs` will, decode the resulting
+/// (possibly truncated) ids back to text with the same tokenizer, and fail
+/// closed if a required sentinel did not survive — rather than silently
+/// serving the model a candidate pair whose effect/contrast text vanished.
+fn verify_pair_survives_tokenization(
+    tokenizer: &Tokenizer,
+    candidate_id: &str,
+    pair: &crate::pair::SerializedCandidatePair,
+) -> Result<()> {
+    let encoding = tokenizer
+        .encode((pair.side_a.clone(), pair.side_b.clone()), true)
+        .map_err(|error| anyhow!("verify pair tokenization for '{candidate_id}': {error}"))?;
+    let decoded = tokenizer
+        .decode(encoding.get_ids(), true)
+        .map_err(|error| anyhow!("verify pair decode for '{candidate_id}': {error}"))?;
+    for sentinel in REQUIRED_SIDE_B_SENTINELS {
+        if !decoded.contains(sentinel) {
+            anyhow::bail!(
+                "candidate pair for '{candidate_id}' lost its '{sentinel}' sentinel under real \
+                 tokenizer truncation at {MAX_LENGTH} tokens — the word-level pair budget \
+                 (side_a={}, side_b={} words) is not sufficient on its own",
+                pair.side_a.split_whitespace().count(),
+                pair.side_b.split_whitespace().count(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The tier-1 SERVING producer (DIR-002 serving integration, ruled
@@ -401,7 +524,7 @@ impl Tier1Ranker {
         tier0: &dyn crate::retrieval::Tier0Retriever,
         utterance: &str,
         context_projection: &str,
-        board: &crate::board::Board,
+        board: &dyn crate::board::InferenceBoard,
     ) -> Result<SlmResult> {
         let tier0_evidence = tier0.retrieve(utterance, board)?;
         let list = crate::retrieval::tier1_list(&tier0_evidence, crate::retrieval::TIER1_K);
@@ -426,8 +549,70 @@ impl Tier1Ranker {
         Ok(SlmResult {
             ranking,
             retrieved_subset_hash: raw.retrieved_subset_hash,
-            board_hash: board.board_hash.clone(),
+            board_hash: board.board_hash().to_string(),
             model_bundle_hash: self.model_bundle_hash.clone(),
+            evidence_trace: None,
+        })
+    }
+
+    /// BPMN production serving path: score every board candidate, including
+    /// abstention. Top-K remains available only through `rank` for legacy and
+    /// explicit evaluation adapters.
+    pub fn rank_full_board(
+        &self,
+        utterance: &str,
+        context: &crate::context::ContextProjection,
+        board: &semantic_decision_contracts::SemanticDecisionBoard,
+    ) -> Result<SlmResult> {
+        let list = board
+            .candidates
+            .iter()
+            .map(|candidate| candidate.canonical_id.as_str().to_string())
+            .collect::<Vec<_>>();
+        let pairs = board
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let pair = crate::pair::serialize_candidate_pair(
+                    utterance,
+                    context,
+                    candidate,
+                    crate::pair::PairTokenBudget::default(),
+                )?;
+                verify_pair_survives_tokenization(
+                    &self.ranker.tokenizer,
+                    candidate.canonical_id.as_str(),
+                    &pair,
+                )?;
+                Ok((pair.side_a, pair.side_b))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let raw = self.ranker.score_pairs(
+            &pairs,
+            &list,
+            board.board_hash.as_str(),
+            &self.device,
+        )?;
+        let logits: Vec<f64> = raw.ranking.iter().map(|candidate| candidate.score.get()).collect();
+        let probabilities = calibrated_probabilities(&logits, self.temperature)?;
+        let mut ranking = raw
+            .ranking
+            .iter()
+            .zip(probabilities.iter())
+            .map(|(candidate, &probability)| {
+                Ok(RankedCandidate {
+                    candidate_id: candidate.candidate_id.clone(),
+                    score: FiniteScore::new(probability)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rank_canonically(&mut ranking);
+        Ok(SlmResult {
+            ranking,
+            retrieved_subset_hash: raw.retrieved_subset_hash,
+            board_hash: board.board_hash.as_str().to_string(),
+            model_bundle_hash: self.model_bundle_hash.clone(),
+            evidence_trace: None,
         })
     }
 }
@@ -435,6 +620,38 @@ impl Tier1Ranker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_with_old_candidate_serializer_is_refused_before_model_load() {
+        let dir = std::env::temp_dir().join(format!("bpmn-bundle-card-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"tokenizer").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"weights").unwrap();
+        let budget = crate::pair::PairTokenBudget::default();
+        let card = serde_json::json!({
+            "corpus_schema_id": crate::corpus_schema::CORPUS_SCHEMA_ID,
+            "corpus_schema_hash": crate::corpus_schema::corpus_schema_hash(),
+            "semantic_board_schema_version": 1,
+            "semantic_pack_identity": crate::bpmn_board::bpmn_semantic_snapshot_identity(),
+            "turn_serializer_id": crate::pair::TURN_SERIALIZER_ID,
+            "turn_serializer_hash": crate::pair::turn_serializer_hash(),
+            "candidate_serializer_id": "legacy.description.v2",
+            "candidate_serializer_hash": crate::exact::candidate_serializer_hash(),
+            "pair_serializer_id": crate::pair::PAIR_SERIALIZER_ID,
+            "pair_serializer_hash": crate::pair::pair_serializer_hash(),
+            "tokenizer_hash": file_hash(&dir.join("tokenizer.json")).unwrap(),
+            "max_length": MAX_LENGTH,
+            "side_a_tokens": budget.side_a_tokens,
+            "side_b_tokens": budget.side_b_tokens,
+            "model_weights_hash": file_hash(&dir.join("model.safetensors")).unwrap(),
+            "temperature": 1.0,
+            "calibration_set_identity": "calibration-test",
+            "training_split_manifest_hash": "split-test",
+        });
+        let error = validate_bundle_card(&card, &dir).unwrap_err();
+        assert!(error.to_string().contains("candidate_serializer_id mismatch"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Hermetic calibration receipts: temperature actually rescales the
     /// distribution (T>1 flattens), output is a probability simplex, and
@@ -513,5 +730,130 @@ mod tests {
         assert!((sum - 1.0).abs() < 1e-9, "calibrated probabilities must sum to 1, got {sum}");
         assert_eq!(ev.board_hash, board.board_hash);
         assert_eq!(ev.model_bundle_hash, t1.model_bundle_hash());
+    }
+
+    /// Build a real (not simulated) `tokenizers::Tokenizer` for the
+    /// `verify_pair_survives_tokenization` tests: `WordLevel` model over a
+    /// vocabulary built from the exact whitespace-delimited words the test
+    /// will encode, so every word round-trips through encode/decode
+    /// unchanged (default no-decoder join is `""`, so decoded words stay
+    /// contiguous substrings even without spaces between them — sufficient
+    /// for the sentinel substring check under test). This exercises the
+    /// production `Tokenizer::encode`/`truncate`/`decode` pipeline, not a
+    /// hand-simulated approximation of it.
+    fn word_level_tokenizer(vocabulary_source: &[&str], max_length: usize) -> Tokenizer {
+        use tokenizers::models::wordlevel::WordLevelBuilder;
+        use tokenizers::pre_tokenizers::split::{Split, SplitPattern};
+        use tokenizers::SplitDelimiterBehavior;
+
+        let mut vocab = HashMap::new();
+        vocab.insert("[UNK]".to_string(), 0u32);
+        let mut next_id = 1u32;
+        for text in vocabulary_source {
+            for word in text.split_whitespace() {
+                vocab.entry(word.to_string()).or_insert_with(|| {
+                    let id = next_id;
+                    next_id += 1;
+                    id
+                });
+            }
+        }
+        let model = WordLevelBuilder::new()
+            .vocab(vocab)
+            .unk_token("[UNK]".to_string())
+            .build()
+            .expect("WordLevel model builds from a non-empty vocab");
+        let pre_tokenizer = Split::new(
+            SplitPattern::Regex(r"\s+".to_string()),
+            SplitDelimiterBehavior::Removed,
+            false,
+        )
+        .expect("whitespace-run split pattern is valid");
+        let mut tokenizer = Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length,
+                strategy: TruncationStrategy::LongestFirst,
+                ..Default::default()
+            }))
+            .expect("truncation params are valid");
+        tokenizer
+    }
+
+    fn candidate() -> semantic_decision_contracts::CandidateSemanticSlice {
+        use semantic_decision_contracts::{
+            ActionClass, CanonicalCandidateId, HarmClass, NegativeContrast,
+        };
+
+        semantic_decision_contracts::CandidateSemanticSlice {
+            canonical_id: CanonicalCandidateId::new("op.insert_after").unwrap(),
+            schema_version: 1,
+            title: "Insert after".into(),
+            intent_summary: "insert a node after an anchor".into(),
+            action_class: ActionClass::Create,
+            applicability: "normal flow".into(),
+            effect: "rewires the existing route".into(),
+            arguments: vec![],
+            phrases: vec![],
+            positive_examples: vec![],
+            negative_contrasts: vec![NegativeContrast {
+                candidate_id: CanonicalCandidateId::new("op.append_node").unwrap(),
+                distinction: "append extends an open route".into(),
+            }],
+            risk: HarmClass::Reversible,
+            adapter_payload_hash: "payload".into(),
+        }
+    }
+
+    #[test]
+    fn word_budget_alone_can_still_lose_the_sentinel_under_real_tokenization() {
+        // A turn long enough that PairTokenBudget's word-level truncation
+        // keeps it under budget, but the REAL tokenizer (small max_length
+        // here, standing in for "many words expand to more than one
+        // subword token in the real MiniLM/BERT tokenizer") truncates the
+        // pair and cuts side B's tail before verify() can save it.
+        let turn = crate::context::ContextProjection::new(
+            "pack",
+            (0..40).map(|i| format!("ctx{i}")).collect::<Vec<_>>().join(" "),
+            None,
+            vec![],
+        )
+        .unwrap();
+        let candidate = candidate();
+        let pair = crate::pair::serialize_candidate_pair(
+            "insert something here please",
+            &turn,
+            &candidate,
+            crate::pair::PairTokenBudget::default(),
+        )
+        .unwrap();
+
+        // max_length small enough that side_a alone (turn + utterance)
+        // consumes the whole budget under LongestFirst, cutting all of
+        // side_b including its sentinel suffix.
+        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], 10);
+        let error =
+            verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair).unwrap_err();
+        assert!(
+            error.to_string().contains("lost its"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn sentinel_survives_when_the_real_tokenizer_has_room() {
+        let turn = crate::context::ContextProjection::new("pack", "graph", None, vec![]).unwrap();
+        let candidate = candidate();
+        let pair = crate::pair::serialize_candidate_pair(
+            "insert something",
+            &turn,
+            &candidate,
+            crate::pair::PairTokenBudget::default(),
+        )
+        .unwrap();
+        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], MAX_LENGTH);
+        verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair)
+            .expect("a pair well inside the real tokenizer's budget must pass");
     }
 }

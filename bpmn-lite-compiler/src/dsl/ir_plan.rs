@@ -274,6 +274,24 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                 );
             }
 
+            IRNode::MessageWait {
+                id,
+                name,
+                corr_key_source,
+            } => {
+                let next = single_successor(ir, idx)?;
+                nodes.insert(
+                    id.clone(),
+                    ExecutionNode::MessageWait(crate::dsl::plan::MessageWaitExecNode {
+                        id: id.clone(),
+                        name: name.clone(),
+                        correlation_key_source: corr_key_source.clone(),
+                        next,
+                        span: None,
+                    }),
+                );
+            }
+
             IRNode::GatewayAnd { id, direction, .. }
             | IRNode::GatewayInclusive { id, direction, .. } => {
                 let mode = match node {
@@ -782,9 +800,7 @@ mod tests {
         ));
     }
 
-    /// Cement (WS-D D1 scope boundary): kinds still without a plan
-    /// representation stay refused by name — widening for guards/waits
-    /// must not have loosened the catch-all.
+    /// Message waits are structural plan nodes, never fake service tasks.
     #[test]
     fn still_unsupported_kinds_remain_refused() {
         let mut g: IRGraph = IRGraph::new();
@@ -798,11 +814,13 @@ mod tests {
         g.add_edge(s, m, IREdge { id: "e1".into(), condition: None });
         g.add_edge(m, end, IREdge { id: "e2".into(), condition: None });
 
-        let err = project_ir(&g, "wf".into()).expect_err("MessageWait must still be refused");
-        assert!(matches!(
-            err,
-            IrPlanError::UnsupportedNode { kind: "MessageWait", .. }
-        ));
+        let plan = project_ir(&g, "wf".into()).expect("MessageWait must project");
+        let ExecutionNode::MessageWait(wait) = plan.nodes.get("mw").unwrap() else {
+            panic!("mw must be a MessageWait node");
+        };
+        assert_eq!(wait.name, "mw");
+        assert_eq!(wait.correlation_key_source, "docs_received");
+        assert_eq!(wait.next, "end");
     }
 
     /// RED: no Start node at all.

@@ -36,10 +36,28 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Layering and deterministic capability gate
         run: bash scripts/check-layering.sh
+      - name: Shared-pin guard self-test
+        run: bash scripts/check-shared-pin.sh --self-test
+      - name: Shared-pin guard (dsl/sem_os revision, invariant 19)
+        run: bash scripts/check-shared-pin.sh
       - name: Q9 capture-gate guard self-test
         run: bash scripts/check-q9-capture-gate.sh --self-test
       - name: Q9 capture-gate guard
         run: bash scripts/check-q9-capture-gate.sh
+      - name: Checked BPMN invocation-pack gate
+        run: cargo run -p xtask -- pack-check bpmn
+      - name: BPMN semantic mapper contract gates
+        run: |
+          cargo test -p utterance-engine property_tests
+          cargo test -p utterance-engine bpmn_pack::tests::semantic_registry_exhaustively_covers_designer_catalogue -- --exact
+          cargo test -p utterance-engine exact::tests::serializer_changes_with_semantic_fields_and_is_order_stable -- --exact
+          cargo test -p utterance-engine pair::tests::pair_hash_is_deterministic_and_budget_bound -- --exact
+          cargo test -p bpmn-lite-server-designer proposal::tests
+      - name: Hermetic mapper bundle compatibility gate
+        run: >-
+          cargo test -p utterance-engine --features candle-probe
+          trained_ranker::tests::bundle_with_old_candidate_serializer_is_refused_before_model_load
+          -- --exact
       - name: Clippy
         # DIR-004 Phase 1.2: NOT --all-features -- that would silently
         # compile the Q9-gated capture module into every clippy/build/
@@ -71,6 +89,16 @@ jobs:
         run: cargo build -p bpmn-lite-kernel --target wasm32-wasip2
       - name: Fiber persistence codec benchmark
         run: bash scripts/check-benchmark-regression.sh
+      - name: Generate BPMN mapper performance receipt
+        run: >-
+          cargo run --release -p utterance-engine
+          --example semantic_perf_receipt
+          > bpmn-mapper-performance.md
+      - name: Upload BPMN mapper performance receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpmn-mapper-performance
+          path: bpmn-mapper-performance.md
       - name: v2 frame perf suite (frame ∝ live tokens; encode latency)
         run: cargo bench -p bpmn-lite-types --bench v2_perf
       - name: Public API documentation surface
@@ -105,30 +133,24 @@ jobs:
           wasmtime target/wasm32-wasip2/debug/replay_fixture.wasm > wasm-replay.txt
           cmp native-replay.txt wasm-replay.txt
 
-  # EOP-FUZZ F4: every committed fuzz-crash reproducer is a permanent
-  # blocking gate (cement-locked). Toolchain install is conditioned on the
-  # regression set being non-empty — an empty set gates nothing, and that
-  # emptiness is checked and reported explicitly, never silently skipped.
+  # EOP-FUZZ F4: every committed fuzz-crash reproducer is a permanent,
+  # governed blocking gate. Empty or unmanifested corpora fail closed.
   fuzz-regressions:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Check for committed regression inputs
-        id: regress-check
-        run: |
-          count=$(find . -path '*/fuzz/regressions/*' -type f ! -name '.gitkeep' | wc -l)
-          echo "count=${count}" >> "$GITHUB_OUTPUT"
-          echo "${count} committed fuzz regression input(s)"
+      - name: Validate governed regression inputs
+        run: python3 scripts/check_fuzz_regressions.py
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.regress-check.outputs.count != '0'
-      - uses: dtolnay/rust-toolchain@nightly
-        if: steps.regress-check.outputs.count != '0'
+      # Pinned (not floating @nightly): cargo-fuzz's synthesized workspace
+      # patches depend on the exact nightly's Cargo/rustc metadata output;
+      # a moving nightly can silently reintroduce fuzz lockfile drift.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-03
       - uses: Swatinem/rust-cache@v2
-        if: steps.regress-check.outputs.count != '0'
       - name: Install cargo-fuzz
-        if: steps.regress-check.outputs.count != '0'
         run: cargo install cargo-fuzz --locked
       - name: Run regression corpus
-        if: steps.regress-check.outputs.count != '0'
         run: cargo run -p xtask -- fuzz regress

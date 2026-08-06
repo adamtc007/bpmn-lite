@@ -5,13 +5,13 @@
 //! (§10.6: tier-0 is high-recall retrieval; tier-1 ranks the retrieved
 //! subset). Producers registered here supply EVIDENCE ONLY (I27) — the
 //! output is an `SlmResult` fed to `policy::decide`, never a
-//! disposition. The Candle embed-and-score producer (ruling E3, matcher
-//! pinned at ob-poc-rust `ff3f12c`, `default-features = false`) plugs
-//! in behind this same trait; per the programme ruling, the retired
+//! disposition. The Candle embed-and-score producer (ruling E3, shared
+//! embedder pinned at DSL `5ac7da7`, default-off) plugs in behind this
+//! same trait; per the programme ruling, the retired
 //! keyword gate's successor is THIS lexical producer, retired in turn
 //! when the embedder lands.
 
-use crate::board::Board;
+use crate::board::InferenceBoard;
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
 
 /// THE tier-1 list constructor — Adam's ruling 2026-07-27 (spec
@@ -53,7 +53,7 @@ pub trait Tier0Retriever {
     /// Sealed identity of this producer (stands in for the model
     /// bundle hash until a tier-1 bundle exists — §10.8).
     fn bundle_identity(&self) -> String;
-    fn retrieve(&self, raw_utterance: &str, board: &Board) -> Result<SlmResult>;
+    fn retrieve(&self, raw_utterance: &str, board: &dyn InferenceBoard) -> Result<SlmResult>;
 }
 
 /// Deterministic lexical overlap scorer — the interim tier-0.
@@ -79,13 +79,14 @@ impl Tier0Retriever for LexicalTier0 {
         "tier0.lexical.v1".to_owned()
     }
 
-    fn retrieve(&self, raw_utterance: &str, board: &Board) -> Result<SlmResult> {
+    fn retrieve(&self, raw_utterance: &str, board: &dyn InferenceBoard) -> Result<SlmResult> {
         let utter_tokens = tokens(raw_utterance);
         let utter_lower = raw_utterance.trim().to_lowercase();
         let mut best_overlap = 0.0f64;
-        let mut ranking: Vec<RankedCandidate> = Vec::with_capacity(board.candidates.len());
+        let candidates = board.inference_candidates();
+        let mut ranking: Vec<RankedCandidate> = Vec::with_capacity(candidates.len());
 
-        for c in &board.candidates {
+        for c in &candidates {
             if c.canonical_id == crate::contract::NONE_OF_THE_ABOVE {
                 continue; // scored after the loop from best_overlap
             }
@@ -124,8 +125,9 @@ impl Tier0Retriever for LexicalTier0 {
         Ok(SlmResult {
             ranking,
             retrieved_subset_hash: blake3::hash(&pre).to_hex().to_string(),
-            board_hash: board.board_hash.clone(),
+            board_hash: board.board_hash().to_string(),
             model_bundle_hash: self.bundle_identity(),
+            evidence_trace: None,
         })
     }
 }
@@ -196,6 +198,7 @@ mod tests {
             retrieved_subset_hash: "h".into(),
             board_hash: "b".into(),
             model_bundle_hash: "m".into(),
+            evidence_trace: None,
         };
         let list = tier1_list(&result, TIER1_K);
         assert_eq!(list.len(), TIER1_K + 1, "K-prefix + appended NOTA");
@@ -225,15 +228,15 @@ mod tests {
 /// candidates embedded ON THE FLY, cosine in memory — the pgvector
 /// ranking path is not used for Designer boards. Deterministic by
 /// construction: BGE weights pinned to an immutable HF revision inside
-/// the matcher crate, CPU device, no RNG/dropout, L2-normalised
+/// the shared embedder crate, CPU device, no RNG/dropout, L2-normalised
 /// outputs (so cosine = dot product).
 #[cfg(feature = "embed")]
 pub mod embed {
     use super::*;
-    use ob_semantic_matcher::Embedder;
+    use semantic_embedder::CandleEmbedder;
 
     pub struct EmbedTier0 {
-        embedder: Embedder,
+        embedder: CandleEmbedder,
         // Performance finding (plan §F, 2026-07-27 corpus-gen receipt):
         // every board's candidate set was re-embedded on EVERY retrieve()
         // call — a corpus run reuses the same small set of enumeration-
@@ -253,7 +256,7 @@ pub mod embed {
         /// hf-hub — network on cold cache; deterministic thereafter.
         pub fn new() -> Result<Self> {
             Ok(EmbedTier0 {
-                embedder: Embedder::new()?,
+                embedder: CandleEmbedder::new()?,
                 target_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             })
         }
@@ -286,17 +289,18 @@ pub mod embed {
             // to an immutable HF commit; the consuming rev is pinned in
             // Cargo.toml. Both named so records are attributable.
             format!(
-                "tier0.embed.{}@ob-semantic-matcher:ff3f12c7",
+                "tier0.embed.{}@semantic-embedder:5ac7da7",
                 self.embedder.model_name()
             )
         }
 
-        fn retrieve(&self, raw_utterance: &str, board: &Board) -> Result<SlmResult> {
+        fn retrieve(&self, raw_utterance: &str, board: &dyn InferenceBoard) -> Result<SlmResult> {
             let query = self.embedder.embed_query(raw_utterance)?;
             let utter_lower = raw_utterance.trim().to_lowercase();
             let mut best = 0.0f64;
-            let mut ranking: Vec<RankedCandidate> = Vec::with_capacity(board.candidates.len());
-            for c in &board.candidates {
+            let candidates = board.inference_candidates();
+            let mut ranking: Vec<RankedCandidate> = Vec::with_capacity(candidates.len());
+            for c in &candidates {
                 if c.canonical_id == crate::contract::NONE_OF_THE_ABOVE {
                     continue;
                 }
@@ -327,8 +331,9 @@ pub mod embed {
             Ok(SlmResult {
                 ranking,
                 retrieved_subset_hash: blake3::hash(&pre).to_hex().to_string(),
-                board_hash: board.board_hash.clone(),
+                board_hash: board.board_hash().to_string(),
                 model_bundle_hash: self.bundle_identity(),
+                evidence_trace: None,
             })
         }
     }

@@ -1,0 +1,969 @@
+capabilities:
+- action_class: create
+  adapter_binding: bpmn.designer.op.append_node
+  applicability: The anchor is a non-terminal flow node or guard escape with no outgoing route
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: What BPMN node should be appended?
+    kind: identifier
+    name: node
+    required: true
+  effect: Adds a new node and one forward sequence flow after the anchor
+  extensions:
+    bpmn.binder_support: supported
+  id: op.append_node
+  intent_summary: Extend the selected sequence end with one typed BPMN node
+  negative_contrasts:
+  - candidate_id: op.insert_after
+    distinction: Insert-after places work on an existing route; append extends a route that currently ends
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: append a node
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: add at the end
+  positive_examples:
+  - Add a service task after the current sequence end
+  risk: reversible
+  title: Append a node
+- action_class: create
+  adapter_binding: bpmn.designer.op.insert_before
+  applicability: The anchor participates in normal flow and is not the process start
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: What BPMN node should be inserted before the selection?
+    kind: identifier
+    name: node
+    required: true
+  effect: Rewires incoming flow through the new node while retaining the anchor
+  extensions:
+    bpmn.binder_support: supported
+  id: op.insert_before
+  intent_summary: Place one typed node immediately before the selected node
+  negative_contrasts:
+  - candidate_id: op.replace_node
+    distinction: Replace removes the selected node; insert-before preserves it
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: insert before
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: put this ahead of
+  positive_examples:
+  - Insert a validation task before approval
+  risk: reversible
+  title: Insert before
+- action_class: create
+  adapter_binding: bpmn.designer.op.insert_after
+  applicability: The anchor is a non-terminal normal-flow node
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: What BPMN node should be inserted after the selection?
+    kind: identifier
+    name: node
+    required: true
+  effect: Rewires an existing outgoing route through the new node
+  extensions:
+    bpmn.binder_support: supported
+  id: op.insert_after
+  intent_summary: Place one typed node after the selected node on its existing route
+  negative_contrasts:
+  - candidate_id: op.append_node
+    distinction: Append extends a route with no outgoing edge; insert-after changes an existing route
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: insert after
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: put this next
+  positive_examples:
+  - Insert a review task after document collection
+  risk: reversible
+  title: Insert after
+- action_class: update
+  adapter_binding: bpmn.designer.op.replace_node
+  applicability: The anchor is a replaceable, unguarded normal-flow node
+  arguments:
+  - clarification_prompt: Which existing BPMN node should be replaced?
+    kind: node_reference
+    name: target
+    required: true
+  - clarification_prompt: What BPMN node should replace the selection?
+    kind: identifier
+    name: replacement
+    required: true
+  effect: Removes the selected payload and installs the replacement at the same topology position
+  extensions:
+    bpmn.binder_support: supported
+  id: op.replace_node
+  intent_summary: Substitute the selected flow node while preserving its connections
+  negative_contrasts:
+  - candidate_id: op.insert_before
+    distinction: Insert-before keeps the selected node; replace substitutes it
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: replace this node
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: swap this task
+  positive_examples:
+  - Replace the manual check with a service task
+  risk: reversible
+  title: Replace node
+- action_class: update
+  adapter_binding: bpmn.designer.op.connect
+  applicability: Both endpoints exist and the connector preserves acyclicity
+  arguments:
+  - clarification_prompt: Which node should the connector start from?
+    kind: node_reference
+    name: from
+    required: true
+  - clarification_prompt: Which node should it lead to?
+    kind: node_reference
+    name: to
+    required: true
+  - clarification_prompt: Should the connector have a condition?
+    kind: condition
+    name: condition
+    required: false
+  effect: Adds one sequence flow without creating a new branch body
+  extensions:
+    bpmn.binder_support: needs_workbook
+  id: op.connect
+  intent_summary: Add a typed forward connector between two existing BPMN nodes
+  negative_contrasts:
+  - candidate_id: op.create_branch
+    distinction: Create-branch adds a distinct gateway outcome and branch body; connect only joins existing nodes
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: connect these nodes
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: link this to that
+  positive_examples:
+  - Connect the validation task to the existing approval task
+  risk: reversible
+  title: Connect existing nodes
+- action_class: create
+  adapter_binding: bpmn.designer.op.create_branch
+  applicability: The anchor is an exclusive gateway with a valid forward target
+  arguments:
+  - clarification_prompt: Which exclusive gateway owns the new outcome?
+    kind: node_reference
+    name: gateway
+    required: true
+  - clarification_prompt: What outcome should select the new branch?
+    kind: identifier
+    name: outcome
+    required: true
+  - clarification_prompt: Where should the branch rejoin or continue?
+    kind: node_reference
+    name: target
+    required: true
+  effect: Creates a unique conditional route to an existing forward target
+  extensions:
+    bpmn.binder_support: needs_workbook
+  id: op.create_branch
+  intent_summary: Add a new named route from an existing exclusive gateway
+  negative_contrasts:
+  - candidate_id: op.connect
+    distinction: Connect adds a flow between existing nodes and does not declare a gateway outcome
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: create a branch
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: add another outcome
+  positive_examples:
+  - Add a rejected outcome branch from the decision
+  risk: reversible
+  title: Create an outcome branch
+- action_class: create
+  adapter_binding: bpmn.designer.op.create_race
+  applicability: Reserved until the Designer IR has a complete race representation
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How many event arms should participate?
+    kind: count
+    name: arms
+    required: true
+  effect: Would create an event race and matched continuation
+  extensions:
+    bpmn.binder_support: not_representable
+  id: op.create_race
+  intent_summary: Create a race whose first declared event arm wins
+  negative_contrasts:
+  - candidate_id: prod.timer_message_race
+    distinction: The production is the specialised timer/message pattern; this operation is the generic race primitive
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: race these events
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: shorthand
+    text: first one wins
+  positive_examples:
+  - Continue on whichever of the timer or message happens first
+  risk: reversible
+  title: Create a first-wins race
+- action_class: create
+  adapter_binding: bpmn.designer.op.create_parallel_region
+  applicability: The anchor is a non-terminal normal-flow node and the region can remain SESE
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How many parallel branches are required?
+    kind: count
+    name: branch_count
+    required: true
+  effect: Creates a matched parallel split/join region
+  extensions:
+    bpmn.binder_support: supported
+  id: op.create_parallel_region
+  intent_summary: Run every declared branch concurrently and join them all
+  negative_contrasts:
+  - candidate_id: op.create_inclusive_region
+    distinction: Inclusive branches are conditionally selected; parallel runs every branch
+  - candidate_id: op.create_multi_instance_region
+    distinction: Multi-instance repeats one body over data; parallel declares distinct branch bodies
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: run in parallel
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: do all of these together
+  positive_examples:
+  - Run sanctions and document checks in parallel
+  risk: reversible
+  title: Create a parallel region
+- action_class: update
+  adapter_binding: bpmn.designer.op.close_parallel_region
+  applicability: Reserved because current region construction creates split and join atomically
+  arguments:
+  - clarification_prompt: Which parallel split should be closed?
+    kind: node_reference
+    name: split
+    required: true
+  effect: Would close an open parallel region at a declared join position
+  extensions:
+    bpmn.binder_support: not_representable
+  id: op.close_parallel_region
+  intent_summary: Place the matching join for an independently opened parallel split
+  negative_contrasts:
+  - candidate_id: op.create_parallel_region
+    distinction: Create-parallel constructs a complete matched region; close-parallel only closes a pre-existing open split
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: close the parallel
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: join these branches
+  positive_examples:
+  - Close the open parallel block after both checks
+  risk: reversible
+  title: Close a parallel region
+- action_class: create
+  adapter_binding: bpmn.designer.op.create_inclusive_region
+  applicability: The anchor is a non-terminal flow node and each branch has a governed condition
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How many conditional branches are required?
+    kind: count
+    name: branch_count
+    required: true
+  - clarification_prompt: What governs each branch selection?
+    kind: condition
+    name: conditions
+    required: true
+  effect: Creates a matched inclusive split/join region with non-empty selection
+  extensions:
+    bpmn.binder_support: needs_workbook
+  id: op.create_inclusive_region
+  intent_summary: Create conditional branches where one or more named outcomes may run
+  negative_contrasts:
+  - candidate_id: op.create_parallel_region
+    distinction: Parallel runs every branch; inclusive runs the non-empty subset whose conditions hold
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: create inclusive branches
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: run any matching branches
+  positive_examples:
+  - Run enhanced due diligence and tax review when their conditions apply
+  risk: reversible
+  title: Create an inclusive region
+- action_class: create
+  adapter_binding: bpmn.designer.op.create_multi_instance_region
+  applicability: A typed collection source and positive declared maximum are available
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: Which collection should drive the instances?
+    kind: data_reference
+    name: collection
+    required: true
+  - clarification_prompt: What is the maximum number of instances?
+    kind: count
+    name: declared_max
+    required: true
+  effect: Creates one SESE multi-instance body with a verified concurrency ceiling
+  extensions:
+    bpmn.binder_support: supported
+  id: op.create_multi_instance_region
+  intent_summary: Repeat one bounded body for each item in a declared collection
+  negative_contrasts:
+  - candidate_id: op.create_parallel_region
+    distinction: Parallel declares different branches; multi-instance repeats one body over collection elements
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: for each item
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: repeat with a ceiling
+  positive_examples:
+  - Check each account in the portfolio, up to fifty accounts
+  risk: reversible
+  title: Create a multi-instance region
+- action_class: create
+  adapter_binding: bpmn.designer.op.attach_guard
+  applicability: The anchor is a task or supported wait host without an incompatible guard
+  arguments:
+  - clarification_prompt: Which existing BPMN node should host this boundary guard?
+    kind: node_reference
+    name: host
+    required: true
+  - clarification_prompt: When should the guard fire?
+    kind: duration
+    name: trigger
+    required: true
+  - clarification_prompt: What should happen after interruption?
+    kind: identifier
+    name: escape
+    required: true
+  effect: Adds an interrupting boundary guard and an escape continuation
+  extensions:
+    bpmn.binder_support: needs_workbook
+  id: op.attach_guard
+  intent_summary: Interrupt guarded work when its boundary trigger fires
+  negative_contrasts:
+  - candidate_id: op.attach_rearming_guard
+    distinction: A rearming guard emits notifications without interrupting its host; this guard stops the host
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: attach an interrupting guard
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: time this out
+  positive_examples:
+  - Interrupt manual review after two days and escalate
+  risk: reversible
+  title: Attach an interrupting guard
+- action_class: create
+  adapter_binding: bpmn.designer.op.attach_rearming_guard
+  applicability: The anchor is a task or supported wait host and a finite firing bound is declared
+  arguments:
+  - clarification_prompt: Which existing BPMN node should host this boundary guard?
+    kind: node_reference
+    name: host
+    required: true
+  - clarification_prompt: How often should the guard fire?
+    kind: duration
+    name: interval
+    required: true
+  - clarification_prompt: What is the maximum number of firings?
+    kind: count
+    name: max_fires
+    required: true
+  - clarification_prompt: What should each firing do?
+    kind: identifier
+    name: escape
+    required: true
+  effect: Adds a non-interrupting boundary timer with a bounded escape body
+  extensions:
+    bpmn.binder_support: needs_workbook
+  id: op.attach_rearming_guard
+  intent_summary: Emit bounded non-interrupting boundary events while work continues
+  negative_contrasts:
+  - candidate_id: op.attach_guard
+    distinction: An interrupting guard stops the host on its first firing; a rearming guard does not
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: attach a rearming guard
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: send bounded reminders
+  positive_examples:
+  - Notify the owner daily up to three times without stopping review
+  risk: reversible
+  title: Attach a rearming guard
+- action_class: create
+  adapter_binding: bpmn.designer.op.attach_rollback_guard
+  applicability: Reserved until rollback scope is representable in the Designer IR
+  arguments:
+  - clarification_prompt: Which existing BPMN node should host this boundary guard?
+    kind: node_reference
+    name: host
+    required: true
+  - clarification_prompt: Which error should trigger rollback?
+    kind: identifier
+    name: error
+    required: true
+  effect: Would add an interrupting error guard with rollback semantics
+  extensions:
+    bpmn.binder_support: not_representable
+  id: op.attach_rollback_guard
+  intent_summary: Interrupt work and restore data to the enclosing scope opening state
+  negative_contrasts:
+  - candidate_id: op.attach_guard
+    distinction: A normal interrupting guard redirects control but does not restore scope data
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: rollback on error
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: undo this scope if it fails
+  positive_examples:
+  - Restore the scope if settlement validation fails
+  risk: reversible
+  title: Attach a rollback guard
+- action_class: update
+  adapter_binding: bpmn.designer.op.set_guard_trigger
+  applicability: The anchor is an existing boundary guard
+  arguments:
+  - clarification_prompt: Which existing boundary guard should be changed?
+    kind: node_reference
+    name: guard
+    required: true
+  - clarification_prompt: What timer duration or bounded cycle should arm the guard?
+    kind: duration
+    name: trigger
+    required: true
+  effect: Updates the guard timer duration or bounded cycle
+  extensions:
+    bpmn.binder_support: supported
+  id: op.set_guard_trigger
+  intent_summary: Change when an existing boundary guard becomes armed or fires
+  negative_contrasts:
+  - candidate_id: op.set_guard_budget
+    distinction: Trigger controls timing; budget controls tolerated failures
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: set the guard trigger
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: change when it fires
+  positive_examples:
+  - Make the timeout fire after four hours
+  risk: reversible
+  title: Set guard trigger
+- action_class: update
+  adapter_binding: bpmn.designer.op.set_guard_budget
+  applicability: The anchor is an existing boundary guard
+  arguments:
+  - clarification_prompt: Which existing boundary guard should be changed?
+    kind: node_reference
+    name: guard
+    required: true
+  - clarification_prompt: How many failures should this guard permit?
+    kind: count
+    name: failure_budget
+    required: true
+  effect: Overrides the workflow default with a positive finite failure budget
+  extensions:
+    bpmn.binder_support: supported
+  id: op.set_guard_budget
+  intent_summary: Set the maximum governed failures for an existing boundary guard
+  negative_contrasts:
+  - candidate_id: op.set_guard_trigger
+    distinction: Budget limits failures; trigger controls when the guard fires
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: set the guard budget
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: allow this many failures
+  positive_examples:
+  - Allow two notification failures before the workflow fails
+  risk: reversible
+  title: Set guard failure budget
+- action_class: update
+  adapter_binding: bpmn.designer.op.set_correlation_source
+  applicability: The anchor is a message-capable wait or send and the data reference exists
+  arguments:
+  - clarification_prompt: Which message-capable node should use this correlation source?
+    kind: node_reference
+    name: node
+    required: true
+  - clarification_prompt: Which declared data object supplies the correlation key?
+    kind: data_reference
+    name: data_reference
+    required: true
+  effect: Changes the typed source from which the runtime correlation key is read
+  extensions:
+    bpmn.binder_support: supported
+  id: op.set_correlation_source
+  intent_summary: Bind a wait or send node to a declared data reference used for correlation
+  negative_contrasts:
+  - candidate_id: prod.request_and_wait
+    distinction: Request-and-wait creates the whole interaction; this operation only changes correlation on an existing node
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: set correlation source
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: correlate using this field
+  positive_examples:
+  - Correlate the response using the application reference
+  risk: reversible
+  title: Set message correlation source
+- action_class: create
+  adapter_binding: bpmn.designer.op.call_subprocess
+  applicability: Reserved until call activities are represented in the Designer IR
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: Which pinned subprocess should be called?
+    kind: subprocess_reference
+    name: subprocess
+    required: true
+  effect: Would add a call activity that waits for a typed subprocess outcome
+  extensions:
+    bpmn.binder_support: not_representable
+  id: op.call_subprocess
+  intent_summary: Invoke a published subprocess through a pinned durable reference
+  negative_contrasts:
+  - candidate_id: prod.call_durable_subprocess
+    distinction: The production supplies the complete durable-call pattern; this is its atomic call primitive
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: call a subprocess
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: invoke this workflow
+  positive_examples:
+  - Call the published enhanced-review subprocess
+  risk: reversible
+  title: Call a subprocess
+- action_class: delete
+  adapter_binding: bpmn.designer.op.delete_subgraph
+  applicability: The anchor is removable without dangling a guard or breaking region closure
+  arguments:
+  - clarification_prompt: Which node or enclosed region should be deleted?
+    kind: node_reference
+    name: target
+    required: true
+  effect: Deletes selected topology and reconnects only where the operation contract permits
+  extensions:
+    bpmn.binder_support: supported
+  id: op.delete_subgraph
+  intent_summary: Remove the selected node or a complete enclosed region
+  negative_contrasts:
+  - candidate_id: op.replace_node
+    distinction: Replace preserves the topology position with new work; delete removes the selected work
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: delete this
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: remove this section
+  positive_examples:
+  - Remove the obsolete manual review task
+  risk: destructive
+  title: Delete node or region
+- action_class: create
+  adapter_binding: bpmn.designer.prod.request_and_wait
+  applicability: The anchor is a non-terminal flow node and correlation data is declared
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: What request should be sent?
+    kind: identifier
+    name: request
+    required: true
+  - clarification_prompt: Which data reference correlates the response?
+    kind: data_reference
+    name: correlation_source
+    required: true
+  effect: Creates a request task followed by a correlated message wait
+  extensions:
+    bpmn.binder_support: supported
+  id: prod.request_and_wait
+  intent_summary: Send a request and wait for its correlated response
+  negative_contrasts:
+  - candidate_id: op.set_correlation_source
+    distinction: Set-correlation edits one existing node; request-and-wait creates the full send/wait pattern
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: request and wait
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: send then await the reply
+  positive_examples:
+  - Send the onboarding request and wait for its correlated response
+  risk: reversible
+  title: Request and wait
+- action_class: create
+  adapter_binding: bpmn.designer.prod.timer_message_race
+  applicability: Reserved until event-race topology is represented in the Designer IR
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: What deadline competes with the message?
+    kind: duration
+    name: deadline
+    required: true
+  effect: Would create matched message and timer arms with first-wins semantics
+  extensions:
+    bpmn.binder_support: not_representable
+  id: prod.timer_message_race
+  intent_summary: 'Continue on whichever occurs first: a correlated message or a deadline'
+  negative_contrasts:
+  - candidate_id: op.create_race
+    distinction: This production is the timer/message specialisation of the generic first-wins race
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: race a message against a timer
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: shorthand
+    text: reply or timeout
+  positive_examples:
+  - Wait for approval until Friday, otherwise escalate
+  risk: reversible
+  title: Timer/message race
+- action_class: create
+  adapter_binding: bpmn.designer.prod.reminder_then_escalate
+  applicability: The anchor supports guards and a finite reminder count is declared
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How often should reminders be sent?
+    kind: duration
+    name: interval
+    required: true
+  - clarification_prompt: How many reminders precede escalation?
+    kind: count
+    name: max_reminders
+    required: true
+  - clarification_prompt: What should the final escalation do?
+    kind: identifier
+    name: escalation
+    required: true
+  effect: Creates a bounded rearming reminder guard plus a final escalation continuation
+  extensions:
+    bpmn.binder_support: supported
+  id: prod.reminder_then_escalate
+  intent_summary: Issue bounded reminders without interruption, then escalate if work remains incomplete
+  negative_contrasts:
+  - candidate_id: prod.non_interrupting_notification
+    distinction: Notification schedules events but has no mandatory final escalation
+  - candidate_id: prod.interrupting_timeout
+    distinction: Interrupting-timeout stops the host at one deadline; reminders let it continue through a bounded cycle
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: remind then escalate
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: nudge a few times, then escalate
+  positive_examples:
+  - Send three daily reminders, then escalate to the team lead
+  risk: reversible
+  title: Remind then escalate
+- action_class: create
+  adapter_binding: bpmn.designer.prod.interrupting_timeout
+  applicability: The anchor is a supported guard host
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How long may the work run before interruption?
+    kind: duration
+    name: duration
+    required: true
+  - clarification_prompt: What should happen on timeout?
+    kind: identifier
+    name: escape
+    required: true
+  effect: Creates an interrupting boundary timer and timeout continuation
+  extensions:
+    bpmn.binder_support: supported
+  id: prod.interrupting_timeout
+  intent_summary: Stop the selected work at a deadline and continue on an escape path
+  negative_contrasts:
+  - candidate_id: prod.non_interrupting_notification
+    distinction: A notification leaves the host running; an interrupting timeout stops it
+  - candidate_id: prod.reminder_then_escalate
+    distinction: Reminder/escalate uses repeated bounded notices before escalation; timeout fires once
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: interrupt on timeout
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: stop this if it takes too long
+  positive_examples:
+  - After forty-eight hours, stop review and escalate
+  risk: reversible
+  title: Interrupting timeout
+- action_class: create
+  adapter_binding: bpmn.designer.prod.non_interrupting_notification
+  applicability: The anchor supports a rearming guard and the schedule is finite
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How often should the notification fire?
+    kind: duration
+    name: interval
+    required: true
+  - clarification_prompt: What is the maximum number of notifications?
+    kind: count
+    name: max_fires
+    required: true
+  - clarification_prompt: What notification should be sent?
+    kind: identifier
+    name: notification
+    required: true
+  effect: Creates a bounded non-interrupting timer guard and notification body
+  extensions:
+    bpmn.binder_support: supported
+  id: prod.non_interrupting_notification
+  intent_summary: Emit bounded scheduled notifications while the selected work continues
+  negative_contrasts:
+  - candidate_id: prod.interrupting_timeout
+    distinction: Timeout stops the host; notification leaves it running
+  - candidate_id: prod.reminder_then_escalate
+    distinction: Reminder/escalate includes a final escalation; notification only emits the bounded notices
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: notify without interrupting
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: keep working and send reminders
+  positive_examples:
+  - Notify the case owner every day, at most five times, while review continues
+  risk: reversible
+  title: Non-interrupting notification
+- action_class: create
+  adapter_binding: bpmn.designer.prod.human_review_with_rework
+  applicability: Representable in BPMN but withheld until the production builder is implemented
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: How many rework attempts are permitted?
+    kind: count
+    name: max_attempts
+    required: true
+  effect: Would create review, decision, bounded rework and completion routes
+  extensions:
+    bpmn.binder_support: not_representable
+  id: prod.human_review_with_rework
+  intent_summary: Route work through human review and a bounded forward rework loop
+  negative_contrasts:
+  - candidate_id: op.create_branch
+    distinction: Create-branch adds one gateway outcome; this production creates the complete bounded review/rework pattern
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: human review with rework
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: review and send back if needed
+  positive_examples:
+  - Review the application and allow up to two correction attempts
+  risk: reversible
+  title: Human review with rework
+- action_class: create
+  adapter_binding: bpmn.designer.prod.call_durable_subprocess
+  applicability: Reserved until durable call activities are represented in the Designer IR
+  arguments:
+  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
+    kind: node_reference
+    name: anchor
+    required: true
+  - clarification_prompt: Which published subprocess revision should be called?
+    kind: subprocess_reference
+    name: subprocess
+    required: true
+  effect: Would create a pinned call activity with typed completion
+  extensions:
+    bpmn.binder_support: not_representable
+  id: prod.call_durable_subprocess
+  intent_summary: Invoke a pinned published subprocess and await its governed outcome
+  negative_contrasts:
+  - candidate_id: op.call_subprocess
+    distinction: This production supplies the full durable-call pattern; the operation is its atomic call primitive
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: call durable subprocess
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: run this published workflow
+  positive_examples:
+  - Invoke the pinned source-of-funds review process
+  risk: reversible
+  title: Call durable subprocess
+declarations:
+  domain_types:
+  - bpmn.process
+  focus_kinds:
+  - bpmn.node
+  slot_kinds:
+  - anchor
+  - arms
+  - branch_count
+  - collection
+  - condition
+  - conditions
+  - correlation_source
+  - data_reference
+  - deadline
+  - declared_max
+  - duration
+  - error
+  - escalation
+  - escape
+  - failure_budget
+  - from
+  - gateway
+  - guard
+  - host
+  - interval
+  - max_attempts
+  - max_fires
+  - max_reminders
+  - node
+  - notification
+  - outcome
+  - replacement
+  - request
+  - split
+  - subprocess
+  - target
+  - to
+  - trigger
+extensions:
+  bpmn.catalogue_revision: designer-candidate-schema-v3
+pack:
+  canonicalization_version: 1
+  dependencies: []
+  domain: bpmn.designer
+  id: bpmn.designer
+  identity_namespace: bpmn.designer.semantic
+  provenance:
+    revision: designer-candidate-schema-v3
+    source: utterance-engine/config/bpmn-semantic-pack.yaml
+  version: 1.0.0
+policy:
+  abstention:
+    candidate_id: abstain.none_of_the_above
+    enabled: true
+  phrase_ambiguity: reject
+  roles: []
+schema_version: 1

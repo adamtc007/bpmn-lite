@@ -697,6 +697,7 @@ async fn drive_forward(
                     node = %node_id,
                     kind = match other {
                         ExecutionNode::Wait(_) => "Wait",
+                        ExecutionNode::MessageWait(_) => "MessageWait",
                         _ => "unsupported",
                     },
                     "demo simulation cannot execute this node — timers/waits require the engine path, not the plan-walker; failing the instance loudly"
@@ -748,6 +749,9 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                 }
                 ExecutionNode::Wait(w) => {
                     queue.push_back(w.next.clone());
+                }
+                ExecutionNode::MessageWait(wait) => {
+                    queue.push_back(wait.next.clone());
                 }
                 ExecutionNode::End(_) => {}
             }
@@ -840,6 +844,16 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     fqn: None,
                     target_domain: None,
                     kind: "wait".into(),
+                },
+                ExecutionNode::MessageWait(wait) => NodeInfo {
+                    id: id.clone(),
+                    label: format!(
+                        "✉ Wait for {} (correlate on {})",
+                        wait.name, wait.correlation_key_source
+                    ),
+                    fqn: None,
+                    target_domain: None,
+                    kind: "message_wait".into(),
                 },
                 ExecutionNode::End(end) => NodeInfo {
                     id: id.clone(),
@@ -936,6 +950,7 @@ async fn get_instance_stack(
                     ExecutionNode::Join(j) => span = j.span,
                     ExecutionNode::Loop(l) => span = l.span,
                     ExecutionNode::Wait(w) => span = w.span,
+                    ExecutionNode::MessageWait(wait) => span = wait.span,
                 }
             }
         }
@@ -1025,6 +1040,15 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 w.span,
             ),
+            ExecutionNode::MessageWait(wait) => (
+                "message_wait".to_owned(),
+                format!(
+                    "Wait for {} (correlate on {})",
+                    wait.name, wait.correlation_key_source
+                ),
+                None,
+                wait.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -1104,6 +1128,16 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     condition: None,
                 });
             }
+            ExecutionNode::MessageWait(wait) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: wait.next.clone(),
+                    condition: Some(format!(
+                        "Message correlation: {}",
+                        wait.correlation_key_source
+                    )),
+                });
+            }
             ExecutionNode::End(_) => {}
         }
     }
@@ -1163,8 +1197,75 @@ fn get_preview_registry() -> bpmn_lite_compiler::dsl::ManifestPlaceholderRegistr
 mod tests {
     use super::*;
     use axum::http::Request;
+    use bpmn_lite_compiler::dsl::{
+        EndExecNode, MessageWaitExecNode, PlaceholderSchema, StartExecNode,
+    };
     use serde_json::Value;
+    use std::collections::BTreeMap;
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn message_wait_is_visible_in_plan_graph_and_flow_order() {
+        let nodes = BTreeMap::from([
+            (
+                "start".to_string(),
+                ExecutionNode::Start(StartExecNode {
+                    id: "start".to_string(),
+                    next: "await_reply".to_string(),
+                    span: None,
+                }),
+            ),
+            (
+                "await_reply".to_string(),
+                ExecutionNode::MessageWait(MessageWaitExecNode {
+                    id: "await_reply".to_string(),
+                    name: "Application response".to_string(),
+                    correlation_key_source: "application_reference".to_string(),
+                    next: "end".to_string(),
+                    span: None,
+                }),
+            ),
+            (
+                "end".to_string(),
+                ExecutionNode::End(EndExecNode {
+                    id: "end".to_string(),
+                    status: "completed".to_string(),
+                    span: None,
+                }),
+            ),
+        ]);
+        let plan = WorkflowExecutionPlan::new(
+            "message_wait".to_string(),
+            nodes,
+            "start".to_string(),
+            PlaceholderSchema::default(),
+            None,
+            None,
+        );
+        let infos = build_node_infos(&plan);
+        assert_eq!(
+            infos.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
+            vec!["start", "await_reply", "end"]
+        );
+        assert_eq!(infos[1].kind, "message_wait");
+        assert!(infos[1].label.contains("application_reference"));
+
+        let graph = plan_to_visual_graph(&plan);
+        let wait = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "await_reply")
+            .unwrap();
+        assert_eq!(wait.kind, "message_wait");
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "await_reply"
+                && edge.to == "end"
+                && edge
+                    .condition
+                    .as_deref()
+                    .is_some_and(|condition| condition.contains("application_reference"))
+        }));
+    }
 
     #[tokio::test]
     async fn test_rest_graph_and_stack_endpoints() {

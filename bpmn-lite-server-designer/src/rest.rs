@@ -28,6 +28,54 @@ use bpmn_lite_types::TenantId;
 
 // ── Designer state ─────────────────────────────────────────────────────
 
+/// Explicit utterance-mapper rollout. Production defaults to `Shadow` and
+/// there is deliberately no auto-apply state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MapperRollout {
+    Shadow,
+    Suggest,
+    Workbook,
+}
+
+impl MapperRollout {
+    fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("suggest") => Self::Suggest,
+            Some("workbook") => Self::Workbook,
+            _ => Self::Shadow,
+        }
+    }
+
+    fn configured() -> Self {
+        #[cfg(test)]
+        {
+            // Endpoint tests exercise the complete staged-workbook surface;
+            // a separate test below cements the production default.
+            Self::Workbook
+        }
+        #[cfg(not(test))]
+        {
+            Self::parse(std::env::var("BPMN_MAPPER_ROLLOUT").ok().as_deref())
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Suggest => "suggest",
+            Self::Workbook => "workbook",
+        }
+    }
+
+    fn suggestions_enabled(self) -> bool {
+        matches!(self, Self::Suggest | Self::Workbook)
+    }
+
+    fn workbooks_enabled(self) -> bool {
+        matches!(self, Self::Workbook)
+    }
+}
+
 pub struct DesignerState {
     store: Arc<dyn WorkflowStore>,
     /// Save-as-template registry (2026-07-30): the lifecycle-bearing
@@ -50,6 +98,7 @@ pub struct DesignerState {
     /// demo mode only; not a precedent for merging the crates generally.
     engine: bpmn_lite_engine::BpmnLiteEngine,
     tenant_id: TenantId,
+    mapper_rollout: MapperRollout,
     /// Serializes each session's load→reconstruct→stage→append sequence
     /// (graph-edit and save-as-template) so two concurrent requests against
     /// the SAME session id can never both stage against the same base and
@@ -71,11 +120,10 @@ pub struct DesignerState {
     /// DESIGN DECISION — deliberately EPHEMERAL, in-memory only: a
     /// pending proposal is an un-ratified draft; losing it on restart is
     /// fail-closed (nothing un-ratified may survive a process). The
-    /// audit trail is NOT here — the utterance that produced the
-    /// proposal is already a persisted `Utterance` event, and a ratified
-    /// proposal becomes a persisted `GraphEdit` event carrying a
-    /// "ratified proposal …" note. Rejection/drift leave only the
-    /// utterance record, which is correct: no mutation happened.
+    /// audit trail is NOT here: every state is copied into an append-only
+    /// `ProposalAudit` event, while ratification additionally becomes a
+    /// persisted `GraphEdit`. Losing this cache on restart remains
+    /// fail-closed; the historical proposal chain does not disappear.
     proposals: Mutex<HashMap<Uuid, PendingProposal>>,
     /// Tier-1 trained ranker (DIR-002 serving integration, ruled
     /// 2026-08-01): loaded ONCE at startup from `SLM_BUNDLE_DIR` when the
@@ -97,13 +145,15 @@ pub struct DesignerState {
 /// One staged-but-unratified proposal. `staged_against_hash` is the
 /// session's graph-identity hash (blake3 over the accumulated edit-log
 /// payloads) at staging time — ratification refuses on any drift.
+#[derive(Clone)]
 pub(crate) struct PendingProposal {
     session_id: Uuid,
-    ops: Vec<designer_graph::ops::Operation>,
-    description: String,
+    workbook: semantic_decision_contracts::ProposalWorkbook,
+    bound: Option<crate::proposal::BoundProposal>,
     source_utterance_text: String,
-    source_utterance_seq: u64,
     staged_against_hash: String,
+    dry_run_diagnostics: Vec<String>,
+    audit_event_seq: Option<u64>,
 }
 
 impl DesignerState {
@@ -121,6 +171,14 @@ impl DesignerState {
         store: Arc<dyn WorkflowStore>,
         template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
     ) -> Result<Arc<Self>, anyhow::Error> {
+        Self::assemble_with_rollout(store, template_store, MapperRollout::configured())
+    }
+
+    fn assemble_with_rollout(
+        store: Arc<dyn WorkflowStore>,
+        template_store: Arc<dyn bpmn_lite_authoring::TemplateStore>,
+        mapper_rollout: MapperRollout,
+    ) -> Result<Arc<Self>, anyhow::Error> {
         let tenant_id = TenantId::new("demo")?;
         let engine =
             bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(store.clone(), tenant_id.clone());
@@ -129,6 +187,7 @@ impl DesignerState {
             template_store,
             engine,
             tenant_id,
+            mapper_rollout,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
             proposals: Mutex::new(HashMap::new()),
@@ -144,6 +203,11 @@ impl DesignerState {
     /// tier-0 serving. The endpoint never 500s for a missing model.
     #[cfg(feature = "candle-probe")]
     fn load_tier1_from_env() -> Option<Arc<utterance_engine::trained_ranker::Tier1Ranker>> {
+        // Unit tests must remain hermetic even when CI compiles every named
+        // feature.  Loading weights is an explicit evaluation activity, not
+        // an incidental side effect of constructing an in-memory test state.
+        #[cfg(test)]
+        std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS")?;
         let dir = match std::env::var("SLM_BUNDLE_DIR") {
             Ok(d) if !d.is_empty() => d,
             _ => {
@@ -177,6 +241,10 @@ impl DesignerState {
 
     #[cfg(feature = "embed")]
     fn load_embed_tier0() -> Option<Arc<utterance_engine::retrieval::embed::EmbedTier0>> {
+        // See `load_tier1_from_env`: ordinary all-feature tests exercise the
+        // deterministic degraded path without network access or model loads.
+        #[cfg(test)]
+        std::env::var_os("BPMN_LITE_TEST_ENABLE_MODELS")?;
         match utterance_engine::retrieval::embed::EmbedTier0::new() {
             Ok(t) => Some(Arc::new(t)),
             Err(e) => {
@@ -195,34 +263,68 @@ impl DesignerState {
     fn retrieve_utterance_evidence(
         &self,
         text: &str,
-        board: &utterance_engine::board::Board,
+        board: &dyn utterance_engine::board::InferenceBoard,
         context: &utterance_engine::context::ContextProjection,
     ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
         #[cfg(not(feature = "candle-probe"))]
         let _ = context; // context text is a tier-1 encoding input only
         #[cfg(feature = "candle-probe")]
         if let Some(t1) = &self.tier1 {
-            // Tier-0 front end for the K-subset: embed when available
-            // (the retriever the corpus was generated on), else lexical.
-            #[cfg(feature = "embed")]
-            if let Some(e0) = &self.embed_tier0 {
-                return t1.rank(e0.as_ref(), text, &context.serialize_canonical(), board);
+            if let Some(semantic_board) = board.semantic_board() {
+                let result = t1.rank_full_board(text, context, semantic_board)?;
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::CandleCrossEncoder],
+                    vec![bundle],
+                );
             }
-            return t1.rank(
-                &utterance_engine::retrieval::LexicalTier0,
-                text,
-                &context.serialize_canonical(),
-                board,
-            );
+            // Deliberately do NOT call `t1.rank(...)` here. Every loadable
+            // tier-1 bundle's card is required (`validate_bundle_card`) to
+            // declare `pair_serializer_id`/`pair_serializer_hash` matching
+            // `pair::serialize_candidate_pair` — i.e. every live bundle was
+            // trained on that sentinel-laden pair text. `Tier1Ranker::rank`
+            // routes through `score_serving`, which builds an entirely
+            // different `"{utterance}\n\n{context}"` + plain description
+            // textualisation the bundle was never trained on. A legacy/thin
+            // board has no `CandidateSemanticSlice`s to serialize a real
+            // pair from in the first place, so there is no correct way to
+            // route it through tier-1 at all — degrade to tier-0 with an
+            // honest producer identity instead of silently scoring on
+            // untrained text.
         }
         #[cfg(feature = "embed")]
         if let Some(e0) = &self.embed_tier0 {
             use utterance_engine::retrieval::Tier0Retriever as _;
-            return e0.retrieve(text, board);
+            let result = e0.retrieve(text, board)?;
+            if let Some(semantic_board) = board.semantic_board() {
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::Embedding],
+                    vec![bundle],
+                );
+            }
+            return Ok(result);
         }
         {
             use utterance_engine::retrieval::Tier0Retriever as _;
-            utterance_engine::retrieval::LexicalTier0.retrieve(text, board)
+            let result = utterance_engine::retrieval::LexicalTier0.retrieve(text, board)?;
+            if let Some(semantic_board) = board.semantic_board() {
+                let bundle = result.model_bundle_hash.clone();
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![utterance_engine::exact::EvidenceLane::Lexical],
+                    vec![bundle],
+                );
+            }
+            Ok(result)
         }
     }
 
@@ -241,6 +343,11 @@ impl DesignerState {
     ///   (mirrors the runner: fail closed rather than silently dropping
     ///   to a volatile store when persistence was explicitly requested).
     /// - Nothing set → memory (zero-env demo UX unchanged).
+    ///
+    /// Mapper rollout is independent of storage: `BPMN_MAPPER_ROLLOUT` accepts
+    /// `shadow`, `suggest`, or `workbook`; missing/unknown values are shadow.
+    /// Every stage records the actual evidence producer, and even `workbook`
+    /// requires explicit ratification. There is no auto-apply stage.
     pub async fn try_new_from_env() -> Result<Arc<Self>, anyhow::Error> {
         let store_mode = std::env::var("BPMN_LITE_STORE").unwrap_or_default();
         let force_memory = store_mode.eq_ignore_ascii_case("memory");
@@ -283,7 +390,9 @@ impl DesignerState {
         #[cfg(not(feature = "postgres"))]
         {
             let _ = url;
-            anyhow::bail!("DATABASE_URL set but the designer was built without the postgres feature")
+            anyhow::bail!(
+                "DATABASE_URL set but the designer was built without the postgres feature"
+            )
         }
     }
 
@@ -387,6 +496,15 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 w.span,
             ),
+            ExecutionNode::MessageWait(w) => (
+                "message_wait".to_owned(),
+                format!(
+                    "Wait for {} (correlate by {})",
+                    w.name, w.correlation_key_source
+                ),
+                None,
+                w.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -466,6 +584,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     condition: None,
                 });
             }
+            ExecutionNode::MessageWait(w) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: w.next.clone(),
+                    condition: Some(format!("Message: {}", w.name)),
+                });
+            }
             ExecutionNode::End(_) => {}
         }
     }
@@ -491,7 +616,10 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
 /// curl answers "which service, which model".
 async fn designer_health(State(state): State<Arc<DesignerState>>) -> impl IntoResponse {
     #[cfg(feature = "candle-probe")]
-    let tier1_bundle = state.tier1.as_ref().map(|r| r.model_bundle_hash().to_string());
+    let tier1_bundle = state
+        .tier1
+        .as_ref()
+        .map(|r| r.model_bundle_hash().to_string());
     #[cfg(not(feature = "candle-probe"))]
     let tier1_bundle: Option<String> = {
         let _ = &state; // state unused in the tier-0-only build
@@ -501,6 +629,11 @@ async fn designer_health(State(state): State<Arc<DesignerState>>) -> impl IntoRe
         "status": "ok",
         "service": "bpmn-lite-designer",
         "tier1_bundle": tier1_bundle,
+        "mapper_rollout": state.mapper_rollout.label(),
+        "mapper_suggestions_enabled": state.mapper_rollout.suggestions_enabled(),
+        "mapper_workbooks_enabled": state.mapper_rollout.workbooks_enabled(),
+        "mapper_ratification_required": true,
+        "mapper_auto_apply": false,
     }))
 }
 
@@ -553,10 +686,17 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             post(ratify_proposal_endpoint),
         )
         .route(
+            "/api/dsl/sessions/:id/proposals/:pid/answers",
+            post(answer_proposal_endpoint),
+        )
+        .route(
             "/api/dsl/sessions/:id/proposals/:pid/reject",
             post(reject_proposal_endpoint),
         )
-        .route("/api/dsl/sessions/:id/save", post(save_design_session_endpoint))
+        .route(
+            "/api/dsl/sessions/:id/save",
+            post(save_design_session_endpoint),
+        )
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route("/designer", get(designer_page))
         .route(
@@ -575,10 +715,7 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/bpmn/templates/published",
             get(list_published_templates_endpoint),
         )
-        .route(
-            "/bpmn/instances/:id/status",
-            get(instance_status_endpoint),
-        )
+        .route("/bpmn/instances/:id/status", get(instance_status_endpoint))
         .route(
             "/bpmn/instances/:id/advance",
             post(advance_instance_endpoint),
@@ -965,16 +1102,13 @@ fn get_predicate_field(pred: &dmn_lite_parser::PredicateAst) -> Option<&str> {
         PredicateAst::And { items, .. } | PredicateAst::Or { items, .. } => {
             let mut field = None;
             for item in items {
-                if let Some(f) = get_predicate_field(item) {
-                    if let Some(prev) = field {
-                        if prev != f {
-                            return None;
-                        }
-                    } else {
-                        field = Some(f);
+                let current = get_predicate_field(item)?;
+                if let Some(previous) = field {
+                    if previous != current {
+                        return None;
                     }
                 } else {
-                    return None;
+                    field = Some(current);
                 }
             }
             field
@@ -1093,8 +1227,7 @@ fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::MacroConfigList> {
     }
     let server_macros = format!("{}/macros.yaml", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&server_macros).exists() {
-        if let Ok(config) =
-            bpmn_lite_compiler::dsl::MacroConfigList::load_from_file(&server_macros)
+        if let Ok(config) = bpmn_lite_compiler::dsl::MacroConfigList::load_from_file(&server_macros)
         {
             return Some(config);
         }
@@ -1104,8 +1237,8 @@ fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::MacroConfigList> {
 
 async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoResponse {
     use bpmn_lite_compiler::dsl::{
-        AstMutator, NodeAst, ToSexpr, XorBranchConfig, create_bounded_retry_macro,
-        create_parallel_split_join, create_xor_split_join, parse_workflow_str,
+        create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
+        parse_workflow_str, AstMutator, NodeAst, ToSexpr, XorBranchConfig,
     };
 
     let mut workflow = match parse_workflow_str(&body.source_code) {
@@ -1406,6 +1539,11 @@ fn find_all_predecessors_id_rec(
                     acc.push(t.id.clone());
                 }
             }
+            bpmn_lite_compiler::dsl::NodeAst::MessageWait(wait) => {
+                if wait.next == target_id {
+                    acc.push(wait.id.clone());
+                }
+            }
             bpmn_lite_compiler::dsl::NodeAst::Join(j) => {
                 if j.next == target_id {
                     acc.push(j.id.clone());
@@ -1453,11 +1591,7 @@ async fn resolve_dsl_diagnostics(Json(body): Json<DiagnosticsResolveRequest>) ->
     let manifests_path = std::env::var("SAGE_MANIFESTS_DIR")
         .unwrap_or_else(|_| format!("{}/../manifests", env!("CARGO_MANIFEST_DIR")));
     let manifests_dir = std::path::PathBuf::from(manifests_path);
-    match bpmn_lite_authoring::execute_autofix(
-        &body.source_code,
-        &body.action,
-        &manifests_dir,
-    ) {
+    match bpmn_lite_authoring::execute_autofix(&body.source_code, &body.action, &manifests_dir) {
         Ok(new_dsl) => {
             let registry = get_preview_registry();
             let new_dsl_str = new_dsl.clone();
@@ -2079,7 +2213,6 @@ async fn spawn_template_instance_endpoint(
         .into_response()
 }
 
-
 // ── Phase C: observe + advance a spawned instance (2026-08-01) ─────────
 //
 // Request-driven execution for the demo browser UI: no background tick
@@ -2313,27 +2446,24 @@ async fn advance_instance_endpoint(
     // interrupting unwind is a surfaced kernel gap (production workers
     // holding the host's job hit the same ghost), recorded in the WS-D
     // phase notes — not silently papered over here.
-    let parked_job_keys: std::collections::HashSet<String> = match demo
-        .engine
-        .inspect(instance_id)
-        .await
-    {
-        Ok(inspection) => inspection
-            .fibers
-            .iter()
-            .filter_map(|f| match &f.wait_state {
-                bpmn_lite_types::WaitState::Job { job_key } => Some(job_key.clone()),
-                _ => None,
-            })
-            .collect(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
+    let parked_job_keys: std::collections::HashSet<String> =
+        match demo.engine.inspect(instance_id).await {
+            Ok(inspection) => inspection
+                .fibers
+                .iter()
+                .filter_map(|f| match &f.wait_state {
+                    bpmn_lite_types::WaitState::Job { job_key } => Some(job_key.clone()),
+                    _ => None,
+                })
+                .collect(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
 
     for job in jobs.iter().filter(|j| parked_job_keys.contains(&j.job_key)) {
         // The kernel verifies `expected_instance_payload_hash` against
@@ -2472,7 +2602,9 @@ async fn create_design_session_endpoint(
     }
 }
 
-async fn list_design_sessions_endpoint(State(demo): State<Arc<DesignerState>>) -> impl IntoResponse {
+async fn list_design_sessions_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+) -> impl IntoResponse {
     match demo.store.list_design_sessions(&demo.tenant_id).await {
         Ok(summaries) => Json(summaries).into_response(),
         Err(e) => (
@@ -2616,7 +2748,9 @@ fn reconstruct_designer_dag(
     let mut dag = DesignerDag::new(record.name.clone());
     dag.seed(
         seed_start_key(record.id),
-        bpmn_lite_compiler::IRNode::Start { id: SEED_START_ID.into() },
+        bpmn_lite_compiler::IRNode::Start {
+            id: SEED_START_ID.into(),
+        },
         Provenance::default(),
     )?;
     for (i, payload) in record.graph_edit_payloads().into_iter().enumerate() {
@@ -2746,7 +2880,10 @@ async fn session_graph_edit_endpoint(
         .append_design_session_event(
             &demo.tenant_id,
             id,
-            &DesignSessionEventKind::GraphEdit { operations_json, note: body.note.clone() },
+            &DesignSessionEventKind::GraphEdit {
+                operations_json,
+                note: body.note.clone(),
+            },
         )
         .await
     {
@@ -2765,6 +2902,287 @@ async fn session_graph_edit_endpoint(
 // EOP-SPEC-SLM-TRAIN-001: model/binding output remains evidence into
 // deterministic policy — no code path auto-applies a proposal.
 
+#[derive(Deserialize)]
+struct ProposalAnswersBody {
+    answers: Vec<crate::proposal::SlotAnswer>,
+}
+
+fn proposal_audit_event(
+    pending: &PendingProposal,
+    outcome: &str,
+) -> Result<DesignSessionEventKind, serde_json::Error> {
+    let workbook_json = serde_json::to_string(&pending.workbook)?;
+    let bound_plan_json = pending
+        .bound
+        .as_ref()
+        .map(|bound| {
+            serde_json::to_string(&serde_json::json!({
+                "operations": bound.ops,
+                "description": bound.description,
+            }))
+        })
+        .transpose()?;
+    let diagnostics_preimage = serde_json::to_vec(&pending.dry_run_diagnostics)?;
+    Ok(DesignSessionEventKind::ProposalAudit {
+        workbook_json,
+        bound_plan_json,
+        outcome: outcome.to_string(),
+        dry_run_diagnostics: pending.dry_run_diagnostics.clone(),
+        dry_run_diagnostics_hash: blake3::hash(&diagnostics_preimage).to_hex().to_string(),
+        decision_record_hash: pending.workbook.evidence_record_hash.as_str().to_string(),
+        related_event_seq: pending.audit_event_seq,
+    })
+}
+
+async fn append_proposal_audit(
+    demo: &DesignerState,
+    session_id: Uuid,
+    pending: &PendingProposal,
+    outcome: &str,
+) -> Result<u64, anyhow::Error> {
+    let event = proposal_audit_event(pending, outcome)?;
+    Ok(demo
+        .store
+        .append_design_session_event(&demo.tenant_id, session_id, &event)
+        .await?)
+}
+
+/// POST /api/dsl/sessions/:id/proposals/:pid/answers — atomically apply typed
+/// answers to a needs-input workbook, then materialize and dry-stage only when
+/// all required slots are resolved.
+async fn answer_proposal_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path((id, pid)): Path<(Uuid, Uuid)>,
+    Json(body): Json<ProposalAnswersBody>,
+) -> impl IntoResponse {
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
+    let pending = {
+        let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+        match proposals.get(&pid) {
+            Some(pending) if pending.session_id == id => pending.clone(),
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "proposal not found" })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let current_hash = graph_identity_hash(&record);
+    if current_hash != pending.staged_against_hash {
+        let mut expired = pending.clone();
+        if let Err(error) = expired
+            .workbook
+            .transition(semantic_decision_contracts::ProposalStatus::Expired)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("workbook expiry: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &expired, "expired_graph_drift").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("proposal audit append: {error}") })),
+            )
+                .into_response();
+        }
+        demo.proposals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&pid);
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "graph changed since workbook creation",
+                "proposal_status": expired.workbook.status(),
+                "staged_against": pending.staged_against_hash,
+                "current": current_hash,
+            })),
+        )
+            .into_response();
+    }
+    let dag = match reconstruct_designer_dag(&record) {
+        Ok(dag) => dag,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("reconstruction: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    let mut workbook =
+        match crate::proposal::apply_explicit_answers(&dag, pending.workbook.clone(), body.answers)
+        {
+            Ok(workbook) => workbook,
+            Err(error) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": error.to_string(),
+                        "workbook": pending.workbook,
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+    if workbook.status() == semantic_decision_contracts::ProposalStatus::NeedsArguments {
+        let mut updated = PendingProposal {
+            workbook: workbook.clone(),
+            bound: None,
+            dry_run_diagnostics: Vec::new(),
+            ..pending
+        };
+        match append_proposal_audit(demo.as_ref(), id, &updated, "answers_applied").await {
+            Ok(audit_seq) => updated.audit_event_seq = Some(audit_seq),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("proposal audit append: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        demo.proposals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(pid, updated);
+        return Json(serde_json::json!({
+            "proposal_id": pid,
+            "proposal_status": workbook.status(),
+            "workbook": workbook,
+            "operations": serde_json::Value::Null,
+            "dry_run_diagnostics": [],
+        }))
+        .into_response();
+    }
+
+    let bound = match crate::proposal::materialize_operations(&dag, &workbook) {
+        Ok(bound) => bound,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": error.to_string(),
+                    "workbook": pending.workbook,
+                })),
+            )
+                .into_response();
+        }
+    };
+    let mut diagnostics = Vec::new();
+    let dry = designer_graph::productions::apply_production(
+        &dag,
+        bound.ops.clone(),
+        designer_graph::schema::Provenance::default(),
+    );
+    match dry {
+        Ok(staged) => match staged.candidate.admit() {
+            Ok(_) => {
+                if let Err(error) = workbook
+                    .transition(semantic_decision_contracts::ProposalStatus::ReadyForRatification)
+                {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": error.to_string() })),
+                    )
+                        .into_response();
+                }
+            }
+            Err(errors) => {
+                diagnostics = errors.iter().map(|error| error.message.clone()).collect();
+                if let Err(error) = workbook
+                    .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+                {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": error.to_string() })),
+                    )
+                        .into_response();
+                }
+            }
+        },
+        Err(error) => {
+            diagnostics.push(error.to_string());
+            if let Err(error) =
+                workbook.transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let mut updated = PendingProposal {
+        workbook: workbook.clone(),
+        bound: Some(bound.clone()),
+        dry_run_diagnostics: diagnostics.clone(),
+        ..pending
+    };
+    let outcome = if workbook.status()
+        == semantic_decision_contracts::ProposalStatus::ReadyForRatification
+    {
+        "dry_run_admitted"
+    } else {
+        "dry_run_refused"
+    };
+    match append_proposal_audit(demo.as_ref(), id, &updated, outcome).await {
+        Ok(audit_seq) => updated.audit_event_seq = Some(audit_seq),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
+    }
+    demo.proposals
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(pid, updated);
+    Json(serde_json::json!({
+        "proposal_id": pid,
+        "proposal_status": workbook.status(),
+        "workbook": workbook,
+        "operations": bound.ops,
+        "description": bound.description,
+        "dry_run_diagnostics": diagnostics,
+    }))
+    .into_response()
+}
+
 /// POST /api/dsl/sessions/:id/proposals/:pid/ratify — under the session
 /// lock: re-check graph identity (409 on drift, proposal consumed),
 /// re-stage through EXACTLY the graph-edit validation, append the
@@ -2778,18 +3196,12 @@ async fn ratify_proposal_endpoint(
     let lock = demo.session_lock(id);
     let _guard = lock.lock().await;
 
-    // Peek without consuming: an unknown pid / session mismatch is a
-    // 404 that must not disturb some other session's pending entry.
-    let (ops, description, staged_against_hash, utterance_text, utterance_seq) = {
+    // Peek without consuming: an unknown pid / session mismatch is a 404 that
+    // must not disturb some other session's pending entry.
+    let pending = {
         let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
         match proposals.get(&pid) {
-            Some(p) if p.session_id == id => (
-                p.ops.clone(),
-                p.description.clone(),
-                p.staged_against_hash.clone(),
-                p.source_utterance_text.clone(),
-                p.source_utterance_seq,
-            ),
+            Some(p) if p.session_id == id => p.clone(),
             _ => {
                 return (
                     StatusCode::NOT_FOUND,
@@ -2805,6 +3217,34 @@ async fn ratify_proposal_endpoint(
             .unwrap_or_else(|p| p.into_inner())
             .remove(&pid);
     };
+    if pending.workbook.status()
+        != semantic_decision_contracts::ProposalStatus::ReadyForRatification
+    {
+        let status = pending.workbook.status();
+        consume();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "proposal is not ready for ratification",
+                "proposal_status": status,
+            })),
+        )
+            .into_response();
+    }
+    let bound = match pending.bound.clone() {
+        Some(bound) => bound,
+        None => {
+            consume();
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": "ready workbook has no materialized plan" })),
+            )
+                .into_response();
+        }
+    };
+    let ops = bound.ops.clone();
+    let description = bound.description.clone();
+    let staged_against_hash = pending.staged_against_hash.clone();
 
     let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
         Ok(Some(r)) => r,
@@ -2829,6 +3269,28 @@ async fn ratify_proposal_endpoint(
     // user re-utters against the current graph.
     let current_hash = graph_identity_hash(&record);
     if current_hash != staged_against_hash {
+        let mut expired = pending.clone();
+        if let Err(error) = expired
+            .workbook
+            .transition(semantic_decision_contracts::ProposalStatus::Expired)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("workbook expiry: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &expired, "expired_graph_drift").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
         consume();
         return (
             StatusCode::CONFLICT,
@@ -2893,20 +3355,47 @@ async fn ratify_proposal_endpoint(
     // The note marks this edit as utterance-ratified (vs a manual
     // graph-edit) and anchors it to its source utterance.
     let note = format!(
-        "ratified proposal {pid} (utterance seq {utterance_seq}): {utterance_text}"
+        "ratified proposal {pid} (workbook {}, utterance seq {}, evidence {}, proposal audit seq {}): {}",
+        pending.workbook.workbook_id.as_str(),
+        pending.workbook.source_utterance_seq,
+        pending.workbook.evidence_record_hash.as_str(),
+        pending
+            .audit_event_seq
+            .map(|seq| seq.to_string())
+            .unwrap_or_else(|| "legacy-none".to_string()),
+        pending.source_utterance_text,
     );
     match demo
         .store
         .append_design_session_event(
             &demo.tenant_id,
             id,
-            &DesignSessionEventKind::GraphEdit { operations_json, note },
+            &DesignSessionEventKind::GraphEdit {
+                operations_json,
+                note,
+            },
         )
         .await
     {
         Ok(seq) => {
+            let mut workbook = pending.workbook;
+            let transition =
+                workbook.transition(semantic_decision_contracts::ProposalStatus::Ratified);
             consume();
-            Json(serde_json::json!({ "seq": seq, "applied": description })).into_response()
+            match transition {
+                Ok(()) => Json(serde_json::json!({
+                    "seq": seq,
+                    "applied": description,
+                    "proposal_status": workbook.status(),
+                    "workbook": workbook,
+                }))
+                .into_response(),
+                Err(error) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+                )
+                    .into_response(),
+            }
         }
         Err(e) => {
             consume();
@@ -2919,27 +3408,61 @@ async fn ratify_proposal_endpoint(
     }
 }
 
-/// POST /api/dsl/sessions/:id/proposals/:pid/reject — drop the pending
-/// entry. Persists nothing (the utterance record already carries the
-/// full audit trail of what was proposed).
+/// POST /api/dsl/sessions/:id/proposals/:pid/reject — durably record the
+/// terminal workbook and then drop the ephemeral pending entry.
 async fn reject_proposal_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path((id, pid)): Path<(Uuid, Uuid)>,
 ) -> impl IntoResponse {
     let lock = demo.session_lock(id);
     let _guard = lock.lock().await;
-    let mut proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
-    match proposals.get(&pid) {
-        Some(p) if p.session_id == id => {
-            proposals.remove(&pid);
-            Json(serde_json::json!({ "rejected": pid })).into_response()
+    let pending = {
+        let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
+        match proposals.get(&pid) {
+            Some(pending) if pending.session_id == id => pending.clone(),
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "proposal not found" })),
+                )
+                    .into_response();
+            }
         }
-        _ => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "proposal not found" })),
+    };
+    let mut rejected = pending;
+    if let Err(error) = rejected
+        .workbook
+        .transition(semantic_decision_contracts::ProposalStatus::Rejected)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("cannot reject: {error}") })),
         )
-            .into_response(),
+            .into_response();
     }
+    let audit_seq = match append_proposal_audit(demo.as_ref(), id, &rejected, "rejected").await {
+        Ok(audit_seq) => audit_seq,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("proposal audit append: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    demo.proposals
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&pid);
+    Json(serde_json::json!({
+        "rejected": pid,
+        "proposal_status": rejected.workbook.status(),
+        "workbook": rejected.workbook,
+        "audit_seq": audit_seq,
+    }))
+    .into_response()
 }
 
 /// GET /api/dsl/sessions/:id/proposals — the session's pending
@@ -2953,11 +3476,23 @@ async fn list_proposals_endpoint(
         .iter()
         .filter(|(_, p)| p.session_id == id)
         .map(|(pid, p)| {
+            let (description, operations) = p
+                .bound
+                .as_ref()
+                .map(|bound| {
+                    (
+                        serde_json::Value::String(bound.description.clone()),
+                        serde_json::to_value(&bound.ops).unwrap_or(serde_json::Value::Null),
+                    )
+                })
+                .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
             serde_json::json!({
                 "proposal_id": pid,
-                "description": p.description,
-                "operations": serde_json::to_value(&p.ops).unwrap_or(serde_json::Value::Null),
-                "source_utterance_seq": p.source_utterance_seq,
+                "description": description,
+                "operations": operations,
+                "workbook": p.workbook,
+                "proposal_status": p.workbook.status(),
+                "source_utterance_seq": p.workbook.source_utterance_seq,
                 "source_utterance_text": p.source_utterance_text,
                 "staged_against_hash": p.staged_against_hash,
             })
@@ -2972,17 +3507,14 @@ async fn list_proposals_endpoint(
 /// enumerates what the user cannot do.
 fn render_disposition(
     disposition: &utterance_engine::policy::ProposalDisposition,
-    board: &utterance_engine::board::Board,
+    board: &dyn utterance_engine::board::InferenceBoard,
 ) -> String {
     use utterance_engine::policy::ProposalDisposition as D;
     match disposition {
         D::Candidate { candidate_id } => {
             let desc = board
-                .candidates
-                .iter()
-                .find(|c| &c.canonical_id == candidate_id)
-                .map(|c| c.description.as_str())
-                .unwrap_or(candidate_id.as_str());
+                .candidate_description(candidate_id)
+                .unwrap_or_else(|| candidate_id.clone());
             format!("Proposed: {desc}. Stage and ratify to apply.")
         }
         D::OutOfScope => {
@@ -2994,13 +3526,14 @@ fn render_disposition(
                 .to_owned()
         }
         // Unreachable in v1 (policy enum docs) — rendered defensively.
-        D::Ambiguous { top_candidates } => {
-            format!("Did you mean one of: {}?", top_candidates.join(", "))
-        }
+        D::Ambiguous { question, .. } => question.clone(),
         D::MissingArguments { candidate_id, missing } => {
             format!("'{candidate_id}' needs: {}", missing.join(", "))
         }
-        D::Compound => "That looks like several changes — one at a time, please.".to_owned(),
+        D::Compound { spans } => format!(
+            "That contains {} governed changes. Please submit them one at a time; nothing was staged.",
+            spans.len()
+        ),
     }
 }
 
@@ -3014,10 +3547,10 @@ async fn session_utterance_endpoint(
     Path(id): Path<Uuid>,
     Json(body): Json<SessionUtteranceBody>,
 ) -> impl IntoResponse {
-    use utterance_engine::board::{build_board, EmptyUniverse, PolicyFilter};
+    use utterance_engine::board::{build_board, EmptyUniverse, InferenceBoard, PolicyFilter};
     #[cfg(feature = "q9-capture")]
     use utterance_engine::capture::{CaptureOutcome, CapturePipeline};
-    use utterance_engine::policy::{decide, DispositionConfig};
+    use utterance_engine::policy::{decide_with_action_spans, DispositionConfig};
 
     // Session must exist; its current source is the graph identity the
     // board hashes (C7 obligation: WS-B supplies the revision identity).
@@ -3085,33 +3618,55 @@ async fn session_utterance_endpoint(
         // content (here, the accumulated edit-log payloads — the DAG's
         // sole source of truth) rather than a Debug-formatted derivative.
         let graph_identity = graph_identity_hash(&record_session);
-        let oracle = designer_graph::positional::PositionalLegality { dag: &dag };
-        let anchor_pair = anchor_key.as_ref().zip(body.anchor.as_deref());
-        build_board(
-            &oracle,
+        let anchor_pair = anchor_key.zip(body.anchor.as_deref());
+        utterance_engine::bpmn_board::build_bpmn_semantic_board(
+            &dag,
             anchor_pair,
-            Some(&graph_identity),
-            &EmptyUniverse,
+            &graph_identity,
             &PolicyFilter::default(),
         )
+        .map_err(anyhow::Error::from)
         .and_then(|board| {
             let context = utterance_engine::context::project_ir(
                 &ir,
                 body.anchor.as_deref(),
-                &board.context.pack_identity,
+                board.semantic_snapshot.as_str(),
                 &graph_identity,
             )?;
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
-            let (disposition, record) =
-                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
-            Ok((board, disposition, record, context))
+            let (disposition, record) = decide_with_action_spans(
+                &DispositionConfig::shadow_v2(),
+                &board,
+                &evidence,
+                &context,
+                &body.text,
+                &utterance_engine::disposition::StrictCompoundSyntax,
+            )?;
+            Ok((
+                Box::new(board.clone()) as Box<dyn InferenceBoard>,
+                disposition,
+                record,
+                context,
+                board,
+            ))
         })
         // Carry the reconstruction forward for binding extraction —
         // the proposal loop is strictly downstream of the disposition.
-        .map(|t| (t.0, t.1, t.2, t.3, Some((dag, anchor_key, graph_identity))))
+        .map(|t| {
+            (
+                t.0,
+                t.1,
+                t.2,
+                t.3,
+                Some((dag, anchor_key, graph_identity, t.4)),
+            )
+        })
     } else {
         let graph_identity = blake3::hash(
-            record_session.current_source().unwrap_or_default().as_bytes(),
+            record_session
+                .current_source()
+                .unwrap_or_default()
+                .as_bytes(),
         )
         .to_hex()
         .to_string();
@@ -3151,9 +3706,20 @@ async fn session_utterance_endpoint(
                 node_kind_counts,
             )?;
             let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
-            let (disposition, record) =
-                decide(&DispositionConfig::shadow_v1(), &board, &evidence, &context)?;
-            Ok((board, disposition, record, context))
+            let (disposition, record) = decide_with_action_spans(
+                &DispositionConfig::shadow_v2(),
+                &board,
+                &evidence,
+                &context,
+                &body.text,
+                &utterance_engine::disposition::StrictCompoundSyntax,
+            )?;
+            Ok((
+                Box::new(board) as Box<dyn InferenceBoard>,
+                disposition,
+                record,
+                context,
+            ))
         })
         // Legacy DSL-source sessions have no DesignerDag — no binding
         // extraction, no proposals (the graph-edit surface is the only
@@ -3170,86 +3736,149 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
-    let mut message = render_disposition(&disposition, &board);
+    let mut message = if demo.mapper_rollout.suggestions_enabled() {
+        render_disposition(&disposition, board.as_ref())
+    } else {
+        "Mapper evidence recorded in shadow; no suggestion or workbook was served.".to_string()
+    };
 
-    // ── Binding extraction + dry stage (propose half of the loop) ────
-    // Strictly downstream of the disposition: policy already decided
-    // `Candidate`; here the deterministic slot resolver tries to fill
-    // the concrete operation arguments. Three outcomes:
-    // - Bound + dry-stages + admits → a PendingProposal is held in
-    //   memory (NOTHING appended; the graph is untouched until ratify).
-    // - Bound but the dry stage refuses → reported, nothing held.
-    // - Missing bindings → a MissingArguments-shaped response naming
-    //   them (the persisted decision record keeps policy's own
-    //   `Candidate` disposition — the record is policy's truth; the
-    //   missing-arguments shape is the binding layer's).
-    let mut effective_disposition = disposition.clone();
+    // ── Typed workbook + dry stage (propose half of the loop) ────────
+    // Inference truth remains `disposition`; binding state is carried by
+    // a separate shared workbook and can never overwrite it.
     let mut staged_proposal: Option<PendingProposal> = None;
-    let mut proposal_refusal: Option<Vec<String>> = None;
+    let mut dry_run_diagnostics: Vec<String> = Vec::new();
     if let (
-        Some((dag, anchor_key, graph_identity)),
+        true,
+        Some((dag, anchor_key, graph_identity, semantic_board)),
         utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
-    ) = (&graph_ctx, &disposition)
-    {
-        match crate::proposal::bind_candidate(dag, *anchor_key, candidate_id, &body.text) {
-            Ok(crate::proposal::BindingOutcome::Bound(bound)) => {
-                // Dry stage: exactly the graph-edit endpoint's
-                // validation (apply_production + full admit), with no
-                // append. A refusal persists nothing.
-                let dry = designer_graph::productions::apply_production(
-                    dag,
-                    bound.ops.clone(),
-                    designer_graph::schema::Provenance::default(),
-                );
-                match dry {
-                    Ok(staged) => match staged.candidate.admit() {
-                        Ok(_) => {
-                            message = format!(
-                                "Proposed: {}. Ratify to apply, or reject.",
-                                bound.description
-                            );
-                            staged_proposal = Some(PendingProposal {
-                                session_id: id,
-                                ops: bound.ops,
-                                description: bound.description,
-                                source_utterance_text: body.text.clone(),
-                                source_utterance_seq: 0, // filled after append
-                                staged_against_hash: graph_identity.clone(),
-                            });
-                        }
-                        Err(errs) => {
-                            let diags: Vec<String> =
-                                errs.iter().map(|e| e.message.clone()).collect();
-                            message = format!(
-                                "Proposal for '{candidate_id}' does not admit — nothing staged."
-                            );
-                            proposal_refusal = Some(diags);
-                        }
-                    },
-                    Err(e) => {
-                        message = format!(
-                            "Proposal for '{candidate_id}' refused at staging — nothing staged."
-                        );
-                        proposal_refusal = Some(vec![format!("{e}")]);
-                    }
+    ) = (
+        demo.mapper_rollout.workbooks_enabled(),
+        &graph_ctx,
+        &disposition,
+    ) {
+        let canonical_id =
+            match semantic_decision_contracts::CanonicalCandidateId::new(candidate_id.clone()) {
+                Ok(candidate_id) => candidate_id,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(
+                            serde_json::json!({ "error": format!("candidate identity: {error}") }),
+                        ),
+                    )
+                        .into_response();
                 }
-            }
-            Ok(crate::proposal::BindingOutcome::Missing(missing)) => {
-                effective_disposition =
-                    utterance_engine::policy::ProposalDisposition::MissingArguments {
-                        candidate_id: candidate_id.clone(),
-                        missing,
-                    };
-                message = render_disposition(&effective_disposition, &board);
-            }
-            Err(e) => {
+            };
+        let mut workbook = match crate::proposal::start_workbook(
+            dag,
+            *anchor_key,
+            semantic_board,
+            &record,
+            &canonical_id,
+            &body.text,
+            0,
+        ) {
+            Ok(workbook) => workbook,
+            Err(error) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("binding extraction: {e}") })),
+                    Json(serde_json::json!({ "error": format!("workbook start: {error}") })),
                 )
                     .into_response();
             }
+        };
+        let mut bound = None;
+        if workbook.status() == semantic_decision_contracts::ProposalStatus::ReadyForDryRun {
+            let materialized = match crate::proposal::materialize_operations(dag, &workbook) {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": format!("materialization: {error}") })),
+                    )
+                        .into_response();
+                }
+            };
+            let dry = designer_graph::productions::apply_production(
+                dag,
+                materialized.ops.clone(),
+                designer_graph::schema::Provenance::default(),
+            );
+            match dry {
+                Ok(staged) => match staged.candidate.admit() {
+                    Ok(_) => {
+                        if let Err(error) = workbook.transition(
+                            semantic_decision_contracts::ProposalStatus::ReadyForRatification,
+                        ) {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+                            )
+                                .into_response();
+                        }
+                        message = format!(
+                            "Proposed: {}. Ratify to apply, or reject.",
+                            materialized.description
+                        );
+                    }
+                    Err(errors) => {
+                        dry_run_diagnostics =
+                            errors.iter().map(|error| error.message.clone()).collect();
+                        if let Err(error) = workbook.transition(
+                            semantic_decision_contracts::ProposalStatus::DryRunRefused,
+                        ) {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+                            )
+                                .into_response();
+                        }
+                        message = format!(
+                            "Proposal for '{candidate_id}' does not admit — nothing staged."
+                        );
+                    }
+                },
+                Err(error) => {
+                    dry_run_diagnostics = vec![error.to_string()];
+                    if let Err(error) = workbook
+                        .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+                    {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+                        )
+                            .into_response();
+                    }
+                    message = format!(
+                        "Proposal for '{candidate_id}' refused at staging — nothing staged."
+                    );
+                }
+            }
+            bound = Some(materialized);
+        } else {
+            let prompts = workbook
+                .slots()
+                .iter()
+                .filter(|slot| {
+                    slot.requirement == semantic_decision_contracts::SlotRequirement::Required
+                        && matches!(
+                            slot.value,
+                            semantic_decision_contracts::SlotValueState::Missing
+                        )
+                })
+                .map(|slot| slot.clarification_prompt.as_str())
+                .collect::<Vec<_>>();
+            message = format!("More information is required: {}", prompts.join(" "));
         }
+        staged_proposal = Some(PendingProposal {
+            session_id: id,
+            workbook,
+            bound,
+            source_utterance_text: body.text.clone(),
+            staged_against_hash: graph_identity.clone(),
+            dry_run_diagnostics: dry_run_diagnostics.clone(),
+            audit_event_seq: None,
+        });
     }
 
     let record_json = match serde_json::to_string(&record) {
@@ -3271,16 +3900,15 @@ async fn session_utterance_endpoint(
     // runtime state, but it is now also a build-time fact, not just a
     // runtime one.
     #[cfg(feature = "q9-capture")]
-    let capture_state = match CapturePipeline::off().capture(
-        utterance_engine::capture::CaptureEvent {
+    let capture_state =
+        match CapturePipeline::off().capture(utterance_engine::capture::CaptureEvent {
             raw_utterance: body.text.clone(),
             record: record.clone(),
             dataset: utterance_engine::capture::DatasetClass::Evaluation,
-        },
-    ) {
-        CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
-        CaptureOutcome::Stored(_) => "stored",
-    };
+        }) {
+            CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
+            CaptureOutcome::Stored(_) => "stored",
+        };
     #[cfg(not(feature = "q9-capture"))]
     let capture_state = "not_compiled";
 
@@ -3298,14 +3926,19 @@ async fn session_utterance_endpoint(
                 store.capture(utterance_engine::dev_capture::DevSessionCaptureInput {
                     raw_utterance: body.text.clone(),
                     board_hash: record.board_hash.clone(),
-                    board: utterance_engine::corpus_schema::BoardDump::from_board(&board),
+                    board: utterance_engine::corpus_schema::BoardDump::from_inference_board(
+                        board.as_ref(),
+                    ),
                     context_projection: context.serialize_canonical(),
                     context_projection_hash: record.context_projection_hash.clone(),
                     retrieved_subset_hash: record.retrieved_subset_hash.clone(),
                     model_bundle_hash: record.model_bundle_hash.clone(),
                     disposition_policy_hash: record.disposition_policy_hash.clone(),
+                    action_span_producer_hash: record.action_span_producer_hash.clone(),
+                    decision_record_hash: record.decision_record_hash.clone(),
                     ranking: record.ranking.clone(),
                     disposition: disposition.clone(),
+                    evidence_trace: record.evidence_trace.clone(),
                 });
                 "captured"
             }
@@ -3330,35 +3963,109 @@ async fn session_utterance_endpoint(
         Ok(seq) => {
             // The pending proposal is registered only once its source
             // utterance is durably appended (the audit anchor).
-            let proposal_json = match staged_proposal {
-                Some(mut pending) => {
-                    pending.source_utterance_seq = seq;
-                    let proposal_id = Uuid::new_v4();
-                    let ops_json = serde_json::to_value(&pending.ops)
-                        .unwrap_or(serde_json::Value::Null);
-                    let description = pending.description.clone();
-                    demo.proposals
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .insert(proposal_id, pending);
-                    serde_json::json!({
-                        "proposal_id": proposal_id,
-                        "operations": ops_json,
-                        "description": description,
-                    })
-                }
-                None => serde_json::Value::Null,
+            let (proposal_json, workbook_json, proposal_status, proposal_id_json) =
+                match staged_proposal {
+                    Some(mut pending) => {
+                        pending.workbook.source_utterance_seq = seq;
+                        let proposal_id = match Uuid::parse_str(
+                            pending.workbook.workbook_id.as_str(),
+                        ) {
+                            Ok(proposal_id) => proposal_id,
+                            Err(error) => {
+                                return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": format!("workbook id: {error}") })),
+                            )
+                                .into_response();
+                            }
+                        };
+                        let workbook_json = serde_json::to_value(&pending.workbook)
+                            .unwrap_or(serde_json::Value::Null);
+                        let status_json = serde_json::to_value(pending.workbook.status())
+                            .unwrap_or(serde_json::Value::Null);
+                        let (ops_json, description) = pending
+                            .bound
+                            .as_ref()
+                            .map(|bound| {
+                                (
+                                    serde_json::to_value(&bound.ops)
+                                        .unwrap_or(serde_json::Value::Null),
+                                    serde_json::Value::String(bound.description.clone()),
+                                )
+                            })
+                            .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
+                        let audit_seq =
+                            match append_proposal_audit(demo.as_ref(), id, &pending, "created")
+                                .await
+                            {
+                                Ok(audit_seq) => audit_seq,
+                                Err(error) => {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(serde_json::json!({
+                                            "error": format!("proposal audit append: {error}")
+                                        })),
+                                    )
+                                        .into_response();
+                                }
+                            };
+                        pending.audit_event_seq = Some(audit_seq);
+                        demo.proposals
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .insert(proposal_id, pending);
+                        (
+                            serde_json::json!({
+                                "proposal_id": proposal_id,
+                                "operations": ops_json,
+                                "description": description,
+                                "workbook": workbook_json.clone(),
+                                "status": status_json.clone(),
+                            }),
+                            workbook_json,
+                            status_json,
+                            serde_json::json!(proposal_id),
+                        )
+                    }
+                    None => (
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                    ),
+                };
+            let served_disposition = if demo.mapper_rollout.suggestions_enabled() {
+                serde_json::to_value(&disposition).unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
             };
             Json(serde_json::json!({
                 "seq": seq,
                 "message": message,
-                "disposition": effective_disposition,
-                "board_hash": board.board_hash,
-                "model_bundle_hash": record.model_bundle_hash,
+                "inference_disposition": served_disposition.clone(),
+                "disposition": served_disposition,
+                "decision_record_hash": record.decision_record_hash,
+                "workbook": workbook_json,
+                "proposal_status": proposal_status,
+                "dry_run_diagnostics": dry_run_diagnostics,
+                "proposal_id": proposal_id_json,
+                "board_hash": board.board_hash(),
+                "board_schema": board.schema_label(),
+                "board_pack_identity": board.pack_identity(),
+                "model_bundle_hash": record.model_bundle_hash.clone(),
+                "evidence_producer": record.model_bundle_hash,
+                "mapper_rollout": {
+                    "stage": demo.mapper_rollout.label(),
+                    "evidence_recorded": true,
+                    "suggestions_enabled": demo.mapper_rollout.suggestions_enabled(),
+                    "workbooks_enabled": demo.mapper_rollout.workbooks_enabled(),
+                    "ratification_required": true,
+                    "auto_apply": false,
+                },
                 "capture": capture_state,
                 "dev_capture": dev_capture_state,
                 "proposal": proposal_json,
-                "proposal_refusal": proposal_refusal,
+                "proposal_refusal": dry_run_diagnostics,
             }))
             .into_response()
         }
@@ -3404,7 +4111,10 @@ async fn dev_capture_enable_endpoint(
         )
             .into_response();
     }
-    match utterance_engine::dev_capture::DevSessionStore::open(&id.to_string(), &body.consent_statement) {
+    match utterance_engine::dev_capture::DevSessionStore::open(
+        &id.to_string(),
+        &body.consent_statement,
+    ) {
         Ok(store) => {
             stores.insert(id, store);
             Json(serde_json::json!({ "enabled": true, "session_id": id })).into_response()
@@ -3420,7 +4130,10 @@ async fn dev_capture_enable_endpoint(
 /// Read-back: whether dev-capture is enabled for this session and, if
 /// so, every record captured so far (full I28 closure, train-on-able --
 /// this endpoint is Adam's own export path, not a general query API).
-async fn dev_capture_status_endpoint(State(demo): State<Arc<DesignerState>>, Path(id): Path<Uuid>) -> impl IntoResponse {
+async fn dev_capture_status_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
     let stores = demo.dev_capture.lock().unwrap();
     match stores.get(&id) {
         Some(store) => Json(serde_json::json!({
@@ -3430,7 +4143,8 @@ async fn dev_capture_status_endpoint(State(demo): State<Arc<DesignerState>>, Pat
             "records": store.records(),
         }))
         .into_response(),
-        None => Json(serde_json::json!({ "enabled": false, "record_count": 0, "records": [] })).into_response(),
+        None => Json(serde_json::json!({ "enabled": false, "record_count": 0, "records": [] }))
+            .into_response(),
     }
 }
 
@@ -3559,7 +4273,11 @@ async fn save_design_session_endpoint(
     // Registry version: next after the highest existing version for this
     // key in ANY state — Draft/Retired rows still reserve their numbers
     // (the store's immutability rules refuse overwrites).
-    let template_version = match demo.template_store.list(Some(&body.template_name), None).await {
+    let template_version = match demo
+        .template_store
+        .list(Some(&body.template_name), None)
+        .await
+    {
         Ok(existing) => existing
             .iter()
             .map(|t| t.template_version)
@@ -3625,7 +4343,12 @@ async fn save_design_session_endpoint(
         format!("<graph-authored session {id}; edit via the graph-edit endpoint, not DSL text>");
     if let Err(e) = demo
         .store
-        .store_template(&body.template_name, catalog_version, hash, &source_for_template)
+        .store_template(
+            &body.template_name,
+            catalog_version,
+            hash,
+            &source_for_template,
+        )
         .await
     {
         return (
@@ -3636,7 +4359,13 @@ async fn save_design_session_endpoint(
     }
     if let Err(e) = demo
         .store
-        .mark_design_session_saved(&demo.tenant_id, id, &body.template_name, catalog_version, hash)
+        .mark_design_session_saved(
+            &demo.tenant_id,
+            id,
+            &body.template_name,
+            catalog_version,
+            hash,
+        )
         .await
     {
         return (
@@ -3655,7 +4384,6 @@ async fn save_design_session_endpoint(
     }))
     .into_response()
 }
-
 
 /// Server-built DAG for the designer window (merged T4 / WS-B.2): the
 /// session's CURRENT revision recompiled server-side; compile errors
@@ -3772,9 +4500,7 @@ async fn session_graph_endpoint(
 /// Deterministic layered layout: x = BFS depth from the start node,
 /// y = order within the layer. Display-only — never a structural
 /// derivation (I16: pairing/regions stay the compiler's).
-fn layered_layout(
-    graph: &VisualGraphDto,
-) -> std::collections::BTreeMap<String, serde_json::Value> {
+fn layered_layout(graph: &VisualGraphDto) -> std::collections::BTreeMap<String, serde_json::Value> {
     use std::collections::{BTreeMap, HashMap, VecDeque};
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in &graph.edges {
@@ -3832,6 +4558,24 @@ mod tests {
     use axum::http::Request;
     use serde_json::Value;
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn mapper_rollout_defaults_conservatively_and_has_no_auto_apply_stage() {
+        assert_eq!(MapperRollout::parse(None), MapperRollout::Shadow);
+        assert_eq!(MapperRollout::parse(Some("unknown")), MapperRollout::Shadow);
+        assert_eq!(
+            MapperRollout::parse(Some("suggest")),
+            MapperRollout::Suggest
+        );
+        assert_eq!(
+            MapperRollout::parse(Some("workbook")),
+            MapperRollout::Workbook
+        );
+        assert!(!MapperRollout::Shadow.suggestions_enabled());
+        assert!(!MapperRollout::Suggest.workbooks_enabled());
+        assert!(MapperRollout::Workbook.suggestions_enabled());
+        assert!(MapperRollout::Workbook.workbooks_enabled());
+    }
 
     #[test]
     fn legacy_designer_request_remains_backward_compatible() {
@@ -3909,6 +4653,71 @@ mod tests {
         assert!(missing.action_payload.is_none());
     }
 
+    async fn app_at_rollout(rollout: MapperRollout) -> axum::Router {
+        designer_router(
+            DesignerState::assemble_with_rollout(
+                Arc::new(MemoryStore::new()),
+                Arc::new(bpmn_lite_authoring::MemoryTemplateStore::new()),
+                rollout,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn shadow_records_evidence_without_serving_suggestion_or_workbook() {
+        let app = app_at_rollout(MapperRollout::Shadow).await;
+        let (session_id, _anchor) = seed_graph_backed_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Places a node on an existing route, after the selected node",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert!(body["inference_disposition"].is_null(), "{body:?}");
+        assert!(body["workbook"].is_null(), "{body:?}");
+        assert!(body["proposal"].is_null(), "{body:?}");
+        assert_eq!(body["mapper_rollout"]["stage"], "shadow");
+        assert_eq!(body["mapper_rollout"]["evidence_recorded"], true);
+        assert_eq!(body["mapper_rollout"]["ratification_required"], true);
+        assert_eq!(body["mapper_rollout"]["auto_apply"], false);
+        assert!(body["decision_record_hash"].is_string());
+        assert!(body["evidence_producer"].is_string());
+    }
+
+    #[tokio::test]
+    async fn suggest_serves_candidate_without_staging_workbook() {
+        let app = app_at_rollout(MapperRollout::Suggest).await;
+        let (session_id, _anchor) = seed_graph_backed_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Places a node on an existing route, after the selected node",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["inference_disposition"]["Candidate"]["candidate_id"],
+            "op.insert_after"
+        );
+        assert!(body["workbook"].is_null(), "{body:?}");
+        assert!(body["proposal"].is_null(), "{body:?}");
+        assert_eq!(body["mapper_rollout"]["stage"], "suggest");
+    }
+
     #[tokio::test]
     async fn test_compile_and_preview_endpoints() {
         let state = DesignerState::try_new().unwrap();
@@ -3972,11 +4781,11 @@ mod tests {
         let diagnostics = res["diagnostics"].as_array().unwrap();
         assert!(diagnostics.iter().any(|d| d.as_str().unwrap().contains("Suggestion: Would you like me to import unknown-domain:unknown-verb to fix the unresolved verb error?")));
 
-        // Test BPMN compilation preview with valid bpmn:message-wait and ob-poc verbs
+        // First-class message waits are structural nodes, not invocation verbs.
         let bpmn_wait_src = r#"(workflow custody-cbu-onboarding
           (start-event :id start :next create-cbu)
           (service-task :id create-cbu :verb ob-poc:cbu.create :next message-wait)
-          (service-task :id message-wait :verb bpmn:message-wait :next type-decision)
+          (message-wait :id message-wait :name response-received :correlation-source case-id :next type-decision)
           (business-rule-task :id type-decision :decision dmn-lite:cbu_type_routing :next type-gateway)
           (exclusive-gateway :id type-gateway
             (flow :condition (= @cbu-type "fund")      :next add-fund)
@@ -4504,10 +5313,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap();
         let html = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(html.contains("BPMN-Lite Designer"));
-        assert!(html.contains("/api/dsl/sessions"), "drives the governed endpoints");
+        assert!(
+            html.contains("/api/dsl/sessions"),
+            "drives the governed endpoints"
+        );
     }
 
     /// Graph-window receipt (merged T4 / WS-B.2): compiling session →
@@ -4526,7 +5340,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let sid = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let sid = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         let get_graph = |sid: &str| {
             Request::builder()
@@ -4542,7 +5359,10 @@ mod tests {
         let nodes = g["graph"]["nodes"].as_array().unwrap();
         assert!(!nodes.is_empty());
         let first_id = nodes[0]["id"].as_str().unwrap();
-        assert!(g["layout"][first_id]["x"].is_number(), "layout coords served");
+        assert!(
+            g["layout"][first_id]["x"].is_number(),
+            "layout coords served"
+        );
 
         // Broken revision → diagnostics, not a blank-canvas error.
         let response = app
@@ -4578,9 +5398,15 @@ mod tests {
             )
         };
         let response = app.clone().oneshot(mk("s1", "(workflow a)")).await.unwrap();
-        let s1 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let s1 = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let response = app.clone().oneshot(mk("s2", "(workflow b)")).await.unwrap();
-        let s2 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let s2 = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         let utter = |sid: &str, text: &str| {
             post_json(
@@ -4589,12 +5415,19 @@ mod tests {
             )
         };
         // Gibberish → abstention with the generic, path-forward denial.
-        let response = app.clone().oneshot(utter(&s1, "zzz qqq xyzzy")).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(utter(&s1, "zzz qqq xyzzy"))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let r1 = body_json(response).await;
         assert_eq!(r1["disposition"], "OutOfScope");
         assert!(
-            r1["message"].as_str().unwrap().contains("current working context"),
+            r1["message"]
+                .as_str()
+                .unwrap()
+                .contains("current working context"),
             "actual message: {}",
             r1["message"]
         );
@@ -4606,12 +5439,18 @@ mod tests {
         assert_eq!(r1["capture"], "not_compiled");
         #[cfg(feature = "q9-capture")]
         assert_eq!(r1["capture"], "suppressed_no_charter");
+        assert_eq!(r1["board_schema"], "legacy_thin_v1");
+        assert_eq!(r1["board_pack_identity"], "pack.none");
         let h1 = r1["board_hash"].as_str().unwrap().to_owned();
         assert_eq!(h1.len(), 64);
 
         // Different session source → different board hash (graph
         // identity is hashed — C7).
-        let response = app.clone().oneshot(utter(&s2, "zzz qqq xyzzy")).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(utter(&s2, "zzz qqq xyzzy"))
+            .await
+            .unwrap();
         let r2 = body_json(response).await;
         assert_ne!(h1, r2["board_hash"].as_str().unwrap());
 
@@ -4681,7 +5520,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let sid = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let sid = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         let status_req = |sid: &str| {
             Request::builder()
@@ -4700,7 +5542,11 @@ mod tests {
         // Before consent: not enabled, no capture happens on an utterance.
         let response = app.clone().oneshot(status_req(&sid)).await.unwrap();
         assert_eq!(body_json(response).await["enabled"], false);
-        let response = app.clone().oneshot(utter(&sid, "add a task after start")).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(utter(&sid, "add a task after start"))
+            .await
+            .unwrap();
         assert_eq!(body_json(response).await["dev_capture"], "not_enabled");
 
         // Empty consent statement is refused (mirrors CapturePipeline's
@@ -4739,7 +5585,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         // Now an utterance IS captured, end to end.
-        let response = app.clone().oneshot(utter(&sid, "add a task after start")).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(utter(&sid, "add a task after start"))
+            .await
+            .unwrap();
         let u = body_json(response).await;
         assert_eq!(u["dev_capture"], "captured");
 
@@ -4750,16 +5600,26 @@ mod tests {
         let record = &status["records"][0];
         assert_eq!(record["provenance"], "dev-session-adam-v1");
         assert_eq!(record["subject"], "Adam");
-        assert_eq!(record["consent_statement_timestamp"], "Adam, 2026-07-29, self-testing only");
+        assert_eq!(
+            record["consent_statement_timestamp"],
+            "Adam, 2026-07-29, self-testing only"
+        );
         assert_eq!(record["raw_utterance"], "add a task after start");
         assert!(
             !record["board"]["candidates"].as_array().unwrap().is_empty(),
             "captured record must carry real board candidates, not just a hash"
         );
         assert!(
-            record["context_projection"].as_str().unwrap().starts_with("ctxproj.v1\n"),
+            record["context_projection"]
+                .as_str()
+                .unwrap()
+                .starts_with("ctxproj.v1\n"),
             "captured record must carry serialized context TEXT, not hash-only"
         );
+        assert_eq!(record["decision_record_hash"], u["decision_record_hash"]);
+        assert!(record["action_span_producer_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
 
         // A second session never sees the first session's records
         // (per-session isolation, same pattern as session_locks).
@@ -4771,7 +5631,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let sid2 = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let sid2 = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let response = app.clone().oneshot(status_req(&sid2)).await.unwrap();
         assert_eq!(body_json(response).await["enabled"], false);
     }
@@ -4903,7 +5766,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let session_id = body_json(response).await["session_id"].as_str().unwrap().to_owned();
+        let session_id = body_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let sid: Uuid = session_id.parse().unwrap();
         let start_key = seed_start_key(sid);
 
@@ -4933,7 +5799,12 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{:?}",
+            body_json(response).await
+        );
         let seq = body_json(
             app.clone()
                 .oneshot(post_json(
@@ -5195,12 +6066,20 @@ mod tests {
                 ))
             })
             .collect();
-        let responses: Vec<_> =
-            futures::future::join_all(requests).await.into_iter().map(|r| r.unwrap()).collect();
+        let responses: Vec<_> = futures::future::join_all(requests)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
 
-        let ok_count = responses.iter().filter(|r| r.status() == StatusCode::OK).count();
-        let refused_count =
-            responses.iter().filter(|r| r.status() == StatusCode::UNPROCESSABLE_ENTITY).count();
+        let ok_count = responses
+            .iter()
+            .filter(|r| r.status() == StatusCode::OK)
+            .count();
+        let refused_count = responses
+            .iter()
+            .filter(|r| r.status() == StatusCode::UNPROCESSABLE_ENTITY)
+            .count();
         assert_eq!(
             ok_count, 1,
             "only ONE request can legitimately win the anchor's single outgoing-edge slot"
@@ -5295,6 +6174,18 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
+        // Enable the explicitly consented development capture so this
+        // endpoint test can prove the semantic board is retained in full.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "semantic board endpoint test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
         // Real anchor: training-grade projection.
         let response = app
             .clone()
@@ -5304,7 +6195,58 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        let response_status = response.status();
+        let utterance = body_json(response).await;
+        assert_eq!(response_status, StatusCode::OK, "{utterance:?}");
+        assert_eq!(utterance["board_schema"], "semantic_decision_board_v1");
+        assert_ne!(utterance["board_pack_identity"], "pack.none");
+        let anchored_hash = utterance["board_hash"].as_str().unwrap().to_owned();
+
+        // Position is part of semantic authority: the same graph at a
+        // whole-graph position must not reuse the anchored board hash.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "irrelevant" }),
+            ))
+            .await
+            .unwrap();
+        let whole_graph = body_json(response).await;
+        assert_ne!(anchored_hash, whole_graph["board_hash"]);
+
+        let capture = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/dev-capture"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let captured_board = &capture["records"][0]["board"];
+        assert_eq!(captured_board["schema"], "semantic_decision_board_v1");
+        assert!(
+            captured_board["semantic_board"]["candidates"].is_array(),
+            "capture must retain the full semantic candidate contracts: {captured_board:?}"
+        );
+        let captured_record = &capture["records"][0];
+        assert_eq!(
+            captured_record["ranking"].as_array().unwrap().len(),
+            captured_board["semantic_board"]["candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            "BPMN serving must score the complete legal board"
+        );
+        assert_eq!(captured_record["evidence_trace"]["served_full_board"], true);
+        assert_eq!(
+            captured_record["evidence_trace"]["candidate_serializer_hash"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
         let record = body_json(
             app.clone()
                 .oneshot(
@@ -5329,7 +6271,10 @@ mod tests {
             ctx_text.contains("anchor: service_task review_documents"),
             "project_ir must project the REAL anchor, not a census-only fallback: {ctx_text:?}"
         );
-        assert!(ctx_text.contains("nodes:\n"), "node census present: {ctx_text:?}");
+        assert!(
+            ctx_text.contains("nodes:\n"),
+            "node census present: {ctx_text:?}"
+        );
     }
 
     /// Fail-closed DEGRADATION receipt (tier-1 serving integration,
@@ -5368,7 +6313,11 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "degraded path must serve, not error");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "degraded path must serve, not error"
+        );
         let body = body_json(response).await;
         let bundle = body["model_bundle_hash"].as_str().unwrap();
         assert!(
@@ -5407,7 +6356,9 @@ mod tests {
     #[ignore = "needs SLM_BUNDLE_DIR trained bundle + BGE weights (hf-hub cache)"]
     async fn test_tier1_resolves_context_pair_lexical_cannot() {
         assert!(
-            std::env::var("SLM_BUNDLE_DIR").map(|d| !d.is_empty()).unwrap_or(false),
+            std::env::var("SLM_BUNDLE_DIR")
+                .map(|d| !d.is_empty())
+                .unwrap_or(false),
             "set SLM_BUNDLE_DIR to the modernbert-base bundle dir"
         );
         let state = DesignerState::try_new().unwrap();
@@ -5444,7 +6395,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             designer_graph::ops::Operation::AttachRearmingGuard {
@@ -5452,7 +6406,10 @@ mod tests {
                 key: guard,
                 guard_id: "g_reminder".into(),
                 trigger: designer_graph::ops::GuardTrigger::Timer(
-                    bpmn_lite_compiler::TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 },
+                    bpmn_lite_compiler::TimerSpec::Cycle {
+                        interval_ms: 86_400_000,
+                        max_fires: 3,
+                    },
                 ),
             },
             // The REST graph-edit path runs the full admit (unlike the
@@ -5467,7 +6424,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: esc,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end_esc".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end_esc".into(),
+                    terminate: false,
+                },
                 edge_id: "f4".into(),
             },
         ];
@@ -5479,7 +6439,12 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{:?}",
+            body_json(response).await
+        );
 
         // Same utterance, two anchors — the divergence only context can
         // resolve. top1() reads the persisted decision record (evidence
@@ -5513,7 +6478,10 @@ mod tests {
 
         // Read the persisted records back for the top-1 evidence.
         let record = body_json(
-            app.clone().oneshot(get_req(&format!("/api/dsl/sessions/{session_id}"))).await.unwrap(),
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
         )
         .await;
         let rankings: Vec<Vec<serde_json::Value>> = record["events"]
@@ -5531,7 +6499,10 @@ mod tests {
         let top = |r: &Vec<serde_json::Value>| r[0][0].as_str().unwrap().to_owned();
         let (guard_top, task_top) = (top(&rankings[0]), top(&rankings[1]));
         println!("guard-anchor top-1: {guard_top}  task-anchor top-1: {task_top}");
-        assert_eq!(guard_top, "op.set_guard_budget", "guard-anchor gold (context pair)");
+        assert_eq!(
+            guard_top, "op.set_guard_budget",
+            "guard-anchor gold (context pair)"
+        );
         assert_eq!(
             task_top, "abstain.none_of_the_above",
             "task-anchor gold is context-conditioned abstention"
@@ -5571,7 +6542,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ];
@@ -5616,6 +6590,39 @@ mod tests {
         body_json(response).await
     }
 
+    #[tokio::test]
+    async fn test_strict_compound_utterance_never_falls_through_to_one_proposal() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let before = graph_body(&app, &session_id).await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "attach an interrupting guard; attach a rearming guard",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["inference_disposition"]["Compound"]["spans"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "strict span evidence must preserve both actions: {body}"
+        );
+        assert!(body["proposal"].is_null());
+        assert!(body["workbook"].is_null());
+        assert_eq!(before, graph_body(&app, &session_id).await);
+    }
+
     /// GREEN half of the propose step: a bindable candidate yields a
     /// proposal (id + concrete ops) — and the graph is UNCHANGED (the
     /// utterance endpoint never mutates; ratify is the only door).
@@ -5632,13 +6639,19 @@ mod tests {
             "utterance must resolve to a Candidate disposition: {utter:?}"
         );
         let proposal = &utter["proposal"];
-        assert!(proposal["proposal_id"].is_string(), "proposal staged: {utter:?}");
+        assert!(
+            proposal["proposal_id"].is_string(),
+            "proposal staged: {utter:?}"
+        );
         assert_eq!(proposal["operations"].as_array().unwrap().len(), 1);
         assert!(
             proposal["operations"][0].get("InsertAfter").is_some(),
             "bound op is InsertAfter: {proposal:?}"
         );
-        assert!(proposal["description"].as_str().unwrap().contains("collect_documents"));
+        assert!(proposal["description"]
+            .as_str()
+            .unwrap()
+            .contains("collect_documents"));
 
         let after = graph_body(&app, &session_id).await;
         assert_eq!(before, after, "proposing must not mutate the graph");
@@ -5646,7 +6659,9 @@ mod tests {
         // Pending list shows it.
         let list = body_json(
             app.clone()
-                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/proposals")))
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/proposals"
+                )))
                 .await
                 .unwrap(),
         )
@@ -5663,7 +6678,10 @@ mod tests {
         let (session_id, _t1) = seed_graph_backed_session(&app).await;
 
         let utter = utter_bindable(&app, &session_id).await;
-        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let pid = utter["proposal"]["proposal_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         let response = app
             .clone()
@@ -5673,7 +6691,12 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{:?}", body_json(response).await);
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{:?}",
+            body_json(response).await
+        );
 
         // /graph reflects the applied edit (session still compiles).
         let graph = graph_body(&app, &session_id).await;
@@ -5701,7 +6724,32 @@ mod tests {
                     .map(|n| n.contains(&format!("ratified proposal {pid}")))
                     .unwrap_or(false)
             });
-        assert!(ratified.is_some(), "GraphEdit with ratified-proposal note: {record}");
+        assert!(
+            ratified.is_some(),
+            "GraphEdit with ratified-proposal note: {record}"
+        );
+        assert!(
+            ratified.unwrap()["note"]
+                .as_str()
+                .unwrap()
+                .contains("proposal audit seq"),
+            "ratification must link the durable proposal audit"
+        );
+        let created_audit = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "created")
+            .expect("proposal creation audit");
+        assert_eq!(
+            created_audit["decision_record_hash"],
+            utter["decision_record_hash"]
+        );
+        assert!(created_audit["workbook_json"]
+            .as_str()
+            .unwrap()
+            .contains(&pid));
 
         // Proposal consumed: second ratify is a 404.
         let response = app
@@ -5724,7 +6772,10 @@ mod tests {
 
         let before = graph_body(&app, &session_id).await;
         let utter = utter_bindable(&app, &session_id).await;
-        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let pid = utter["proposal"]["proposal_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         let response = app
             .clone()
@@ -5736,7 +6787,11 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        assert_eq!(before, graph_body(&app, &session_id).await, "reject mutates nothing");
+        assert_eq!(
+            before,
+            graph_body(&app, &session_id).await,
+            "reject mutates nothing"
+        );
         let response = app
             .clone()
             .oneshot(post_json(
@@ -5745,7 +6800,30 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "rejected proposal is gone");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "rejected proposal is gone"
+        );
+
+        let record = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let rejected = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "rejected")
+            .expect("terminal rejection audit");
+        assert!(rejected["related_event_seq"].is_number());
+        let workbook: serde_json::Value =
+            serde_json::from_str(rejected["workbook_json"].as_str().unwrap()).unwrap();
+        assert_eq!(workbook["status"], "rejected");
     }
 
     /// Drift: a manual graph-edit lands between staging and ratify →
@@ -5757,7 +6835,10 @@ mod tests {
         let (session_id, t1) = seed_graph_backed_session(&app).await;
 
         let utter = utter_bindable(&app, &session_id).await;
-        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let pid = utter["proposal"]["proposal_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         // Manual edit shifts the graph identity.
         let manual = vec![designer_graph::ops::Operation::InsertAfter {
@@ -5800,15 +6881,18 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "drift consumes the proposal");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "drift consumes the proposal"
+        );
     }
 
-    /// Missing bindings: `op.connect` resolves as the Candidate (exact
-    /// description pin) but its two endpoints have no deterministic
-    /// binding rule → MissingArguments-shaped response naming them, and
-    /// NO proposal staged.
+    /// Missing bindings preserve the inference disposition and create a typed,
+    /// non-mutating workbook instead of collapsing inference into a terminal
+    /// `MissingArguments` pseudo-disposition.
     #[tokio::test]
-    async fn test_missing_bindings_yield_missing_arguments_and_no_proposal() {
+    async fn test_missing_bindings_create_workbook_without_mutation() {
         let state = DesignerState::try_new().unwrap();
         let app = designer_router(state.clone());
         let (session_id, _t1) = seed_graph_backed_session(&app).await;
@@ -5828,29 +6912,241 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let utter = body_json(response).await;
 
-        let ma = utter["disposition"]
-            .get("MissingArguments")
-            .unwrap_or_else(|| panic!("MissingArguments-shaped response: {utter:?}"));
-        assert_eq!(ma["candidate_id"], "op.connect");
-        let missing: Vec<String> = ma["missing"]
+        assert_eq!(
+            utter["inference_disposition"]["Candidate"]["candidate_id"],
+            "op.connect"
+        );
+        assert_eq!(utter["proposal_status"], "needs_arguments");
+        let missing: Vec<String> = utter["workbook"]["slots"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|m| m.as_str().unwrap().to_owned())
+            .filter(|slot| slot["value"]["state"] == "missing")
+            .map(|slot| slot["name"].as_str().unwrap().to_owned())
             .collect();
-        assert!(missing.iter().any(|m| m.contains("from_node")), "{missing:?}");
-        assert!(missing.iter().any(|m| m.contains("to_node")), "{missing:?}");
-        assert!(utter["proposal"].is_null(), "no proposal staged: {utter:?}");
+        assert_eq!(missing, vec!["condition", "to"]);
+        assert!(
+            utter["proposal_id"].is_string(),
+            "workbook staged: {utter:?}"
+        );
+        assert!(utter["proposal"]["operations"].is_null());
 
         assert_eq!(before, graph_body(&app, &session_id).await);
         let list = body_json(
             app.clone()
-                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/proposals")))
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/proposals"
+                )))
                 .await
                 .unwrap(),
         )
         .await;
-        assert!(list.as_array().unwrap().is_empty(), "pending list empty: {list}");
+        assert_eq!(
+            list.as_array().unwrap().len(),
+            1,
+            "workbook is resumable: {list}"
+        );
+    }
+
+    async fn utter_needs_insert_name(app: &axum::Router, session_id: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Places a node on an existing route, after the selected node",
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await
+    }
+
+    fn identifier_answer(name: &str, value: &str) -> serde_json::Value {
+        serde_json::json!({
+            "answers": [{
+                "name": name,
+                "value": { "kind": "identifier", "value": value },
+            }],
+        })
+    }
+
+    #[tokio::test]
+    async fn test_typed_answer_completes_workbook_and_dry_stages_without_mutation() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let before = graph_body(&app, &session_id).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        assert_eq!(utter["proposal_status"], "needs_arguments", "{utter:?}");
+        assert!(utter["proposal"]["operations"].is_null());
+        let pid = utter["proposal_id"].as_str().unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "collect_documents"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let answer = body_json(response).await;
+        assert_eq!(
+            answer["proposal_status"], "ready_for_ratification",
+            "{answer:?}"
+        );
+        assert!(answer["operations"][0].get("InsertAfter").is_some());
+        assert!(answer["dry_run_diagnostics"].as_array().unwrap().is_empty());
+        assert_eq!(before, graph_body(&app, &session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_unknown_and_duplicate_answers_leave_workbook_intact() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid = utter["proposal_id"].as_str().unwrap();
+
+        for invalid in [
+            serde_json::json!({
+                "answers": [{"name": "node", "value": {"kind": "count", "value": 2}}]
+            }),
+            identifier_answer("undeclared", "x"),
+            serde_json::json!({
+                "answers": [
+                    {"name": "node", "value": {"kind": "identifier", "value": "one"}},
+                    {"name": "node", "value": {"kind": "identifier", "value": "two"}}
+                ]
+            }),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                    invalid,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            let body = body_json(response).await;
+            assert_eq!(body["workbook"]["status"], "needs_arguments", "{body:?}");
+            assert_eq!(body["workbook"]["slots"][1]["value"]["state"], "missing");
+        }
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "finally_valid"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_direct_needs_arguments_to_ratify_is_refused_and_consumed() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid = utter["proposal_id"].as_str().unwrap();
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let second = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_graph_drift_before_answers_expires_and_consumes_workbook() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid = utter["proposal_id"].as_str().unwrap();
+        let manual = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: task_ir("manual_before_answer"),
+            edge_id: "manual_answer_edge".into(),
+        }];
+        let edit = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({"operations": manual}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(edit.status(), StatusCode::OK);
+        let answer = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "never_applied"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(answer.status(), StatusCode::CONFLICT);
+        let retry = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "never_applied"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_restart_drops_ephemeral_workbook() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid = utter["proposal_id"].as_str().unwrap();
+
+        let restarted =
+            DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap();
+        let restarted_app = designer_router(restarted);
+        let list = body_json(
+            restarted_app
+                .clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/proposals"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(list.as_array().unwrap().is_empty());
+        let answer = restarted_app
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "lost_with_restart"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(answer.status(), StatusCode::NOT_FOUND);
     }
 
     /// G2 BLOCKER-2 ruling, receipt (i)'s server-side half: a graph-backed
@@ -6076,10 +7372,7 @@ mod tests {
         // refused by the legacy-authoring-path gate (save-as-template
         // rewire, 2026-07-30; previously the "no revision to save" 400).
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            body_json(response).await["error"],
-            "legacy_authoring_path"
-        );
+        assert_eq!(body_json(response).await["error"], "legacy_authoring_path");
     }
 
     /// G2 BLOCKER-2 ruling, receipt (ii): saving a graph-backed session as
@@ -6413,7 +7706,7 @@ mod tests {
         assert_eq!(body["bytecode_version"].as_str().unwrap().len(), 64);
 
         let instance_id: Uuid = body["instance_id"].as_str().unwrap().parse().unwrap();
-            let instance = state
+        let instance = state
             .store
             .load_instance(&state.tenant_id, instance_id)
             .await
@@ -6532,7 +7825,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: t1,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             designer_graph::ops::Operation::AttachGuard {
@@ -6562,7 +7858,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: notify,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end_esc".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end_esc".into(),
+                    terminate: false,
+                },
                 edge_id: "g3".into(),
             },
         ];
@@ -6585,7 +7884,11 @@ mod tests {
             .unwrap();
         let status = response.status();
         let body = body_json(response).await;
-        assert_eq!(status, StatusCode::OK, "guarded template must save: {body:?}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "guarded template must save: {body:?}"
+        );
     }
 
     async fn spawn_named(app: &Router, template_name: &str) -> Uuid {
@@ -6659,7 +7962,10 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(last["state"], "Completed", "timed-out instance must complete: {last:?}");
+        assert_eq!(
+            last["state"], "Completed",
+            "timed-out instance must complete: {last:?}"
+        );
         assert!(
             saw_escape_route,
             "completion must be via the guard's ESCAPE flow (a round parked on notify_esc)"
@@ -6748,7 +8054,10 @@ mod tests {
             designer_graph::ops::Operation::AppendNode {
                 anchor: wait,
                 key: new_key(),
-                node: bpmn_lite_compiler::IRNode::End { id: "end".into(), terminate: false },
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ];
@@ -6771,7 +8080,11 @@ mod tests {
             .unwrap();
         let status_code = response.status();
         let body = body_json(response).await;
-        assert_eq!(status_code, StatusCode::OK, "wait template must save: {body:?}");
+        assert_eq!(
+            status_code,
+            StatusCode::OK,
+            "wait template must save: {body:?}"
+        );
         let instance_id = spawn_named(&app, "wait-template").await;
 
         // Parked on the timer, surfaced with its deadline.
@@ -6784,7 +8097,11 @@ mod tests {
         .await;
         assert_eq!(status["state"], "Running", "{status:?}");
         let timers = status["waiting_timers"].as_array().unwrap();
-        assert_eq!(timers.len(), 1, "the Wait fiber must be visible: {status:?}");
+        assert_eq!(
+            timers.len(),
+            1,
+            "the Wait fiber must be visible: {status:?}"
+        );
         assert!(timers[0]["deadline_ms"].as_u64().unwrap() > 0);
 
         // Before the deadline: advance holds.
@@ -6798,7 +8115,10 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        assert_eq!(held["state"], "Running", "not due yet — must hold: {held:?}");
+        assert_eq!(
+            held["state"], "Running",
+            "not due yet — must hold: {held:?}"
+        );
         assert_eq!(held["waiting_timers"].as_array().unwrap().len(), 1);
 
         // Past the deadline: fires, resumes, completes.
@@ -7143,7 +8463,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/api/dsl/sessions/{session_id}/graph"))
+                    .uri(format!("/api/dsl/sessions/{session_id}/graph"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -7166,12 +8486,14 @@ mod tests {
             .filter_map(|n| n["id"].as_str())
             .collect::<Vec<_>>();
         assert!(chain.iter().any(|id| id.contains("t1")), "{chain:?}");
-        let mut ordered: Vec<(&str, f64)> =
-            chain.iter().map(|id| (*id, x_of(id))).collect();
+        let mut ordered: Vec<(&str, f64)> = chain.iter().map(|id| (*id, x_of(id))).collect();
         ordered.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         let xs: Vec<f64> = ordered.iter().map(|(_, x)| *x).collect();
         for w in xs.windows(2) {
-            assert!(w[0] < w[1], "layout is a strict left-to-right chain: {ordered:?}");
+            assert!(
+                w[0] < w[1],
+                "layout is a strict left-to-right chain: {ordered:?}"
+            );
         }
         assert_eq!(ordered.first().unwrap().1, 0.0, "start at x=0: {ordered:?}");
     }
@@ -7288,7 +8610,11 @@ mod tests {
             .unwrap();
         let status = response.status();
         let body = body_json(response).await;
-        assert_eq!(status, StatusCode::OK, "branched graph-edit must admit: {body:?}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "branched graph-edit must admit: {body:?}"
+        );
         session_id
     }
 
@@ -7364,7 +8690,11 @@ mod tests {
             .unwrap();
         let status = response.status();
         let body = body_json(response).await;
-        assert_eq!(status, StatusCode::OK, "branched save must publish: {body:?}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "branched save must publish: {body:?}"
+        );
 
         let spawn = body_json(
             app.clone()

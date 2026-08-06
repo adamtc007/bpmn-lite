@@ -19,6 +19,7 @@
 //! becomes a drop-in provider behind the same trait when T3 lands.
 
 use designer_graph::board_candidate::{BoardCandidate, LegalityOracle};
+use semantic_decision_contracts::SemanticDecisionBoard;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -103,6 +104,131 @@ pub struct Board {
 impl Board {
     pub fn contains(&self, canonical_id: &str) -> bool {
         self.candidates.iter().any(|c| c.canonical_id == canonical_id)
+    }
+}
+
+/// One candidate as consumed by evidence producers.
+///
+/// The owned textual projection keeps the interface object-safe and lets the
+/// semantic implementation expose its complete contract rather than reducing
+/// it to the legacy one-line description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InferenceCandidate {
+    pub canonical_id: String,
+    pub description: String,
+    pub schema_version: u32,
+}
+
+/// Read-only board surface shared by the legacy and semantic serving paths.
+///
+/// This is deliberately not a board constructor or conversion trait: the
+/// graph-backed endpoint retains the original `SemanticDecisionBoard` and no
+/// second, thin authority object is created beside it.
+pub trait InferenceBoard: Send + Sync {
+    fn inference_candidates(&self) -> Vec<InferenceCandidate>;
+    fn board_hash(&self) -> &str;
+    fn contains(&self, canonical_id: &str) -> bool;
+    fn candidate_description(&self, canonical_id: &str) -> Option<String>;
+    fn anchor(&self) -> Option<&str>;
+    fn graph_identity(&self) -> &str;
+    fn pack_identity(&self) -> &str;
+    fn schema_label(&self) -> &'static str;
+    fn semantic_board(&self) -> Option<&SemanticDecisionBoard> {
+        None
+    }
+}
+
+impl InferenceBoard for Board {
+    fn inference_candidates(&self) -> Vec<InferenceCandidate> {
+        self.candidates
+            .iter()
+            .map(|candidate| InferenceCandidate {
+                canonical_id: candidate.canonical_id.clone(),
+                description: candidate.description.clone(),
+                schema_version: candidate.schema_version,
+            })
+            .collect()
+    }
+
+    fn board_hash(&self) -> &str {
+        &self.board_hash
+    }
+
+    fn contains(&self, canonical_id: &str) -> bool {
+        self.contains(canonical_id)
+    }
+
+    fn candidate_description(&self, canonical_id: &str) -> Option<String> {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.canonical_id == canonical_id)
+            .map(|candidate| candidate.description.clone())
+    }
+
+    fn anchor(&self) -> Option<&str> {
+        self.context.anchor.as_deref()
+    }
+
+    fn graph_identity(&self) -> &str {
+        self.context.graph_identity.as_deref().unwrap_or_default()
+    }
+
+    fn pack_identity(&self) -> &str {
+        &self.context.pack_identity
+    }
+
+    fn schema_label(&self) -> &'static str {
+        "legacy_thin_v1"
+    }
+}
+
+impl InferenceBoard for SemanticDecisionBoard {
+    fn inference_candidates(&self) -> Vec<InferenceCandidate> {
+        self.candidates
+            .iter()
+            .map(|candidate| InferenceCandidate {
+                canonical_id: candidate.canonical_id.as_str().to_string(),
+                description: crate::exact::serialize_candidate(candidate),
+                schema_version: candidate.schema_version,
+            })
+            .collect()
+    }
+
+    fn board_hash(&self) -> &str {
+        self.board_hash.as_str()
+    }
+
+    fn contains(&self, canonical_id: &str) -> bool {
+        self.candidates
+            .iter()
+            .any(|candidate| candidate.canonical_id.as_str() == canonical_id)
+    }
+
+    fn candidate_description(&self, canonical_id: &str) -> Option<String> {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.canonical_id.as_str() == canonical_id)
+            .map(|candidate| candidate.intent_summary.clone())
+    }
+
+    fn anchor(&self) -> Option<&str> {
+        self.position.anchor.as_deref()
+    }
+
+    fn graph_identity(&self) -> &str {
+        self.graph_revision.as_str()
+    }
+
+    fn pack_identity(&self) -> &str {
+        self.semantic_snapshot.as_str()
+    }
+
+    fn schema_label(&self) -> &'static str {
+        "semantic_decision_board_v1"
+    }
+
+    fn semantic_board(&self) -> Option<&SemanticDecisionBoard> {
+        Some(self)
     }
 }
 

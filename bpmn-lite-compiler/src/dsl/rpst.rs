@@ -126,6 +126,9 @@ fn dfs_walk(
         ExecutionNode::Wait(w) => {
             dfs_walk(&w.next, plan, visited, split_stack, errors);
         }
+        ExecutionNode::MessageWait(w) => {
+            dfs_walk(&w.next, plan, visited, split_stack, errors);
+        }
         ExecutionNode::End(_) => {
             split_stack.clear();
         }

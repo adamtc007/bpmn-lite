@@ -201,6 +201,7 @@ fn main() -> Result<()> {
             style_regime: e.regime.clone(),
             utterance: e.text.clone(),
             gold_in_tier1,
+            semantic_v3: None,
         });
     }
 
@@ -329,6 +330,7 @@ fn main() -> Result<()> {
             style_regime: "ambiguity".to_string(),
             utterance: item.text.clone(),
             gold_in_tier1: true,
+            semantic_v3: None,
         });
     }
     if !amb_bad.is_empty() {

@@ -15,8 +15,11 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::board::Board;
+use crate::board::InferenceBoard;
 use crate::contract::{SlmResult, NONE_OF_THE_ABOVE};
+
+#[cfg(test)]
+use crate::board::Board;
 
 /// E5: the versioned threshold config. Serialized (stable field order —
 /// serde struct order) and blake3-hashed into `disposition_policy_hash`.
@@ -42,6 +45,16 @@ impl DispositionConfig {
         }
     }
 
+    /// Phase 8 policy: permits contract-derived clarification on semantic
+    /// boards while retaining the same unratified shadow thresholds.
+    pub fn shadow_v2() -> Self {
+        DispositionConfig {
+            policy_version: 2,
+            acceptance_floor: 0.50,
+            separation_margin: 0.15,
+        }
+    }
+
     /// Content address over a HAND-BUILT preimage (blind-review C4):
     /// f64 thresholds enter as IEEE-754 bit patterns, never as decimal
     /// text, so the hash cannot drift with a serializer's float
@@ -58,27 +71,29 @@ impl DispositionConfig {
 
 /// V&S §9.2's ratified shape (I21: ambiguous, missing-argument,
 /// compound, and out-of-scope are all expressible). Issued ONLY by
-/// `decide`. v1 REACHABILITY (blind-review B2 disposition, recorded in
-/// the plan): `MissingArguments` and `Compound` are UNREACHABLE until
-/// the option-(a) slot resolvers and a certified action-span producer
-/// exist respectively — §10.3 rules that score topology cannot
-/// distinguish ambiguity from compound intent, so v1 maps EVERY
-/// insufficient-separation case to `EscalateToSage`, never to a
-/// rendered "did you mean A or B?" that may mask a compound request.
-/// `Ambiguous` becomes reachable only when a certified producer can
-/// distinguish the cases; making it reachable earlier is a policy
-/// version bump plus a plan amendment, not a threshold tweak.
+/// `decide`. v1 maps every insufficient-separation case to
+/// `EscalateToSage`: score topology cannot distinguish ambiguity from
+/// compound intent. v2 makes `Ambiguous` reachable only where the two
+/// semantic candidates carry reciprocal, governed negative contrasts.
+/// `Compound` is issued only by `decide_with_action_spans` when its
+/// independently identified producer supplies strict span evidence.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProposalDisposition {
     /// Sufficiently separated top candidate → deterministic binding
     /// proceeds (Repl still re-establishes everything).
     Candidate { candidate_id: String },
-    /// UNREACHABLE in v1 (see enum docs).
-    Ambiguous { top_candidates: Vec<String> },
+    /// Reachable from v2 only with a reciprocal governed contrast.
+    Ambiguous {
+        top_candidates: Vec<String>,
+        question: String,
+    },
     /// UNREACHABLE in v1: requires the option-(a) slot resolvers.
-    MissingArguments { candidate_id: String, missing: Vec<String> },
-    /// UNREACHABLE in v1: requires certified action-span evidence.
-    Compound,
+    MissingArguments {
+        candidate_id: String,
+        missing: Vec<String>,
+    },
+    /// Reachable only with independently identified action-span evidence.
+    Compound { spans: Vec<String> },
     /// The abstention hypothesis won: the board does not contain the
     /// answer. D19-rider denial rendering applies downstream.
     OutOfScope,
@@ -107,6 +122,16 @@ pub struct DecisionRecord {
     /// reintroduce non-finite values on round-trip (review N5).
     pub ranking: Vec<(String, crate::contract::FiniteScore)>,
     pub disposition: ProposalDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_trace: Option<crate::contract::EvidenceTrace>,
+    /// Resolvable board dump. `None` only for records written before Phase 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<crate::corpus_schema::BoardDump>,
+    /// Identity of the producer that established the atomic/compound boundary.
+    #[serde(default)]
+    pub action_span_producer_hash: String,
+    /// Content address of the complete historical decision closure.
+    pub decision_record_hash: String,
 }
 
 /// THE disposition function. Fail-closed: a ranking naming any
@@ -114,16 +139,16 @@ pub struct DecisionRecord {
 /// the board is rejected), never a silent skip.
 pub fn decide(
     config: &DispositionConfig,
-    board: &Board,
+    board: &dyn InferenceBoard,
     result: &SlmResult,
     context: &crate::context::ContextProjection,
 ) -> Result<(ProposalDisposition, DecisionRecord)> {
-    if result.board_hash != board.board_hash {
+    if result.board_hash != board.board_hash() {
         return Err(anyhow!(
             "SlmResult board_hash {} does not match the presented board {} — evidence \
              from a different board is inadmissible (I28)",
             result.board_hash,
-            board.board_hash
+            board.board_hash()
         ));
     }
     for rc in &result.ranking {
@@ -132,7 +157,7 @@ pub fn decide(
                 "ranking names '{}' which is not on board {} — off-board model output \
                  is rejected (I15)",
                 rc.candidate_id,
-                board.board_hash
+                board.board_hash()
             ));
         }
     }
@@ -171,15 +196,27 @@ pub fn decide(
                 }
             } else if let Some(second) = rest.first() {
                 if top.score.get() - second.score.get() < config.separation_margin {
-                    // §10.3 ruling: multi-peak does NOT distinguish
-                    // ambiguity from compound — escalate, never render
-                    // a masking A-or-B clarification (review B2).
-                    ProposalDisposition::EscalateToSage {
-                        reason: format!(
-                            "insufficient separation ({:.3} < {:.3}): ambiguity vs                              compound intent indistinguishable without span evidence",
-                            top.score.get() - second.score.get(),
-                            config.separation_margin
-                        ),
+                    if config.policy_version >= 2 {
+                        contract_clarification(board, &top.candidate_id, &second.candidate_id)
+                            .map(|question| ProposalDisposition::Ambiguous {
+                                top_candidates: vec![
+                                    top.candidate_id.clone(),
+                                    second.candidate_id.clone(),
+                                ],
+                                question,
+                            })
+                            .unwrap_or_else(|| ProposalDisposition::EscalateToSage {
+                                reason: "close candidates lack a governed discriminating contrast"
+                                    .to_string(),
+                            })
+                    } else {
+                        ProposalDisposition::EscalateToSage {
+                            reason: format!(
+                                "insufficient separation ({:.3} < {:.3}): ambiguity vs compound intent indistinguishable without span evidence",
+                                top.score.get() - second.score.get(),
+                                config.separation_margin
+                            ),
+                        }
                     }
                 } else {
                     ProposalDisposition::Candidate {
@@ -194,8 +231,8 @@ pub fn decide(
         }
     };
 
-    let record = DecisionRecord {
-        board_hash: board.board_hash.clone(),
+    let mut record = DecisionRecord {
+        board_hash: board.board_hash().to_string(),
         retrieved_subset_hash: result.retrieved_subset_hash.clone(),
         model_bundle_hash: result.model_bundle_hash.clone(),
         disposition_policy_hash: config.policy_hash(),
@@ -207,7 +244,83 @@ pub fn decide(
             .map(|rc| (rc.candidate_id.clone(), rc.score))
             .collect(),
         disposition: disposition.clone(),
+        evidence_trace: result.evidence_trace.clone(),
+        board: Some(crate::corpus_schema::BoardDump::from_inference_board(board)),
+        action_span_producer_hash: crate::disposition::producer_hash(
+            crate::disposition::NO_ACTION_SPAN_PRODUCER_ID,
+        ),
+        decision_record_hash: String::new(),
     };
+    record.decision_record_hash = decision_record_hash(&record)?;
+    Ok((disposition, record))
+}
+
+fn decision_record_hash(record: &DecisionRecord) -> Result<String> {
+    let preimage = serde_json::to_vec(&(
+        &record.board_hash,
+        &record.retrieved_subset_hash,
+        &record.model_bundle_hash,
+        &record.disposition_policy_hash,
+        &record.context_projection_hash,
+        &record.ranking,
+        &record.disposition,
+        &record.evidence_trace,
+        &record.board,
+        &record.action_span_producer_hash,
+    ))?;
+    Ok(blake3::hash(&preimage).to_hex().to_string())
+}
+
+fn contract_clarification(
+    board: &dyn InferenceBoard,
+    first_id: &str,
+    second_id: &str,
+) -> Option<String> {
+    let semantic = board.semantic_board()?;
+    let first = semantic
+        .candidates
+        .iter()
+        .find(|candidate| candidate.canonical_id.as_str() == first_id)?;
+    let second = semantic
+        .candidates
+        .iter()
+        .find(|candidate| candidate.canonical_id.as_str() == second_id)?;
+    let first_distinction = first
+        .negative_contrasts
+        .iter()
+        .find(|contrast| contrast.candidate_id.as_str() == second_id)?;
+    let second_distinction = second
+        .negative_contrasts
+        .iter()
+        .find(|contrast| contrast.candidate_id.as_str() == first_id)?;
+    Some(format!(
+        "Did you mean '{}' ({}) or '{}' ({})?",
+        first.title, first_distinction.distinction, second.title, second_distinction.distinction,
+    ))
+}
+
+/// Apply deterministic policy with an independently identified action-span
+/// producer. Strict compound evidence overrides scalar score topology; two
+/// score peaks alone never become two actions.
+pub fn decide_with_action_spans(
+    config: &DispositionConfig,
+    board: &dyn InferenceBoard,
+    result: &SlmResult,
+    context: &crate::context::ContextProjection,
+    utterance: &str,
+    producer: &dyn crate::disposition::ActionSpanProducer,
+) -> Result<(ProposalDisposition, DecisionRecord)> {
+    let (mut disposition, mut record) = decide(config, board, result, context)?;
+    record.action_span_producer_hash = crate::disposition::producer_hash(producer.producer_id());
+    if let Some(semantic) = board.semantic_board() {
+        if let Some(evidence) = producer.detect(utterance, semantic) {
+            disposition = ProposalDisposition::Compound {
+                spans: evidence.spans,
+            };
+            record.disposition = disposition.clone();
+        }
+    }
+    record.decision_record_hash = decision_record_hash(&record)?;
     Ok((disposition, record))
 }
 
@@ -255,7 +368,14 @@ mod tests {
     }
 
     fn board() -> Board {
-        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap()
+        build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap()
     }
 
     fn result(board: &Board, ranking: Vec<(&str, f64)>) -> SlmResult {
@@ -270,6 +390,52 @@ mod tests {
             retrieved_subset_hash: "subset0".into(),
             board_hash: board.board_hash.clone(),
             model_bundle_hash: "tier0.v1".into(),
+            evidence_trace: None,
+        }
+    }
+
+    fn semantic_board_at(
+        policy: &PolicyFilter,
+        revision: &str,
+    ) -> semantic_decision_contracts::SemanticDecisionBoard {
+        let state = crate::fixtures::enumeration_classes()
+            .unwrap()
+            .into_iter()
+            .find(|state| state.class_id == "mid_sequence_task")
+            .unwrap();
+        crate::bpmn_board::build_bpmn_semantic_board(
+            &state.dag,
+            state.anchor_key.zip(state.anchor_id),
+            revision,
+            policy,
+        )
+        .unwrap()
+    }
+
+    fn semantic_board(
+        policy: &PolicyFilter,
+    ) -> semantic_decision_contracts::SemanticDecisionBoard {
+        semantic_board_at(policy, "rev-policy-v2")
+    }
+
+    fn semantic_result(
+        board: &semantic_decision_contracts::SemanticDecisionBoard,
+        ranking: Vec<(&str, f64)>,
+    ) -> SlmResult {
+        let mut ranking = ranking
+            .into_iter()
+            .map(|(id, score)| RankedCandidate {
+                candidate_id: id.to_string(),
+                score: FiniteScore::new(score).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        crate::contract::rank_canonically(&mut ranking);
+        SlmResult {
+            ranking,
+            retrieved_subset_hash: "semantic-subset-v1".into(),
+            board_hash: board.board_hash.as_str().to_string(),
+            model_bundle_hash: "semantic-test-bundle-v1".into(),
+            evidence_trace: None,
         }
     }
 
@@ -278,10 +444,18 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.90), ("op.connect", 0.40)]);
-        let (d, rec) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let (d, rec) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert_eq!(
             d,
-            ProposalDisposition::Candidate { candidate_id: "op.append_node".into() }
+            ProposalDisposition::Candidate {
+                candidate_id: "op.append_node".into()
+            }
         );
         assert_eq!(rec.board_hash, b.board_hash);
         assert_eq!(rec.disposition_policy_hash, cfg.policy_hash());
@@ -298,16 +472,33 @@ mod tests {
     fn close_scores_and_weak_evidence_both_escalate() {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
-        let r = result(&b, vec![("op.append_node", 0.80), ("op.insert_after", 0.75)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let r = result(
+            &b,
+            vec![("op.append_node", 0.80), ("op.insert_after", 0.75)],
+        );
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert!(
             matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("separation")),
             "close scores must escalate, not render Ambiguous: {d:?}"
         );
 
         let r = result(&b, vec![("op.append_node", 0.30)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
-        assert!(matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor")));
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
+        assert!(
+            matches!(&d, ProposalDisposition::EscalateToSage { reason } if reason.contains("floor"))
+        );
     }
 
     /// Review C5 reds: duplicate ids refused; misordered producer input
@@ -319,15 +510,42 @@ mod tests {
         let b = board();
         let cfg = DispositionConfig::shadow_v1();
         let r = result(&b, vec![("op.append_node", 0.9), ("op.append_node", 0.9)]);
-        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("more than once"));
+        assert!(decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("more than once"));
 
         // Misordered: low score listed first; re-sort selects the real top.
         let r = result(&b, vec![("op.connect", 0.55), ("op.append_node", 0.95)]);
-        let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
-        assert_eq!(d, ProposalDisposition::Candidate { candidate_id: "op.append_node".into() });
+        let (d, _) = decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
+        assert_eq!(
+            d,
+            ProposalDisposition::Candidate {
+                candidate_id: "op.append_node".into()
+            }
+        );
 
         let r = result(&b, vec![]);
-        assert!(decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err().to_string().contains("malfunction"));
+        assert!(decide(
+            &cfg,
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("malfunction"));
     }
 
     /// Review N4: golden decision table cementing policy_version 1
@@ -343,30 +561,53 @@ mod tests {
             "shadow_v1 policy hash drifted — semantic or encoding change without a bump"
         );
         let b = board();
-        let table: Vec<(Vec<(&str, f64)>, fn(&ProposalDisposition) -> bool)> = vec![
-            (vec![("op.append_node", 0.90), ("op.connect", 0.40)],
-             |d| matches!(d, ProposalDisposition::Candidate { .. })),
-            (vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],
-             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
-            (vec![("op.append_node", 0.49)],
-             |d| matches!(d, ProposalDisposition::EscalateToSage { .. })),
-            (vec![(NONE_OF_THE_ABOVE, 0.99), ("op.append_node", 0.10)],
-             |d| matches!(d, ProposalDisposition::OutOfScope)),
+        type DecisionCase<'a> = (Vec<(&'a str, f64)>, fn(&ProposalDisposition) -> bool);
+        let table: Vec<DecisionCase<'_>> = vec![
+            (vec![("op.append_node", 0.90), ("op.connect", 0.40)], |d| {
+                matches!(d, ProposalDisposition::Candidate { .. })
+            }),
+            (
+                vec![("op.append_node", 0.80), ("op.insert_after", 0.70)],
+                |d| matches!(d, ProposalDisposition::EscalateToSage { .. }),
+            ),
+            (vec![("op.append_node", 0.49)], |d| {
+                matches!(d, ProposalDisposition::EscalateToSage { .. })
+            }),
+            (
+                vec![(NONE_OF_THE_ABOVE, 0.99), ("op.append_node", 0.10)],
+                |d| matches!(d, ProposalDisposition::OutOfScope),
+            ),
         ];
         for (ranking, check) in table {
             let r = result(&b, ranking.clone());
-            let (d, _) = decide(&cfg, &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+            let (d, _) = decide(
+                &cfg,
+                &b,
+                &r,
+                &crate::context::minimal("pack.none", "g-test"),
+            )
+            .unwrap();
             assert!(check(&d), "decision table drift for {ranking:?}: {d:?}");
         }
     }
 
-    const GOLDEN_SHADOW_V1_POLICY_HASH: &str = "b93371789f5202158f286d44555087dba5da4b059b01b929a279479bc60815b2";
+    const GOLDEN_SHADOW_V1_POLICY_HASH: &str =
+        "b93371789f5202158f286d44555087dba5da4b059b01b929a279479bc60815b2";
 
     #[test]
     fn abstention_top_is_out_of_scope() {
         let b = board();
-        let r = result(&b, vec![(NONE_OF_THE_ABOVE, 0.95), ("op.append_node", 0.20)]);
-        let (d, _) = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let r = result(
+            &b,
+            vec![(NONE_OF_THE_ABOVE, 0.95), ("op.append_node", 0.20)],
+        );
+        let (d, _) = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         assert_eq!(d, ProposalDisposition::OutOfScope);
     }
 
@@ -376,12 +617,24 @@ mod tests {
     fn off_board_and_wrong_board_evidence_are_rejected() {
         let b = board();
         let r = result(&b, vec![("verb.made_up_by_model", 0.99)]);
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &r, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
+        let err = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &r,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not on board"));
 
         let mut wrong = result(&b, vec![("op.append_node", 0.9)]);
         wrong.board_hash = "deadbeef".into();
-        let err = decide(&DispositionConfig::shadow_v1(), &b, &wrong, &crate::context::minimal("pack.none", "g-test")).unwrap_err();
+        let err = decide(
+            &DispositionConfig::shadow_v1(),
+            &b,
+            &wrong,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("does not match"));
     }
 
@@ -406,5 +659,316 @@ mod tests {
         let resolved = reg.resolve(&hash).expect("resolvable");
         assert_eq!(resolved.policy_hash(), hash);
         assert!(reg.resolve("unknown").is_none());
+    }
+
+    #[test]
+    fn shadow_v2_uses_only_governed_reciprocal_contrasts_for_clarification() {
+        let semantic_board = semantic_board(&PolicyFilter::default());
+        let semantic_evidence = semantic_result(
+            &semantic_board,
+            vec![
+                ("op.attach_guard", 0.80),
+                ("op.attach_rearming_guard", 0.75),
+            ],
+        );
+        let context = crate::context::minimal("pack.semantic", "rev-policy-v2");
+        let (first, first_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &semantic_board,
+            &semantic_evidence,
+            &context,
+        )
+        .unwrap();
+        let (second, second_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &semantic_board,
+            &semantic_evidence,
+            &context,
+        )
+        .unwrap();
+
+        match &first {
+            ProposalDisposition::Ambiguous {
+                top_candidates,
+                question,
+            } => {
+                assert_eq!(
+                    top_candidates,
+                    &["op.attach_guard", "op.attach_rearming_guard"]
+                );
+                assert!(question.contains("Attach an interrupting guard"));
+                assert!(question.contains("Attach a rearming guard"));
+                assert!(question.contains("does not"));
+            }
+            other => panic!("expected governed ambiguity, got {other:?}"),
+        }
+        assert_eq!(first, second);
+        assert_eq!(
+            first_record.decision_record_hash,
+            second_record.decision_record_hash
+        );
+        assert_eq!(
+            first_record
+                .board
+                .as_ref()
+                .unwrap()
+                .semantic_board
+                .as_ref()
+                .unwrap()
+                .board_hash
+                .as_str(),
+            first_record.board_hash
+        );
+
+        let legacy = board();
+        let close = result(
+            &legacy,
+            vec![("op.append_node", 0.80), ("op.insert_after", 0.75)],
+        );
+        let (disposition, _) = decide(
+            &DispositionConfig::shadow_v2(),
+            &legacy,
+            &close,
+            &crate::context::minimal("pack.none", "legacy"),
+        )
+        .unwrap();
+        assert!(matches!(
+            disposition,
+            ProposalDisposition::EscalateToSage { .. }
+        ));
+    }
+
+    #[test]
+    fn strict_compound_boundary_requires_two_governed_semicolon_spans() {
+        let board = semantic_board(&PolicyFilter::default());
+        let result = semantic_result(&board, vec![("op.attach_guard", 0.90)]);
+        let context = crate::context::minimal("pack.semantic", "rev-policy-v2");
+        let producer = crate::disposition::StrictCompoundSyntax;
+
+        let (compound, record) = decide_with_action_spans(
+            &DispositionConfig::shadow_v2(),
+            &board,
+            &result,
+            &context,
+            "attach an interrupting guard; attach a rearming guard",
+            &producer,
+        )
+        .unwrap();
+        assert_eq!(
+            compound,
+            ProposalDisposition::Compound {
+                spans: vec![
+                    "attach an interrupting guard".into(),
+                    "attach a rearming guard".into(),
+                ]
+            }
+        );
+        assert_eq!(
+            record.action_span_producer_hash,
+            crate::disposition::producer_hash(crate::disposition::STRICT_ACTION_SPAN_PRODUCER_ID)
+        );
+
+        let (atomic, _) = decide_with_action_spans(
+            &DispositionConfig::shadow_v2(),
+            &board,
+            &result,
+            &context,
+            "attach an interrupting guard and attach a rearming guard",
+            &producer,
+        )
+        .unwrap();
+        assert!(matches!(atomic, ProposalDisposition::Candidate { .. }));
+    }
+
+    #[test]
+    fn policy_filter_hides_denied_candidate_and_record_hash_closes_over_producers() {
+        let visible = semantic_board(&PolicyFilter::default());
+        let mut denied = PolicyFilter::default();
+        denied.denied.insert("op.attach_guard".into());
+        let hidden = semantic_board(&denied);
+        assert!(!hidden.contains("op.attach_guard"));
+        assert_ne!(visible.board_hash, hidden.board_hash);
+
+        let inadmissible = semantic_result(&hidden, vec![("op.attach_guard", 0.99)]);
+        let error = decide(
+            &DispositionConfig::shadow_v2(),
+            &hidden,
+            &inadmissible,
+            &crate::context::minimal("pack.semantic", "rev-policy-v2"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not on board"));
+
+        let mut result = semantic_result(&visible, vec![("op.attach_guard", 0.90)]);
+        result.evidence_trace = Some(crate::contract::EvidenceTrace {
+            candidate_serializer_hash: "serializer-v1".into(),
+            turn_serializer_hash: "turn-serializer-v1".into(),
+            lanes: vec![semantic_decision_contracts::EvidenceLane::Lexical],
+            bundle_identities: vec!["lexical-v1".into()],
+            exact_collision: Vec::new(),
+            served_full_board: true,
+        });
+        let context = crate::context::minimal("pack.semantic", "rev-policy-v2");
+        let (_, baseline) =
+            decide(&DispositionConfig::shadow_v2(), &visible, &result, &context).unwrap();
+
+        let mut different_bundle = result.clone();
+        different_bundle.model_bundle_hash = "semantic-test-bundle-v2".into();
+        let (_, bundle_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_bundle,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            bundle_record.decision_record_hash
+        );
+
+        let mut different_subset = result.clone();
+        different_subset.retrieved_subset_hash = "semantic-subset-v2".into();
+        let (_, subset_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_subset,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            subset_record.decision_record_hash
+        );
+
+        let (_, context_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &result,
+            &crate::context::minimal("pack.semantic", "different-context"),
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            context_record.decision_record_hash
+        );
+
+        let mut altered_policy = DispositionConfig::shadow_v2();
+        altered_policy.separation_margin = 0.16;
+        let (_, policy_record) = decide(&altered_policy, &visible, &result, &context).unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            policy_record.decision_record_hash
+        );
+
+        let mut different_ranking = result.clone();
+        different_ranking.ranking[0].score = FiniteScore::new(0.91).unwrap();
+        let (_, ranking_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_ranking,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            ranking_record.decision_record_hash
+        );
+
+        let mut different_trace = result.clone();
+        different_trace
+            .evidence_trace
+            .as_mut()
+            .unwrap()
+            .candidate_serializer_hash = "serializer-v2".into();
+        let (_, trace_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_trace,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            trace_record.decision_record_hash
+        );
+
+        let mut different_turn_serializer = result.clone();
+        different_turn_serializer
+            .evidence_trace
+            .as_mut()
+            .unwrap()
+            .turn_serializer_hash = "turn-serializer-v2".into();
+        let (_, turn_serializer_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &different_turn_serializer,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            turn_serializer_record.decision_record_hash,
+            "turn_serializer_hash must move the per-utterance audit hash, not only the corpus/bundle hashes it was previously sealed into"
+        );
+
+        let different_board = semantic_board_at(&PolicyFilter::default(), "rev-policy-v3");
+        let mut different_board_result = result.clone();
+        different_board_result.board_hash = different_board.board_hash.as_str().to_string();
+        let (_, board_record) = decide(
+            &DispositionConfig::shadow_v2(),
+            &different_board,
+            &different_board_result,
+            &context,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            board_record.decision_record_hash
+        );
+
+        let (_, span_record) = decide_with_action_spans(
+            &DispositionConfig::shadow_v2(),
+            &visible,
+            &result,
+            &context,
+            "attach an interrupting guard",
+            &crate::disposition::StrictCompoundSyntax,
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.decision_record_hash,
+            span_record.decision_record_hash
+        );
+    }
+
+    #[test]
+    fn impossible_position_scores_abstention_on_the_actual_empty_semantic_board() {
+        let state = crate::fixtures::enumeration_classes()
+            .unwrap()
+            .into_iter()
+            .find(|state| state.class_id == "empty_graph")
+            .unwrap();
+        let board = crate::bpmn_board::build_bpmn_semantic_board(
+            &state.dag,
+            None,
+            "rev-empty",
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        assert_eq!(board.candidates.len(), 1);
+        let evidence = crate::retrieval::Tier0Retriever::retrieve(
+            &crate::retrieval::LexicalTier0,
+            "attach an interrupting guard",
+            &board,
+        )
+        .unwrap();
+        let (disposition, _) = decide(
+            &DispositionConfig::shadow_v2(),
+            &board,
+            &evidence,
+            &crate::context::minimal("pack.semantic", "rev-empty"),
+        )
+        .unwrap();
+        assert_eq!(disposition, ProposalDisposition::OutOfScope);
     }
 }

@@ -29,6 +29,8 @@
 //! into a crate-root facade without re-litigating that call.
 
 pub mod board;
+pub mod bpmn_board;
+mod bpmn_pack;
 pub mod context;
 // Q9-GATED user capture: compiled ONLY under `q9-capture` (off by
 // default, absent from every release build in this repo -- DIR-004
@@ -43,6 +45,8 @@ pub mod corpus_schema;
 // structurally distinct from the Q9-gated path above (DIR-004 Phase 1,
 // Option B ruling). See `dev_capture.rs`'s module doc.
 pub mod dev_capture;
+pub mod disposition;
+pub mod exact;
 pub mod fixtures;
 // Gate-time evaluation harness (WS-C C-now item 5; V&S §10.7): measures
 // recall/precision decomposition over a labeled case set for a human to
@@ -52,7 +56,10 @@ pub mod fixtures;
 // submodules, so it's test-only scaffolding, not a runtime dependency.
 #[cfg(test)]
 pub mod metrics;
+pub mod pair;
 pub mod policy;
+#[cfg(test)]
+mod property_tests;
 pub mod retrieval;
 #[cfg(feature = "candle-probe")]
 pub mod trained_ranker;

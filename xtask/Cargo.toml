@@ -9,7 +9,9 @@ database = []
 
 [dependencies]
 anyhow = { workspace = true }
+bpmn-lite-bus-handler = { path = "../bpmn-lite-bus-handler" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
+dsl-manifest = { path = "../dsl-manifest" }
 serde_yaml = "0.9"
 serde = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }

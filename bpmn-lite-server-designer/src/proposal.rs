@@ -1,76 +1,53 @@
-//! Deterministic binding extraction — the serving-side slot resolver
-//! that turns a policy `Candidate` disposition into concrete
-//! `designer_graph::ops::Operation`s (or an honest missing-bindings
-//! list), downstream of `policy::decide` and strictly outside it.
+//! Deterministic, resumable proposal workbooks.
 //!
-//! WHY THIS CRATE (dependency direction): binding needs the utterance
-//! text, the session's `DesignerDag`, the anchor, and the candidate id —
-//! a serving-layer closure. `designer-graph` stays utterance-agnostic
-//! graph algebra; `utterance-engine`'s policy stays evidence-in /
-//! disposition-out (I27). When the DIR-002 SLM lands, it replaces the
-//! RULES in this module, not the seam: same inputs, same
-//! `BindingOutcome`, and the SLM's output remains evidence — the dry
-//! stage + human ratify downstream never move (EOP-SPEC-SLM-TRAIN-001
-//! §S7: zero direct model-authorised executions by construction).
-//!
-//! DETERMINISTIC RULES (each documented at its use site; the catalogue):
-//! - R1 anchor: the operation's anchor/host/target NodeKey is the
-//!   utterance's explicit `anchor` (already resolved by the endpoint).
-//!   No anchor supplied → missing `"anchor"`. Never inferred from text.
-//! - R2 fresh identity: new `NodeKey`s are minted (`Uuid::new_v4`) —
-//!   identity minting, not semantic inference (same F4 discipline as a
-//!   REST client authoring a graph-edit). BPMN ids/edge ids are DERIVED
-//!   deterministically from the bound name (`flow_{name}`,
-//!   `{name}_guard`, `{name}_end`); a derived id colliding with an
-//!   existing one is refused by the dry stage (fail closed — the user
-//!   re-utters with a different name), never silently uniquified.
-//! - R3 names: quoted spans in the utterance ('…' or "…"), in order of
-//!   appearance, sanitized to snake_case ids. A binder needing N names
-//!   and finding fewer reports them missing. Never derived from
-//!   unquoted "salient" words — that would be guessing.
-//! - R4 task_type: created `ServiceTask`s get `task_type = "noop"`.
-//!   Judged semantically safe: it is the substrate's draft placeholder
-//!   (every designer fixture uses it) and is refined by later edits;
-//!   an utterance never carries a plug binding.
-//! - R5 durations: `<N> <unit>` plain forms (ms/second/minute/hour/
-//!   day/week) and simple ISO-8601 (`PnDTnHnMnS`). A duration preceded
-//!   by the word "every" is an INTERVAL (cycle trigger); otherwise it
-//!   is a plain duration (timeout trigger). First match of each class
-//!   wins.
-//! - R6 counts: `<N> times` binds a cycle's `max_fires`. A bare integer
-//!   that is neither a duration magnitude nor a `times` count binds
-//!   `declared_max` / `failure_budget` where a binder needs one.
-//! - R7 data references: a `corr_key_source` / `collection_flag_name`
-//!   must name an EXISTING `DataObject` — bound only when a declared
-//!   data object's id appears verbatim as a token of the utterance.
-//!   No fabricated data objects, ever.
-//!
-//! A binding that cannot be derived by these rules is MISSING, not
-//! defaulted. Candidates with no deterministic rule at all (Connect's
-//! two endpoints, CreateBranch's condition, inclusive-region
-//! conditions, bare guard attachment whose escape flow can never admit
-//! alone) report their unresolvable bindings — coverage honesty over
-//! breadth.
+//! Inference selects a candidate; this module can only bind arguments declared
+//! by that candidate's semantic contract. Missing semantic values remain typed
+//! missing slots. Graph operations and fresh node identities are created only
+//! after every required slot has resolved.
 
+use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
 use designer_graph::ops::{GuardTrigger, Operation, RegionBranch};
 use designer_graph::productions;
 use designer_graph::schema::{DesignerDag, NodeKey};
-use bpmn_lite_compiler::{IRNode, TimerSpec};
+use semantic_decision_contracts::{
+    ArgumentKind, BindingProvenance, CanonicalCandidateId, EvidenceRecordHash, ProposalStatus,
+    ProposalWorkbook, SemanticDecisionBoard, SlotRequirement, SlotValue, SlotValueState,
+    WorkbookId, WorkbookSlot,
+};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 
-/// A successfully bound proposal: the concrete operation sequence and a
-/// human-facing description of what ratifying it will do.
+const MAX_DECLARED_COUNT: u32 = 10_000;
+const MAX_DURATION_MS: u64 = 10 * 365 * 24 * 60 * 60 * 1_000;
+
+#[derive(Debug, Error)]
+pub(crate) enum ProposalError {
+    #[error("proposal contract error: {0}")]
+    Contract(String),
+    #[error("invalid slot answer: {0}")]
+    InvalidAnswer(String),
+    #[error("proposal workbook is not ready for materialization: {0:?}")]
+    NotReady(ProposalStatus),
+    #[error("proposal graph resolution failed: {0}")]
+    Graph(String),
+    #[error("proposal materialization failed: {0}")]
+    Materialization(String),
+}
+
+/// One explicitly typed answer. The tagged `SlotValue` shape prevents a text
+/// value from being smuggled into a node/count/duration slot.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct SlotAnswer {
+    pub name: String,
+    pub value: SlotValue,
+}
+
+/// Concrete operations exist only once the workbook is complete.
+#[derive(Clone, Debug)]
 pub(crate) struct BoundProposal {
     pub ops: Vec<Operation>,
     pub description: String,
-}
-
-pub(crate) enum BindingOutcome {
-    Bound(BoundProposal),
-    /// The candidate is real but these binding names could not be
-    /// derived under the documented rules — populates the
-    /// `MissingArguments` response shape. Nothing is staged.
-    Missing(Vec<String>),
 }
 
 fn fresh_key() -> NodeKey {
@@ -78,47 +55,51 @@ fn fresh_key() -> NodeKey {
 }
 
 fn task(name: &str) -> IRNode {
-    // R4: draft placeholder task_type.
-    IRNode::ServiceTask { id: name.into(), name: name.into(), task_type: "noop".into() }
+    IRNode::ServiceTask {
+        id: name.to_string(),
+        name: name.to_string(),
+        task_type: "noop".to_string(),
+    }
 }
 
 fn end_node(id: String) -> IRNode {
-    IRNode::End { id, terminate: false }
+    IRNode::End {
+        id,
+        terminate: false,
+    }
 }
 
-/// R3: quoted spans, in order, sanitized to snake_case ids.
-fn quoted_names(text: &str) -> Vec<String> {
+pub(crate) fn quoted_names(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\'' || c == '"' {
-            let quote = c;
+    while let Some(character) = chars.next() {
+        if character == '\'' || character == '"' {
             let mut span = String::new();
-            for d in chars.by_ref() {
-                if d == quote {
+            for next in chars.by_ref() {
+                if next == character {
                     break;
                 }
-                span.push(d);
+                span.push(next);
             }
-            let sanitized = sanitize(&span);
-            if !sanitized.is_empty() {
-                out.push(sanitized);
+            let value = sanitize_identifier(&span);
+            if !value.is_empty() {
+                out.push(value);
             }
         }
     }
     out
 }
 
-fn sanitize(s: &str) -> String {
+pub(crate) fn sanitize_identifier(value: &str) -> String {
     let mut out = String::new();
-    let mut last_us = true; // suppress leading underscores
-    for c in s.to_lowercase().chars() {
-        if c.is_alphanumeric() {
-            out.push(c);
-            last_us = false;
-        } else if !last_us {
+    let mut last_underscore = true;
+    for character in value.to_lowercase().chars() {
+        if character.is_alphanumeric() {
+            out.push(character);
+            last_underscore = false;
+        } else if !last_underscore {
             out.push('_');
-            last_us = true;
+            last_underscore = true;
         }
     }
     while out.ends_with('_') {
@@ -127,11 +108,21 @@ fn sanitize(s: &str) -> String {
     out
 }
 
+fn valid_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(first) if first.is_alphabetic() || first == '_')
+        && characters
+            .all(|character| character.is_alphanumeric() || character == '_' || character == '-')
+}
+
 fn words(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split_whitespace()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_owned())
-        .filter(|w| !w.is_empty())
+        .map(|word| {
+            word.trim_matches(|character: char| !character.is_alphanumeric())
+                .to_string()
+        })
+        .filter(|word| !word.is_empty())
         .collect()
 }
 
@@ -147,57 +138,53 @@ fn unit_ms(unit: &str) -> Option<u64> {
     }
 }
 
-/// Minimal ISO-8601 duration: `PnW` / `PnD` / `PTnH` / `PTnM` / `PTnS`
-/// and their concatenations. Anything unparseable is simply not a
-/// duration token (no error — R5's plain forms remain available).
 fn iso8601_ms(word: &str) -> Option<u64> {
-    let w = word.to_uppercase();
-    let rest = w.strip_prefix('P')?;
-    let (date_part, time_part) = match rest.split_once('T') {
-        Some((d, t)) => (d, t),
-        None => (rest, ""),
-    };
-    let mut ms: u64 = 0;
-    let mut any = false;
-    let mut parse_segments = |s: &str, units: &[(char, u64)]| -> Option<()> {
-        let mut num = String::new();
-        for c in s.chars() {
-            if c.is_ascii_digit() {
-                num.push(c);
-            } else {
-                let (_, mult) = units.iter().find(|(u, _)| *u == c)?;
-                let n: u64 = num.parse().ok()?;
-                ms = ms.checked_add(n.checked_mul(*mult)?)?;
-                any = true;
-                num.clear();
+    let upper = word.to_uppercase();
+    let rest = upper.strip_prefix('P')?;
+    let (date, time) = rest.split_once('T').unwrap_or((rest, ""));
+    let mut millis = 0_u64;
+    let mut found = false;
+    let mut parse = |part: &str, units: &[(char, u64)]| -> Option<()> {
+        let mut number = String::new();
+        for character in part.chars() {
+            if character.is_ascii_digit() {
+                number.push(character);
+                continue;
             }
+            let multiplier = units
+                .iter()
+                .find_map(|(unit, multiplier)| (*unit == character).then_some(*multiplier))?;
+            let value: u64 = number.parse().ok()?;
+            millis = millis.checked_add(value.checked_mul(multiplier)?)?;
+            found = true;
+            number.clear();
         }
-        if num.is_empty() { Some(()) } else { None }
+        number.is_empty().then_some(())
     };
-    parse_segments(date_part, &[('W', 604_800_000), ('D', 86_400_000)])?;
-    parse_segments(time_part, &[('H', 3_600_000), ('M', 60_000), ('S', 1_000)])?;
-    if any { Some(ms) } else { None }
+    parse(date, &[('W', 604_800_000), ('D', 86_400_000)])?;
+    parse(time, &[('H', 3_600_000), ('M', 60_000), ('S', 1_000)])?;
+    found.then_some(millis)
 }
 
-struct ParsedDuration {
-    ms: u64,
-    /// R5: preceded by "every" → interval (cycle), else plain duration.
-    every: bool,
+#[derive(Clone, Copy)]
+pub(crate) struct ParsedDuration {
+    millis: u64,
+    interval: bool,
 }
 
-fn durations(text: &str) -> Vec<ParsedDuration> {
-    let ws = words(text);
+pub(crate) fn durations(text: &str) -> Vec<ParsedDuration> {
+    let words = words(text);
     let mut out = Vec::new();
-    for (i, w) in ws.iter().enumerate() {
-        let every = i > 0 && ws[i - 1] == "every";
-        if let Some(ms) = iso8601_ms(w) {
-            out.push(ParsedDuration { ms, every });
+    for (index, word) in words.iter().enumerate() {
+        let interval = index > 0 && words[index - 1] == "every";
+        if let Some(millis) = iso8601_ms(word) {
+            out.push(ParsedDuration { millis, interval });
             continue;
         }
-        if let Ok(n) = w.parse::<u64>() {
-            if let Some(mult) = ws.get(i + 1).and_then(|u| unit_ms(u)) {
-                if let Some(ms) = n.checked_mul(mult) {
-                    out.push(ParsedDuration { ms, every });
+        if let Ok(value) = word.parse::<u64>() {
+            if let Some(multiplier) = words.get(index + 1).and_then(|unit| unit_ms(unit)) {
+                if let Some(millis) = value.checked_mul(multiplier) {
+                    out.push(ParsedDuration { millis, interval });
                 }
             }
         }
@@ -205,435 +192,1020 @@ fn durations(text: &str) -> Vec<ParsedDuration> {
     out
 }
 
-/// R5: the first plain (non-"every") duration.
 fn plain_duration_ms(text: &str) -> Option<u64> {
-    durations(text).into_iter().find(|d| !d.every).map(|d| d.ms)
+    durations(text)
+        .into_iter()
+        .find(|duration| !duration.interval)
+        .map(|duration| duration.millis)
 }
 
-/// R5: the first "every"-prefixed duration (a cycle interval).
 fn interval_ms(text: &str) -> Option<u64> {
-    durations(text).into_iter().find(|d| d.every).map(|d| d.ms)
+    durations(text)
+        .into_iter()
+        .find(|duration| duration.interval)
+        .map(|duration| duration.millis)
 }
 
-/// R6: `<N> times`.
-fn max_fires(text: &str) -> Option<u32> {
-    let ws = words(text);
-    for (i, w) in ws.iter().enumerate() {
-        if let Ok(n) = w.parse::<u32>() {
-            if matches!(ws.get(i + 1).map(String::as_str), Some("time") | Some("times")) {
-                return Some(n);
-            }
-        }
-    }
-    None
+pub(crate) fn followed_count(text: &str, labels: &[&str]) -> Option<u32> {
+    let words = words(text);
+    words.iter().enumerate().find_map(|(index, word)| {
+        let value = word.parse::<u32>().ok()?;
+        labels
+            .contains(&words.get(index + 1)?.as_str())
+            .then_some(value)
+    })
 }
 
-/// R6: first bare integer that is neither a duration magnitude nor a
-/// `times` count.
 fn bare_integer(text: &str) -> Option<u32> {
-    let ws = words(text);
-    for (i, w) in ws.iter().enumerate() {
-        if let Ok(n) = w.parse::<u32>() {
-            let next = ws.get(i + 1).map(String::as_str);
-            let is_duration = next.map(|u| unit_ms(u).is_some()).unwrap_or(false);
-            let is_times = matches!(next, Some("time") | Some("times"));
-            if !is_duration && !is_times {
-                return Some(n);
-            }
-        }
-    }
-    None
+    let words = words(text);
+    words.iter().enumerate().find_map(|(index, word)| {
+        let value = word.parse::<u32>().ok()?;
+        let next = words.get(index + 1).map(String::as_str);
+        let reserved = next.is_some_and(|unit| unit_ms(unit).is_some())
+            || matches!(next, Some("time" | "times" | "branch" | "branches"));
+        (!reserved).then_some(value)
+    })
 }
 
-/// R7: the first declared `DataObject` whose id appears verbatim as a
-/// token of the utterance (tokenized on non-alphanumerics EXCEPT `_`,
-/// so `corr_flag` survives as one token).
-fn matched_data_object(dag: &DesignerDag, text: &str) -> anyhow::Result<Option<String>> {
-    let ir = dag.to_ir()?;
-    let data_ids: Vec<String> = ir
+fn count_for_slot(name: &str, utterance: &str, quoted: &[String]) -> Option<u32> {
+    match name {
+        "max_fires" | "max_reminders" => followed_count(utterance, &["time", "times"]),
+        "branch_count" => followed_count(utterance, &["branch", "branches"])
+            .or_else(|| (quoted.len() >= 2).then_some(quoted.len() as u32)),
+        _ => bare_integer(utterance),
+    }
+}
+
+fn data_object_ids(dag: &DesignerDag) -> Result<Vec<String>, ProposalError> {
+    let graph = dag
+        .to_ir()
+        .map_err(|error| ProposalError::Graph(error.to_string()))?;
+    Ok(graph
         .node_indices()
-        .filter_map(|i| match &ir[i] {
+        .filter_map(|index| match &graph[index] {
             IRNode::DataObject { id, .. } => Some(id.clone()),
             _ => None,
         })
-        .collect();
-    let tokens: Vec<String> = text
-        .to_lowercase()
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter(|t| !t.is_empty())
-        .map(str::to_owned)
-        .collect();
-    Ok(data_ids.into_iter().find(|d| tokens.contains(&d.to_lowercase())))
+        .collect())
 }
 
-fn anchor_bpmn_id(dag: &DesignerDag, anchor: NodeKey) -> anyhow::Result<String> {
-    let ir = dag.to_ir()?;
-    // to_ir preserves ids; resolve via the dag's own reverse lookup.
-    for i in ir.node_indices() {
-        if dag.key_for_bpmn_id(ir[i].id()) == Some(anchor) {
-            return Ok(ir[i].id().to_owned());
-        }
+fn graph_node_ids(dag: &DesignerDag) -> Result<Vec<String>, ProposalError> {
+    let graph = dag
+        .to_ir()
+        .map_err(|error| ProposalError::Graph(error.to_string()))?;
+    Ok(graph
+        .node_indices()
+        .map(|index| graph[index].id().to_string())
+        .collect())
+}
+
+fn mentioned_id(ids: &[String], text: &str, used: &[String]) -> Option<String> {
+    let lower = text.to_lowercase();
+    ids.iter()
+        .filter(|id| !used.contains(id))
+        .find(|id| {
+            lower
+                .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                .any(|token| token == id.to_lowercase())
+        })
+        .cloned()
+}
+
+fn bpmn_id_for_key(dag: &DesignerDag, key: NodeKey) -> Result<String, ProposalError> {
+    let graph = dag
+        .to_ir()
+        .map_err(|error| ProposalError::Graph(error.to_string()))?;
+    graph
+        .node_indices()
+        .find_map(|index| {
+            (dag.key_for_bpmn_id(graph[index].id()) == Some(key))
+                .then(|| graph[index].id().to_string())
+        })
+        .ok_or_else(|| ProposalError::Graph("anchor key resolves to no node".to_string()))
+}
+
+fn anchor_slot(candidate_id: &str) -> Option<&'static str> {
+    match candidate_id {
+        "op.append_node"
+        | "op.insert_before"
+        | "op.insert_after"
+        | "op.create_parallel_region"
+        | "op.create_inclusive_region"
+        | "op.create_multi_instance_region"
+        | "prod.request_and_wait"
+        | "prod.reminder_then_escalate"
+        | "prod.interrupting_timeout"
+        | "prod.non_interrupting_notification" => Some("anchor"),
+        "op.replace_node" | "op.delete_subgraph" => Some("target"),
+        "op.connect" => Some("from"),
+        "op.create_branch" => Some("gateway"),
+        "op.attach_guard" | "op.attach_rearming_guard" => Some("host"),
+        "op.set_guard_trigger" | "op.set_guard_budget" => Some("guard"),
+        "op.set_correlation_source" => Some("node"),
+        _ => None,
     }
-    anyhow::bail!("anchor key resolves to no node")
 }
 
-/// Attempt to bind `candidate_id` (a canonical id from the board /
-/// disposition) against the utterance text at `anchor`. `Ok(Missing)`
-/// is the honest not-derivable outcome; `Err` is an internal fault
-/// (projection failure), never a user-facing shape.
-pub(crate) fn bind_candidate(
+fn extracted_provenance(detail: impl Into<String>) -> Option<BindingProvenance> {
+    Some(BindingProvenance {
+        source: "deterministic_extraction".to_string(),
+        detail: detail.into(),
+    })
+}
+
+/// Start a workbook from exactly the argument schema on the selected semantic
+/// board. No undeclared convenience slot can enter this structure.
+pub(crate) fn start_workbook(
     dag: &DesignerDag,
     anchor: Option<NodeKey>,
-    candidate_id: &str,
-    text: &str,
-) -> anyhow::Result<BindingOutcome> {
-    use BindingOutcome::{Bound, Missing};
+    board: &SemanticDecisionBoard,
+    decision: &utterance_engine::policy::DecisionRecord,
+    candidate_id: &CanonicalCandidateId,
+    utterance: &str,
+    source_utterance_seq: u64,
+) -> Result<ProposalWorkbook, ProposalError> {
+    if decision.board_hash != board.board_hash.as_str() {
+        return Err(ProposalError::Contract(
+            "decision record and semantic board hashes differ".to_string(),
+        ));
+    }
+    match &decision.disposition {
+        utterance_engine::policy::ProposalDisposition::Candidate {
+            candidate_id: selected,
+        } if selected == candidate_id.as_str() => {}
+        _ => {
+            return Err(ProposalError::Contract(
+                "workbook candidate does not match the inference disposition".to_string(),
+            ));
+        }
+    }
+    let candidate = board
+        .candidates
+        .iter()
+        .find(|candidate| candidate.canonical_id == *candidate_id)
+        .ok_or_else(|| ProposalError::Contract("candidate is absent from the board".to_string()))?;
 
-    // R1: every implemented binder needs the explicit anchor.
-    let need_anchor = |missing: &mut Vec<String>| -> Option<NodeKey> {
-        if anchor.is_none() {
-            missing.push("anchor".into());
-        }
-        anchor
-    };
-    let names = quoted_names(text);
-    let mut missing: Vec<String> = Vec::new();
+    let quoted = quoted_names(utterance);
+    let data_ids = data_object_ids(dag)?;
+    let node_ids = graph_node_ids(dag)?;
+    let anchor_id = anchor.map(|key| bpmn_id_for_key(dag, key)).transpose()?;
+    let positional_slot = anchor_slot(candidate_id.as_str());
+    let mut identifier_index = 0_usize;
+    let mut used_node_ids = anchor_id.iter().cloned().collect::<Vec<_>>();
+    let mut slots = Vec::with_capacity(candidate.arguments.len());
 
-    let outcome = match candidate_id {
-        // ── Single-task insertions: anchor + one quoted name ─────────
-        "op.append_node" | "op.insert_after" | "op.insert_before" | "op.replace_node" => {
-            let a = need_anchor(&mut missing);
-            let name = names.first().cloned();
-            if name.is_none() {
-                missing.push("task_name (quote the new step's name)".into());
+    for argument in &candidate.arguments {
+        let mut value = SlotValueState::Missing;
+        let mut provenance = None;
+        if positional_slot == Some(argument.name.as_str()) {
+            if let Some(id) = &anchor_id {
+                value = SlotValueState::Resolved(SlotValue::NodeReference(id.clone()));
+                provenance = extracted_provenance("resolved endpoint anchor");
             }
-            match (a, name) {
-                (Some(a), Some(name)) => {
-                    let key = fresh_key();
-                    let node = task(&name);
-                    let edge_id = format!("flow_{name}");
-                    let anchor_id = anchor_bpmn_id(dag, a)?;
-                    let (op, verb) = match candidate_id {
-                        "op.append_node" => (
-                            Operation::AppendNode { anchor: a, key, node, edge_id },
-                            "append",
-                        ),
-                        "op.insert_after" => (
-                            Operation::InsertAfter { anchor: a, key, node, edge_id },
-                            "insert after",
-                        ),
-                        "op.insert_before" => (
-                            Operation::InsertBefore { anchor: a, key, node, edge_id },
-                            "insert before",
-                        ),
-                        _ => (Operation::ReplaceNode { target: a, key, node }, "replace"),
-                    };
-                    Bound(BoundProposal {
-                        ops: vec![op],
-                        description: format!("{verb} '{anchor_id}': service task '{name}'"),
-                    })
+        } else {
+            let extracted = match argument.kind {
+                ArgumentKind::Identifier => {
+                    let name = quoted.get(identifier_index).cloned();
+                    if name.is_some() {
+                        identifier_index += 1;
+                    }
+                    name.filter(|name| valid_identifier(name))
+                        .map(SlotValue::Identifier)
                 }
-                _ => Missing(missing),
-            }
-        }
-        // ── DeleteSubgraph → DeleteNode: anchor only ─────────────────
-        "op.delete_subgraph" => match need_anchor(&mut missing) {
-            Some(a) => {
-                let anchor_id = anchor_bpmn_id(dag, a)?;
-                Bound(BoundProposal {
-                    ops: vec![Operation::DeleteNode { target: a }],
-                    description: format!("delete node '{anchor_id}'"),
-                })
-            }
-            None => Missing(missing),
-        },
-        // ── SetCorrelationSource: anchor + R7 data-object match ──────
-        "op.set_correlation_source" => {
-            let a = need_anchor(&mut missing);
-            let dobj = matched_data_object(dag, text)?;
-            if dobj.is_none() {
-                missing.push("correlation_source (name a declared data object)".into());
-            }
-            match (a, dobj) {
-                (Some(a), Some(d)) => Bound(BoundProposal {
-                    ops: vec![Operation::SetCorrelationSource {
-                        node: a,
-                        corr_key_source: d.clone(),
-                    }],
-                    description: format!("set correlation source to '{d}'"),
-                }),
-                _ => Missing(missing),
-            }
-        }
-        // ── SetGuardBudget: anchor (the guard) + R6 bare integer ─────
-        "op.set_guard_budget" => {
-            let a = need_anchor(&mut missing);
-            let n = bare_integer(text);
-            if n.is_none() {
-                missing.push("failure_budget (a number)".into());
-            }
-            match (a, n) {
-                (Some(a), Some(n)) => Bound(BoundProposal {
-                    ops: vec![Operation::SetGuardBudget { guard: a, failure_budget: Some(n) }],
-                    description: format!("set guard failure budget to {n}"),
-                }),
-                _ => Missing(missing),
-            }
-        }
-        // ── SetGuardTrigger: cycle ("every N … M times") else plain
-        //    duration; neither derivable → missing ────────────────────
-        "op.set_guard_trigger" => {
-            let a = need_anchor(&mut missing);
-            let trigger = match (interval_ms(text), max_fires(text), plain_duration_ms(text)) {
-                (Some(interval), Some(fires), _) => {
-                    Some(GuardTrigger::Timer(TimerSpec::Cycle {
-                        interval_ms: interval,
-                        max_fires: fires,
-                    }))
+                ArgumentKind::NodeReference => mentioned_id(&node_ids, utterance, &used_node_ids)
+                    .map(|id| {
+                        used_node_ids.push(id.clone());
+                        SlotValue::NodeReference(id)
+                    }),
+                ArgumentKind::DataReference => {
+                    mentioned_id(&data_ids, utterance, &[]).map(SlotValue::DataReference)
                 }
-                (_, _, Some(ms)) => Some(GuardTrigger::Timer(TimerSpec::Duration { ms })),
-                _ => None,
-            };
-            if trigger.is_none() {
-                missing.push(
-                    "trigger (a duration like '3 days', or 'every 2 hours' plus 'N times')"
-                        .into(),
-                );
-            }
-            match (a, trigger) {
-                (Some(a), Some(t)) => Bound(BoundProposal {
-                    ops: vec![Operation::SetGuardTrigger { guard: a, trigger: t }],
-                    description: "set guard trigger from the stated schedule".into(),
-                }),
-                _ => Missing(missing),
-            }
-        }
-        // ── Multi-instance: anchor + name + R7 collection + R6 max ───
-        // (2026-08-04: absorbed the former prod.for_each_with_ceiling,
-        // which lowered to this exact Operation with no field
-        // difference -- collapsed to one route, Adam's ruling.)
-        "op.create_multi_instance_region" => {
-            let a = need_anchor(&mut missing);
-            let name = names.first().cloned();
-            if name.is_none() {
-                missing.push("task_name (quote the per-element step's name)".into());
-            }
-            let coll = matched_data_object(dag, text)?;
-            if coll.is_none() {
-                missing.push("collection_flag_name (name a declared data object)".into());
-            }
-            let max = bare_integer(text);
-            if max.is_none() {
-                missing.push("declared_max (a number)".into());
-            }
-            match (a, name, coll, max) {
-                (Some(a), Some(name), Some(coll), Some(max)) => Bound(BoundProposal {
-                    description: format!(
-                        "for each element of '{coll}' (max {max}): task '{name}'"
-                    ),
-                    ops: vec![Operation::CreateMultiInstanceRegion {
-                        anchor: a,
-                        key: fresh_key(),
-                        node: IRNode::MultiInstance {
-                            id: name.clone(),
-                            name: name.clone(),
-                            task_type: "noop".into(), // R4
-                            collection_flag_name: coll,
-                            declared_max: max,
-                        },
-                        edge_id: format!("flow_{name}"),
-                    }],
-                }),
-                _ => Missing(missing),
-            }
-        }
-        // ── Parallel region: anchor + ≥2 quoted branch names ─────────
-        // (2026-08-04: absorbed the former prod.parallel_checks_and_join,
-        // same collapse.)
-        "op.create_parallel_region" => {
-            let a = need_anchor(&mut missing);
-            if names.len() < 2 {
-                missing.push("branch_names (quote at least two step names)".into());
-            }
-            match a {
-                Some(a) if names.len() >= 2 => {
-                    let base = names[0].clone();
-                    let branches: Vec<RegionBranch> = names
-                        .iter()
-                        .map(|n| RegionBranch {
-                            key: fresh_key(),
-                            node: task(n),
-                            in_edge_id: format!("flow_in_{n}"),
-                            out_edge_id: format!("flow_out_{n}"),
-                            condition: None,
-                        })
-                        .collect();
-                    Bound(BoundProposal {
-                        description: format!("parallel branches: {}", names.join(", ")),
-                        ops: vec![Operation::CreateParallelRegion {
-                            anchor: a,
-                            fork_key: fresh_key(),
-                            fork_node_id: format!("{base}_fork"),
-                            join_key: fresh_key(),
-                            join_node_id: format!("{base}_join"),
-                            entry_edge_id: format!("flow_{base}_entry"),
-                            branches,
-                        }],
-                    })
-                }
-                _ => Missing(missing),
-            }
-        }
-        // ── RequestAndWait: anchor + two names (send, wait) + R7 ─────
-        "prod.request_and_wait" => {
-            let a = need_anchor(&mut missing);
-            if names.len() < 2 {
-                missing.push(
-                    "send_and_wait_names (quote two names: the send step, then the wait)".into(),
-                );
-            }
-            let dobj = matched_data_object(dag, text)?;
-            if dobj.is_none() {
-                missing.push("correlation_source (name a declared data object)".into());
-            }
-            match (a, dobj) {
-                (Some(a), Some(d)) if names.len() >= 2 => {
-                    let (send, wait) = (names[0].clone(), names[1].clone());
-                    Bound(BoundProposal {
-                        description: format!(
-                            "send '{send}' then wait '{wait}' correlated on '{d}'"
-                        ),
-                        ops: productions::request_and_wait(productions::RequestAndWaitBindings {
-                            anchor: a,
-                            send_key: fresh_key(),
-                            send_node: task(&send),
-                            send_edge_id: format!("flow_{send}"),
-                            wait_key: fresh_key(),
-                            wait_node: IRNode::MessageWait {
-                                id: wait.clone(),
-                                name: wait.clone(),
-                                corr_key_source: d,
-                            },
-                            wait_edge_id: format!("flow_{wait}"),
-                        }),
-                    })
-                }
-                _ => Missing(missing),
-            }
-        }
-        // ── InterruptingTimeout: anchor + plain duration + name ──────
-        "prod.interrupting_timeout" => {
-            let a = need_anchor(&mut missing);
-            let ms = plain_duration_ms(text);
-            if ms.is_none() {
-                missing.push("timeout_duration (e.g. '3 days' or 'PT45M')".into());
-            }
-            let name = names.first().cloned();
-            if name.is_none() {
-                missing.push("continuation_name (quote the timeout step's name)".into());
-            }
-            match (a, ms, name) {
-                (Some(a), Some(ms), Some(name)) => Bound(BoundProposal {
-                    description: format!("interrupting timeout → '{name}'"),
-                    ops: productions::interrupting_timeout(
-                        productions::InterruptingTimeoutBindings {
-                            anchor: a,
-                            guard_key: fresh_key(),
-                            guard_id: format!("{name}_guard"),
-                            duration_ms: ms,
-                            continuation_key: fresh_key(),
-                            continuation_node: task(&name),
-                            continuation_edge_id: format!("flow_{name}"),
-                            continuation_end_key: fresh_key(),
-                            continuation_end_node: end_node(format!("{name}_end")),
-                            continuation_end_edge_id: format!("flow_{name}_end"),
-                        },
-                    ),
-                }),
-                _ => Missing(missing),
-            }
-        }
-        // ── Cycle-guard productions: anchor + interval + fires + name ─
-        "prod.non_interrupting_notification" | "prod.reminder_then_escalate" => {
-            let a = need_anchor(&mut missing);
-            let interval = interval_ms(text);
-            if interval.is_none() {
-                missing.push("interval (say 'every <duration>')".into());
-            }
-            let fires = max_fires(text);
-            if fires.is_none() {
-                missing.push("max_fires (say '<N> times')".into());
-            }
-            let name = names.first().cloned();
-            if name.is_none() {
-                missing.push("step_name (quote the notification/escalation step's name)".into());
-            }
-            match (a, interval, fires, name) {
-                (Some(a), Some(interval), Some(fires), Some(name)) => {
-                    let ops = if candidate_id == "prod.reminder_then_escalate" {
-                        productions::reminder_then_escalate(
-                            productions::ReminderThenEscalateBindings {
-                                anchor: a,
-                                guard_key: fresh_key(),
-                                guard_id: format!("{name}_guard"),
-                                cycle: TimerSpec::Cycle {
-                                    interval_ms: interval,
-                                    max_fires: fires,
-                                },
-                                escalation_key: fresh_key(),
-                                escalation_node: task(&name),
-                                escalation_edge_id: format!("flow_{name}"),
-                                escalation_end_key: fresh_key(),
-                                escalation_end_node: end_node(format!("{name}_end")),
-                                escalation_end_edge_id: format!("flow_{name}_end"),
-                            },
-                        )
+                ArgumentKind::Count => count_for_slot(&argument.name, utterance, &quoted)
+                    .filter(|value| *value > 0 && *value <= MAX_DECLARED_COUNT)
+                    .map(SlotValue::Count),
+                ArgumentKind::Duration => {
+                    let millis = if argument.name == "interval" {
+                        interval_ms(utterance)
                     } else {
-                        productions::non_interrupting_notification(
-                            productions::NonInterruptingNotificationBindings {
-                                anchor: a,
-                                guard_key: fresh_key(),
-                                guard_id: format!("{name}_guard"),
-                                interval_ms: interval,
-                                max_fires: fires,
-                                notification_key: fresh_key(),
-                                notification_node: task(&name),
-                                notification_edge_id: format!("flow_{name}"),
-                                notification_end_key: fresh_key(),
-                                notification_end_node: end_node(format!("{name}_end")),
-                                notification_end_edge_id: format!("flow_{name}_end"),
-                            },
-                        )
+                        plain_duration_ms(utterance).or_else(|| interval_ms(utterance))
                     };
-                    Bound(BoundProposal {
-                        description: format!("re-arming cycle guard → '{name}'"),
-                        ops,
-                    })
+                    millis
+                        .filter(|value| *value > 0 && *value <= MAX_DURATION_MS)
+                        .map(SlotValue::DurationMillis)
                 }
-                _ => Missing(missing),
+                ArgumentKind::Text => quoted.get(identifier_index).cloned().map(|text| {
+                    identifier_index += 1;
+                    SlotValue::Text(text)
+                }),
+                ArgumentKind::Boolean => {
+                    words(utterance)
+                        .into_iter()
+                        .find_map(|word| match word.as_str() {
+                            "true" | "yes" => Some(SlotValue::Boolean(true)),
+                            "false" | "no" => Some(SlotValue::Boolean(false)),
+                            _ => None,
+                        })
+                }
+                // Conditions and subprocess pins require explicit typed answers.
+                ArgumentKind::Condition | ArgumentKind::SubprocessReference => None,
+            };
+            if let Some(extracted) = extracted {
+                value = SlotValueState::Resolved(extracted);
+                provenance = extracted_provenance("bounded utterance extraction");
             }
         }
-        // ── Honest non-bindables: real candidates whose bindings have
-        //    no deterministic rule today ───────────────────────────────
-        "op.connect" => Missing(vec!["from_node".into(), "to_node".into()]),
-        "op.create_branch" => Missing(vec!["target_node".into(), "branch_condition".into()]),
-        "op.create_inclusive_region" => Missing(vec![
-            "branch_names (quote at least two step names)".into(),
-            "branch_conditions (one per branch — inclusive branches must be conditional)".into(),
-        ]),
-        // A bare boundary guard can never admit (verifier §7a: "no
-        // outgoing sequence flow" is a reject) — the guard's escape flow
-        // is unresolvable from an attach-only utterance. The bindable
-        // route is the corresponding production.
-        "op.attach_guard" => Missing(vec![
-            "escape_flow (use the interrupting-timeout production: state a duration and quote the continuation step)".into(),
-        ]),
-        "op.attach_rearming_guard" => Missing(vec![
-            "escape_flow (use the notification/reminder production: say 'every <duration>', '<N> times', and quote the step)".into(),
-        ]),
-        // Anything else (never-boarded catalogue entries, Abstain,
-        // future ids): no rule — honest missing, never a guess.
-        other => Missing(vec![format!("no deterministic binding rule for '{other}'")]),
+        slots.push(WorkbookSlot {
+            name: argument.name.clone(),
+            kind: argument.kind,
+            requirement: if argument.required {
+                SlotRequirement::Required
+            } else {
+                SlotRequirement::Optional
+            },
+            value,
+            provenance,
+            clarification_prompt: argument.clarification_prompt.clone(),
+        });
+    }
+
+    ProposalWorkbook::new(
+        1,
+        WorkbookId::new(Uuid::new_v4().to_string())
+            .map_err(|error| ProposalError::Contract(error.to_string()))?,
+        source_utterance_seq,
+        board.board_hash.clone(),
+        board.graph_revision.clone(),
+        candidate_id.clone(),
+        slots,
+        EvidenceRecordHash::new(decision.decision_record_hash.clone())
+            .map_err(|error| ProposalError::Contract(error.to_string()))?,
+    )
+    .map_err(|error| ProposalError::Contract(error.to_string()))
+}
+
+pub(crate) fn parse_condition(value: &str) -> Result<ConditionExpr, ProposalError> {
+    let value = value.trim();
+    for (operator_text, operator) in [
+        ("!=", ConditionOp::Neq),
+        ("==", ConditionOp::Eq),
+        (">", ConditionOp::Gt),
+        ("<", ConditionOp::Lt),
+    ] {
+        if let Some((flag, literal)) = value.split_once(operator_text) {
+            let flag = flag.trim();
+            if !valid_identifier(flag) {
+                return Err(ProposalError::InvalidAnswer(format!(
+                    "condition flag '{flag}' is not an identifier"
+                )));
+            }
+            let literal = match literal.trim() {
+                "true" => ConditionLiteral::Bool(true),
+                "false" => ConditionLiteral::Bool(false),
+                integer => ConditionLiteral::I64(integer.parse().map_err(|_| {
+                    ProposalError::InvalidAnswer(format!(
+                        "condition literal '{integer}' is not boolean or integer"
+                    ))
+                })?),
+            };
+            return Ok(ConditionExpr {
+                flag_name: flag.to_string(),
+                op: operator,
+                literal,
+            });
+        }
+    }
+    Err(ProposalError::InvalidAnswer(
+        "condition must use flag==value, flag!=value, flag>integer or flag<integer".to_string(),
+    ))
+}
+
+fn validate_answer(dag: &DesignerDag, answer: &SlotAnswer) -> Result<(), ProposalError> {
+    match &answer.value {
+        SlotValue::Identifier(value) if !valid_identifier(value) => Err(
+            ProposalError::InvalidAnswer(format!("'{}' is not a valid identifier", value)),
+        ),
+        SlotValue::NodeReference(value) if dag.key_for_bpmn_id(value).is_none() => Err(
+            ProposalError::InvalidAnswer(format!("node reference '{value}' does not exist")),
+        ),
+        SlotValue::DataReference(value) if !data_object_ids(dag)?.contains(value) => Err(
+            ProposalError::InvalidAnswer(format!("data reference '{value}' does not exist")),
+        ),
+        SlotValue::Count(value) if *value == 0 || *value > MAX_DECLARED_COUNT => Err(
+            ProposalError::InvalidAnswer(format!("count must be in 1..={MAX_DECLARED_COUNT}")),
+        ),
+        SlotValue::DurationMillis(value) if *value == 0 || *value > MAX_DURATION_MS => {
+            Err(ProposalError::InvalidAnswer(format!(
+                "duration must be in 1..={MAX_DURATION_MS} milliseconds"
+            )))
+        }
+        SlotValue::Condition(value) if answer.name == "conditions" => value
+            .split([',', ';'])
+            .map(parse_condition)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|_| ()),
+        SlotValue::Condition(value) => parse_condition(value).map(|_| ()),
+        SlotValue::SubprocessReference(value) if !value.contains('@') => {
+            Err(ProposalError::InvalidAnswer(
+                "subprocess reference must be a pinned name@revision".to_string(),
+            ))
+        }
+        SlotValue::Text(value) if value.trim().is_empty() => Err(ProposalError::InvalidAnswer(
+            "text answer must not be empty".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Validate and apply a batch atomically. The owned input lets the caller keep
+/// its prior workbook unchanged whenever validation fails.
+pub(crate) fn apply_explicit_answers(
+    dag: &DesignerDag,
+    mut workbook: ProposalWorkbook,
+    answers: Vec<SlotAnswer>,
+) -> Result<ProposalWorkbook, ProposalError> {
+    if workbook.status() != ProposalStatus::NeedsArguments {
+        return Err(ProposalError::InvalidAnswer(format!(
+            "workbook in {:?} does not accept answers",
+            workbook.status()
+        )));
+    }
+    for answer in &answers {
+        validate_answer(dag, answer)?;
+    }
+    workbook
+        .apply_answers(
+            answers
+                .into_iter()
+                .map(|answer| (answer.name, answer.value))
+                .collect(),
+        )
+        .map_err(|error| ProposalError::InvalidAnswer(error.to_string()))?;
+    Ok(workbook)
+}
+
+fn value<'a>(workbook: &'a ProposalWorkbook, name: &str) -> Result<&'a SlotValue, ProposalError> {
+    workbook
+        .slots()
+        .iter()
+        .find(|slot| slot.name == name)
+        .and_then(|slot| match &slot.value {
+            SlotValueState::Resolved(value) => Some(value),
+            SlotValueState::Missing => None,
+        })
+        .ok_or_else(|| ProposalError::Materialization(format!("slot '{name}' is unresolved")))
+}
+
+fn optional_value<'a>(workbook: &'a ProposalWorkbook, name: &str) -> Option<&'a SlotValue> {
+    workbook
+        .slots()
+        .iter()
+        .find(|slot| slot.name == name)
+        .and_then(|slot| match &slot.value {
+            SlotValueState::Resolved(value) => Some(value),
+            SlotValueState::Missing => None,
+        })
+}
+
+fn identifier(workbook: &ProposalWorkbook, name: &str) -> Result<String, ProposalError> {
+    match value(workbook, name)? {
+        SlotValue::Identifier(value) => Ok(value.clone()),
+        _ => Err(ProposalError::Materialization(format!(
+            "slot '{name}' is not an identifier"
+        ))),
+    }
+}
+
+fn node_key(
+    dag: &DesignerDag,
+    workbook: &ProposalWorkbook,
+    name: &str,
+) -> Result<NodeKey, ProposalError> {
+    match value(workbook, name)? {
+        SlotValue::NodeReference(value) => dag.key_for_bpmn_id(value).ok_or_else(|| {
+            ProposalError::Graph(format!("node reference '{value}' no longer exists"))
+        }),
+        _ => Err(ProposalError::Materialization(format!(
+            "slot '{name}' is not a node reference"
+        ))),
+    }
+}
+
+fn data_reference(workbook: &ProposalWorkbook, name: &str) -> Result<String, ProposalError> {
+    match value(workbook, name)? {
+        SlotValue::DataReference(value) => Ok(value.clone()),
+        _ => Err(ProposalError::Materialization(format!(
+            "slot '{name}' is not a data reference"
+        ))),
+    }
+}
+
+fn count(workbook: &ProposalWorkbook, name: &str) -> Result<u32, ProposalError> {
+    match value(workbook, name)? {
+        SlotValue::Count(value) => Ok(*value),
+        _ => Err(ProposalError::Materialization(format!(
+            "slot '{name}' is not a count"
+        ))),
+    }
+}
+
+fn duration(workbook: &ProposalWorkbook, name: &str) -> Result<u64, ProposalError> {
+    match value(workbook, name)? {
+        SlotValue::DurationMillis(value) => Ok(*value),
+        _ => Err(ProposalError::Materialization(format!(
+            "slot '{name}' is not a duration"
+        ))),
+    }
+}
+
+/// Convert a complete workbook into the exhaustive Designer operation shape.
+/// This is the only function in the proposal path that mints graph identities.
+pub(crate) fn materialize_operations(
+    dag: &DesignerDag,
+    workbook: &ProposalWorkbook,
+) -> Result<BoundProposal, ProposalError> {
+    if workbook.status() != ProposalStatus::ReadyForDryRun {
+        return Err(ProposalError::NotReady(workbook.status()));
+    }
+    let candidate = workbook.candidate_id.as_str();
+    let bound = match candidate {
+        "op.append_node" | "op.insert_after" | "op.insert_before" | "op.replace_node" => {
+            let slot = if candidate == "op.replace_node" {
+                "replacement"
+            } else {
+                "node"
+            };
+            let name = identifier(workbook, slot)?;
+            let key = fresh_key();
+            let node = task(&name);
+            let (operation, description) = match candidate {
+                "op.append_node" => (
+                    Operation::AppendNode {
+                        anchor: node_key(dag, workbook, "anchor")?,
+                        key,
+                        node,
+                        edge_id: format!("flow_{name}"),
+                    },
+                    format!("append service task '{name}'"),
+                ),
+                "op.insert_after" => (
+                    Operation::InsertAfter {
+                        anchor: node_key(dag, workbook, "anchor")?,
+                        key,
+                        node,
+                        edge_id: format!("flow_{name}"),
+                    },
+                    format!("insert service task '{name}' after the selection"),
+                ),
+                "op.insert_before" => (
+                    Operation::InsertBefore {
+                        anchor: node_key(dag, workbook, "anchor")?,
+                        key,
+                        node,
+                        edge_id: format!("flow_{name}"),
+                    },
+                    format!("insert service task '{name}' before the selection"),
+                ),
+                _ => (
+                    Operation::ReplaceNode {
+                        target: node_key(dag, workbook, "target")?,
+                        key,
+                        node,
+                    },
+                    format!("replace the selection with service task '{name}'"),
+                ),
+            };
+            BoundProposal {
+                ops: vec![operation],
+                description,
+            }
+        }
+        "op.connect" => {
+            let condition = match optional_value(workbook, "condition") {
+                Some(SlotValue::Condition(value)) => Some(parse_condition(value)?),
+                Some(_) => {
+                    return Err(ProposalError::Materialization(
+                        "slot 'condition' has the wrong kind".to_string(),
+                    ));
+                }
+                None => None,
+            };
+            BoundProposal {
+                ops: vec![Operation::Connect {
+                    from: node_key(dag, workbook, "from")?,
+                    to: node_key(dag, workbook, "to")?,
+                    edge_id: format!("flow_{}", workbook.workbook_id.as_str()),
+                    condition,
+                }],
+                description: "connect the two declared existing nodes".to_string(),
+            }
+        }
+        "op.create_branch" => {
+            let outcome = identifier(workbook, "outcome")?;
+            BoundProposal {
+                ops: vec![Operation::CreateBranch {
+                    gateway: node_key(dag, workbook, "gateway")?,
+                    target: node_key(dag, workbook, "target")?,
+                    edge_id: format!("flow_{outcome}"),
+                    condition: Some(ConditionExpr {
+                        flag_name: outcome.clone(),
+                        op: ConditionOp::Eq,
+                        literal: ConditionLiteral::Bool(true),
+                    }),
+                }],
+                description: format!("create the '{outcome}' outcome branch"),
+            }
+        }
+        "op.create_parallel_region" => {
+            let branch_count = count(workbook, "branch_count")?;
+            if !(2..=32).contains(&branch_count) {
+                return Err(ProposalError::Materialization(
+                    "parallel branch_count must be in 2..=32".to_string(),
+                ));
+            }
+            let branches = (1..=branch_count)
+                .map(|index| {
+                    let name = format!("parallel_branch_{index}");
+                    RegionBranch {
+                        key: fresh_key(),
+                        node: task(&name),
+                        in_edge_id: format!("flow_in_{name}"),
+                        out_edge_id: format!("flow_out_{name}"),
+                        condition: None,
+                    }
+                })
+                .collect();
+            let base = workbook.workbook_id.as_str();
+            BoundProposal {
+                ops: vec![Operation::CreateParallelRegion {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    fork_key: fresh_key(),
+                    fork_node_id: format!("parallel_{base}_fork"),
+                    join_key: fresh_key(),
+                    join_node_id: format!("parallel_{base}_join"),
+                    entry_edge_id: format!("flow_parallel_{base}"),
+                    branches,
+                }],
+                description: format!("create {branch_count} parallel branches"),
+            }
+        }
+        "op.create_inclusive_region" => {
+            let branch_count = count(workbook, "branch_count")?;
+            if !(2..=32).contains(&branch_count) {
+                return Err(ProposalError::Materialization(
+                    "inclusive branch_count must be in 2..=32".to_string(),
+                ));
+            }
+            let conditions = match value(workbook, "conditions")? {
+                SlotValue::Condition(value) => value
+                    .split([',', ';'])
+                    .map(parse_condition)
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => {
+                    return Err(ProposalError::Materialization(
+                        "slot 'conditions' has the wrong kind".to_string(),
+                    ));
+                }
+            };
+            if conditions.len() != branch_count as usize {
+                return Err(ProposalError::Materialization(format!(
+                    "inclusive region declares {branch_count} branches but {} conditions",
+                    conditions.len()
+                )));
+            }
+            let branches = conditions
+                .into_iter()
+                .enumerate()
+                .map(|(index, condition)| {
+                    let name = format!("inclusive_{}_{}", condition.flag_name, index + 1);
+                    RegionBranch {
+                        key: fresh_key(),
+                        node: task(&name),
+                        in_edge_id: format!("flow_in_{name}"),
+                        out_edge_id: format!("flow_out_{name}"),
+                        condition: Some(condition),
+                    }
+                })
+                .collect();
+            let base = workbook.workbook_id.as_str();
+            BoundProposal {
+                ops: vec![Operation::CreateInclusiveRegion {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    fork_key: fresh_key(),
+                    fork_node_id: format!("inclusive_{base}_fork"),
+                    join_key: fresh_key(),
+                    join_node_id: format!("inclusive_{base}_join"),
+                    entry_edge_id: format!("flow_inclusive_{base}"),
+                    branches,
+                }],
+                description: format!("create {branch_count} conditional inclusive branches"),
+            }
+        }
+        "op.create_multi_instance_region" => {
+            let collection = data_reference(workbook, "collection")?;
+            let maximum = count(workbook, "declared_max")?;
+            let name = format!("for_each_{collection}");
+            BoundProposal {
+                ops: vec![Operation::CreateMultiInstanceRegion {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    key: fresh_key(),
+                    node: IRNode::MultiInstance {
+                        id: name.clone(),
+                        name: name.clone(),
+                        task_type: "noop".to_string(),
+                        collection_flag_name: collection.clone(),
+                        declared_max: maximum,
+                    },
+                    edge_id: format!("flow_{name}"),
+                }],
+                description: format!("repeat over '{collection}' up to {maximum} times"),
+            }
+        }
+        "op.attach_guard" => {
+            let escape = identifier(workbook, "escape")?;
+            let guard_key = fresh_key();
+            BoundProposal {
+                ops: vec![
+                    Operation::AttachGuard {
+                        host: node_key(dag, workbook, "host")?,
+                        key: guard_key,
+                        guard_id: format!("{escape}_guard"),
+                        trigger: GuardTrigger::Timer(TimerSpec::Duration {
+                            ms: duration(workbook, "trigger")?,
+                        }),
+                    },
+                    Operation::AppendNode {
+                        anchor: guard_key,
+                        key: fresh_key(),
+                        node: task(&escape),
+                        edge_id: format!("flow_{escape}"),
+                    },
+                ],
+                description: format!("attach an interrupting guard leading to '{escape}'"),
+            }
+        }
+        "op.attach_rearming_guard" => {
+            let escape = identifier(workbook, "escape")?;
+            let guard_key = fresh_key();
+            BoundProposal {
+                ops: vec![
+                    Operation::AttachRearmingGuard {
+                        host: node_key(dag, workbook, "host")?,
+                        key: guard_key,
+                        guard_id: format!("{escape}_guard"),
+                        trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                            interval_ms: duration(workbook, "interval")?,
+                            max_fires: count(workbook, "max_fires")?,
+                        }),
+                    },
+                    Operation::AppendNode {
+                        anchor: guard_key,
+                        key: fresh_key(),
+                        node: task(&escape),
+                        edge_id: format!("flow_{escape}"),
+                    },
+                ],
+                description: format!("attach a bounded rearming guard leading to '{escape}'"),
+            }
+        }
+        "op.set_guard_trigger" => BoundProposal {
+            ops: vec![Operation::SetGuardTrigger {
+                guard: node_key(dag, workbook, "guard")?,
+                trigger: GuardTrigger::Timer(TimerSpec::Duration {
+                    ms: duration(workbook, "trigger")?,
+                }),
+            }],
+            description: "set the selected guard timer".to_string(),
+        },
+        "op.set_guard_budget" => {
+            let budget = count(workbook, "failure_budget")?;
+            BoundProposal {
+                ops: vec![Operation::SetGuardBudget {
+                    guard: node_key(dag, workbook, "guard")?,
+                    failure_budget: Some(budget),
+                }],
+                description: format!("set guard failure budget to {budget}"),
+            }
+        }
+        "op.set_correlation_source" => {
+            let data = data_reference(workbook, "data_reference")?;
+            BoundProposal {
+                ops: vec![Operation::SetCorrelationSource {
+                    node: node_key(dag, workbook, "node")?,
+                    corr_key_source: data.clone(),
+                }],
+                description: format!("set correlation source to '{data}'"),
+            }
+        }
+        "op.delete_subgraph" => BoundProposal {
+            ops: vec![Operation::DeleteNode {
+                target: node_key(dag, workbook, "target")?,
+            }],
+            description: "delete the selected node or closed region".to_string(),
+        },
+        "prod.request_and_wait" => {
+            let request = identifier(workbook, "request")?;
+            let wait = format!("{request}_response");
+            let correlation = data_reference(workbook, "correlation_source")?;
+            BoundProposal {
+                ops: productions::request_and_wait(productions::RequestAndWaitBindings {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    send_key: fresh_key(),
+                    send_node: task(&request),
+                    send_edge_id: format!("flow_{request}"),
+                    wait_key: fresh_key(),
+                    wait_node: IRNode::MessageWait {
+                        id: wait.clone(),
+                        name: wait.clone(),
+                        corr_key_source: correlation.clone(),
+                    },
+                    wait_edge_id: format!("flow_{wait}"),
+                }),
+                description: format!(
+                    "send '{request}' and wait for a response correlated on '{correlation}'"
+                ),
+            }
+        }
+        "prod.interrupting_timeout" => {
+            let escape = identifier(workbook, "escape")?;
+            BoundProposal {
+                ops: productions::interrupting_timeout(productions::InterruptingTimeoutBindings {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    guard_key: fresh_key(),
+                    guard_id: format!("{escape}_guard"),
+                    duration_ms: duration(workbook, "duration")?,
+                    continuation_key: fresh_key(),
+                    continuation_node: task(&escape),
+                    continuation_edge_id: format!("flow_{escape}"),
+                    continuation_end_key: fresh_key(),
+                    continuation_end_node: end_node(format!("{escape}_end")),
+                    continuation_end_edge_id: format!("flow_{escape}_end"),
+                }),
+                description: format!("interrupt on timeout and continue to '{escape}'"),
+            }
+        }
+        "prod.reminder_then_escalate" | "prod.non_interrupting_notification" => {
+            let name_slot = if candidate == "prod.reminder_then_escalate" {
+                "escalation"
+            } else {
+                "notification"
+            };
+            let count_slot = if candidate == "prod.reminder_then_escalate" {
+                "max_reminders"
+            } else {
+                "max_fires"
+            };
+            let name = identifier(workbook, name_slot)?;
+            let interval = duration(workbook, "interval")?;
+            let maximum = count(workbook, count_slot)?;
+            let ops = if candidate == "prod.reminder_then_escalate" {
+                productions::reminder_then_escalate(productions::ReminderThenEscalateBindings {
+                    anchor: node_key(dag, workbook, "anchor")?,
+                    guard_key: fresh_key(),
+                    guard_id: format!("{name}_guard"),
+                    cycle: TimerSpec::Cycle {
+                        interval_ms: interval,
+                        max_fires: maximum,
+                    },
+                    escalation_key: fresh_key(),
+                    escalation_node: task(&name),
+                    escalation_edge_id: format!("flow_{name}"),
+                    escalation_end_key: fresh_key(),
+                    escalation_end_node: end_node(format!("{name}_end")),
+                    escalation_end_edge_id: format!("flow_{name}_end"),
+                })
+            } else {
+                productions::non_interrupting_notification(
+                    productions::NonInterruptingNotificationBindings {
+                        anchor: node_key(dag, workbook, "anchor")?,
+                        guard_key: fresh_key(),
+                        guard_id: format!("{name}_guard"),
+                        interval_ms: interval,
+                        max_fires: maximum,
+                        notification_key: fresh_key(),
+                        notification_node: task(&name),
+                        notification_edge_id: format!("flow_{name}"),
+                        notification_end_key: fresh_key(),
+                        notification_end_node: end_node(format!("{name}_end")),
+                        notification_end_edge_id: format!("flow_{name}_end"),
+                    },
+                )
+            };
+            BoundProposal {
+                ops,
+                description: format!("run '{name}' every {interval}ms up to {maximum} times"),
+            }
+        }
+        // Every board-visible id is listed above. Reaching this arm means the
+        // semantic board admitted a candidate without adapter coverage.
+        other => {
+            return Err(ProposalError::Contract(format!(
+                "board-visible candidate '{other}' has no materialization implementation"
+            )));
+        }
     };
-    Ok(outcome)
+    Ok(bound)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+    use designer_graph::schema::Provenance;
+    use proptest::prelude::*;
+    use utterance_engine::board::PolicyFilter;
+    use utterance_engine::policy::{DecisionRecord, ProposalDisposition};
+
+    #[test]
+    fn condition_parser_is_strict() {
+        assert!(parse_condition("approved==true").is_ok());
+        assert!(parse_condition("attempts>2").is_ok());
+        assert!(parse_condition("approved").is_err());
+        assert!(parse_condition("bad flag==true").is_err());
+    }
+
+    #[test]
+    fn bounded_extractors_do_not_panic_on_hostile_text() {
+        let text = "\0 every 999999999999999999999999 weeks 999999999999 times \"\"";
+        assert!(interval_ms(text).is_none());
+        assert!(quoted_names(text).is_empty());
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_slot_answers_cannot_bypass_declared_identifier_type(
+            answer_name in ".{0,64}",
+            text in ".{0,256}",
+            number in any::<u64>(),
+            flag in any::<bool>(),
+            variant in 0u8..9,
+        ) {
+            let value = match variant {
+                0 => SlotValue::Text(text),
+                1 => SlotValue::Identifier(text),
+                2 => SlotValue::NodeReference(text),
+                3 => SlotValue::DataReference(text),
+                4 => SlotValue::Count(number as u32),
+                5 => SlotValue::DurationMillis(number),
+                6 => SlotValue::Condition(text),
+                7 => SlotValue::SubprocessReference(text),
+                _ => SlotValue::Boolean(flag),
+            };
+            let workbook = ProposalWorkbook::new(
+                1,
+                WorkbookId::new("property-workbook").unwrap(),
+                1,
+                semantic_decision_contracts::BoardHash::new("b".repeat(64)).unwrap(),
+                semantic_decision_contracts::GraphRevision::new("property-revision").unwrap(),
+                CanonicalCandidateId::new("op.append_node").unwrap(),
+                vec![WorkbookSlot {
+                    name: "name".into(),
+                    kind: ArgumentKind::Identifier,
+                    requirement: SlotRequirement::Required,
+                    value: SlotValueState::Missing,
+                    provenance: None,
+                    clarification_prompt: "Which name?".into(),
+                }],
+                EvidenceRecordHash::new("e".repeat(64)).unwrap(),
+            )
+            .unwrap();
+            let result = apply_explicit_answers(
+                &DesignerDag::new("property-answer"),
+                workbook,
+                vec![SlotAnswer { name: answer_name, value }],
+            );
+            if let Ok(workbook) = result {
+                prop_assert_eq!(workbook.status(), ProposalStatus::ReadyForDryRun);
+                let resolved = &workbook.slots()[0].value;
+                prop_assert!(matches!(
+                    resolved,
+                    SlotValueState::Resolved(SlotValue::Identifier(identifier))
+                        if valid_identifier(identifier)
+                ));
+            }
+        }
+
+        #[test]
+        fn arbitrary_text_never_panics_deterministic_extractors(text in ".{0,4096}") {
+            let _ = quoted_names(&text);
+            let _ = durations(&text);
+            let _ = followed_count(&text, &["times", "branches", "items"]);
+            let _ = parse_condition(&text);
+            let sanitized = sanitize_identifier(&text);
+            let identifier_alphabet = sanitized.chars().all(|character| {
+                character.is_alphanumeric() || character == '_'
+            });
+            prop_assert!(identifier_alphabet);
+        }
+    }
+
+    #[test]
+    fn request_and_wait_resumes_with_typed_data_answer_and_dry_admits() {
+        let mut dag = DesignerDag::new("request workbook");
+        let start = fresh_key();
+        let data = fresh_key();
+        dag.seed(
+            start,
+            IRNode::Start {
+                id: "start".to_string(),
+            },
+            Provenance::default(),
+        )
+        .unwrap();
+        dag.seed(
+            data,
+            IRNode::DataObject {
+                id: "application_reference".to_string(),
+                name: "Application reference".to_string(),
+                type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                role: DataObjectRole::Internal,
+            },
+            Provenance::default(),
+        )
+        .unwrap();
+        let anchor = fresh_key();
+        let staged = productions::apply_production(
+            &dag,
+            vec![
+                Operation::AppendNode {
+                    anchor: start,
+                    key: anchor,
+                    node: task("review"),
+                    edge_id: "flow_review".to_string(),
+                },
+                Operation::AppendNode {
+                    anchor,
+                    key: fresh_key(),
+                    node: end_node("end".to_string()),
+                    edge_id: "flow_end".to_string(),
+                },
+            ],
+            Provenance::default(),
+        )
+        .unwrap();
+        let dag = staged.candidate;
+        let board = utterance_engine::bpmn_board::build_bpmn_semantic_board(
+            &dag,
+            Some((anchor, "review")),
+            "revision-1",
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let candidate_id = CanonicalCandidateId::new("prod.request_and_wait").unwrap();
+        assert!(board
+            .candidates
+            .iter()
+            .any(|candidate| candidate.canonical_id == candidate_id));
+        let decision = DecisionRecord {
+            board_hash: board.board_hash.as_str().to_string(),
+            retrieved_subset_hash: "subset".to_string(),
+            model_bundle_hash: "tier0.test".to_string(),
+            disposition_policy_hash: "policy".to_string(),
+            context_projection_hash: "context".to_string(),
+            ranking: vec![],
+            disposition: ProposalDisposition::Candidate {
+                candidate_id: candidate_id.as_str().to_string(),
+            },
+            evidence_trace: None,
+            board: Some(utterance_engine::corpus_schema::BoardDump::from_inference_board(&board)),
+            action_span_producer_hash: utterance_engine::disposition::producer_hash(
+                utterance_engine::disposition::NO_ACTION_SPAN_PRODUCER_ID,
+            ),
+            decision_record_hash: "d".repeat(64),
+        };
+        let workbook = start_workbook(
+            &dag,
+            Some(anchor),
+            &board,
+            &decision,
+            &candidate_id,
+            "Send 'onboarding_request' and wait for its response",
+            7,
+        )
+        .unwrap();
+        assert_eq!(workbook.status(), ProposalStatus::NeedsArguments);
+        assert_eq!(
+            workbook
+                .slots()
+                .iter()
+                .filter(|slot| matches!(slot.value, SlotValueState::Missing))
+                .map(|slot| slot.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["correlation_source"]
+        );
+
+        let workbook = apply_explicit_answers(
+            &dag,
+            workbook,
+            vec![SlotAnswer {
+                name: "correlation_source".to_string(),
+                value: SlotValue::DataReference("application_reference".to_string()),
+            }],
+        )
+        .unwrap();
+        assert_eq!(workbook.status(), ProposalStatus::ReadyForDryRun);
+        let bound = materialize_operations(&dag, &workbook).unwrap();
+        let dry = productions::apply_production(&dag, bound.ops, Provenance::default()).unwrap();
+        dry.candidate.admit().unwrap();
+        assert_eq!(dag.node_count(), 4, "workbook processing mutates no graph");
+    }
 }

@@ -44,6 +44,12 @@ fn main() -> Result<()> {
             }
             pack_build_command(&args[1])
         }
+        "pack-check" => {
+            if args.len() < 2 {
+                bail!("missing domain argument. Usage: cargo xtask pack-check <domain>");
+            }
+            pack_check_command(&args[1])
+        }
         "run-pack" => run_pack_command(),
         "fuzz" => fuzz::fuzz_command(&workspace_root()?, &args[1..]),
         "help" | "--help" | "-h" => {
@@ -1284,6 +1290,257 @@ fn pack_build_command(domain: &str) -> Result<()> {
     println!("Wrote closure manifest to {}", closure_path.display());
 
     Ok(())
+}
+
+/// Verify checked-in pack artifacts without modifying them.
+///
+/// This is deliberately separate from `pack-build`: a generation command can
+/// make a stale checkout look green by overwriting the evidence under test.
+fn pack_check_command(domain: &str) -> Result<()> {
+    let workspace_root = workspace_root()?;
+    let manifests_dir = workspace_root.join("manifests");
+    let dag_path = manifests_dir.join(format!("{domain}.dag.yaml"));
+    let dag_content = std::fs::read_to_string(&dag_path)
+        .with_context(|| format!("read DAG at {}", dag_path.display()))?;
+    let dag: bpmn_lite_compiler::dsl::WorkflowPackDAG =
+        serde_yaml::from_str(&dag_content).context("parse DAG yaml")?;
+
+    let manifest_path = manifests_dir.join(format!("{}-{}.yaml", domain, dag.version));
+    let checked_manifest_content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read checked manifest at {}", manifest_path.display()))?;
+    let checked_manifest = dsl_manifest::Manifest::load_from_yaml(&checked_manifest_content)
+        .context("parse checked manifest")?;
+
+    bpmn_lite_compiler::dsl::validate_pack(&dag, &checked_manifest)
+        .map_err(|errors| anyhow!("checked pack validation failed: {errors:?}"))?;
+
+    let mut generated = bpmn_lite_compiler::dsl::generate_manifest(&dag)
+        .map_err(|error| anyhow!("generate_manifest error: {error}"))?;
+    generated.catalogue_version = bpmn_lite_compiler::dsl::derive_version(&generated, &dag);
+    let generated_yaml = generated
+        .to_yaml()
+        .map_err(|error| anyhow!("serialize generated manifest: {error}"))?;
+    let checked_yaml = checked_manifest
+        .to_yaml()
+        .map_err(|error| anyhow!("serialize checked manifest: {error}"))?;
+    if generated_yaml != checked_yaml {
+        bail!(
+            "checked manifest {} does not match the DAG-derived artifact; run `cargo xtask pack-build {domain}` and review the diff",
+            manifest_path.display()
+        );
+    }
+
+    let closure_path =
+        manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
+    let checked_closure_content = std::fs::read_to_string(&closure_path)
+        .with_context(|| format!("read checked closure at {}", closure_path.display()))?;
+    let checked_closure: bpmn_lite_compiler::dsl::PackClosureManifest =
+        serde_yaml::from_str(&checked_closure_content).context("parse checked closure")?;
+    let generated_closure = bpmn_lite_compiler::dsl::generate_closure(&generated, &dag);
+    if generated_closure != checked_closure {
+        bail!(
+            "checked closure {} does not match regeneration",
+            closure_path.display()
+        );
+    }
+
+    if domain == "bpmn" {
+        let declared = checked_manifest
+            .verb_ids()
+            .collect::<std::collections::BTreeSet<_>>();
+        let handled: std::collections::BTreeSet<&str> = bpmn_lite_bus_handler::HANDLED_VERBS
+            .iter()
+            .copied()
+            .collect();
+        check_bpmn_invocation_surface(&declared, &handled)?;
+    }
+
+    println!(
+        "pack-check {domain}: checked DAG, manifest, closure, handler surface, and structural-node separation"
+    );
+    Ok(())
+}
+
+/// The checked BPMN invocation manifest declares exactly this
+/// business-scoped subset of `BpmnLiteBusHandler`'s routed verbs
+/// (excluding its two read-only catalogue verbs, `list-templates` and
+/// `get-template-version`, which are not part of the per-instance
+/// invocation surface this manifest governs).
+const BPMN_INVOCATION_VERBS: [&str; 6] = [
+    "define-template",
+    "spawn-instance",
+    "deliver-message",
+    "correlate-message",
+    "cancel-instance",
+    "inspect-instance",
+];
+
+/// Structural BPMN elements (waits, boundary events) that must never appear
+/// as a service-invocation verb — they compile into typed graph/IR
+/// operations, not bus calls. Checked before the verb-subset-equality rule
+/// below so the diagnostic names the actual defect (a structural id leaked
+/// into the invocation surface) rather than a generic count/set mismatch;
+/// otherwise this arm would never be reached, since any declared set
+/// containing one of these ids already differs from the expected real-verb
+/// set and would be caught there first with a less specific message.
+const BPMN_STRUCTURAL_NODES: [&str; 4] =
+    ["message-wait", "timer-wait", "boundary-timer", "boundary-error"];
+
+/// Pure, file-free checks over the BPMN invocation surface, factored out of
+/// `pack_check_command` so each rule has its own red-fixture test: a
+/// structural node, an unresolved verb, or a mismatched declared set must
+/// each be independently detectable from a doctored input, not only
+/// provable by reading real manifest/DAG files end to end.
+fn check_bpmn_invocation_surface(
+    declared: &std::collections::BTreeSet<&str>,
+    handled: &std::collections::BTreeSet<&str>,
+) -> Result<()> {
+    check_no_structural_verbs(declared)?;
+    check_invocation_verb_subset(declared)?;
+    check_verbs_resolve_to_handlers(handled)?;
+    Ok(())
+}
+
+fn check_no_structural_verbs(declared: &std::collections::BTreeSet<&str>) -> Result<()> {
+    for forbidden in BPMN_STRUCTURAL_NODES {
+        if declared.contains(forbidden) {
+            bail!("structural BPMN node '{forbidden}' appears as an invocation verb");
+        }
+    }
+    Ok(())
+}
+
+fn check_invocation_verb_subset(declared: &std::collections::BTreeSet<&str>) -> Result<()> {
+    let expected = BPMN_INVOCATION_VERBS
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if declared != &expected {
+        bail!(
+            "BPMN invocation manifest does not declare exactly the expected invocation verb subset: declared={declared:?}, expected={expected:?}"
+        );
+    }
+    Ok(())
+}
+
+/// Resolve the expected invocation verbs against the handler crate's own
+/// exported verb list (`bpmn_lite_bus_handler::HANDLED_VERBS`, declared next
+/// to its real dispatch match and proven not to drift from it by
+/// `handled_verbs_matches_every_dispatch_arm` in that crate) rather than a
+/// copy of the verb strings kept here. A hand-maintained copy would stay
+/// green even after a match arm was renamed or deleted upstream — this
+/// resolves against the live source.
+fn check_verbs_resolve_to_handlers(handled: &std::collections::BTreeSet<&str>) -> Result<()> {
+    let expected = BPMN_INVOCATION_VERBS
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let unresolved: Vec<&str> = expected
+        .iter()
+        .copied()
+        .filter(|verb| !handled.contains(verb))
+        .collect();
+    if !unresolved.is_empty() {
+        bail!(
+            "BPMN invocation manifest declares verbs with no real BpmnLiteBusHandler route (checked against bpmn_lite_bus_handler::HANDLED_VERBS, not a hand-copied list): {unresolved:?}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pack_check_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn expected_set() -> BTreeSet<&'static str> {
+        BPMN_INVOCATION_VERBS.into_iter().collect()
+    }
+
+    #[test]
+    fn accepts_the_real_verb_subset_fully_resolved() {
+        let declared = expected_set();
+        let handled = expected_set();
+        assert!(check_bpmn_invocation_surface(&declared, &handled).is_ok());
+    }
+
+    #[test]
+    fn red_dag_verb_without_handler_is_refused() {
+        // The manifest declares exactly the expected verb subset, but the
+        // handler crate no longer routes one of them (e.g. its match arm
+        // was renamed or deleted) -- this is the drift a hand-copied
+        // handler list could not catch; it must fail here.
+        let handled = {
+            let mut h = expected_set();
+            h.remove("cancel-instance");
+            h
+        };
+
+        let error = check_verbs_resolve_to_handlers(&handled)
+            .expect_err("a manifest verb with no real handler route must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("no real BpmnLiteBusHandler route"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("cancel-instance"),
+            "diagnostic must name the unresolved verb: {message}"
+        );
+
+        // And the same fixture through the full combined check, so the
+        // ordering (structural, then subset, then handler resolution)
+        // doesn't accidentally hide this failure behind an earlier one.
+        let declared = expected_set();
+        let error = check_bpmn_invocation_surface(&declared, &handled)
+            .expect_err("the combined check must also refuse this fixture");
+        assert!(error.to_string().contains("cancel-instance"));
+    }
+
+    #[test]
+    fn red_structural_node_registered_as_invocation_verb_is_refused() {
+        // Exercise the dedicated structural-node check directly and in
+        // true isolation: a same-SIZE declared set that substitutes one
+        // real verb for a structural one must be refused specifically as
+        // a structural-node violation, not merely as "not the expected 6".
+        let declared = {
+            let mut d = expected_set();
+            d.remove("cancel-instance");
+            d.insert("boundary-timer");
+            d
+        };
+        assert_eq!(declared.len(), BPMN_INVOCATION_VERBS.len());
+
+        let error = check_no_structural_verbs(&declared)
+            .expect_err("a structural node in the declared surface must be refused");
+        assert!(
+            error.to_string().contains("structural BPMN node 'boundary-timer'"),
+            "unexpected error message: {error}"
+        );
+
+        // And through the combined check: the structural-node check runs
+        // FIRST, so the diagnostic names the real defect (a structural id)
+        // rather than the secondary "wrong 6 verbs" symptom.
+        let handled = expected_set();
+        let error = check_bpmn_invocation_surface(&declared, &handled)
+            .expect_err("the combined check must refuse this fixture");
+        assert!(
+            error.to_string().contains("structural BPMN node"),
+            "combined check must surface the structural-node diagnostic first, got: {error}"
+        );
+    }
+
+    #[test]
+    fn each_forbidden_structural_node_is_individually_detected() {
+        for forbidden in BPMN_STRUCTURAL_NODES {
+            let mut declared = expected_set();
+            declared.insert(forbidden);
+            let error = check_no_structural_verbs(&declared)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(forbidden),
+                "'{forbidden}' must be named in the diagnostic, got: {error}"
+            );
+        }
+    }
 }
 
 fn run_pack_command() -> Result<()> {

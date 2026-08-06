@@ -283,6 +283,7 @@ pub enum ExecutionNode {
     Join(JoinExecNode),
     Loop(LoopExecNode),
     Wait(WaitExecNode),
+    MessageWait(MessageWaitExecNode),
     End(EndExecNode),
 }
 
@@ -295,6 +296,7 @@ impl ExecutionNode {
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
             Self::Wait(n) => &n.id,
+            Self::MessageWait(n) => &n.id,
             Self::End(n) => &n.id,
         }
     }
@@ -321,6 +323,7 @@ impl ExecutionNode {
                 v
             }
             Self::Wait(n) => vec![n.next.as_str()],
+            Self::MessageWait(n) => vec![n.next.as_str()],
             Self::End(_) => vec![],
         }
     }
@@ -424,6 +427,21 @@ pub enum GuardTriggerExec {
 pub struct WaitExecNode {
     pub id: String,
     pub spec: crate::ir::TimerSpec,
+    pub next: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
+}
+
+/// First-class correlated message wait.
+///
+/// Unlike a service task, this lowers directly to `V2WaitMsg`; it never
+/// dispatches an invocation verb. `correlation_key_source` is a dotted domain
+/// payload path resolved when the message arrives.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MessageWaitExecNode {
+    pub id: String,
+    pub name: String,
+    pub correlation_key_source: String,
     pub next: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<bpmn_lite_types::SourceSpan>,
