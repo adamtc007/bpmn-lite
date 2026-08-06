@@ -336,8 +336,8 @@ mod tests {
                     .to_owned(),
             ),
             (
-                "bpmn-semantic-profile-v1:24867e4e6116abb31e40a497180287e97c8b2edd7f0b14b0e98386b25f169420".to_owned(),
-                "0459649ce9082ba62aee48bc25ea8ab6e9071367ed69adcea7956072fbe215db".to_owned(),
+                "bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9".to_owned(),
+                "ca698f442c4aa7eb1a80bddcf55a280fd44dc8fe6ccc4745b00ebac459d8d1ef".to_owned(),
             )
         );
     }
@@ -348,7 +348,7 @@ mod tests {
         let lock = include_str!("../config/bpmn-semantic-pack.lock");
         assert_eq!(
             receipt.source_hash.as_str(),
-            "9c763264fdf51041eb75c88b028d03e2f3f9635d9260b7d563cdadf356c03e32"
+            "343fdb2fd9fa2b09e1aea4ae11f7ff869f651cb5fe34c08a1078e96eb37435a7"
         );
         assert!(lock.contains(receipt.source_hash.as_str()));
         assert!(lock.contains(receipt.artifact_hash.as_str()));

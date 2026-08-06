@@ -250,13 +250,11 @@ capabilities:
     kind: count
     name: branch_count
     required: true
-  effect: Creates a matched parallel split/join region that always executes every branch,
-    unlike an inclusive region's condition-selected subset
+  effect: Creates a matched parallel split/join region
   extensions:
     bpmn.binder_support: supported
   id: op.create_parallel_region
-  intent_summary: Run every declared branch concurrently — all branches always run, with
-    no conditions — and join them all
+  intent_summary: Run every declared branch concurrently and join them all
   negative_contrasts:
   - candidate_id: op.create_inclusive_region
     distinction: Inclusive branches are conditionally selected; parallel runs every branch
@@ -306,8 +304,7 @@ capabilities:
   title: Close a parallel region
 - action_class: create
   adapter_binding: bpmn.designer.op.create_inclusive_region
-  applicability: The anchor is a non-terminal flow node and each named branch carries a
-    governed condition
+  applicability: The anchor is a non-terminal flow node and each branch has a governed condition
   arguments:
   - clarification_prompt: Which existing BPMN node should this change follow or apply to?
     kind: node_reference
@@ -321,14 +318,11 @@ capabilities:
     kind: condition
     name: conditions
     required: true
-  effect: Creates a matched inclusive split/join region whose join waits for exactly the
-    subset of branches selected; at least one branch always runs, unlike an exclusive
-    gateway's single winning route
+  effect: Creates a matched inclusive split/join region with non-empty selection
   extensions:
     bpmn.binder_support: needs_workbook
   id: op.create_inclusive_region
-  intent_summary: Create conditional branches where every branch whose condition holds
-    runs — one, some, or all together, never none
+  intent_summary: Create conditional branches where one or more named outcomes may run
   negative_contrasts:
   - candidate_id: op.create_parallel_region
     distinction: Parallel runs every branch; inclusive runs the non-empty subset whose conditions hold
