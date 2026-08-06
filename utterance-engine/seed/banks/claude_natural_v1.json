@@ -1,0 +1,877 @@
+[
+ {
+  "class_id": "and_gateway_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "does the join wait for every branch or just the first",
+  "paraphrase_seq": 991
+ },
+ {
+  "class_id": "and_gateway_node",
+  "label": "op.connect",
+  "regime": "spoken",
+  "text": "link this join forward to the notification step",
+  "paraphrase_seq": 990
+ },
+ {
+  "class_id": "and_gateway_node",
+  "label": "op.create_parallel_region",
+  "regime": "spoken",
+  "text": "make this a proper both-at-once split, everything runs",
+  "paraphrase_seq": 989
+ },
+ {
+  "class_id": "and_gateway_node",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "once both legs finish, add a reconciliation step after the join",
+  "paraphrase_seq": 988
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "why does this error path even exist, who added it",
+  "paraphrase_seq": 910
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "log every time this error fires to the ops dashboard",
+  "paraphrase_seq": 911
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.delete_subgraph",
+  "regime": "indirect",
+  "text": "we don't need this failure handling any more, take the whole thing out",
+  "paraphrase_seq": 908
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.delete_subgraph",
+  "regime": "rushed_ops",
+  "text": "kill the error branch entirely",
+  "paraphrase_seq": 909
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_budget",
+  "regime": "indirect",
+  "text": "if this keeps blowing up, stop retrying after the third failure",
+  "paraphrase_seq": 905
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "cap the error handler so it only fires twice",
+  "paraphrase_seq": 906
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_budget",
+  "regime": "verbose_manager",
+  "text": "I want a sensible ceiling on how many times this error route can trigger before we give up",
+  "paraphrase_seq": 907
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_trigger",
+  "regime": "indirect",
+  "text": "this error catch is firing on the wrong thing \u2014 change what actually trips it",
+  "paraphrase_seq": 901
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_trigger",
+  "regime": "spoken",
+  "text": "make the error handler react to the payment failure instead",
+  "paraphrase_seq": 902
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_trigger",
+  "regime": "rushed_ops",
+  "text": "wrong trigger on the error path, swap it",
+  "paraphrase_seq": 903
+ },
+ {
+  "class_id": "boundary_error",
+  "label": "op.set_guard_trigger",
+  "regime": "question_form",
+  "text": "can we point this failure catch at a different error signal?",
+  "paraphrase_seq": 904
+ },
+ {
+  "class_id": "data_object",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "document where this data object gets its values from",
+  "paraphrase_seq": 1023
+ },
+ {
+  "class_id": "data_object",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "this data object isn't referenced any more, clean it out",
+  "paraphrase_seq": 1022
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "show me an example of a finished onboarding workflow",
+  "paraphrase_seq": 1024
+ },
+ {
+  "class_id": "empty_graph",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "what should a decent kyc template even contain",
+  "paraphrase_seq": 1025
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "how many cases actually reach this end state?",
+  "paraphrase_seq": 1013
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "indirect",
+  "text": "just before we close out, archive everything to the record store",
+  "paraphrase_seq": 1010
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.insert_before",
+  "regime": "spoken",
+  "text": "one last step before the end: notify the client",
+  "paraphrase_seq": 1011
+ },
+ {
+  "class_id": "end_anchor",
+  "label": "op.replace_node",
+  "regime": "indirect",
+  "text": "this ending should be the rejection outcome, not the happy path",
+  "paraphrase_seq": 1012
+ },
+ {
+  "class_id": "ffi_service_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "is the vendor api up right now",
+  "paraphrase_seq": 1009
+ },
+ {
+  "class_id": "ffi_service_task",
+  "label": "op.attach_guard",
+  "regime": "indirect",
+  "text": "if the vendor call hangs, cut it off after ten minutes",
+  "paraphrase_seq": 1007
+ },
+ {
+  "class_id": "ffi_service_task",
+  "label": "op.replace_node",
+  "regime": "indirect",
+  "text": "point this integration at the sandbox endpoint version instead",
+  "paraphrase_seq": 1006
+ },
+ {
+  "class_id": "ffi_service_task",
+  "label": "prod.interrupting_timeout",
+  "regime": "indirect",
+  "text": "give the external check a hard deadline, then take the failure route",
+  "paraphrase_seq": 1008
+ },
+ {
+  "class_id": "guard_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "when did this guard last actually fire?",
+  "paraphrase_seq": 1021
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "remove this trigger, it's redundant now",
+  "paraphrase_seq": 1020
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_budget",
+  "regime": "spoken",
+  "text": "let it re-fire twice more at most",
+  "paraphrase_seq": 1019
+ },
+ {
+  "class_id": "guard_node",
+  "label": "op.set_guard_trigger",
+  "regime": "indirect",
+  "text": "this should trip on the rejection message, not the clock",
+  "paraphrase_seq": 1018
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "who signed off on a guard with no exit, check the audit trail",
+  "paraphrase_seq": 922
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.append_node",
+  "regime": "indirect",
+  "text": "the timeout fires and then just dies \u2014 give it somewhere to go",
+  "paraphrase_seq": 912
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.append_node",
+  "regime": "spoken",
+  "text": "this guard has no follow-up, add a step on its route",
+  "paraphrase_seq": 913
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.append_node",
+  "regime": "rushed_ops",
+  "text": "dead-end guard, bolt an escalation step onto it",
+  "paraphrase_seq": 914
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.append_node",
+  "regime": "question_form",
+  "text": "shouldn't something actually happen after this trigger fires?",
+  "paraphrase_seq": 915
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.append_node",
+  "regime": "verbose_manager",
+  "text": "when the reminder goes off we need a concrete action after it, not a dead end",
+  "paraphrase_seq": 916
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "just get rid of this guard, it's noise",
+  "paraphrase_seq": 921
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.set_guard_budget",
+  "regime": "indirect",
+  "text": "only let this thing fire three times, then stop",
+  "paraphrase_seq": 919
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.set_guard_budget",
+  "regime": "telegraphic",
+  "text": "budget 2 on this guard",
+  "paraphrase_seq": 920
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.set_guard_trigger",
+  "regime": "indirect",
+  "text": "this stuck guard should wake on the reply message, not the timer",
+  "paraphrase_seq": 917
+ },
+ {
+  "class_id": "guard_node_no_escape",
+  "label": "op.set_guard_trigger",
+  "regime": "spoken",
+  "text": "change what sets this guard off",
+  "paraphrase_seq": 918
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "list every guard currently on this step",
+  "paraphrase_seq": 1017
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.attach_rearming_guard",
+  "regime": "indirect",
+  "text": "on top of the timeout it already has, chase the owner daily",
+  "paraphrase_seq": 1014
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "after this guarded step clears, add the handoff",
+  "paraphrase_seq": 1016
+ },
+ {
+  "class_id": "guarded_task",
+  "label": "prod.reminder_then_escalate",
+  "regime": "indirect",
+  "text": "remind, remind again, then hand it to compliance if still stuck",
+  "paraphrase_seq": 1015
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "who's the approver on this step usually",
+  "paraphrase_seq": 963
+ },
+ {
+  "class_id": "human_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "export the list of pending approvals to a spreadsheet",
+  "paraphrase_seq": 964
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_guard",
+  "regime": "telegraphic",
+  "text": "72h timeout on the approval",
+  "paraphrase_seq": 960
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "spoken",
+  "text": "keep re-pinging this review until it's done, three times max",
+  "paraphrase_seq": 959
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "once they approve, add a step to record who signed",
+  "paraphrase_seq": 962
+ },
+ {
+  "class_id": "human_wait",
+  "label": "op.replace_node",
+  "regime": "indirect",
+  "text": "this manual sign-off should really be the four-eyes version",
+  "paraphrase_seq": 961
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "indirect",
+  "text": "if the approver sits on this for a week, pull the plug and route it to the fallback",
+  "paraphrase_seq": 957
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "indirect",
+  "text": "let ops know if this approval is still pending after 48 hours, but don't stop it",
+  "paraphrase_seq": 958
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "indirect",
+  "text": "nudge the reviewer every two days and if nothing happens by Friday, bump it to their manager",
+  "paraphrase_seq": 955
+ },
+ {
+  "class_id": "human_wait",
+  "label": "prod.reminder_then_escalate",
+  "regime": "verbose_manager",
+  "text": "gentle chaser cadence on this approval please, with an escalation if it goes stale",
+  "paraphrase_seq": 956
+ },
+ {
+  "class_id": "message_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "how long do these confirmations usually take to arrive",
+  "paraphrase_seq": 973
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.attach_rearming_guard",
+  "regime": "indirect",
+  "text": "re-chase the sender every morning until the file arrives",
+  "paraphrase_seq": 970
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.delete_subgraph",
+  "regime": "rushed_ops",
+  "text": "drop this wait entirely, we get the data another way now",
+  "paraphrase_seq": 972
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "when the message lands, add a validation step right after",
+  "paraphrase_seq": 971
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "indirect",
+  "text": "match the incoming confirmation to the case by the deal reference, not the client id",
+  "paraphrase_seq": 965
+ },
+ {
+  "class_id": "message_wait",
+  "label": "op.set_correlation_source",
+  "regime": "spoken",
+  "text": "key this wait on the settlement reference instead",
+  "paraphrase_seq": 966
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "indirect",
+  "text": "if the counterparty never responds, kill the wait after five days",
+  "paraphrase_seq": 968
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.non_interrupting_notification",
+  "regime": "indirect",
+  "text": "ping the desk if we're still waiting on this message tomorrow, keep waiting though",
+  "paraphrase_seq": 969
+ },
+ {
+  "class_id": "message_wait",
+  "label": "prod.interrupting_timeout",
+  "regime": "indirect",
+  "text": "wait for their answer but if the cutoff hits first, go with the cutoff",
+  "paraphrase_seq": 967
+ },
+ {
+  "class_id": "mi_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "how many instances did the last run spawn?",
+  "paraphrase_seq": 997
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "indirect",
+  "text": "do this once per director on the register, then gather the results",
+  "paraphrase_seq": 992
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "spoken",
+  "text": "repeat this block for every document in the pack",
+  "paraphrase_seq": 993
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.create_multi_instance_region",
+  "regime": "verbose_manager",
+  "text": "each beneficial owner needs this identical treatment, per owner, capped at the register size",
+  "paraphrase_seq": 994
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "after the per-item loop finishes, add a summary step",
+  "paraphrase_seq": 995
+ },
+ {
+  "class_id": "mi_node",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "the body of this per-item block should be the new screening call",
+  "paraphrase_seq": 996
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "rename this step to something clearer",
+  "paraphrase_seq": 981
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.attach_guard",
+  "regime": "indirect",
+  "text": "don't let this step run forever \u2014 day and a half, tops",
+  "paraphrase_seq": 977
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.create_parallel_region",
+  "regime": "indirect",
+  "text": "these next bits don't depend on each other, run them at the same time",
+  "paraphrase_seq": 978
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "this step and everything hanging off it can go",
+  "paraphrase_seq": 979
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "after the enrichment step, we should really be validating before moving on",
+  "paraphrase_seq": 974
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.insert_before",
+  "regime": "indirect",
+  "text": "something needs to happen before this step \u2014 put the data pull ahead of it",
+  "paraphrase_seq": 975
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "this step's the old vendor call, swap it for the new one",
+  "paraphrase_seq": 976
+ },
+ {
+  "class_id": "mid_sequence_task",
+  "label": "prod.request_and_wait",
+  "regime": "indirect",
+  "text": "here we ask legal for their opinion and park until they answer",
+  "paraphrase_seq": 980
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "how many branches ran last time this executed",
+  "paraphrase_seq": 933
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "abstain.none_of_the_above",
+  "regime": "indirect",
+  "text": "colour these branches differently in the diagram",
+  "paraphrase_seq": 934
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.create_inclusive_region",
+  "regime": "indirect",
+  "text": "depending on what applies, run any of the checks that match \u2014 could be one, could be all",
+  "paraphrase_seq": 923
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.create_inclusive_region",
+  "regime": "spoken",
+  "text": "split this so whichever conditions hold, those branches run together",
+  "paraphrase_seq": 924
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.create_inclusive_region",
+  "regime": "verbose_manager",
+  "text": "we need the applicable screenings to run in whatever combination the case requires",
+  "paraphrase_seq": 925
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.create_inclusive_region",
+  "regime": "question_form",
+  "text": "can this fan out to every branch whose condition is true, not just one?",
+  "paraphrase_seq": 926
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.create_inclusive_region",
+  "regime": "rushed_ops",
+  "text": "conditional fan-out here, all matching branches",
+  "paraphrase_seq": 927
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.delete_subgraph",
+  "regime": "indirect",
+  "text": "collapse this whole conditional section, it's overkill",
+  "paraphrase_seq": 932
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "once the applicable checks rejoin, put a consolidation step right after this gate",
+  "paraphrase_seq": 928
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "drop a summary step after the inclusive gateway",
+  "paraphrase_seq": 929
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.insert_before",
+  "regime": "indirect",
+  "text": "before we fan out, snapshot the case state",
+  "paraphrase_seq": 930
+ },
+ {
+  "class_id": "or_gateway_node",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "swap this gateway for a different kind of split",
+  "paraphrase_seq": 931
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "which of the parallel legs usually finishes last",
+  "paraphrase_seq": 945
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_guard",
+  "regime": "indirect",
+  "text": "if this leg takes more than a day, time it out",
+  "paraphrase_seq": 940
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.attach_rearming_guard",
+  "regime": "indirect",
+  "text": "keep nudging this branch every couple of days until it finishes",
+  "paraphrase_seq": 941
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.create_multi_instance_region",
+  "regime": "indirect",
+  "text": "this bit inside the branch should repeat per document",
+  "paraphrase_seq": 942
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.delete_subgraph",
+  "regime": "spoken",
+  "text": "take this whole leg out of the parallel block",
+  "paraphrase_seq": 943
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "inside this leg, after the doc check, add a verification step",
+  "paraphrase_seq": 935
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "this branch needs another step after the current one",
+  "paraphrase_seq": 936
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_after",
+  "regime": "rushed_ops",
+  "text": "extra step in this lane, after the screen",
+  "paraphrase_seq": 937
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.insert_before",
+  "regime": "indirect",
+  "text": "before this branch does its thing, add a prep step",
+  "paraphrase_seq": 938
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "swap out this step in the parallel leg for the newer service",
+  "paraphrase_seq": 939
+ },
+ {
+  "class_id": "parallel_branch_interior",
+  "label": "prod.request_and_wait",
+  "regime": "indirect",
+  "text": "from inside this branch, ask custody for the confirmation and hold until it lands",
+  "paraphrase_seq": 944
+ },
+ {
+  "class_id": "send_task",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "resend the last notification for case 4411",
+  "paraphrase_seq": 1005
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "after we fire the notification, record it in the audit log",
+  "paraphrase_seq": 1003
+ },
+ {
+  "class_id": "send_task",
+  "label": "op.set_correlation_source",
+  "regime": "indirect",
+  "text": "tag the outbound request so the reply comes back to this case",
+  "paraphrase_seq": 1002
+ },
+ {
+  "class_id": "send_task",
+  "label": "prod.request_and_wait",
+  "regime": "indirect",
+  "text": "this shouldn't be fire-and-forget \u2014 send it and hold for the acknowledgement",
+  "paraphrase_seq": 1004
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "what normally triggers this workflow to start",
+  "paraphrase_seq": 954
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.connect",
+  "regime": "spoken",
+  "text": "wire the start straight into the triage step",
+  "paraphrase_seq": 953
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_inclusive_region",
+  "regime": "indirect",
+  "text": "at kickoff, run whichever intake checks apply to this client type",
+  "paraphrase_seq": 951
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.create_parallel_region",
+  "regime": "indirect",
+  "text": "straight out of the gate, run screening and doc collection side by side",
+  "paraphrase_seq": 950
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "first thing after kickoff should be a sanity check",
+  "paraphrase_seq": 946
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "right at the start, before anything else, collect the basics",
+  "paraphrase_seq": 947
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "rushed_ops",
+  "text": "step one after start: intake",
+  "paraphrase_seq": 948
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "op.insert_after",
+  "regime": "question_form",
+  "text": "can we make the very first action a duplicate check?",
+  "paraphrase_seq": 949
+ },
+ {
+  "class_id": "start_anchor",
+  "label": "prod.request_and_wait",
+  "regime": "indirect",
+  "text": "the workflow should open by asking the client for their pack and waiting on it",
+  "paraphrase_seq": 952
+ },
+ {
+  "class_id": "timer_wait",
+  "label": "abstain.none_of_the_above",
+  "regime": "spoken",
+  "text": "whats the point of this delay",
+  "paraphrase_seq": 1001
+ },
+ {
+  "class_id": "timer_wait",
+  "label": "op.delete_subgraph",
+  "regime": "rushed_ops",
+  "text": "no more waiting period, cut it",
+  "paraphrase_seq": 1000
+ },
+ {
+  "class_id": "timer_wait",
+  "label": "op.insert_after",
+  "regime": "indirect",
+  "text": "when the cooling-off period ends, go straight into confirmation",
+  "paraphrase_seq": 998
+ },
+ {
+  "class_id": "timer_wait",
+  "label": "op.replace_node",
+  "regime": "spoken",
+  "text": "make this a two-week wait instead of whatever it is now",
+  "paraphrase_seq": 999
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "abstain.none_of_the_above",
+  "regime": "question_form",
+  "text": "which branch does this take most often in production?",
+  "paraphrase_seq": 987
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.connect",
+  "regime": "indirect",
+  "text": "the failure route should end up back at the review step that already exists",
+  "paraphrase_seq": 985
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "indirect",
+  "text": "there's a third outcome we're not handling \u2014 high-risk cases need their own route",
+  "paraphrase_seq": 982
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "spoken",
+  "text": "add another way out of this decision for the edge cases",
+  "paraphrase_seq": 983
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.create_branch",
+  "regime": "rushed_ops",
+  "text": "new branch off this gate for rejects",
+  "paraphrase_seq": 984
+ },
+ {
+  "class_id": "xor_gateway",
+  "label": "op.insert_after",
+  "regime": "spoken",
+  "text": "after the decision resolves, log which way it went",
+  "paraphrase_seq": 986
+ }
+]
