@@ -1,0 +1,106 @@
+[
+  {
+    "base": "modernbert-base",
+    "bundle_identity": "slm.trained.modernbert-base@8949b909",
+    "n_eval": 118,
+    "per_class_accuracy": {
+      "and_gateway_node": {
+        "accuracy": 0.75,
+        "correct": 3,
+        "total": 4
+      },
+      "boundary_error": {
+        "accuracy": 0.75,
+        "correct": 3,
+        "total": 4
+      },
+      "data_object": {
+        "accuracy": 1.0,
+        "correct": 4,
+        "total": 4
+      },
+      "empty_graph": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6
+      },
+      "end_anchor": {
+        "accuracy": 1.0,
+        "correct": 4,
+        "total": 4
+      },
+      "ffi_service_task": {
+        "accuracy": 0.5,
+        "correct": 2,
+        "total": 4
+      },
+      "guard_node": {
+        "accuracy": 1.0,
+        "correct": 8,
+        "total": 8
+      },
+      "guarded_task": {
+        "accuracy": 1.0,
+        "correct": 9,
+        "total": 9
+      },
+      "human_wait": {
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
+        "total": 6
+      },
+      "message_wait": {
+        "accuracy": 0.7777777777777778,
+        "correct": 7,
+        "total": 9
+      },
+      "mi_node": {
+        "accuracy": 0.5,
+        "correct": 3,
+        "total": 6
+      },
+      "mid_sequence_task": {
+        "accuracy": 0.7222222222222222,
+        "correct": 13,
+        "total": 18
+      },
+      "or_gateway_node": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "total": 4
+      },
+      "parallel_branch_interior": {
+        "accuracy": 0.8571428571428571,
+        "correct": 6,
+        "total": 7
+      },
+      "send_task": {
+        "accuracy": 1.0,
+        "correct": 7,
+        "total": 7
+      },
+      "start_anchor": {
+        "accuracy": 0.8333333333333334,
+        "correct": 5,
+        "total": 6
+      },
+      "timer_wait": {
+        "accuracy": 0.75,
+        "correct": 3,
+        "total": 4
+      },
+      "xor_gateway": {
+        "accuracy": 0.875,
+        "correct": 7,
+        "total": 8
+      }
+    },
+    "tier0_top1_accuracy_baseline": 0.4322033898305085,
+    "top1_end_to_end": 0.8050847457627118,
+    "top1_end_to_end_correct": 95,
+    "top1_given_inclusion": 0.8050847457627118,
+    "top1_given_inclusion_correct": 95,
+    "top1_given_inclusion_total": 118,
+    "uplift_vs_tier0_top1_pp": 37.28813559322033
+  }
+]

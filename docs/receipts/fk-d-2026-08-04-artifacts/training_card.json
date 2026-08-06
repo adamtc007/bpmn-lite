@@ -1,0 +1,29 @@
+{
+  "base": "modernbert-base",
+  "repo": "answerdotai/ModernBERT-base",
+  "revision": "8949b909ec900327062f0ebf497f51aef5e6f0c8",
+  "hidden_size": 768,
+  "pooling": "mean",
+  "max_length": 256,
+  "epochs": 3,
+  "lr": 2e-05,
+  "grad_accum": 16,
+  "seed": 20260728,
+  "n_train": 2638,
+  "n_val": 152,
+  "best_epoch": 1,
+  "best_val_loss": 1.081084602757504,
+  "best_val_acc": 0.6907894736842105,
+  "final_train_acc": 0.9075056861258529,
+  "final_val_acc": 0.625,
+  "final_val_loss": 1.354806096930253,
+  "corpus_manifest": {
+    "corpus_version": "synthetic-v2-beta",
+    "seed": 20260728,
+    "n_records": 3097,
+    "n_train_families": 132,
+    "n_val_families": 16,
+    "n_test_families": 17
+  },
+  "timestamp": "2026-08-04T12:25:09Z"
+}
