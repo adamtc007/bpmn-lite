@@ -1,6 +1,6 @@
 # EOP-BRIEF-FK-E-001 — xor/or gateway wording adjudication
 
-**Status: awaiting Adam's ruling. Blocks: any corpus regeneration / retrain (WS-4.2 of EOP-PLAN-SEM-RESOLVER-001).**
+**Status: RULED — option (a), Adam, 2026-08-06.** The description audit extends to the `or_gateway` candidate family; Adam adjudicates both families' text together (OR draft in §"OR-family draft" below when authored); then one single-variable retrain — adjudicated wording first on the committed 178-family split, the re-split as a separate scored step. Nothing retrains until then and until the WS-1 funnel has real turns (I-3).
 
 ## The question
 
@@ -26,5 +26,30 @@ This removes the skew (the only clean way to measure the wording, per §10.2's o
 
 ## What a ruling on (a) needs from Adam
 
-- Approve the XOR trio's new wording as-adjudicated (or edit it), review the OR-family wording when drafted.
+- Approve the XOR trio's new wording as-adjudicated (or edit it), review the OR-family wording below.
 - Nothing retrains until the WS-1 funnel exists (invariant I-3) — this ruling sequences the corpus work; it does not start it.
+
+## OR-family draft (2026-08-06) — for adjudication
+
+Principle (same as the XOR trio): each description states its distinguishing **routing consequence** relative to its confusable siblings. The OR class's two confusion edges are AND (`op.create_parallel_region`: every branch always runs) and XOR (`op.create_branch`: exactly one route wins). The XOR trio's adjudicated text is NOT touched; `op.create_parallel_region` was never part of that trio and is sharpened here as the other half of the OR/AND edge.
+
+**`op.create_inclusive_region`** (the collapsed `or_gateway_node` class):
+
+| field | current | proposed |
+|---|---|---|
+| intent_summary | Create conditional branches where one or more named outcomes may run | Create conditional branches where every branch whose condition holds runs — one, some, or all together, never none |
+| applicability | The anchor is a non-terminal flow node and each branch has a governed condition | The anchor is a non-terminal flow node and each named branch carries a governed condition |
+| effect | Creates a matched inclusive split/join region with non-empty selection | Creates a matched inclusive split/join region whose join waits for exactly the subset of branches selected; at least one branch always runs, unlike an exclusive gateway's single winning route |
+
+**`op.create_parallel_region`** (the AND half of the OR/AND edge):
+
+| field | current | proposed |
+|---|---|---|
+| intent_summary | Run every declared branch concurrently and join them all | Run every declared branch concurrently — all branches always run, with no conditions — and join them all |
+| effect | Creates a matched parallel split/join region | Creates a matched parallel split/join region that always executes every branch, unlike an inclusive region's condition-selected subset |
+
+Rationale anchors: the settled OR-gateway decision (named-subset output types, empty set excluded) is what "never none" / "at least one branch always runs" states in candidate language; the join-subset sentence gives the model the interlocking consequence, which is the fact that separates OR from both siblings.
+
+Per the standing rule, adopting any of this text obligates corpus regeneration at the retrain — which is exactly step 1 of the ruled single-variable protocol.
+
+**Adjudication:** ☐ adopt as drafted / ☐ adopt with edits (record inline) / ☐ reject, keep current OR text

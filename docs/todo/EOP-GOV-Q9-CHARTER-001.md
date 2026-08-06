@@ -52,7 +52,7 @@ Family-level splits per the committed `split_manifest.json` discipline: no parap
 On ratification the existing 30k corpus (`corpus-30k` provenance) comes under this charter:
 
 - **Training use:** permitted only after a lineage pass records its provenance and the prohibited-fields lint runs over it.
-- **Evaluation use (the tier-0 baseline measurement flagged in EOP-PLAN-BPMN-DESIGN-003):** Adam's timing call, recorded here at ratification: ☐ approved immediately / ☐ after lineage pass / ☐ deferred.
+- **Evaluation use (the tier-0 baseline measurement flagged in EOP-PLAN-BPMN-DESIGN-003):** Adam's timing call, recorded 2026-08-06: **☑ after lineage pass** — the same gate as training use; once the 30k's provenance is recorded and the prohibited-fields lint has run over it, evaluation use is open.
 
 ## 10. Mechanical effect of ratification
 
@@ -63,4 +63,4 @@ On ratification the existing 30k corpus (`corpus-30k` provenance) comes under th
 
 ## Ratification
 
-- [x] Ratified by Adam — date: 2026-08-06 — 30k evaluation-use timing choice (§9): **pending (not yet chosen; 30k evaluation use remains blocked until recorded here)**
+- [x] Ratified by Adam — date: 2026-08-06 — 30k evaluation-use timing choice (§9): **after lineage pass** (chosen 2026-08-06)

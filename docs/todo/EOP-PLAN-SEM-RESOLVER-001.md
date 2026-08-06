@@ -103,13 +103,13 @@ The review's ten risks become permanent tests, distributed: 1–3 → WS-5; 4 (e
 
 | Fork | Question | Blocks | Status |
 |---|---|---|---|
-| FK-A | Q9 capture charter — ratify scope/retention/provenance text (to be drafted WS-1.1) | Gates 1 & 4; all real-data evidence | Open — schedule-critical |
+| FK-A | Q9 capture charter | Gates 1 & 4 | **Ratified 2026-08-06** (EOP-GOV-Q9-CHARTER-001 v1.0; live in f8fb444; §9 30k timing = after lineage pass) |
 | FK-B | G3 per-regime threshold values (proposal pack from WS-1.5) | Gate 4 / any promotion | Open |
 | FK-C | `bpmn.compile`(XML) vs `define-template`(DSL plan body): one bridge contract | WS-2.B | Open |
-| FK-D | Uncommitted 2026-08-04 retrain (top-1 0.8051 vs 0.8390; `or_gateway_node` 0/4): investigate / commit-as-receipt / discard | WS-0.3, I-3 | Open — unanswered from status review |
-| FK-E | `xor_gateway` wording adjudication (bake-off §10.2) before corpus regeneration | WS-4.2 | Open |
+| FK-D | Uncommitted 2026-08-04 retrain disposition | WS-0.3, I-3 | **Disposed 2026-08-06** — investigated, discarded with receipt `docs/receipts/fk-d-retrain-2026-08-04-comparison.md` |
+| FK-E | Gateway wording adjudication (bake-off §10.2) before corpus regeneration | WS-4.2 | **Ruled 2026-08-06: option (a)** — extend audit to OR family + single-variable retrain; OR-family text drafted in the brief, awaiting Adam's adjudication |
 | FK-F | DSL-coverage scope: which constructs get new designer-graph operations vs pack-only candidates vs ruled out of authoring scope | WS-2.C | Open |
-| FK-G | Merge the three refactor branches to main now (v0.2.2 baseline) vs hold for external promotion | WS-0.1 | Open |
+| FK-G | Merge the three refactor branches to main now vs hold | WS-0.1 | **Ruled + executed 2026-08-06** — all three mains at the v0.2.2 baseline; ob-poc pin-alignment merged (9daf876c) |
 | FK-H | External promotion prerequisites (P8-01: registry, non-prod env, traffic corpus, tolerance policy, dashboards) — also the sole blocker on shared-crates Gates 8/9 and the v0.3.0 shim deletion | Deployment legs only | Open — infra decision |
 
 ## 7. Verification
