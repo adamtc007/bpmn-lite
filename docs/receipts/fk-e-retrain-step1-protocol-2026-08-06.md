@@ -33,3 +33,22 @@ returns to Adam with both runs' numbers.
   both corpora generated and archived; control training started.
 - Pending: control train+score → treatment train+score → comparison
   table + adoption call.
+
+## Finding: score_trained_bundle is skew-invalid for v3 bundles (2026-08-06)
+
+Control run scored 0.3305 through `score_trained_bundle` but **0.7588 on
+the stored-pair test split** (340 unseen-family records, exact training
+text contract, `train_py/eval_stored_pairs.py`). The Rust scorer drives
+the corpus_v2 eval textualization against bundles trained on the v3
+stored pair sides — a train/score text skew introduced silently by the
+lineage merge. All historical eval_scores comparisons through that
+example are invalid for v3-contract bundles. Interim ruling: stored-pair
+scoring is the valid instrument until the Rust scorer is rebuilt against
+the v3 eval closure (carry-over; the missing admission check is
+"scorer pair_serializer_hash == bundle card pair_serializer_hash" —
+exactly the drift gate shape the estate already uses elsewhere).
+
+Control (old wording), component split, test n=340: top1 0.7588;
+gateway classes: or_gateway_node 11/18, xor_gateway 12/13,
+and_gateway_node 10/12; weakest: boundary_error 1/7.
+Artifacts: /tmp/retrain-step1/control-out/ (weights, card, per-class).
