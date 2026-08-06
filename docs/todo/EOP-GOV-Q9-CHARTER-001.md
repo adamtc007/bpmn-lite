@@ -1,7 +1,7 @@
 # EOP-GOV-Q9-CHARTER-001 — Q9 data-governance charter
 
-**Status: DRAFT v0.1 — awaiting Adam's ratification. Nothing is enabled by this document existing.**
-**Charter reference string (the literal `on_under_charter()` argument once ratified):** `Q9-CHARTER-001@v1.0`
+**Status: RATIFIED v1.0 — Adam, 2026-08-06.**
+**Charter reference string (the literal `on_under_charter()` argument):** `Q9-CHARTER-001@v1.0`
 **Governs:** all live-session utterance capture in the BPMN Designer, and — retrospectively — any training or evaluation use of the existing 30k corpus (per V&S D17). Scope ceiling per D18: BPMN Designer design sessions only; nothing here extends to onboarding/KYC pack surfaces.
 
 ## 1. Scope and subjects
@@ -63,4 +63,4 @@ On ratification the existing 30k corpus (`corpus-30k` provenance) comes under th
 
 ## Ratification
 
-- [ ] Ratified by Adam — date: ____________ — 30k evaluation-use timing choice (§9): ____________
+- [x] Ratified by Adam — date: 2026-08-06 — 30k evaluation-use timing choice (§9): **pending (not yet chosen; 30k evaluation use remains blocked until recorded here)**

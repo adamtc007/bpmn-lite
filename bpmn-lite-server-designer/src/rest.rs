@@ -114,6 +114,15 @@ pub struct DesignerState {
     /// captures the full closure via `utterance_engine::dev_capture`
     /// (always compiled, structurally distinct from the Q9-gated path).
     dev_capture: Mutex<HashMap<Uuid, utterance_engine::dev_capture::DevSessionStore>>,
+    /// Q9 charter-governed live capture (EOP-GOV-Q9-CHARTER-001,
+    /// ratified 2026-08-06). `Some` ONLY when the designated deployment
+    /// (`scripts/run-designer-q9-capture.sh`) supplies BOTH
+    /// `Q9_CHARTER_REF` (must equal the ratified reference exactly) and
+    /// `Q9_CAPTURE_DIR` at startup; misconfiguration refuses startup
+    /// (fail closed). `None` = compiled-but-off: every capture call
+    /// reports `suppressed_no_charter`, visibly, per interaction.
+    #[cfg(feature = "q9-capture")]
+    q9_capture: Option<Mutex<utterance_engine::capture::CapturePipeline>>,
     /// Utterance-derived pending proposals awaiting human ratification
     /// (the propose → preview → ratify → apply loop's middle state).
     ///
@@ -190,12 +199,54 @@ impl DesignerState {
             mapper_rollout,
             session_locks: Mutex::new(HashMap::new()),
             dev_capture: Mutex::new(HashMap::new()),
+            #[cfg(feature = "q9-capture")]
+            q9_capture: Self::load_q9_capture_from_env()?,
             proposals: Mutex::new(HashMap::new()),
             #[cfg(feature = "candle-probe")]
             tier1: Self::load_tier1_from_env(),
             #[cfg(feature = "embed")]
             embed_tier0: Self::load_embed_tier0(),
         }))
+    }
+
+    /// Q9 capture startup wiring. Unlike the tier-1 model load (which
+    /// DEGRADES on failure), capture misconfiguration REFUSES startup:
+    /// an operator who explicitly requested charter-governed capture
+    /// must never silently run without it. Env unset → compiled-but-off
+    /// (`None`), logged. In tests: always off — hermetic regardless of
+    /// the developer's shell environment.
+    #[cfg(feature = "q9-capture")]
+    fn load_q9_capture_from_env(
+    ) -> Result<Option<Mutex<utterance_engine::capture::CapturePipeline>>, anyhow::Error> {
+        #[cfg(test)]
+        {
+            return Ok(None);
+        }
+        #[cfg(not(test))]
+        {
+            let charter = match std::env::var("Q9_CHARTER_REF") {
+                Ok(c) if !c.trim().is_empty() => c,
+                _ => {
+                    tracing::info!(
+                        "Q9_CHARTER_REF unset — q9-capture compiled but OFF \
+                         (every capture call will report suppressed_no_charter)"
+                    );
+                    return Ok(None);
+                }
+            };
+            let dir = std::env::var("Q9_CAPTURE_DIR").map_err(|_| {
+                anyhow::anyhow!(
+                    "Q9_CHARTER_REF is set but Q9_CAPTURE_DIR is not — refusing to start: \
+                     charter-governed capture must be durable (EOP-GOV-Q9-CHARTER-001 §4/§5)"
+                )
+            })?;
+            let pipeline = utterance_engine::capture::CapturePipeline::under_ratified_charter(
+                &charter,
+                std::path::Path::new(&dir),
+            )?;
+            tracing::info!(charter = %charter.trim(), dir = %dir, "Q9 capture LIVE under ratified charter");
+            Ok(Some(Mutex::new(pipeline)))
+        }
     }
 
     /// Startup bundle load (fail-closed DEGRADATION, not failure): env
@@ -3892,23 +3943,32 @@ async fn session_utterance_endpoint(
         }
     };
 
-    // Corpus capture: switch OFF until GOV.1 ratifies (D17) — evaluated
-    // per interaction so the suppression is a recorded fact, not an
+    // Corpus capture under the ratified Q9 charter (GOV.1 ratified
+    // 2026-08-06, EOP-GOV-Q9-CHARTER-001): live iff the designated
+    // deployment configured the state pipeline at startup; otherwise
+    // the per-interaction suppression stays a recorded fact, not an
     // assumed one. DIR-004 Phase 1.2: outside `q9-capture`, there is no
     // module to call here at all — `"not_compiled"` reports that as
-    // plainly as `"suppressed_no_charter"` reported the old always-off
-    // runtime state, but it is now also a build-time fact, not just a
-    // runtime one.
+    // plainly as `"suppressed_no_charter"` reports the compiled-but-off
+    // runtime state. Live turns land in the Evaluation class (charter
+    // §3/§6: training data enters only via adjudicated corrections).
     #[cfg(feature = "q9-capture")]
-    let capture_state =
-        match CapturePipeline::off().capture(utterance_engine::capture::CaptureEvent {
+    let capture_state = {
+        let event = utterance_engine::capture::CaptureEvent {
             raw_utterance: body.text.clone(),
             record: record.clone(),
             dataset: utterance_engine::capture::DatasetClass::Evaluation,
-        }) {
+        };
+        let outcome = match demo.q9_capture.as_ref() {
+            Some(pipeline) => pipeline.lock().unwrap().capture(event),
+            None => CapturePipeline::off().capture(event),
+        };
+        match outcome {
             CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
             CaptureOutcome::Stored(_) => "stored",
-        };
+            CaptureOutcome::PersistFailed(_) => "persist_failed",
+        }
+    };
     #[cfg(not(feature = "q9-capture"))]
     let capture_state = "not_compiled";
 

@@ -49,7 +49,9 @@
 set -uo pipefail
 
 ALLOWLIST_FILES=(
-  # (empty -- see header. Add exactly one file per ratified exception.)
+  # EOP-GOV-Q9-CHARTER-001 (Q9-CHARTER-001@v1.0, ratified by Adam
+  # 2026-08-06): the ONE designated capture deployment surface.
+  "scripts/run-designer-q9-capture.sh"
 )
 
 fail=0
