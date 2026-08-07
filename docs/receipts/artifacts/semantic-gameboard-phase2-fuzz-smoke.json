@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "phase": "semantic-gameboard-phase2",
+  "date": "2026-08-07",
+  "toolchain": "nightly",
+  "build_target_directory": "/tmp/bpmn-phase2-refmodel-nightly.qxRNvA/target",
+  "initial_cache_mismatch": {
+    "result": "infrastructure_retry",
+    "reason": "ignored fuzz cache contained artifacts from a different nightly snapshot",
+    "committed_artifacts_modified": false
+  },
+  "targets": [
+    {
+      "project": "utterance-engine/fuzz",
+      "target": "legal_move_enumeration",
+      "runs": 64,
+      "max_len": 64,
+      "result": "pass",
+      "coverage_edges": 6885,
+      "feature_edges": 16053,
+      "final_corpus_entries": 38,
+      "peak_rss_mb": 370,
+      "semantic_counters": {
+        "authoritative_graph_unchanged": true,
+        "anchor_shapes": ["whole_graph", "start", "task", "end"],
+        "partial_binding": true,
+        "canonical_reconstruction": true,
+        "wire_round_trip": true,
+        "independent_reference_model": true
+      }
+    },
+    {
+      "project": "utterance-engine/fuzz",
+      "target": "preview_compilation",
+      "runs": 64,
+      "max_len": 64,
+      "result": "pass",
+      "coverage_edges": 4826,
+      "feature_edges": 16754,
+      "final_corpus_entries": 55,
+      "peak_rss_mb": 131,
+      "semantic_counters": {
+        "complete_binding": true,
+        "compiler_admitted": true,
+        "stale_refused": true,
+        "deterministic_identity": true,
+        "preview_replay_equal": true,
+        "authoritative_graph_unchanged_before_ratification": true,
+        "independent_reference_model_after_every_tape_operation": true,
+        "correction_linkage_validated": true,
+        "executable_candidate_shapes": 19,
+        "attempt_outcomes": [
+          "applied",
+          "incomplete",
+          "inapplicable",
+          "stale",
+          "compiler_refused",
+          "rejected_by_user",
+          "corrected"
+        ]
+      }
+    }
+  ]
+}

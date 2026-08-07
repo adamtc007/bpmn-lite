@@ -2514,11 +2514,14 @@ dependencies = [
 name = "utterance-engine-fuzz"
 version = "0.0.0"
 dependencies = [
+ "bpmn-lite-compiler",
  "candle-core",
+ "designer-graph",
  "libfuzzer-sys",
  "semantic-decision-contracts",
  "serde_json",
  "utterance-engine",
+ "uuid",
 ]
 
 [[package]]

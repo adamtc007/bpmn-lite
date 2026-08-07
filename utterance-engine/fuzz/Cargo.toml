@@ -15,6 +15,9 @@ serde_json = "1"
 utterance-engine = { path = "..", features = ["candle-probe"] }
 candle-core = "0.8"
 semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "bc547723e6831cdb46fb8028071db3f537129d77" }
+designer-graph = { path = "../../designer-graph" }
+bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
+uuid = "1"
 
 [[bin]]
 name = "semantic_board_decode"
@@ -40,6 +43,20 @@ bench = false
 [[bin]]
 name = "v3_route_admission"
 path = "fuzz_targets/v3_route_admission.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legal_move_enumeration"
+path = "fuzz_targets/legal_move_enumeration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "preview_compilation"
+path = "fuzz_targets/preview_compilation.rs"
 test = false
 doc = false
 bench = false

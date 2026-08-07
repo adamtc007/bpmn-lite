@@ -12,7 +12,7 @@ use semantic_decision_contracts::{
     NegativeContrast, PhraseEvidence, ResolvedPosition, SemanticDecisionBoard, SnapshotIdentity,
 };
 use semantic_pack::{
-    CapabilityId, CompiledCapability, CompiledPack, ConfigValue, PackBytes, admit_pack,
+    admit_pack, CapabilityId, CompiledCapability, CompiledPack, ConfigValue, PackBytes,
 };
 
 pub(crate) const BPMN_SEMANTIC_SCHEMA_VERSION: u32 = 1;
@@ -40,6 +40,7 @@ impl BinderSupport {
 pub(crate) struct BpmnCandidateSpec {
     pub semantic: CandidateSemanticSlice,
     pub binder_support: BinderSupport,
+    pub adapter_binding: String,
 }
 
 fn compiled_semantic_pack() -> &'static CompiledPack {
@@ -126,6 +127,7 @@ fn compiled_candidate_spec(capability: &CompiledCapability) -> BpmnCandidateSpec
             adapter_payload_hash,
         },
         binder_support,
+        adapter_binding: capability.adapter_binding.as_str().to_string(),
     }
 }
 
@@ -141,6 +143,10 @@ fn compiled_spec_by_id(canonical_id: &str) -> Option<BpmnCandidateSpec> {
     compiled_semantic_pack()
         .capability(&id)
         .map(compiled_candidate_spec)
+}
+
+pub(crate) fn candidate_spec_by_canonical_id(canonical_id: &str) -> Option<BpmnCandidateSpec> {
+    compiled_spec_by_id(canonical_id)
 }
 
 pub(crate) fn candidate_spec(candidate: CandidateId) -> Option<BpmnCandidateSpec> {
@@ -293,6 +299,25 @@ mod tests {
     }
 
     #[test]
+    fn every_executable_semantic_candidate_has_one_mutation_implementation() {
+        let executable = all_specs()
+            .into_iter()
+            .filter(|spec| spec.binder_support != BinderSupport::NotRepresentable)
+            .map(|spec| spec.semantic.canonical_id.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        let implemented = crate::legal_moves::MATERIALIZED_CANDIDATE_IDS
+            .iter()
+            .map(|candidate| (*candidate).to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(executable, implemented);
+        assert_eq!(
+            implemented.len(),
+            crate::legal_moves::MATERIALIZED_CANDIDATE_IDS.len(),
+            "the mutation table must not contain duplicate candidate identities"
+        );
+    }
+
+    #[test]
     fn nearest_neighbour_contrasts_are_reciprocal() {
         let by_id = all_specs()
             .into_iter()
@@ -312,13 +337,11 @@ mod tests {
         ];
         for (left, right) in pairs {
             for (source, target) in [(left, right), (right, left)] {
-                assert!(
-                    by_id[source]
-                        .semantic
-                        .negative_contrasts
-                        .iter()
-                        .any(|contrast| contrast.candidate_id.as_str() == target)
-                );
+                assert!(by_id[source]
+                    .semantic
+                    .negative_contrasts
+                    .iter()
+                    .any(|contrast| contrast.candidate_id.as_str() == target));
             }
         }
     }

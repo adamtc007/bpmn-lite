@@ -166,3 +166,16 @@ jobs:
           cd utterance-engine/fuzz
           cargo fuzz run v3_route_admission "$smoke_corpus" -- \
             -runs=64 -max_len=1024 -print_final_stats=1
+      - name: Semantic Gameboard Phase 2 smokes
+        run: |
+          enumeration_corpus=$(mktemp -d)
+          preview_corpus=$(mktemp -d)
+          cp utterance-engine/fuzz/seeds/legal_move_enumeration/linear-anchored.bin \
+            "$enumeration_corpus/seed"
+          cp utterance-engine/fuzz/seeds/preview_compilation/insert-after.bin \
+            "$preview_corpus/seed"
+          cd utterance-engine/fuzz
+          cargo fuzz run legal_move_enumeration "$enumeration_corpus" -- \
+            -runs=64 -max_len=64 -print_final_stats=1
+          cargo fuzz run preview_compilation "$preview_corpus" -- \
+            -runs=64 -max_len=64 -print_final_stats=1

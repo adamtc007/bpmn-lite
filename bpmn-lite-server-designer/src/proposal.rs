@@ -5,8 +5,9 @@
 //! missing slots. Graph operations and fresh node identities are created only
 //! after every required slot has resolved.
 
-use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
-use designer_graph::ops::{GuardTrigger, Operation, RegionBranch};
+use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode};
+use designer_graph::ops::Operation;
+#[cfg(test)]
 use designer_graph::productions;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
@@ -27,8 +28,6 @@ pub(crate) enum ProposalError {
     Contract(String),
     #[error("invalid slot answer: {0}")]
     InvalidAnswer(String),
-    #[error("proposal workbook is not ready for materialization: {0:?}")]
-    NotReady(ProposalStatus),
     #[error("proposal graph resolution failed: {0}")]
     Graph(String),
     #[error("proposal materialization failed: {0}")]
@@ -50,10 +49,12 @@ pub(crate) struct BoundProposal {
     pub description: String,
 }
 
+#[cfg(test)]
 fn fresh_key() -> NodeKey {
     NodeKey(Uuid::new_v4())
 }
 
+#[cfg(test)]
 fn task(name: &str) -> IRNode {
     IRNode::ServiceTask {
         id: name.to_string(),
@@ -62,6 +63,7 @@ fn task(name: &str) -> IRNode {
     }
 }
 
+#[cfg(test)]
 fn end_node(id: String) -> IRNode {
     IRNode::End {
         id,
@@ -543,467 +545,20 @@ pub(crate) fn apply_explicit_answers(
     Ok(workbook)
 }
 
-fn value<'a>(workbook: &'a ProposalWorkbook, name: &str) -> Result<&'a SlotValue, ProposalError> {
-    workbook
-        .slots()
-        .iter()
-        .find(|slot| slot.name == name)
-        .and_then(|slot| match &slot.value {
-            SlotValueState::Resolved(value) => Some(value),
-            SlotValueState::Missing => None,
-        })
-        .ok_or_else(|| ProposalError::Materialization(format!("slot '{name}' is unresolved")))
-}
-
-fn optional_value<'a>(workbook: &'a ProposalWorkbook, name: &str) -> Option<&'a SlotValue> {
-    workbook
-        .slots()
-        .iter()
-        .find(|slot| slot.name == name)
-        .and_then(|slot| match &slot.value {
-            SlotValueState::Resolved(value) => Some(value),
-            SlotValueState::Missing => None,
-        })
-}
-
-fn identifier(workbook: &ProposalWorkbook, name: &str) -> Result<String, ProposalError> {
-    match value(workbook, name)? {
-        SlotValue::Identifier(value) => Ok(value.clone()),
-        _ => Err(ProposalError::Materialization(format!(
-            "slot '{name}' is not an identifier"
-        ))),
-    }
-}
-
-fn node_key(
-    dag: &DesignerDag,
-    workbook: &ProposalWorkbook,
-    name: &str,
-) -> Result<NodeKey, ProposalError> {
-    match value(workbook, name)? {
-        SlotValue::NodeReference(value) => dag.key_for_bpmn_id(value).ok_or_else(|| {
-            ProposalError::Graph(format!("node reference '{value}' no longer exists"))
-        }),
-        _ => Err(ProposalError::Materialization(format!(
-            "slot '{name}' is not a node reference"
-        ))),
-    }
-}
-
-fn data_reference(workbook: &ProposalWorkbook, name: &str) -> Result<String, ProposalError> {
-    match value(workbook, name)? {
-        SlotValue::DataReference(value) => Ok(value.clone()),
-        _ => Err(ProposalError::Materialization(format!(
-            "slot '{name}' is not a data reference"
-        ))),
-    }
-}
-
-fn count(workbook: &ProposalWorkbook, name: &str) -> Result<u32, ProposalError> {
-    match value(workbook, name)? {
-        SlotValue::Count(value) => Ok(*value),
-        _ => Err(ProposalError::Materialization(format!(
-            "slot '{name}' is not a count"
-        ))),
-    }
-}
-
-fn duration(workbook: &ProposalWorkbook, name: &str) -> Result<u64, ProposalError> {
-    match value(workbook, name)? {
-        SlotValue::DurationMillis(value) => Ok(*value),
-        _ => Err(ProposalError::Materialization(format!(
-            "slot '{name}' is not a duration"
-        ))),
-    }
-}
-
 /// Convert a complete workbook into the exhaustive Designer operation shape.
-/// This is the only function in the proposal path that mints graph identities.
+/// The capability facade owns deterministic identity derivation and exhaustive
+/// mutation semantics; this application wrapper retains its existing internal
+/// storage shape without becoming a second binder implementation.
 pub(crate) fn materialize_operations(
     dag: &DesignerDag,
     workbook: &ProposalWorkbook,
 ) -> Result<BoundProposal, ProposalError> {
-    if workbook.status() != ProposalStatus::ReadyForDryRun {
-        return Err(ProposalError::NotReady(workbook.status()));
-    }
-    let candidate = workbook.candidate_id.as_str();
-    let bound = match candidate {
-        "op.append_node" | "op.insert_after" | "op.insert_before" | "op.replace_node" => {
-            let slot = if candidate == "op.replace_node" {
-                "replacement"
-            } else {
-                "node"
-            };
-            let name = identifier(workbook, slot)?;
-            let key = fresh_key();
-            let node = task(&name);
-            let (operation, description) = match candidate {
-                "op.append_node" => (
-                    Operation::AppendNode {
-                        anchor: node_key(dag, workbook, "anchor")?,
-                        key,
-                        node,
-                        edge_id: format!("flow_{name}"),
-                    },
-                    format!("append service task '{name}'"),
-                ),
-                "op.insert_after" => (
-                    Operation::InsertAfter {
-                        anchor: node_key(dag, workbook, "anchor")?,
-                        key,
-                        node,
-                        edge_id: format!("flow_{name}"),
-                    },
-                    format!("insert service task '{name}' after the selection"),
-                ),
-                "op.insert_before" => (
-                    Operation::InsertBefore {
-                        anchor: node_key(dag, workbook, "anchor")?,
-                        key,
-                        node,
-                        edge_id: format!("flow_{name}"),
-                    },
-                    format!("insert service task '{name}' before the selection"),
-                ),
-                _ => (
-                    Operation::ReplaceNode {
-                        target: node_key(dag, workbook, "target")?,
-                        key,
-                        node,
-                    },
-                    format!("replace the selection with service task '{name}'"),
-                ),
-            };
-            BoundProposal {
-                ops: vec![operation],
-                description,
-            }
-        }
-        "op.connect" => {
-            let condition = match optional_value(workbook, "condition") {
-                Some(SlotValue::Condition(value)) => Some(parse_condition(value)?),
-                Some(_) => {
-                    return Err(ProposalError::Materialization(
-                        "slot 'condition' has the wrong kind".to_string(),
-                    ));
-                }
-                None => None,
-            };
-            BoundProposal {
-                ops: vec![Operation::Connect {
-                    from: node_key(dag, workbook, "from")?,
-                    to: node_key(dag, workbook, "to")?,
-                    edge_id: format!("flow_{}", workbook.workbook_id.as_str()),
-                    condition,
-                }],
-                description: "connect the two declared existing nodes".to_string(),
-            }
-        }
-        "op.create_branch" => {
-            let outcome = identifier(workbook, "outcome")?;
-            BoundProposal {
-                ops: vec![Operation::CreateBranch {
-                    gateway: node_key(dag, workbook, "gateway")?,
-                    target: node_key(dag, workbook, "target")?,
-                    edge_id: format!("flow_{outcome}"),
-                    condition: Some(ConditionExpr {
-                        flag_name: outcome.clone(),
-                        op: ConditionOp::Eq,
-                        literal: ConditionLiteral::Bool(true),
-                    }),
-                }],
-                description: format!("create the '{outcome}' outcome branch"),
-            }
-        }
-        "op.create_parallel_region" => {
-            let branch_count = count(workbook, "branch_count")?;
-            if !(2..=32).contains(&branch_count) {
-                return Err(ProposalError::Materialization(
-                    "parallel branch_count must be in 2..=32".to_string(),
-                ));
-            }
-            let branches = (1..=branch_count)
-                .map(|index| {
-                    let name = format!("parallel_branch_{index}");
-                    RegionBranch {
-                        key: fresh_key(),
-                        node: task(&name),
-                        in_edge_id: format!("flow_in_{name}"),
-                        out_edge_id: format!("flow_out_{name}"),
-                        condition: None,
-                    }
-                })
-                .collect();
-            let base = workbook.workbook_id.as_str();
-            BoundProposal {
-                ops: vec![Operation::CreateParallelRegion {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    fork_key: fresh_key(),
-                    fork_node_id: format!("parallel_{base}_fork"),
-                    join_key: fresh_key(),
-                    join_node_id: format!("parallel_{base}_join"),
-                    entry_edge_id: format!("flow_parallel_{base}"),
-                    branches,
-                }],
-                description: format!("create {branch_count} parallel branches"),
-            }
-        }
-        "op.create_inclusive_region" => {
-            let branch_count = count(workbook, "branch_count")?;
-            if !(2..=32).contains(&branch_count) {
-                return Err(ProposalError::Materialization(
-                    "inclusive branch_count must be in 2..=32".to_string(),
-                ));
-            }
-            let conditions = match value(workbook, "conditions")? {
-                SlotValue::Condition(value) => value
-                    .split([',', ';'])
-                    .map(parse_condition)
-                    .collect::<Result<Vec<_>, _>>()?,
-                _ => {
-                    return Err(ProposalError::Materialization(
-                        "slot 'conditions' has the wrong kind".to_string(),
-                    ));
-                }
-            };
-            if conditions.len() != branch_count as usize {
-                return Err(ProposalError::Materialization(format!(
-                    "inclusive region declares {branch_count} branches but {} conditions",
-                    conditions.len()
-                )));
-            }
-            let branches = conditions
-                .into_iter()
-                .enumerate()
-                .map(|(index, condition)| {
-                    let name = format!("inclusive_{}_{}", condition.flag_name, index + 1);
-                    RegionBranch {
-                        key: fresh_key(),
-                        node: task(&name),
-                        in_edge_id: format!("flow_in_{name}"),
-                        out_edge_id: format!("flow_out_{name}"),
-                        condition: Some(condition),
-                    }
-                })
-                .collect();
-            let base = workbook.workbook_id.as_str();
-            BoundProposal {
-                ops: vec![Operation::CreateInclusiveRegion {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    fork_key: fresh_key(),
-                    fork_node_id: format!("inclusive_{base}_fork"),
-                    join_key: fresh_key(),
-                    join_node_id: format!("inclusive_{base}_join"),
-                    entry_edge_id: format!("flow_inclusive_{base}"),
-                    branches,
-                }],
-                description: format!("create {branch_count} conditional inclusive branches"),
-            }
-        }
-        "op.create_multi_instance_region" => {
-            let collection = data_reference(workbook, "collection")?;
-            let maximum = count(workbook, "declared_max")?;
-            let name = format!("for_each_{collection}");
-            BoundProposal {
-                ops: vec![Operation::CreateMultiInstanceRegion {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    key: fresh_key(),
-                    node: IRNode::MultiInstance {
-                        id: name.clone(),
-                        name: name.clone(),
-                        task_type: "noop".to_string(),
-                        collection_flag_name: collection.clone(),
-                        declared_max: maximum,
-                    },
-                    edge_id: format!("flow_{name}"),
-                }],
-                description: format!("repeat over '{collection}' up to {maximum} times"),
-            }
-        }
-        "op.attach_guard" => {
-            let escape = identifier(workbook, "escape")?;
-            let guard_key = fresh_key();
-            BoundProposal {
-                ops: vec![
-                    Operation::AttachGuard {
-                        host: node_key(dag, workbook, "host")?,
-                        key: guard_key,
-                        guard_id: format!("{escape}_guard"),
-                        trigger: GuardTrigger::Timer(TimerSpec::Duration {
-                            ms: duration(workbook, "trigger")?,
-                        }),
-                    },
-                    Operation::AppendNode {
-                        anchor: guard_key,
-                        key: fresh_key(),
-                        node: task(&escape),
-                        edge_id: format!("flow_{escape}"),
-                    },
-                ],
-                description: format!("attach an interrupting guard leading to '{escape}'"),
-            }
-        }
-        "op.attach_rearming_guard" => {
-            let escape = identifier(workbook, "escape")?;
-            let guard_key = fresh_key();
-            BoundProposal {
-                ops: vec![
-                    Operation::AttachRearmingGuard {
-                        host: node_key(dag, workbook, "host")?,
-                        key: guard_key,
-                        guard_id: format!("{escape}_guard"),
-                        trigger: GuardTrigger::Timer(TimerSpec::Cycle {
-                            interval_ms: duration(workbook, "interval")?,
-                            max_fires: count(workbook, "max_fires")?,
-                        }),
-                    },
-                    Operation::AppendNode {
-                        anchor: guard_key,
-                        key: fresh_key(),
-                        node: task(&escape),
-                        edge_id: format!("flow_{escape}"),
-                    },
-                ],
-                description: format!("attach a bounded rearming guard leading to '{escape}'"),
-            }
-        }
-        "op.set_guard_trigger" => BoundProposal {
-            ops: vec![Operation::SetGuardTrigger {
-                guard: node_key(dag, workbook, "guard")?,
-                trigger: GuardTrigger::Timer(TimerSpec::Duration {
-                    ms: duration(workbook, "trigger")?,
-                }),
-            }],
-            description: "set the selected guard timer".to_string(),
-        },
-        "op.set_guard_budget" => {
-            let budget = count(workbook, "failure_budget")?;
-            BoundProposal {
-                ops: vec![Operation::SetGuardBudget {
-                    guard: node_key(dag, workbook, "guard")?,
-                    failure_budget: Some(budget),
-                }],
-                description: format!("set guard failure budget to {budget}"),
-            }
-        }
-        "op.set_correlation_source" => {
-            let data = data_reference(workbook, "data_reference")?;
-            BoundProposal {
-                ops: vec![Operation::SetCorrelationSource {
-                    node: node_key(dag, workbook, "node")?,
-                    corr_key_source: data.clone(),
-                }],
-                description: format!("set correlation source to '{data}'"),
-            }
-        }
-        "op.delete_subgraph" => BoundProposal {
-            ops: vec![Operation::DeleteNode {
-                target: node_key(dag, workbook, "target")?,
-            }],
-            description: "delete the selected node or closed region".to_string(),
-        },
-        "prod.request_and_wait" => {
-            let request = identifier(workbook, "request")?;
-            let wait = format!("{request}_response");
-            let correlation = data_reference(workbook, "correlation_source")?;
-            BoundProposal {
-                ops: productions::request_and_wait(productions::RequestAndWaitBindings {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    send_key: fresh_key(),
-                    send_node: task(&request),
-                    send_edge_id: format!("flow_{request}"),
-                    wait_key: fresh_key(),
-                    wait_node: IRNode::MessageWait {
-                        id: wait.clone(),
-                        name: wait.clone(),
-                        corr_key_source: correlation.clone(),
-                    },
-                    wait_edge_id: format!("flow_{wait}"),
-                }),
-                description: format!(
-                    "send '{request}' and wait for a response correlated on '{correlation}'"
-                ),
-            }
-        }
-        "prod.interrupting_timeout" => {
-            let escape = identifier(workbook, "escape")?;
-            BoundProposal {
-                ops: productions::interrupting_timeout(productions::InterruptingTimeoutBindings {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    guard_key: fresh_key(),
-                    guard_id: format!("{escape}_guard"),
-                    duration_ms: duration(workbook, "duration")?,
-                    continuation_key: fresh_key(),
-                    continuation_node: task(&escape),
-                    continuation_edge_id: format!("flow_{escape}"),
-                    continuation_end_key: fresh_key(),
-                    continuation_end_node: end_node(format!("{escape}_end")),
-                    continuation_end_edge_id: format!("flow_{escape}_end"),
-                }),
-                description: format!("interrupt on timeout and continue to '{escape}'"),
-            }
-        }
-        "prod.reminder_then_escalate" | "prod.non_interrupting_notification" => {
-            let name_slot = if candidate == "prod.reminder_then_escalate" {
-                "escalation"
-            } else {
-                "notification"
-            };
-            let count_slot = if candidate == "prod.reminder_then_escalate" {
-                "max_reminders"
-            } else {
-                "max_fires"
-            };
-            let name = identifier(workbook, name_slot)?;
-            let interval = duration(workbook, "interval")?;
-            let maximum = count(workbook, count_slot)?;
-            let ops = if candidate == "prod.reminder_then_escalate" {
-                productions::reminder_then_escalate(productions::ReminderThenEscalateBindings {
-                    anchor: node_key(dag, workbook, "anchor")?,
-                    guard_key: fresh_key(),
-                    guard_id: format!("{name}_guard"),
-                    cycle: TimerSpec::Cycle {
-                        interval_ms: interval,
-                        max_fires: maximum,
-                    },
-                    escalation_key: fresh_key(),
-                    escalation_node: task(&name),
-                    escalation_edge_id: format!("flow_{name}"),
-                    escalation_end_key: fresh_key(),
-                    escalation_end_node: end_node(format!("{name}_end")),
-                    escalation_end_edge_id: format!("flow_{name}_end"),
-                })
-            } else {
-                productions::non_interrupting_notification(
-                    productions::NonInterruptingNotificationBindings {
-                        anchor: node_key(dag, workbook, "anchor")?,
-                        guard_key: fresh_key(),
-                        guard_id: format!("{name}_guard"),
-                        interval_ms: interval,
-                        max_fires: maximum,
-                        notification_key: fresh_key(),
-                        notification_node: task(&name),
-                        notification_edge_id: format!("flow_{name}"),
-                        notification_end_key: fresh_key(),
-                        notification_end_node: end_node(format!("{name}_end")),
-                        notification_end_edge_id: format!("flow_{name}_end"),
-                    },
-                )
-            };
-            BoundProposal {
-                ops,
-                description: format!("run '{name}' every {interval}ms up to {maximum} times"),
-            }
-        }
-        // Every board-visible id is listed above. Reaching this arm means the
-        // semantic board admitted a candidate without adapter coverage.
-        other => {
-            return Err(ProposalError::Contract(format!(
-                "board-visible candidate '{other}' has no materialization implementation"
-            )));
-        }
-    };
-    Ok(bound)
+    let bound = utterance_engine::bpmn_board::materialize_bpmn_workbook(dag, workbook)
+        .map_err(|error| ProposalError::Materialization(error.to_string()))?;
+    Ok(BoundProposal {
+        ops: bound.operations().to_vec(),
+        description: bound.description().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -1203,9 +758,71 @@ mod tests {
         )
         .unwrap();
         assert_eq!(workbook.status(), ProposalStatus::ReadyForDryRun);
-        let bound = materialize_operations(&dag, &workbook).unwrap();
-        let dry = productions::apply_production(&dag, bound.ops, Provenance::default()).unwrap();
+        let first = materialize_operations(&dag, &workbook).unwrap();
+        let second = materialize_operations(&dag, &workbook).unwrap();
+        assert_eq!(
+            serde_json::to_value(&first.ops).unwrap(),
+            serde_json::to_value(&second.ops).unwrap(),
+            "workbook reconstruction must preserve every generated graph identity"
+        );
+        let preview = utterance_engine::bpmn_board::preview_bpmn_workbook(
+            &dag,
+            &workbook,
+            workbook.graph_revision.as_str(),
+            &"a".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(preview.bound().operations()).unwrap(),
+            serde_json::to_value(&first.ops).unwrap()
+        );
+        let replayed_preview = utterance_engine::bpmn_board::preview_bpmn_workbook(
+            &dag,
+            &workbook,
+            workbook.graph_revision.as_str(),
+            &"a".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(preview.delta(), replayed_preview.delta());
+        let dry = productions::apply_production(&dag, first.ops, Provenance::default()).unwrap();
         dry.candidate.admit().unwrap();
         assert_eq!(dag.node_count(), 4, "workbook processing mutates no graph");
+
+        let delete_workbook = ProposalWorkbook::new(
+            1,
+            WorkbookId::new("compiler-refused-delete").unwrap(),
+            8,
+            board.board_hash.clone(),
+            board.graph_revision.clone(),
+            CanonicalCandidateId::new("op.delete_subgraph").unwrap(),
+            vec![WorkbookSlot {
+                name: "target".into(),
+                kind: ArgumentKind::NodeReference,
+                requirement: SlotRequirement::Required,
+                value: SlotValueState::Resolved(SlotValue::NodeReference("review".into())),
+                provenance: Some(BindingProvenance {
+                    source: "test".into(),
+                    detail: "known anchor".into(),
+                }),
+                clarification_prompt: "Which node should be deleted?".into(),
+            }],
+            EvidenceRecordHash::new("f".repeat(64)).unwrap(),
+        )
+        .unwrap();
+        let refusal = utterance_engine::bpmn_board::preview_bpmn_workbook(
+            &dag,
+            &delete_workbook,
+            delete_workbook.graph_revision.as_str(),
+            &"a".repeat(64),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            refusal,
+            utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused {
+                diagnostics,
+                ..
+            } if !diagnostics.is_empty()
+        ));
+        assert_eq!(dag.node_count(), 4, "refused preview mutates no graph");
     }
 }

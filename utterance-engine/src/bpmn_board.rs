@@ -1,17 +1,102 @@
 //! Position-legal BPMN semantic decision-board construction.
 
 use designer_graph::board_candidate::{CandidateId, LegalityOracle};
+use designer_graph::ops::Operation;
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
-    BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignFocus, DesignPosition,
-    DomainIdentity, GameboardContractError, GraphContentHash, GraphRevision, HistoryHash,
-    ResolvedPosition, SemanticDecisionBoard,
+    ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignFocus,
+    DesignPosition, DisclosureClass, DomainIdentity, FeedbackOption, FeedbackOptionKind,
+    GameDomainId, GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision,
+    HistoryHash, LegalMoveId, MessageKey, ProposalWorkbook, ResolvedPosition, RuleCode,
+    RuleExplanation, SemanticDecisionBoard, GAMEBOARD_SCHEMA_VERSION,
 };
 use thiserror::Error;
 
 use crate::board::PolicyFilter;
-use crate::bpmn_pack::{candidate_spec, semantic_snapshot_identity, BinderSupport};
+use crate::bpmn_pack::{
+    candidate_spec, candidate_spec_by_canonical_id, semantic_snapshot_identity, BinderSupport,
+};
+use crate::game_state::BpmnGameState;
+use crate::legal_moves::applicability_explanation;
+use crate::legal_moves::{enumerate, materialize_workbook, preview_workbook};
+
+const MAX_RECOVERY_OPTIONS: usize = 16;
+
+/// Deterministically materialized operations for one fully bound workbook.
+#[derive(Clone, Debug)]
+pub struct BpmnBoundProposal {
+    operations: Vec<Operation>,
+    description: String,
+}
+
+impl BpmnBoundProposal {
+    pub(crate) fn from_parts(operations: Vec<Operation>, description: String) -> Self {
+        Self {
+            operations,
+            description,
+        }
+    }
+
+    /// Exact operation tape supplied to preview and, after ratification, apply.
+    pub fn operations(&self) -> &[Operation] {
+        &self.operations
+    }
+
+    /// Adapter description of the proposed change.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+/// A compiler-admitted, non-mutating preview paired with its exact operation tape.
+#[derive(Clone, Debug)]
+pub struct BpmnWorkbookPreview {
+    bound: BpmnBoundProposal,
+    delta: GraphDeltaPreview,
+}
+
+impl BpmnWorkbookPreview {
+    pub(crate) fn new(bound: BpmnBoundProposal, delta: GraphDeltaPreview) -> Self {
+        Self { bound, delta }
+    }
+
+    /// Exact deterministic operations which produced the preview.
+    pub fn bound(&self) -> &BpmnBoundProposal {
+        &self.bound
+    }
+
+    /// Canonical graph delta admitted against a clone of the supplied graph.
+    pub fn delta(&self) -> &GraphDeltaPreview {
+        &self.delta
+    }
+}
+
+/// Governed explanation and currently legal recovery choices for one requested
+/// candidate shape.
+#[derive(Clone, Debug)]
+pub struct BpmnMoveGuidance {
+    applicability: ApplicabilityState,
+    explanation: RuleExplanation,
+    recoveries: Vec<FeedbackOption>,
+}
+
+impl BpmnMoveGuidance {
+    /// Deterministic classification of the requested shape.
+    pub fn applicability(&self) -> ApplicabilityState {
+        self.applicability
+    }
+
+    /// Pack-derived typed explanation; callers never parse an error string.
+    pub fn explanation(&self) -> &RuleExplanation {
+        &self.explanation
+    }
+
+    /// Bounded options linked only to the current legal move set or focus change.
+    pub fn recoveries(&self) -> &[FeedbackOption] {
+        &self.recoveries
+    }
+}
 
 /// Errors returned while binding a shared decision board to a BPMN position.
 #[derive(Debug, Error)]
@@ -36,6 +121,48 @@ pub enum BpmnBoardError {
     /// A reusable gameboard invariant rejected a compatibility projection.
     #[error(transparent)]
     Gameboard(#[from] GameboardContractError),
+    /// A semantic board still names an anchor absent from the supplied graph.
+    #[error("semantic board anchor '{bpmn_id}' is stale for the supplied graph")]
+    StaleBoardAnchor { bpmn_id: String },
+    /// The semantic board was enumerated at an earlier graph revision.
+    #[error(
+        "stale semantic board revision '{board_revision}'; current revision is '{current_revision}'"
+    )]
+    StaleBoardRevision {
+        board_revision: String,
+        current_revision: String,
+    },
+    /// The authoritative Designer graph could not be projected for enumeration.
+    #[error("Designer graph projection failed: {0}")]
+    GraphProjection(String),
+    /// A fully bound executable candidate has no operation implementation.
+    #[error("candidate '{canonical_id}' has no deterministic mutation implementation")]
+    MissingMutationImplementation { canonical_id: String },
+    /// A canonical preview payload could not be encoded.
+    #[error("graph preview encoding failed: {0}")]
+    PreviewEncoding(String),
+    /// A workbook has not completed its typed binding transition.
+    #[error("proposal workbook is not ready for materialization: {status:?}")]
+    WorkbookNotReady {
+        status: semantic_decision_contracts::ProposalStatus,
+    },
+    /// A typed workbook binding is absent, stale or outside its admitted range.
+    #[error("BPMN binding refused: {0}")]
+    Binding(String),
+    /// Staging or compiler admission refused a fully bound preview.
+    #[error("compiler preview refused candidate '{candidate_id}': {diagnostics:?}")]
+    CompilerRefused {
+        candidate_id: String,
+        diagnostics: Vec<String>,
+    },
+    /// The workbook was bound against a different authoritative graph revision.
+    #[error(
+        "stale workbook revision '{workbook_revision}'; current revision is '{current_revision}'"
+    )]
+    StaleWorkbook {
+        workbook_revision: String,
+        current_revision: String,
+    },
 }
 
 /// Build the complete model-visible semantic board at a resolved BPMN position.
@@ -124,6 +251,219 @@ pub fn project_design_position(
     .map_err(BpmnBoardError::from)
 }
 
+/// Build the concrete, position-bound gameboard from the same admitted semantic
+/// board used by the language path. Enumeration is pure over explicit inputs;
+/// complete moves are staged on a clone and compiler-admitted before inclusion.
+#[allow(clippy::too_many_arguments)]
+pub fn build_bpmn_design_position(
+    dag: &DesignerDag,
+    board: &SemanticDecisionBoard,
+    current_graph_revision: &str,
+    graph_hash: &str,
+    compiler_profile: &str,
+    history_hash: &str,
+    focus: DesignFocus,
+    current_proposal_hash: Option<&str>,
+) -> Result<DesignPosition, BpmnBoardError> {
+    if board.graph_revision.as_str() != current_graph_revision {
+        return Err(BpmnBoardError::StaleBoardRevision {
+            board_revision: board.graph_revision.as_str().to_string(),
+            current_revision: current_graph_revision.to_string(),
+        });
+    }
+    let graph_hash = GraphContentHash::new(graph_hash)?;
+    let state = BpmnGameState::new(dag, board)?;
+    let moves = enumerate(&state, &graph_hash)?;
+    for refusal in &moves.compiler_refused {
+        tracing::debug!(
+            candidate_id = refusal.candidate_id,
+            anchor = refusal.anchor,
+            diagnostics = ?refusal.diagnostics,
+            "compiler-refused concrete move excluded from the legal move set"
+        );
+    }
+    DesignPosition::new(
+        GAMEBOARD_SCHEMA_VERSION,
+        GameDomainId::new(board.domain.as_str())?,
+        BoardPath::new(vec![board.domain.as_str().to_string()])?,
+        board.semantic_snapshot.clone(),
+        board.graph_revision.clone(),
+        graph_hash,
+        compiler_profile,
+        board.policy_fingerprint.clone(),
+        current_proposal_hash
+            .map(GraphContentHash::new)
+            .transpose()?,
+        focus,
+        HistoryHash::new(history_hash)?,
+        moves.admitted,
+    )
+    .map_err(BpmnBoardError::from)
+}
+
+/// Materialize a complete typed workbook with deterministic content-derived graph
+/// identities. This function does not mutate the supplied graph.
+pub fn materialize_bpmn_workbook(
+    dag: &DesignerDag,
+    workbook: &ProposalWorkbook,
+) -> Result<BpmnBoundProposal, BpmnBoardError> {
+    materialize_workbook(dag, workbook)
+}
+
+/// Materialize, dry-apply to a clone, and pass through the production compiler
+/// admission boundary. The authoritative graph is never mutated.
+pub fn preview_bpmn_workbook(
+    dag: &DesignerDag,
+    workbook: &ProposalWorkbook,
+    current_graph_revision: &str,
+    graph_hash: &str,
+) -> Result<BpmnWorkbookPreview, BpmnBoardError> {
+    preview_workbook(
+        dag,
+        workbook,
+        current_graph_revision,
+        &GraphContentHash::new(graph_hash)?,
+    )
+}
+
+/// Resolve a direct graph operation to the same governed move identity when the
+/// current position contains an exactly equivalent concrete move. Operations that
+/// require additional semantic bindings return `None` until represented by a fully
+/// bound move.
+pub fn bpmn_legal_move_id_for_operation(
+    dag: &DesignerDag,
+    position: &DesignPosition,
+    operation: &Operation,
+) -> Option<LegalMoveId> {
+    let (candidate_id, key) = match operation {
+        Operation::DeleteNode { target } => ("op.delete_subgraph", *target),
+        _ => return None,
+    };
+    let ir = dag.to_ir().ok()?;
+    let node_id = ir.node_weights().find_map(|node| {
+        (dag.key_for_bpmn_id(node.id()) == Some(key)).then(|| node.id().to_string())
+    })?;
+    position
+        .legal_moves()
+        .iter()
+        .find(|legal_move| {
+            legal_move.candidate_id().as_str() == candidate_id
+                && legal_move
+                    .anchor()
+                    .is_some_and(|anchor| anchor.as_str() == node_id)
+                && legal_move.binding_state().is_complete()
+        })
+        .map(|legal_move| legal_move.move_id().clone())
+}
+
+/// Explain why a known candidate does or does not fit this position and return
+/// bounded recovery choices from the current legal move set. Policy-hidden
+/// candidates receive a disclosure-safe explanation which does not name the piece.
+pub fn explain_bpmn_candidate(
+    board: &SemanticDecisionBoard,
+    position: &DesignPosition,
+    candidate_id: &str,
+    policy: &PolicyFilter,
+) -> Result<BpmnMoveGuidance, BpmnBoardError> {
+    let spec = candidate_spec_by_canonical_id(candidate_id).ok_or_else(|| {
+        BpmnBoardError::MissingMutationImplementation {
+            canonical_id: candidate_id.to_string(),
+        }
+    })?;
+    let policy_hidden = policy.denied.contains(candidate_id);
+    let has_legal_shape = position
+        .legal_moves()
+        .iter()
+        .any(|legal_move| legal_move.candidate_id().as_str() == candidate_id);
+    let applicability = if policy_hidden {
+        ApplicabilityState::PolicyHidden
+    } else if has_legal_shape {
+        if position.legal_moves().iter().any(|legal_move| {
+            legal_move.candidate_id().as_str() == candidate_id
+                && !legal_move.binding_state().is_complete()
+        }) {
+            ApplicabilityState::Incomplete
+        } else {
+            ApplicabilityState::Applicable
+        }
+    } else {
+        ApplicabilityState::Inapplicable
+    };
+    let explanation = if policy_hidden {
+        RuleExplanation::new(
+            GAMEBOARD_SCHEMA_VERSION,
+            RuleCode::new("semantic.policy.hidden")?,
+            MessageKey::new("semantic.policy.disclosure_safe_refusal")?,
+            Vec::new(),
+            board.semantic_snapshot.as_str(),
+            DisclosureClass::PolicyHidden,
+        )?
+    } else {
+        applicability_explanation(&spec, board.semantic_snapshot.as_str())?
+    };
+
+    let mut recoveries = position
+        .legal_moves()
+        .iter()
+        .filter(|legal_move| {
+            legal_move.candidate_id().as_str()
+                != semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+                && legal_move.candidate_id().as_str() != candidate_id
+        })
+        .take(MAX_RECOVERY_OPTIONS)
+        .filter_map(|legal_move| {
+            let alternative = candidate_spec_by_canonical_id(legal_move.candidate_id().as_str())?;
+            let prompt = alternative
+                .semantic
+                .arguments
+                .iter()
+                .find(|argument| argument.required)
+                .map(|argument| argument.clarification_prompt.as_str())
+                .unwrap_or(alternative.semantic.title.as_str());
+            Some(
+                MessageKey::new(prompt)
+                    .map(|prompt_key| {
+                        FeedbackOption::new(
+                            FeedbackOptionKind::SelectAlternative,
+                            Some(legal_move.move_id().clone()),
+                            prompt_key,
+                            Some(explanation.explanation_id().clone()),
+                            DisclosureClass::Public,
+                        )
+                    })
+                    .map_err(BpmnBoardError::from),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if recoveries.is_empty() {
+        let focus_prompt = spec
+            .semantic
+            .arguments
+            .iter()
+            .find(|argument| {
+                argument.kind == semantic_decision_contracts::ArgumentKind::NodeReference
+            })
+            .map(|argument| argument.clarification_prompt.as_str())
+            .unwrap_or(spec.semantic.applicability.as_str());
+        recoveries.push(FeedbackOption::new(
+            FeedbackOptionKind::ChangeFocus,
+            None,
+            MessageKey::new(focus_prompt)?,
+            Some(explanation.explanation_id().clone()),
+            if policy_hidden {
+                DisclosureClass::PolicyHidden
+            } else {
+                DisclosureClass::Public
+            },
+        ));
+    }
+    Ok(BpmnMoveGuidance {
+        applicability,
+        explanation,
+        recoveries,
+    })
+}
+
 /// Map one position-legal raw candidate id to its model-visible semantic
 /// slice, or `Ok(None)` if it is deliberately excluded from the board.
 ///
@@ -196,11 +536,16 @@ fn put(hasher: &mut blake3::Hasher, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use bpmn_lite_compiler::IRNode;
+    use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
     use designer_graph::board_candidate::OperationKind;
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::Provenance;
-    use semantic_decision_contracts::{GraphElementRef, ABSTENTION_CANDIDATE_ID};
+    use semantic_decision_contracts::{
+        FocusAbsenceReason, GraphElementRef, ABSTENTION_CANDIDATE_ID,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -421,20 +766,226 @@ mod tests {
     }
 
     #[test]
+    fn complete_direct_delete_has_one_compiler_admitted_move_identity() {
+        let (mut dag, _, task) = fixture();
+        let end = NodeKey(Uuid::from_u128(3));
+        dag = apply(
+            &dag,
+            Operation::AppendNode {
+                anchor: task,
+                key: end,
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow-end".into(),
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        let data = NodeKey(Uuid::from_u128(4));
+        dag.seed(
+            data,
+            IRNode::DataObject {
+                id: "case_data".into(),
+                name: "Case data".into(),
+                type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                role: DataObjectRole::Internal,
+            },
+            Provenance::default(),
+        )
+        .unwrap();
+        dag.admit().unwrap();
+        let revision = "a".repeat(64);
+        let board =
+            build_bpmn_semantic_board(&dag, None, &revision, &PolicyFilter::default()).unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            None,
+        )
+        .unwrap();
+        let deletion = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| {
+                legal_move.candidate_id().as_str() == "op.delete_subgraph"
+                    && legal_move
+                        .anchor()
+                        .is_some_and(|anchor| anchor.as_str() == "case_data")
+            })
+            .expect("deleting an unreferenced data declaration must admit");
+        assert!(deletion.binding_state().is_complete());
+        assert!(deletion.preview().is_some());
+        assert_eq!(
+            bpmn_legal_move_id_for_operation(
+                &dag,
+                &position,
+                &Operation::DeleteNode { target: data }
+            )
+            .as_ref(),
+            Some(deletion.move_id())
+        );
+        assert_eq!(
+            dag.node_count(),
+            4,
+            "enumeration and preview must not mutate"
+        );
+
+        let guidance = explain_bpmn_candidate(
+            &board,
+            &position,
+            "op.create_branch",
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        assert_eq!(guidance.applicability(), ApplicabilityState::Inapplicable);
+        assert!(!guidance.recoveries().is_empty());
+        assert!(guidance.recoveries().iter().all(|recovery| {
+            recovery.move_id().is_none_or(|move_id| {
+                position
+                    .legal_moves()
+                    .iter()
+                    .any(|legal_move| legal_move.move_id() == move_id)
+            })
+        }));
+
+        let mut denied = PolicyFilter::default();
+        denied.denied.insert("op.insert_after".to_string());
+        let denied_board = build_bpmn_semantic_board(&dag, None, &revision, &denied).unwrap();
+        let denied_position = build_bpmn_design_position(
+            &dag,
+            &denied_board,
+            &revision,
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            None,
+        )
+        .unwrap();
+        let hidden =
+            explain_bpmn_candidate(&denied_board, &denied_position, "op.insert_after", &denied)
+                .unwrap();
+        assert_eq!(hidden.applicability(), ApplicabilityState::PolicyHidden);
+        assert_eq!(
+            hidden.explanation().disclosure(),
+            DisclosureClass::PolicyHidden
+        );
+        assert!(hidden.recoveries().iter().all(|recovery| {
+            recovery.move_id().is_none_or(|move_id| {
+                denied_position
+                    .legal_moves()
+                    .iter()
+                    .any(|legal_move| legal_move.move_id() == move_id)
+            })
+        }));
+    }
+
+    #[test]
+    fn concrete_positions_cover_empty_multiple_anchor_and_stale_shapes() {
+        let empty = DesignerDag::new("empty-gameboard");
+        let empty_board =
+            build_bpmn_semantic_board(&empty, None, &"a".repeat(64), &PolicyFilter::default())
+                .unwrap();
+        let empty_position = build_bpmn_design_position(
+            &empty,
+            &empty_board,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(empty_position.legal_moves().len(), 1);
+        assert_eq!(
+            empty_position.legal_moves()[0].candidate_id().as_str(),
+            ABSTENTION_CANDIDATE_ID
+        );
+
+        let (dag, _, task) = fixture();
+        let whole_board =
+            build_bpmn_semantic_board(&dag, None, &"d".repeat(64), &PolicyFilter::default())
+                .unwrap();
+        let whole_position = build_bpmn_design_position(
+            &dag,
+            &whole_board,
+            &"d".repeat(64),
+            &"e".repeat(64),
+            "compiler-profile-v1",
+            &"f".repeat(64),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            None,
+        )
+        .unwrap();
+        let insert_after_anchors = whole_position
+            .legal_moves()
+            .iter()
+            .filter(|legal_move| legal_move.candidate_id().as_str() == "op.insert_after")
+            .map(|legal_move| legal_move.anchor().unwrap().as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(insert_after_anchors, BTreeSet::from(["start", "task-1"]));
+
+        let anchored_board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &"1".repeat(64),
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let error = build_bpmn_design_position(
+            &empty,
+            &anchored_board,
+            &"1".repeat(64),
+            &"2".repeat(64),
+            "compiler-profile-v1",
+            &"3".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, BpmnBoardError::StaleBoardAnchor { .. }));
+
+        let error = build_bpmn_design_position(
+            &dag,
+            &anchored_board,
+            &"9".repeat(64),
+            &"2".repeat(64),
+            "compiler-profile-v1",
+            &"3".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, BpmnBoardError::StaleBoardRevision { .. }));
+    }
+
+    #[test]
     fn not_representable_and_policy_denied_are_silently_excluded_not_errors() {
         // Contrast with the fail-closed case above: a real, registered
         // candidate that is deliberately withheld (NotRepresentable, or
         // policy-denied) must return `Ok(None)`, not an error -- these are
         // the one ratified deviation from invariant 13, not a defect.
-        let excluded =
-            map_legal_candidate(CandidateId::Operation(OperationKind::CreateRace), &PolicyFilter::default())
-                .expect("a NotRepresentable candidate must not error");
+        let excluded = map_legal_candidate(
+            CandidateId::Operation(OperationKind::CreateRace),
+            &PolicyFilter::default(),
+        )
+        .expect("a NotRepresentable candidate must not error");
         assert!(excluded.is_none());
 
         let mut denied = PolicyFilter::default();
         denied.denied.insert("op.append_node".into());
-        let excluded = map_legal_candidate(CandidateId::Operation(OperationKind::AppendNode), &denied)
-            .expect("a policy-denied candidate must not error");
+        let excluded =
+            map_legal_candidate(CandidateId::Operation(OperationKind::AppendNode), &denied)
+                .expect("a policy-denied candidate must not error");
         assert!(excluded.is_none());
     }
 }

@@ -752,6 +752,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/api/dsl/sessions/:id/save",
             post(save_design_session_endpoint),
         )
+        .route(
+            "/api/dsl/sessions/:id/gameboard",
+            get(session_gameboard_endpoint),
+        )
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route("/designer", get(designer_page))
         .route(
@@ -2632,6 +2636,12 @@ pub(crate) struct SaveSessionBody {
     template_name: String,
 }
 
+#[derive(Deserialize)]
+struct GameboardQuery {
+    #[serde(default)]
+    anchor: Option<String>,
+}
+
 async fn create_design_session_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Json(body): Json<CreateSessionBody>,
@@ -3908,7 +3918,7 @@ async fn session_utterance_endpoint(
         }
     };
     let design_position = match &graph_ctx {
-        Some((_, _, _, semantic_board)) => {
+        Some((dag, _, revision, semantic_board)) => {
             let focus = match body.anchor.as_deref() {
                 Some(anchor) => semantic_decision_contracts::DesignFocus::element(
                     match semantic_decision_contracts::GraphElementRef::new(anchor) {
@@ -3952,8 +3962,10 @@ async fn session_utterance_endpoint(
                         .into_response();
                 }
             };
-            match utterance_engine::bpmn_board::project_design_position(
+            match utterance_engine::bpmn_board::build_bpmn_design_position(
+                dag,
                 semantic_board,
+                revision,
                 &graph_content_hash(&record_session),
                 DESIGNER_COMPILER_PROFILE_IDENTITY,
                 &history_hash,
@@ -4644,6 +4656,134 @@ async fn save_design_session_endpoint(
         "state": "published",
     }))
     .into_response()
+}
+
+/// Concrete move palette derived from the same semantic board and gameboard
+/// adapter used by the language path.
+async fn session_gameboard_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GameboardQuery>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    if !session.is_graph_backed() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "semantic gameboard requires an authoritative DesignerDag session"
+            })),
+        )
+            .into_response();
+    }
+    let dag = match reconstruct_designer_dag(&session) {
+        Ok(dag) => dag,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("reconstruction: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    let anchor_key = match query.anchor.as_deref() {
+        Some(anchor) => match dag.key_for_bpmn_id(anchor) {
+            Some(key) => Some(key),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("anchor '{anchor}' names no node in this session's graph")
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let revision = graph_identity_hash(&session);
+    let board = match utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        &dag,
+        anchor_key.zip(query.anchor.as_deref()),
+        &revision,
+        &utterance_engine::board::PolicyFilter::default(),
+    ) {
+        Ok(board) => board,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("semantic board: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    let focus = match query.anchor.as_deref() {
+        Some(anchor) => match semantic_decision_contracts::GraphElementRef::new(anchor) {
+            Ok(anchor) => semantic_decision_contracts::DesignFocus::element(anchor),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("focus: {error}") })),
+                )
+                    .into_response();
+            }
+        },
+        None => match semantic_decision_contracts::DesignFocus::absent(
+            semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+            None,
+        ) {
+            Ok(focus) => focus,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("focus: {error}") })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let history_hash = match design_history_hash(&session) {
+        Ok(hash) => hash,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("history: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    match utterance_engine::bpmn_board::build_bpmn_design_position(
+        &dag,
+        &board,
+        &revision,
+        &graph_content_hash(&session),
+        DESIGNER_COMPILER_PROFILE_IDENTITY,
+        &history_hash,
+        focus,
+        None,
+    ) {
+        Ok(position) => Json(position).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("gameboard: {error}") })),
+        )
+            .into_response(),
+    }
 }
 
 /// Server-built DAG for the designer window (merged T4 / WS-B.2): the
@@ -6545,6 +6685,21 @@ mod tests {
         assert!(anchored_position.legal_moves().iter().all(|legal_move| {
             legal_move.graph_revision() == anchored_position.graph_revision()
         }));
+        let palette_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sessions/{session_id}/gameboard?anchor=review_documents"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(palette_response.status(), StatusCode::OK);
+        let palette_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(body_json(palette_response).await).unwrap();
+        assert_eq!(
+            palette_position.move_set_hash(),
+            anchored_position.move_set_hash(),
+            "palette and language paths must observe one canonical move set"
+        );
 
         // Position is part of semantic authority: the same graph at a
         // whole-graph position must not reuse the anchored board hash.
@@ -6570,6 +6725,20 @@ mod tests {
         assert_ne!(
             anchored_position.state_id(),
             whole_graph_position.state_id()
+        );
+        let palette_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sessions/{session_id}/gameboard"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(palette_response.status(), StatusCode::OK);
+        let palette_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(body_json(palette_response).await).unwrap();
+        assert_eq!(
+            palette_position.move_set_hash(),
+            whole_graph_position.move_set_hash()
         );
 
         let capture = body_json(
