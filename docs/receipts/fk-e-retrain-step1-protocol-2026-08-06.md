@@ -133,3 +133,25 @@ State note: bundles/modernbert-base currently holds the embed-recovery
 run's weights (nothing is promoted; shadow only). All absolute template
 -eval numbers in this receipt are internally consistent but NOT
 comparable to pre-merge history.
+
+## 2026-08-07 (cont): third hypothesis dead; bisection is the next act
+
+Full-board-dilution is also refuted: v3 records train on the K-subset
+already (full_served_list == tier1_list for 3301/3301; legality-sized
+lists of 1–16 candidates). Three dead hypotheses (embed generation,
+serving skew — excluded by the green admission hash-checks, negative
+dilution) now say: stop hypothesizing, bisect from the anchor.
+
+**Next act (fresh session): reproduce the 44.1% itself.** Check out the
+07-28/07-29-era trainer + corpus_v2 + serving from git history and
+re-measure starter-seed. Two possible outcomes, both decisive:
+- It reproduces → walk the v2→v3 deltas one at a time (pair text,
+  list-size distribution incl. the 622 trivial ≤4-candidate records,
+  class breadth, NOTA regime) until the regression's variable is found.
+- It does NOT reproduce → the 44.1% was an artifact of its era's
+  serving/measurement environment, tonight's ~21% is the honest
+  baseline, and the climb runs through real captured turns + corpus
+  volume rather than regression repair.
+
+Either way the promotion path is unchanged: adjudicated real sessions
+remain the only evidence that counts (G3, I-4).
