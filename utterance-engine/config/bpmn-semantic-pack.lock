@@ -1,13 +1,13 @@
 schema_version: 1
-compiler_version: semantic-pack/0.2.0
+compiler_version: semantic-pack/0.2.2
 source:
   path: utterance-engine/config/bpmn-semantic-pack.yaml
-  sha256: 343fdb2fd9fa2b09e1aea4ae11f7ff869f651cb5fe34c08a1078e96eb37435a7
+  sha256: fe1174906c5a0bdad127abaaeb1c1fee748b0c6edac79457066a0c01356faca7
 pack:
   id: bpmn.designer
   version: 1.0.0
   canonicalization_version: 1
-  artifact_sha256: ca698f442c4aa7eb1a80bddcf55a280fd44dc8fe6ccc4745b00ebac459d8d1ef
+  artifact_sha256: 965381b5ec50a388977df9fd7a8a940587a0cb74b01bcd49a44026c9cdc4b963
 dependencies: []
 adapter_bindings:
   - bpmn.designer.op.append_node

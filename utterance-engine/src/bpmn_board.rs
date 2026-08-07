@@ -6,16 +6,17 @@ use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
     ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignFocus,
-    DesignPosition, DisclosureClass, DomainIdentity, FeedbackOption, FeedbackOptionKind,
-    GameDomainId, GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision,
-    HistoryHash, LegalMoveId, MessageKey, ProposalWorkbook, ResolvedPosition, RuleCode,
-    RuleExplanation, SemanticDecisionBoard, GAMEBOARD_SCHEMA_VERSION,
+    DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane, FeedbackOption, GameDomainId,
+    GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision, HistoryHash,
+    LegalMoveId, MoveAttemptReceipt, ProposalWorkbook, ResolvedPosition, RuleExplanation,
+    SemanticDecisionBoard, GAMEBOARD_SCHEMA_VERSION,
 };
 use thiserror::Error;
 
 use crate::board::PolicyFilter;
 use crate::bpmn_pack::{
-    candidate_spec, candidate_spec_by_canonical_id, semantic_snapshot_identity, BinderSupport,
+    candidate_spec, candidate_spec_by_canonical_id, feedback_source, rule_source,
+    semantic_snapshot_identity, BinderSupport, POLICY_HIDDEN_RULE_CODE,
 };
 use crate::game_state::BpmnGameState;
 use crate::legal_moves::applicability_explanation;
@@ -301,6 +302,29 @@ pub fn build_bpmn_design_position(
     .map_err(BpmnBoardError::from)
 }
 
+/// Attach complete, finite evidence to every legal move and project the same
+/// fused record back to the existing candidate-level policy input. Evidence can
+/// rank a move but can neither add nor remove legal moves.
+pub fn finalize_bpmn_move_evidence(
+    board: &SemanticDecisionBoard,
+    position: &DesignPosition,
+    utterance: &str,
+    result: crate::contract::SlmResult,
+    active_lane: EvidenceLane,
+    bundle_identities: Vec<String>,
+    attempts: &[MoveAttemptReceipt],
+) -> anyhow::Result<crate::contract::SlmResult> {
+    crate::fusion::fuse_move_evidence(
+        board,
+        position,
+        utterance,
+        result,
+        active_lane,
+        bundle_identities,
+        attempts,
+    )
+}
+
 /// Materialize a complete typed workbook with deterministic content-derived graph
 /// identities. This function does not mutate the supplied graph.
 pub fn materialize_bpmn_workbook(
@@ -390,13 +414,14 @@ pub fn explain_bpmn_candidate(
         ApplicabilityState::Inapplicable
     };
     let explanation = if policy_hidden {
+        let source = rule_source(POLICY_HIDDEN_RULE_CODE);
         RuleExplanation::new(
             GAMEBOARD_SCHEMA_VERSION,
-            RuleCode::new("semantic.policy.hidden")?,
-            MessageKey::new("semantic.policy.disclosure_safe_refusal")?,
+            source.rule_code.clone(),
+            source.message_key.clone(),
             Vec::new(),
             board.semantic_snapshot.as_str(),
-            DisclosureClass::PolicyHidden,
+            source.disclosure,
         )?
     } else {
         applicability_explanation(&spec, board.semantic_snapshot.as_str())?
@@ -412,48 +437,28 @@ pub fn explain_bpmn_candidate(
         })
         .take(MAX_RECOVERY_OPTIONS)
         .filter_map(|legal_move| {
-            let alternative = candidate_spec_by_canonical_id(legal_move.candidate_id().as_str())?;
-            let prompt = alternative
-                .semantic
-                .arguments
-                .iter()
-                .find(|argument| argument.required)
-                .map(|argument| argument.clarification_prompt.as_str())
-                .unwrap_or(alternative.semantic.title.as_str());
-            Some(
-                MessageKey::new(prompt)
-                    .map(|prompt_key| {
-                        FeedbackOption::new(
-                            FeedbackOptionKind::SelectAlternative,
-                            Some(legal_move.move_id().clone()),
-                            prompt_key,
-                            Some(explanation.explanation_id().clone()),
-                            DisclosureClass::Public,
-                        )
-                    })
-                    .map_err(BpmnBoardError::from),
-            )
+            candidate_spec_by_canonical_id(legal_move.candidate_id().as_str())?;
+            let source = feedback_source("recovery.select_alternative");
+            Some(FeedbackOption::new(
+                source.kind,
+                Some(legal_move.move_id().clone()),
+                source.prompt_key.clone(),
+                Some(explanation.explanation_id().clone()),
+                source.disclosure,
+            ))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     if recoveries.is_empty() {
-        let focus_prompt = spec
-            .semantic
-            .arguments
-            .iter()
-            .find(|argument| {
-                argument.kind == semantic_decision_contracts::ArgumentKind::NodeReference
-            })
-            .map(|argument| argument.clarification_prompt.as_str())
-            .unwrap_or(spec.semantic.applicability.as_str());
+        let source = feedback_source("recovery.change_focus");
         recoveries.push(FeedbackOption::new(
-            FeedbackOptionKind::ChangeFocus,
+            source.kind,
             None,
-            MessageKey::new(focus_prompt)?,
+            source.prompt_key.clone(),
             Some(explanation.explanation_id().clone()),
             if policy_hidden {
                 DisclosureClass::PolicyHidden
             } else {
-                DisclosureClass::Public
+                source.disclosure
             },
         ));
     }

@@ -262,6 +262,8 @@ mod tests {
             board_hash: board.board_hash.as_str().to_string(),
             model_bundle_hash: "test.lexical".into(),
             evidence_trace: None,
+            inference_evidence: None,
+            move_evidence: Vec::new(),
         }
     }
 

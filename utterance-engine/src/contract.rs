@@ -4,7 +4,7 @@
 //! producer (Q7 ruled option (a): deterministic resolvers).
 
 use anyhow::{anyhow, Result};
-use semantic_decision_contracts::EvidenceLane;
+use semantic_decision_contracts::{EvidenceLane, InferenceEvidence, MoveEvidence};
 use serde::{Deserialize, Serialize};
 
 /// The explicit abstention candidate present on EVERY board (R2-r1).
@@ -94,6 +94,12 @@ pub struct SlmResult {
     /// Present on the semantic path; absent on compatibility evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_trace: Option<EvidenceTrace>,
+    /// Shared board-complete candidate evidence used by deterministic policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_evidence: Option<InferenceEvidence>,
+    /// Complete, position-bound evidence for every legal move exactly once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub move_evidence: Vec<MoveEvidence>,
 }
 
 /// THE canonical ordering (R2-3): descending score; equal scores break

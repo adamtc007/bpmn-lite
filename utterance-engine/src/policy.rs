@@ -391,6 +391,8 @@ mod tests {
             board_hash: board.board_hash.clone(),
             model_bundle_hash: "tier0.v1".into(),
             evidence_trace: None,
+            inference_evidence: None,
+            move_evidence: Vec::new(),
         }
     }
 
@@ -436,6 +438,8 @@ mod tests {
             board_hash: board.board_hash.as_str().to_string(),
             model_bundle_hash: "semantic-test-bundle-v1".into(),
             evidence_trace: None,
+            inference_evidence: None,
+            move_evidence: Vec::new(),
         }
     }
 

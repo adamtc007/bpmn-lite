@@ -7,19 +7,18 @@ use designer_graph::positional::PositionalLegality;
 use designer_graph::productions::apply_production;
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 use semantic_decision_contracts::{
-    ApplicabilityFact, ApplicabilityState, CanonicalCandidateId, DisclosureClass,
-    ExplanationParameter, GraphContentHash, GraphDeltaOperation, GraphDeltaPreview,
-    GraphElementRef, LegalMove, MessageKey, MoveArgument, ProposalStatus, ProposalWorkbook,
-    RuleCode, RuleExplanation, SlotValue, SlotValueState, GAMEBOARD_SCHEMA_VERSION,
+    ApplicabilityFact, ApplicabilityState, CanonicalCandidateId, ExplanationParameter,
+    GraphContentHash, GraphDeltaOperation, GraphDeltaPreview, GraphElementRef, LegalMove,
+    MoveArgument, ProposalStatus, ProposalWorkbook, RuleCode, RuleExplanation, SlotValue,
+    SlotValueState, GAMEBOARD_SCHEMA_VERSION,
 };
 use sha2::{Digest, Sha256};
 
 use crate::bpmn_board::{BpmnBoardError, BpmnBoundProposal, BpmnWorkbookPreview};
-use crate::bpmn_pack::{candidate_spec, BpmnCandidateSpec};
+use crate::bpmn_pack::{candidate_spec, rule_source, BpmnCandidateSpec, APPLICABILITY_RULE_CODE};
 use crate::game_state::BpmnGameState;
 
 const ANCHOR_PROVENANCE: &str = "bpmn.position.anchor.v1";
-const APPLICABILITY_MESSAGE_KEY: &str = "semantic.pack.applicability";
 
 pub(crate) const MATERIALIZED_CANDIDATE_IDS: &[&str] = &[
     "op.append_node",
@@ -210,16 +209,17 @@ pub(crate) fn applicability_explanation(
     spec: &BpmnCandidateSpec,
     semantic_snapshot: &str,
 ) -> Result<RuleExplanation, BpmnBoardError> {
+    let source = rule_source(APPLICABILITY_RULE_CODE);
     RuleExplanation::new(
         GAMEBOARD_SCHEMA_VERSION,
-        RuleCode::new(spec.adapter_binding.clone())?,
-        MessageKey::new(APPLICABILITY_MESSAGE_KEY)?,
+        source.rule_code.clone(),
+        source.message_key.clone(),
         vec![
             ExplanationParameter::new("candidate", spec.semantic.canonical_id.as_str())?,
             ExplanationParameter::new("rule", spec.semantic.applicability.clone())?,
         ],
         semantic_snapshot,
-        DisclosureClass::Public,
+        source.disclosure,
     )
     .map_err(BpmnBoardError::from)
 }

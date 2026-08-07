@@ -51,6 +51,8 @@ fn deterministic_evidence(board: &semantic_decision_contracts::SemanticDecisionB
         board_hash: board.board_hash.as_str().to_string(),
         model_bundle_hash: "fixed-parity-producer".to_string(),
         evidence_trace: None,
+        inference_evidence: None,
+        move_evidence: Vec::new(),
     }
 }
 

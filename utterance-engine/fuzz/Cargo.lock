@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "dsl_types"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
+source = "git+https://github.com/adamtc007/dsl?rev=f3f781cc42c61066dfb2728c441389f4c34a595d#f3f781cc42c61066dfb2728c441389f4c34a595d"
 dependencies = [
  "serde",
  "serde_json",
@@ -1903,7 +1903,7 @@ dependencies = [
 [[package]]
 name = "sem_os_ontology"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
+source = "git+https://github.com/adamtc007/dsl?rev=f3f781cc42c61066dfb2728c441389f4c34a595d#f3f781cc42c61066dfb2728c441389f4c34a595d"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1922,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "sem_os_types"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
+source = "git+https://github.com/adamtc007/dsl?rev=f3f781cc42c61066dfb2728c441389f4c34a595d#f3f781cc42c61066dfb2728c441389f4c34a595d"
 dependencies = [
  "chrono",
  "serde",
@@ -1934,7 +1934,7 @@ dependencies = [
 [[package]]
 name = "semantic-decision-contracts"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
+source = "git+https://github.com/adamtc007/dsl?rev=f3f781cc42c61066dfb2728c441389f4c34a595d#f3f781cc42c61066dfb2728c441389f4c34a595d"
 dependencies = [
  "hex",
  "serde",
@@ -1946,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "semantic-pack"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
+source = "git+https://github.com/adamtc007/dsl?rev=f3f781cc42c61066dfb2728c441389f4c34a595d#f3f781cc42c61066dfb2728c441389f4c34a595d"
 dependencies = [
  "dsl_types",
  "hex",

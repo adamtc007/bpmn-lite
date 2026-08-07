@@ -128,6 +128,8 @@ impl Tier0Retriever for LexicalTier0 {
             board_hash: board.board_hash().to_string(),
             model_bundle_hash: self.bundle_identity(),
             evidence_trace: None,
+            inference_evidence: None,
+            move_evidence: Vec::new(),
         })
     }
 }
@@ -199,6 +201,8 @@ mod tests {
             board_hash: "b".into(),
             model_bundle_hash: "m".into(),
             evidence_trace: None,
+            inference_evidence: None,
+            move_evidence: Vec::new(),
         };
         let list = tier1_list(&result, TIER1_K);
         assert_eq!(list.len(), TIER1_K + 1, "K-prefix + appended NOTA");
@@ -334,6 +338,8 @@ pub mod embed {
                 board_hash: board.board_hash().to_string(),
                 model_bundle_hash: self.bundle_identity(),
                 evidence_trace: None,
+                inference_evidence: None,
+                move_evidence: Vec::new(),
             })
         }
     }

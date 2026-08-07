@@ -316,7 +316,34 @@ impl DesignerState {
         text: &str,
         board: &dyn utterance_engine::board::InferenceBoard,
         context: &utterance_engine::context::ContextProjection,
+        position: Option<&semantic_decision_contracts::DesignPosition>,
     ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
+        let finalize = |result,
+                        lane: semantic_decision_contracts::EvidenceLane,
+                        bundle: String|
+         -> anyhow::Result<utterance_engine::contract::SlmResult> {
+            if let (Some(semantic_board), Some(position)) = (board.semantic_board(), position) {
+                return utterance_engine::bpmn_board::finalize_bpmn_move_evidence(
+                    semantic_board,
+                    position,
+                    text,
+                    result,
+                    lane,
+                    vec![bundle],
+                    &[],
+                );
+            }
+            if let Some(semantic_board) = board.semantic_board() {
+                return utterance_engine::exact::finalize_semantic_evidence(
+                    semantic_board,
+                    text,
+                    result,
+                    vec![lane],
+                    vec![bundle],
+                );
+            }
+            Ok(result)
+        };
         #[cfg(not(feature = "candle-probe"))]
         let _ = context; // context text is a tier-1 encoding input only
         #[cfg(feature = "candle-probe")]
@@ -324,12 +351,10 @@ impl DesignerState {
             if let Some(semantic_board) = board.semantic_board() {
                 let result = t1.rank_full_board(text, context, semantic_board)?;
                 let bundle = result.model_bundle_hash.clone();
-                return utterance_engine::exact::finalize_semantic_evidence(
-                    semantic_board,
-                    text,
+                return finalize(
                     result,
-                    vec![utterance_engine::exact::EvidenceLane::CandleCrossEncoder],
-                    vec![bundle],
+                    utterance_engine::exact::EvidenceLane::CandleCrossEncoder,
+                    bundle,
                 );
             }
             // Deliberately do NOT call `t1.rank(...)` here. Every loadable
@@ -350,32 +375,22 @@ impl DesignerState {
         if let Some(e0) = &self.embed_tier0 {
             use utterance_engine::retrieval::Tier0Retriever as _;
             let result = e0.retrieve(text, board)?;
-            if let Some(semantic_board) = board.semantic_board() {
-                let bundle = result.model_bundle_hash.clone();
-                return utterance_engine::exact::finalize_semantic_evidence(
-                    semantic_board,
-                    text,
-                    result,
-                    vec![utterance_engine::exact::EvidenceLane::Embedding],
-                    vec![bundle],
-                );
-            }
-            return Ok(result);
+            let bundle = result.model_bundle_hash.clone();
+            return finalize(
+                result,
+                utterance_engine::exact::EvidenceLane::Embedding,
+                bundle,
+            );
         }
         {
             use utterance_engine::retrieval::Tier0Retriever as _;
             let result = utterance_engine::retrieval::LexicalTier0.retrieve(text, board)?;
-            if let Some(semantic_board) = board.semantic_board() {
-                let bundle = result.model_bundle_hash.clone();
-                return utterance_engine::exact::finalize_semantic_evidence(
-                    semantic_board,
-                    text,
-                    result,
-                    vec![utterance_engine::exact::EvidenceLane::Lexical],
-                    vec![bundle],
-                );
-            }
-            Ok(result)
+            let bundle = result.model_bundle_hash.clone();
+            finalize(
+                result,
+                utterance_engine::exact::EvidenceLane::Lexical,
+                bundle,
+            )
         }
     }
 
@@ -2873,6 +2888,20 @@ fn design_history_hash(
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn gameboard_focus(
+    anchor: Option<&str>,
+) -> anyhow::Result<semantic_decision_contracts::DesignFocus> {
+    match anchor {
+        Some(anchor) => Ok(semantic_decision_contracts::DesignFocus::element(
+            semantic_decision_contracts::GraphElementRef::new(anchor)?,
+        )),
+        None => Ok(semantic_decision_contracts::DesignFocus::absent(
+            semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+            None,
+        )?),
+    }
+}
+
 /// Versioned compatibility identity for the compiler/verifier admission
 /// profile used by the existing Designer path. This is application adapter
 /// metadata, not a shared gameboard rule or semantic-pack vocabulary.
@@ -3814,7 +3843,20 @@ async fn session_utterance_endpoint(
                 board.semantic_snapshot.as_str(),
                 &graph_identity,
             )?;
-            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
+            let focus = gameboard_focus(body.anchor.as_deref())?;
+            let history_hash = design_history_hash(&record_session)?;
+            let position = utterance_engine::bpmn_board::build_bpmn_design_position(
+                &dag,
+                &board,
+                &graph_identity,
+                &graph_content_hash(&record_session),
+                DESIGNER_COMPILER_PROFILE_IDENTITY,
+                &history_hash,
+                focus,
+                None,
+            )?;
+            let evidence =
+                demo.retrieve_utterance_evidence(&body.text, &board, &context, Some(&position))?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -3829,6 +3871,7 @@ async fn session_utterance_endpoint(
                 record,
                 context,
                 board,
+                position,
             ))
         })
         // Carry the reconstruction forward for binding extraction —
@@ -3839,7 +3882,7 @@ async fn session_utterance_endpoint(
                 t.1,
                 t.2,
                 t.3,
-                Some((dag, anchor_key, graph_identity, t.4)),
+                Some((dag, anchor_key, graph_identity, t.4, t.5)),
             )
         })
     } else {
@@ -3886,7 +3929,7 @@ async fn session_utterance_endpoint(
                 None,
                 node_kind_counts,
             )?;
-            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context)?;
+            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context, None)?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -3918,85 +3961,18 @@ async fn session_utterance_endpoint(
         }
     };
     let design_position = match &graph_ctx {
-        Some((dag, _, revision, semantic_board)) => {
-            let focus = match body.anchor.as_deref() {
-                Some(anchor) => semantic_decision_contracts::DesignFocus::element(
-                    match semantic_decision_contracts::GraphElementRef::new(anchor) {
-                        Ok(anchor) => anchor,
-                        Err(error) => {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "error": format!("design focus: {error}")
-                                })),
-                            )
-                                .into_response();
-                        }
-                    },
-                ),
-                None => match semantic_decision_contracts::DesignFocus::absent(
-                    semantic_decision_contracts::FocusAbsenceReason::NotProvided,
-                    None,
-                ) {
-                    Ok(focus) => focus,
-                    Err(error) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({
-                                "error": format!("design focus: {error}")
-                            })),
-                        )
-                            .into_response();
-                    }
-                },
-            };
-            let history_hash = match design_history_hash(&record_session) {
-                Ok(hash) => hash,
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": format!("design history identity: {error}")
-                        })),
-                    )
-                        .into_response();
-                }
-            };
-            match utterance_engine::bpmn_board::build_bpmn_design_position(
-                dag,
-                semantic_board,
-                revision,
-                &graph_content_hash(&record_session),
-                DESIGNER_COMPILER_PROFILE_IDENTITY,
-                &history_hash,
-                focus,
-                // The legacy proposal cache permits several pending proposals
-                // and designates no single current one. Do not guess one.
-                None,
-            ) {
-                Ok(position) => match serde_json::to_value(position) {
-                    Ok(position) => position,
-                    Err(error) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({
-                                "error": format!("design position serialize: {error}")
-                            })),
-                        )
-                            .into_response();
-                    }
-                },
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": format!("design position: {error}")
-                        })),
-                    )
-                        .into_response();
-                }
+        Some((_, _, _, _, position)) => match serde_json::to_value(position) {
+            Ok(position) => position,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("design position serialize: {error}")
+                    })),
+                )
+                    .into_response();
             }
-        }
+        },
         None => serde_json::Value::Null,
     };
     let mut message = if demo.mapper_rollout.suggestions_enabled() {
@@ -4012,7 +3988,7 @@ async fn session_utterance_endpoint(
     let mut dry_run_diagnostics: Vec<String> = Vec::new();
     if let (
         true,
-        Some((dag, anchor_key, graph_identity, semantic_board)),
+        Some((dag, anchor_key, graph_identity, semantic_board, _)),
         utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
     ) = (
         demo.mapper_rollout.workbooks_enabled(),
@@ -5111,8 +5087,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(
-            body["inference_disposition"]["Candidate"]["candidate_id"],
-            "op.insert_after"
+            body["inference_disposition"]["Candidate"]["candidate_id"], "op.insert_after",
+            "{body:?}"
         );
         assert!(body["workbook"].is_null(), "{body:?}");
         assert!(body["proposal"].is_null(), "{body:?}");

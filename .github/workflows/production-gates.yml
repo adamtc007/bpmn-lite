@@ -179,3 +179,10 @@ jobs:
             -runs=64 -max_len=64 -print_final_stats=1
           cargo fuzz run preview_compilation "$preview_corpus" -- \
             -runs=64 -max_len=64 -print_final_stats=1
+      - name: Semantic Gameboard Phase 3 evidence smoke
+        run: |
+          evidence_corpus=$(mktemp -d)
+          cp utterance-engine/fuzz/seeds/evidence_fusion/* "$evidence_corpus/"
+          cd utterance-engine/fuzz
+          cargo fuzz run evidence_fusion "$evidence_corpus" -- \
+            -runs=64 -max_len=256 -print_final_stats=1

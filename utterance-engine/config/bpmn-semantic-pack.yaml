@@ -948,6 +948,92 @@ declarations:
   - target
   - to
   - trigger
+evidence:
+  version: 1
+  features:
+  - lane: governed_exact
+    weight_millis: 10000
+  - lane: deterministic_grammar
+    weight_millis: 3500
+  - lane: lexical
+    weight_millis: 2000
+  - lane: embedding
+    weight_millis: 2500
+  - lane: candle_cross_encoder
+    weight_millis: 4000
+  - lane: typed_argument
+    weight_millis: 3000
+  - lane: graph_locality
+    weight_millis: 3000
+  - lane: structural_completion
+    weight_millis: 1000
+  - lane: history
+    weight_millis: 1200
+  - lane: correction
+    weight_millis: 1500
+  - lane: abstention
+    weight_millis: 1000
+  deterministic_gates: []
+rule_explanations:
+- rule_code: bpmn.applicability
+  message_key: bpmn.applicability
+  message: The selected move is available only where its admitted applicability rule holds.
+  disclosure: public
+  feedback_options:
+  - recovery.change_focus
+- rule_code: bpmn.argument.required
+  message_key: bpmn.argument.required
+  message: A required typed argument must be supplied and validated before preview.
+  disclosure: public
+  feedback_options:
+  - recovery.supply_argument
+- rule_code: bpmn.compiler.refused
+  message_key: bpmn.compiler.refused
+  message: The compiler refused this preview against the current authoritative graph.
+  disclosure: public
+  feedback_options:
+  - recovery.select_alternative
+  - recovery.retry
+- rule_code: bpmn.evidence
+  message_key: bpmn.evidence
+  message: The score records governed deterministic and statistical evidence and never authorizes a move.
+  disclosure: public
+  feedback_options: []
+- rule_code: bpmn.policy.hidden
+  message_key: bpmn.policy.hidden
+  message: Policy does not permit disclosure of this move at the current board position.
+  disclosure: policy_hidden
+  feedback_options:
+  - recovery.change_focus
+feedback_options:
+- id: recovery.change_focus
+  rule_code: bpmn.applicability
+  kind: change_focus
+  prompt_key: bpmn.change_focus
+  prompt: Select a graph position where this move is applicable.
+  disclosure: public
+  next_options: []
+- id: recovery.supply_argument
+  rule_code: bpmn.argument.required
+  kind: supply_argument
+  prompt_key: bpmn.supply_argument
+  prompt: Supply the missing typed argument.
+  disclosure: public
+  next_options: []
+- id: recovery.select_alternative
+  rule_code: bpmn.compiler.refused
+  kind: select_alternative
+  prompt_key: bpmn.select_alternative
+  prompt: Select another currently legal move.
+  disclosure: public
+  next_options: []
+- id: recovery.retry
+  rule_code: bpmn.compiler.refused
+  kind: retry
+  prompt_key: bpmn.retry
+  prompt: Retry after refreshing the current board.
+  disclosure: public
+  next_options: []
 extensions:
   bpmn.catalogue_revision: designer-candidate-schema-v3
 pack:

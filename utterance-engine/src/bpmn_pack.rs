@@ -9,13 +9,19 @@ use std::{collections::BTreeSet, sync::OnceLock};
 use designer_graph::board_candidate::{CandidateId, OperationKind, ProductionId};
 use semantic_decision_contracts::{
     ArgumentSpec, CandidateSemanticSlice, CanonicalCandidateId, DomainIdentity, GraphRevision,
-    NegativeContrast, PhraseEvidence, ResolvedPosition, SemanticDecisionBoard, SnapshotIdentity,
+    MessageKey, NegativeContrast, PhraseEvidence, ResolvedPosition, RuleCode,
+    SemanticDecisionBoard, SnapshotIdentity,
 };
 use semantic_pack::{
     admit_pack, CapabilityId, CompiledCapability, CompiledPack, ConfigValue, PackBytes,
 };
 
 pub(crate) const BPMN_SEMANTIC_SCHEMA_VERSION: u32 = 1;
+pub(crate) const APPLICABILITY_RULE_CODE: &str = "bpmn.applicability";
+pub(crate) const ARGUMENT_RULE_CODE: &str = "bpmn.argument.required";
+pub(crate) const COMPILER_REFUSAL_RULE_CODE: &str = "bpmn.compiler.refused";
+pub(crate) const EVIDENCE_RULE_CODE: &str = "bpmn.evidence";
+pub(crate) const POLICY_HIDDEN_RULE_CODE: &str = "bpmn.policy.hidden";
 
 /// Deterministic binding capability associated with a semantic candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,15 +49,89 @@ pub(crate) struct BpmnCandidateSpec {
     pub adapter_binding: String,
 }
 
-fn compiled_semantic_pack() -> &'static CompiledPack {
+pub(crate) fn compiled_semantic_pack() -> &'static CompiledPack {
     static PACK: OnceLock<CompiledPack> = OnceLock::new();
     PACK.get_or_init(|| {
-        admit_pack(PackBytes::new(
+        let pack = admit_pack(PackBytes::new(
             "utterance-engine/config/bpmn-semantic-pack.yaml",
             include_bytes!("../config/bpmn-semantic-pack.yaml"),
         ))
-        .expect("the embedded BPMN semantic pack must pass shared admission")
+        .expect("the embedded BPMN semantic pack must pass shared admission");
+        validate_bpmn_governance(&pack)
+            .expect("the embedded BPMN pack must close every adapter governance resource");
+        pack
     })
+}
+
+fn validate_bpmn_governance(pack: &CompiledPack) -> Result<(), String> {
+    let declared = pack
+        .evidence()
+        .features
+        .iter()
+        .map(|feature| feature.lane)
+        .collect::<BTreeSet<_>>();
+    let required = semantic_decision_contracts::EvidenceLane::ALL
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if declared != required {
+        return Err("BPMN evidence policy must declare every shared lane exactly once".into());
+    }
+    for code in [
+        APPLICABILITY_RULE_CODE,
+        ARGUMENT_RULE_CODE,
+        COMPILER_REFUSAL_RULE_CODE,
+        EVIDENCE_RULE_CODE,
+        POLICY_HIDDEN_RULE_CODE,
+    ] {
+        let code = RuleCode::new(code).map_err(|error| error.to_string())?;
+        let explanation = pack
+            .rule_explanation(&code)
+            .ok_or_else(|| format!("missing governed explanation `{}`", code.as_str()))?;
+        if code.as_str() != EVIDENCE_RULE_CODE && explanation.feedback_options.is_empty() {
+            return Err(format!(
+                "governed explanation `{}` has no recovery",
+                code.as_str()
+            ));
+        }
+        for option in &explanation.feedback_options {
+            if pack.feedback_option(option).is_none() {
+                return Err(format!(
+                    "governed explanation `{}` has dangling recovery `{}`",
+                    code.as_str(),
+                    option.as_str()
+                ));
+            }
+        }
+    }
+    for capability in pack.capabilities() {
+        if capability.phrases.is_empty() {
+            return Err(format!(
+                "candidate `{}` has no governed cues",
+                capability.id
+            ));
+        }
+        for argument in &capability.arguments {
+            if argument.required && argument.clarification_prompt.trim().is_empty() {
+                return Err(format!(
+                    "candidate `{}` has an ungoverned required argument",
+                    capability.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn rule_source(code: &str) -> &'static semantic_pack::RuleExplanationSource {
+    compiled_semantic_pack()
+        .rule_explanation(&RuleCode::new(code).expect("BPMN rule code is valid"))
+        .expect("BPMN governance validation guarantees the rule")
+}
+
+pub(crate) fn feedback_source(id: &str) -> &'static semantic_pack::FeedbackOptionSource {
+    compiled_semantic_pack()
+        .feedback_option(&MessageKey::new(id).expect("BPMN feedback id is valid"))
+        .expect("BPMN governance validation guarantees the feedback option")
 }
 
 fn compiled_candidate_spec(capability: &CompiledCapability) -> BpmnCandidateSpec {
@@ -360,7 +440,7 @@ mod tests {
             ),
             (
                 "bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9".to_owned(),
-                "ca698f442c4aa7eb1a80bddcf55a280fd44dc8fe6ccc4745b00ebac459d8d1ef".to_owned(),
+                "965381b5ec50a388977df9fd7a8a940587a0cb74b01bcd49a44026c9cdc4b963".to_owned(),
             )
         );
     }
@@ -371,7 +451,7 @@ mod tests {
         let lock = include_str!("../config/bpmn-semantic-pack.lock");
         assert_eq!(
             receipt.source_hash.as_str(),
-            "343fdb2fd9fa2b09e1aea4ae11f7ff869f651cb5fe34c08a1078e96eb37435a7"
+            "fe1174906c5a0bdad127abaaeb1c1fee748b0c6edac79457066a0c01356faca7"
         );
         assert!(lock.contains(receipt.source_hash.as_str()));
         assert!(lock.contains(receipt.artifact_hash.as_str()));
