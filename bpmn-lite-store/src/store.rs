@@ -48,6 +48,9 @@ pub enum DesignSessionEventKind {
         /// Non-authoritative belief snapshot produced for this position.
         #[serde(default)]
         gameboard_belief_json: Option<String>,
+        /// Phase 5 deterministic, position-bound interaction packet.
+        #[serde(default)]
+        gameboard_disposition_json: Option<String>,
         /// Bounded history projection used to construct the observed position.
         #[serde(default)]
         history_projection_hash: Option<String>,

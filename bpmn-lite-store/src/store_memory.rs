@@ -4017,6 +4017,7 @@ mod design_session_tests {
                     context_projection: None,
                     gameboard_attempt_receipt_json: None,
                     gameboard_belief_json: None,
+                    gameboard_disposition_json: None,
                     history_projection_hash: None,
                 },
             )

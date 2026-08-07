@@ -16,8 +16,8 @@ use thiserror::Error;
 
 use crate::board::PolicyFilter;
 use crate::bpmn_pack::{
-    candidate_spec, candidate_spec_by_canonical_id, feedback_source, rule_source,
-    semantic_snapshot_identity, BinderSupport, POLICY_HIDDEN_RULE_CODE,
+    candidate_spec, candidate_spec_by_canonical_id, compiled_semantic_pack, feedback_source,
+    rule_source, semantic_snapshot_identity, BinderSupport, POLICY_HIDDEN_RULE_CODE,
 };
 use crate::game_state::BpmnGameState;
 use crate::legal_moves::applicability_explanation;
@@ -381,6 +381,91 @@ pub fn update_bpmn_design_belief(
         .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
 }
 
+/// Select one deterministic, position-bound game interaction from complete move
+/// evidence and bounded belief. Models and belief remain evidence-only; the
+/// returned packet cannot add a legal move or mutate the graph.
+pub fn decide_bpmn_game_disposition(
+    board: &SemanticDecisionBoard,
+    position: &DesignPosition,
+    evidence: &[semantic_decision_contracts::MoveEvidence],
+    belief: &DesignBelief,
+    observed_intent: &str,
+    attempt_id: MoveAttemptId,
+    attempts: &[MoveAttemptReceipt],
+) -> Result<semantic_decision_contracts::GameDisposition, BpmnBoardError> {
+    crate::disposition::decide_game(
+        board,
+        position,
+        evidence,
+        belief,
+        observed_intent,
+        attempt_id,
+        attempts,
+    )
+    .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
+}
+
+/// Render only admitted pack text referenced by a game disposition. The host
+/// supplies layout; it does not invent domain wording, rules or recovery policy.
+pub fn render_bpmn_game_disposition(
+    disposition: &semantic_decision_contracts::GameDisposition,
+    board: &SemanticDecisionBoard,
+    position: &DesignPosition,
+) -> Result<String, BpmnBoardError> {
+    disposition.validate_for_position(position)?;
+    let pack = compiled_semantic_pack();
+    let mut messages = Vec::new();
+    if let Some(prompt) = disposition.governed_prompt() {
+        messages.push(prompt.to_string());
+    }
+    for move_id in disposition.selected_moves() {
+        if let Some(legal_move) = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.move_id() == move_id)
+        {
+            if let Some(candidate) = board.candidate(legal_move.candidate_id().as_str()) {
+                messages.push(candidate.effect.clone());
+            }
+        }
+    }
+    if let Some(receipt) = disposition.attempt_receipt() {
+        for explanation_id in receipt.rule_explanations() {
+            for source in pack.rule_explanations() {
+                let explanation = RuleExplanation::new(
+                    GAMEBOARD_SCHEMA_VERSION,
+                    source.rule_code.clone(),
+                    source.message_key.clone(),
+                    Vec::new(),
+                    board.semantic_snapshot.as_str(),
+                    source.disclosure,
+                )?;
+                if explanation.explanation_id() == explanation_id {
+                    messages.push(source.message.clone());
+                }
+            }
+        }
+        for option in receipt.feedback_options() {
+            if let Some(source) = pack
+                .feedback_options()
+                .iter()
+                .find(|source| source.prompt_key == *option.prompt_key())
+            {
+                messages.push(source.prompt.clone());
+            }
+        }
+    }
+    messages.retain(|message| !message.trim().is_empty());
+    let mut seen = std::collections::BTreeSet::new();
+    messages.retain(|message| seen.insert(message.clone()));
+    if messages.is_empty() {
+        return Err(BpmnBoardError::Continuity(
+            "game disposition has no admitted renderable resource".to_string(),
+        ));
+    }
+    Ok(messages.join("\n"))
+}
+
 /// Materialize a complete typed workbook with deterministic content-derived graph
 /// identities. This function does not mutate the supplied graph.
 pub fn materialize_bpmn_workbook(
@@ -587,6 +672,7 @@ fn policy_fingerprint(policy: &PolicyFilter) -> String {
     for denied in &policy.denied {
         put(&mut hasher, denied);
     }
+    put(&mut hasher, &crate::disposition::game_policy_identity());
     hasher.finalize().to_hex().to_string()
 }
 
@@ -605,7 +691,8 @@ mod tests {
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::Provenance;
     use semantic_decision_contracts::{
-        FocusAbsenceReason, GraphElementRef, ABSTENTION_CANDIDATE_ID,
+        DesignBelief, FiniteScore, FocusAbsenceReason, GameDispositionKind, GraphElementRef,
+        MoveAttemptId, MoveEvidence, ProducerIdentity, ABSTENTION_CANDIDATE_ID,
     };
     use uuid::Uuid;
 
@@ -642,6 +729,65 @@ mod tests {
         (staged.candidate, start, task)
     }
 
+    fn controlled_evidence(
+        position: &DesignPosition,
+        scores: &std::collections::BTreeMap<LegalMoveId, f64>,
+    ) -> Vec<MoveEvidence> {
+        position
+            .legal_moves()
+            .iter()
+            .map(|legal_move| {
+                let score = scores.get(legal_move.move_id()).copied().unwrap_or(0.05);
+                MoveEvidence::new(
+                    GAMEBOARD_SCHEMA_VERSION,
+                    legal_move.move_id().clone(),
+                    Vec::new(),
+                    FiniteScore::new(score).unwrap(),
+                    FiniteScore::new(score).unwrap(),
+                    Vec::new(),
+                    ProducerIdentity::new("test.controlled-evidence.v1").unwrap(),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn empty_belief(position: &DesignPosition) -> DesignBelief {
+        DesignBelief::new(
+            GAMEBOARD_SCHEMA_VERSION,
+            position.state_id().clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ProducerIdentity::new("test.empty-belief.v1").unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn anchored_game() -> (DesignerDag, SemanticDecisionBoard, DesignPosition) {
+        let (dag, _, task) = fixture();
+        let revision = "a".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        (dag, board, position)
+    }
+
     #[test]
     fn same_inputs_produce_the_same_board_hash() {
         let (dag, _, task) = fixture();
@@ -657,6 +803,169 @@ mod tests {
             first.candidates.last().unwrap().canonical_id.as_str(),
             ABSTENTION_CANDIDATE_ID
         );
+    }
+
+    #[test]
+    fn game_disposition_is_permutation_invariant_and_requires_complete_evidence() {
+        let (_, board, position) = anchored_game();
+        let selected = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id().as_str() != ABSTENTION_CANDIDATE_ID)
+            .unwrap()
+            .move_id()
+            .clone();
+        let scores = std::collections::BTreeMap::from([(selected, 0.9)]);
+        let evidence = controlled_evidence(&position, &scores);
+        let belief = empty_belief(&position);
+        let first = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &evidence,
+            &belief,
+            "controlled",
+            MoveAttemptId::new("attempt-permutation").unwrap(),
+            &[],
+        )
+        .unwrap();
+        let mut reversed = evidence.clone();
+        reversed.reverse();
+        let second = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &reversed,
+            &belief,
+            "controlled",
+            MoveAttemptId::new("attempt-permutation").unwrap(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(first, second);
+
+        let mut incomplete = evidence;
+        incomplete.pop();
+        assert!(decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &incomplete,
+            &belief,
+            "controlled",
+            MoveAttemptId::new("attempt-incomplete").unwrap(),
+            &[],
+        )
+        .is_err());
+
+        let (dag, _, task) = fixture();
+        let stale_revision = "9".repeat(64);
+        let current_board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &stale_revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let current_position = build_bpmn_design_position(
+            &dag,
+            &current_board,
+            &stale_revision,
+            &"8".repeat(64),
+            "compiler-profile-v1",
+            &"7".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        assert!(decide_bpmn_game_disposition(
+            &current_board,
+            &current_position,
+            &reversed,
+            &belief,
+            "stale evidence",
+            MoveAttemptId::new("attempt-stale-evidence").unwrap(),
+            &[],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn governed_clarification_surfaces_the_third_ranked_legal_move() {
+        let (_, board, position) = anchored_game();
+        let top_three = position
+            .legal_moves()
+            .iter()
+            .filter(|legal_move| legal_move.candidate_id().as_str() != ABSTENTION_CANDIDATE_ID)
+            .take(3)
+            .map(|legal_move| legal_move.move_id().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(top_three.len(), 3);
+        let scores = std::collections::BTreeMap::from([
+            (top_three[0].clone(), 0.55),
+            (top_three[1].clone(), 0.54),
+            (top_three[2].clone(), 0.53),
+        ]);
+        let evidence = controlled_evidence(&position, &scores);
+        let disposition = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &evidence,
+            &empty_belief(&position),
+            "ambiguous fixture",
+            MoveAttemptId::new("attempt-third-ranked").unwrap(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(disposition.kind(), GameDispositionKind::ClarifyMoves);
+        assert_eq!(disposition.selected_moves().len(), 3);
+        assert!(disposition.selected_moves().contains(&top_three[2]));
+        assert!(disposition.selected_moves().iter().all(|move_id| {
+            position
+                .legal_moves()
+                .iter()
+                .any(|legal_move| legal_move.move_id() == move_id)
+        }));
+        assert!(disposition.governed_prompt().is_some());
+    }
+
+    #[test]
+    fn policy_hidden_move_cannot_leak_through_scoring() {
+        let (dag, _, task) = fixture();
+        let mut filter = PolicyFilter::default();
+        filter.denied.insert("op.insert_after".to_string());
+        let revision = "d".repeat(64);
+        let board =
+            build_bpmn_semantic_board(&dag, Some((task, "task-1")), &revision, &filter).unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"e".repeat(64),
+            "compiler-profile-v1",
+            &"f".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        assert!(position
+            .legal_moves()
+            .iter()
+            .all(|legal_move| { legal_move.candidate_id().as_str() != "op.insert_after" }));
+        let evidence = controlled_evidence(&position, &std::collections::BTreeMap::new());
+        let disposition = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &evidence,
+            &empty_belief(&position),
+            "hidden move",
+            MoveAttemptId::new("attempt-hidden").unwrap(),
+            &[],
+        )
+        .unwrap();
+        assert!(disposition.selected_moves().iter().all(|move_id| {
+            position
+                .legal_moves()
+                .iter()
+                .any(|legal_move| legal_move.move_id() == move_id)
+        }));
     }
 
     #[test]

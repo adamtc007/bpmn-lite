@@ -159,12 +159,15 @@ pub(crate) struct PendingProposal {
     session_id: Uuid,
     workbook: semantic_decision_contracts::ProposalWorkbook,
     bound: Option<crate::proposal::BoundProposal>,
+    preview_delta: Option<semantic_decision_contracts::GraphDeltaPreview>,
     source_utterance_text: String,
     staged_against_hash: String,
     dry_run_diagnostics: Vec<String>,
     audit_event_seq: Option<u64>,
     design_position: semantic_decision_contracts::DesignPosition,
     gameboard_attempt_receipt_json: Option<String>,
+    correction_of: Option<semantic_decision_contracts::MoveAttemptId>,
+    correction_kind: Option<semantic_decision_contracts::CorrectionKind>,
 }
 
 impl DesignerState {
@@ -2925,9 +2928,13 @@ fn latest_gameboard_belief(
 
 fn gameboard_focus(
     anchor: Option<&str>,
+    anchor_resolved: bool,
 ) -> anyhow::Result<semantic_decision_contracts::DesignFocus> {
     match anchor {
-        Some(anchor) => Ok(semantic_decision_contracts::DesignFocus::element(
+        Some(anchor) if anchor_resolved => Ok(semantic_decision_contracts::DesignFocus::element(
+            semantic_decision_contracts::GraphElementRef::new(anchor)?,
+        )),
+        Some(anchor) => Ok(semantic_decision_contracts::DesignFocus::unknown(
             semantic_decision_contracts::GraphElementRef::new(anchor)?,
         )),
         None => Ok(semantic_decision_contracts::DesignFocus::absent(
@@ -3086,6 +3093,7 @@ fn proposal_audit_event(
             serde_json::to_string(&serde_json::json!({
                 "operations": bound.ops,
                 "description": bound.description,
+                "preview": pending.preview_delta,
             }))
         })
         .transpose()?;
@@ -3121,17 +3129,18 @@ fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::R
     let outcome = match pending.workbook.status() {
         ProposalStatus::NeedsArguments => MoveAttemptOutcome::Incomplete,
         ProposalStatus::DryRunRefused => MoveAttemptOutcome::CompilerRefused,
+        ProposalStatus::Ratified if pending.correction_of.is_some() => {
+            MoveAttemptOutcome::Corrected
+        }
         ProposalStatus::Ratified => MoveAttemptOutcome::Applied,
         ProposalStatus::Rejected => MoveAttemptOutcome::RejectedByUser,
         ProposalStatus::Expired => MoveAttemptOutcome::Stale,
         ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification => return Ok(()),
     };
     let attempted_move = pending
-        .design_position
-        .legal_moves()
-        .iter()
-        .find(|legal_move| legal_move.candidate_id() == &pending.workbook.candidate_id)
-        .map(|legal_move| legal_move.move_id().clone());
+        .workbook
+        .position_binding()
+        .map(|binding| binding.move_id().clone());
     let receipt = utterance_engine::bpmn_board::record_bpmn_attempt(
         &pending.design_position,
         MoveAttemptId::new(format!(
@@ -3142,11 +3151,60 @@ fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::R
         attempted_move,
         &pending.source_utterance_text,
         outcome,
-        None,
-        None,
+        pending.correction_of.clone(),
+        pending.correction_kind,
     )?;
     pending.gameboard_attempt_receipt_json = Some(serde_json::to_string(&receipt)?);
     Ok(())
+}
+
+fn validate_pending_position(
+    record: &bpmn_lite_store::store::DesignSessionRecord,
+    pending: &PendingProposal,
+) -> anyhow::Result<designer_graph::schema::DesignerDag> {
+    use semantic_decision_contracts::DesignFocus;
+
+    let dag = reconstruct_designer_dag(record)?;
+    let anchor_pair = match pending.design_position.focus() {
+        DesignFocus::Element { element } => {
+            let key = dag
+                .key_for_bpmn_id(element.as_str())
+                .ok_or_else(|| anyhow::anyhow!("focused graph element no longer exists"))?;
+            Some((key, element.as_str()))
+        }
+        DesignFocus::Absent { .. } => None,
+        DesignFocus::Unknown { .. } => {
+            anyhow::bail!("a workbook cannot remain active with unresolved focus")
+        }
+        DesignFocus::Subgraph { .. } => {
+            anyhow::bail!("this workbook facade does not admit subgraph focus")
+        }
+    };
+    let graph_identity = graph_identity_hash(record);
+    let board = utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        &dag,
+        anchor_pair,
+        &graph_identity,
+        &utterance_engine::board::PolicyFilter::default(),
+    )?;
+    if pending.workbook.board_hash != board.board_hash {
+        anyhow::bail!("semantic board changed since workbook creation");
+    }
+    let position = utterance_engine::bpmn_board::build_bpmn_design_position(
+        &dag,
+        &board,
+        &graph_identity,
+        &graph_content_hash(record),
+        DESIGNER_COMPILER_PROFILE_IDENTITY,
+        pending.design_position.history_hash().as_str(),
+        pending.design_position.focus().clone(),
+        pending
+            .design_position
+            .current_proposal_hash()
+            .map(|hash| hash.as_str()),
+    )?;
+    pending.workbook.validate_position(&position)?;
+    Ok(dag)
 }
 
 /// POST /api/dsl/sessions/:id/proposals/:pid/answers — atomically apply typed
@@ -3191,7 +3249,8 @@ async fn answer_proposal_endpoint(
         }
     };
     let current_hash = graph_identity_hash(&record);
-    if current_hash != pending.staged_against_hash {
+    let validated_dag = validate_pending_position(&record, &pending);
+    if let Err(reason) = &validated_dag {
         let mut expired = pending.clone();
         if let Err(error) = expired
             .workbook
@@ -3226,7 +3285,8 @@ async fn answer_proposal_endpoint(
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
-                "error": "graph changed since workbook creation",
+                "error": "workbook authority inputs changed since creation",
+                "reason": reason.to_string(),
                 "proposal_status": expired.workbook.status(),
                 "staged_against": pending.staged_against_hash,
                 "current": current_hash,
@@ -3234,16 +3294,7 @@ async fn answer_proposal_endpoint(
         )
             .into_response();
     }
-    let dag = match reconstruct_designer_dag(&record) {
-        Ok(dag) => dag,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("reconstruction: {error}") })),
-            )
-                .into_response();
-        }
-    };
+    let dag = validated_dag.expect("checked above");
     let mut workbook =
         match crate::proposal::apply_explicit_answers(&dag, pending.workbook.clone(), body.answers)
         {
@@ -3264,6 +3315,7 @@ async fn answer_proposal_endpoint(
         let mut updated = PendingProposal {
             workbook: workbook.clone(),
             bound: None,
+            preview_delta: None,
             dry_run_diagnostics: Vec::new(),
             ..pending
         };
@@ -3293,8 +3345,46 @@ async fn answer_proposal_endpoint(
         .into_response();
     }
 
-    let bound = match crate::proposal::materialize_operations(&dag, &workbook) {
-        Ok(bound) => bound,
+    let preview = utterance_engine::bpmn_board::preview_bpmn_workbook(
+        &dag,
+        &workbook,
+        pending.design_position.graph_revision().as_str(),
+        pending.design_position.graph_hash().as_str(),
+    );
+    let (bound, preview_delta, diagnostics) = match preview {
+        Ok(preview) => {
+            if let Err(error) = workbook
+                .transition(semantic_decision_contracts::ProposalStatus::ReadyForRatification)
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+            (
+                Some(crate::proposal::BoundProposal {
+                    ops: preview.bound().operations().to_vec(),
+                    description: preview.bound().description().to_string(),
+                }),
+                Some(preview.delta().clone()),
+                Vec::new(),
+            )
+        }
+        Err(utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused {
+            diagnostics, ..
+        }) => {
+            if let Err(error) =
+                workbook.transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+            (None, None, diagnostics)
+        }
         Err(error) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -3306,55 +3396,11 @@ async fn answer_proposal_endpoint(
                 .into_response();
         }
     };
-    let mut diagnostics = Vec::new();
-    let dry = designer_graph::productions::apply_production(
-        &dag,
-        bound.ops.clone(),
-        designer_graph::schema::Provenance::default(),
-    );
-    match dry {
-        Ok(staged) => match staged.candidate.admit() {
-            Ok(_) => {
-                if let Err(error) = workbook
-                    .transition(semantic_decision_contracts::ProposalStatus::ReadyForRatification)
-                {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": error.to_string() })),
-                    )
-                        .into_response();
-                }
-            }
-            Err(errors) => {
-                diagnostics = errors.iter().map(|error| error.message.clone()).collect();
-                if let Err(error) = workbook
-                    .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
-                {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": error.to_string() })),
-                    )
-                        .into_response();
-                }
-            }
-        },
-        Err(error) => {
-            diagnostics.push(error.to_string());
-            if let Err(error) =
-                workbook.transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
-            {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": error.to_string() })),
-                )
-                    .into_response();
-            }
-        }
-    }
 
     let mut updated = PendingProposal {
         workbook: workbook.clone(),
-        bound: Some(bound.clone()),
+        bound: bound.clone(),
+        preview_delta: preview_delta.clone(),
         dry_run_diagnostics: diagnostics.clone(),
         ..pending
     };
@@ -3391,8 +3437,9 @@ async fn answer_proposal_endpoint(
         "proposal_id": pid,
         "proposal_status": workbook.status(),
         "workbook": workbook,
-        "operations": bound.ops,
-        "description": bound.description,
+        "operations": bound.as_ref().map(|bound| &bound.ops),
+        "description": bound.as_ref().map(|bound| bound.description.as_str()),
+        "preview": preview_delta,
         "dry_run_diagnostics": diagnostics,
     }))
     .into_response()
@@ -3436,6 +3483,23 @@ async fn ratify_proposal_endpoint(
         != semantic_decision_contracts::ProposalStatus::ReadyForRatification
     {
         let status = pending.workbook.status();
+        let mut refused = pending.clone();
+        if let Err(error) = attach_terminal_gameboard_attempt(&mut refused) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &refused, "ratification_refused_status").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("proposal audit append: {error}") })),
+            )
+                .into_response();
+        }
         consume();
         return (
             StatusCode::CONFLICT,
@@ -3457,7 +3521,6 @@ async fn ratify_proposal_endpoint(
                 .into_response();
         }
     };
-    let ops = bound.ops.clone();
     let description = bound.description.clone();
     let staged_against_hash = pending.staged_against_hash.clone();
 
@@ -3483,7 +3546,8 @@ async fn ratify_proposal_endpoint(
     // identity; any intervening edit invalidates it. Fail closed — the
     // user re-utters against the current graph.
     let current_hash = graph_identity_hash(&record);
-    if current_hash != staged_against_hash {
+    let validated_dag = validate_pending_position(&record, &pending);
+    if let Err(reason) = &validated_dag {
         let mut expired = pending.clone();
         if let Err(error) = expired
             .workbook
@@ -3517,7 +3581,8 @@ async fn ratify_proposal_endpoint(
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
-                "error": "graph changed since proposal was staged",
+                "error": "proposal authority inputs changed since staging",
+                "reason": reason.to_string(),
                 "staged_against": staged_against_hash,
                 "current": current_hash,
             })),
@@ -3525,44 +3590,118 @@ async fn ratify_proposal_endpoint(
             .into_response();
     }
 
-    // Re-stage + admit: the exact graph-edit validation. With the hash
-    // unchanged this must succeed; if it somehow refuses, refuse —
-    // nothing is persisted and the proposal is consumed.
-    let dag = match reconstruct_designer_dag(&record) {
-        Ok(d) => d,
-        Err(e) => {
-            consume();
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("reconstruction: {e}") })),
-            )
-                .into_response();
-        }
-    };
-    let staged = match designer_graph::productions::apply_production(
+    // Reconstruct the exact public-facade preview and compiler admission.
+    // Any refusal or byte-level preview drift is persisted and consumed.
+    let dag = validated_dag.expect("checked above");
+    let replayed = match utterance_engine::bpmn_board::preview_bpmn_workbook(
         &dag,
-        ops.clone(),
-        designer_graph::schema::Provenance::default(),
+        &pending.workbook,
+        pending.design_position.graph_revision().as_str(),
+        pending.design_position.graph_hash().as_str(),
     ) {
-        Ok(s) => s,
-        Err(e) => {
+        Ok(preview) => preview,
+        Err(error) => {
+            let mut refused = pending.clone();
+            refused.dry_run_diagnostics = match &error {
+                utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused {
+                    diagnostics,
+                    ..
+                } => diagnostics.clone(),
+                _ => vec![error.to_string()],
+            };
+            if let Err(transition_error) = refused
+                .workbook
+                .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("compiler refusal transition: {transition_error}")
+                    })),
+                )
+                    .into_response();
+            }
+            if let Err(receipt_error) = attach_terminal_gameboard_attempt(&mut refused) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("attempt receipt: {receipt_error}")
+                    })),
+                )
+                    .into_response();
+            }
+            if let Err(audit_error) =
+                append_proposal_audit(demo.as_ref(), id, &refused, "ratification_compiler_refused")
+                    .await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("proposal audit append: {audit_error}")
+                    })),
+                )
+                    .into_response();
+            }
             consume();
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("staging refused: {e}") })),
+                Json(serde_json::json!({
+                    "error": "compiler admission refused during ratification",
+                    "diagnostics": refused.dry_run_diagnostics,
+                    "proposal_status": refused.workbook.status(),
+                })),
             )
                 .into_response();
         }
     };
-    if let Err(errs) = staged.candidate.admit() {
+    let preview_matches = pending
+        .preview_delta
+        .as_ref()
+        .is_some_and(|expected| expected == replayed.delta())
+        && serde_json::to_vec(&bound.ops).ok()
+            == serde_json::to_vec(replayed.bound().operations()).ok();
+    if !preview_matches {
+        let mut refused = pending.clone();
+        refused.dry_run_diagnostics = vec![
+            "deterministic preview reconstruction changed the delta or operation tape".to_string(),
+        ];
+        if let Err(error) = refused
+            .workbook
+            .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) = attach_terminal_gameboard_attempt(&mut refused) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) =
+            append_proposal_audit(demo.as_ref(), id, &refused, "preview_replay_mismatch").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("proposal audit append: {error}") })),
+            )
+                .into_response();
+        }
         consume();
-        let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
         return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": "graph does not admit", "diagnostics": messages })),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "deterministic preview reconstruction mismatch",
+                "proposal_status": refused.workbook.status(),
+            })),
         )
             .into_response();
     }
+    let ops = replayed.bound().operations().to_vec();
     let operations_json = match serde_json::to_string(&ops) {
         Ok(j) => j,
         Err(e) => {
@@ -3744,6 +3883,7 @@ async fn list_proposals_endpoint(
                 "proposal_id": pid,
                 "description": description,
                 "operations": operations,
+                "preview": p.preview_delta,
                 "workbook": p.workbook,
                 "proposal_status": p.workbook.status(),
                 "source_utterance_seq": p.workbook.source_utterance_seq,
@@ -3921,21 +4061,10 @@ async fn session_utterance_endpoint(
                     .into_response();
             }
         };
-        let anchor_key = match &body.anchor {
-            Some(id) => match dag.key_for_bpmn_id(id) {
-                Some(k) => Some(k),
-                None => {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({
-                            "error": format!("anchor '{id}' names no node in this session's graph")
-                        })),
-                    )
-                        .into_response();
-                }
-            },
-            None => None,
-        };
+        let anchor_key = body
+            .anchor
+            .as_deref()
+            .and_then(|id| dag.key_for_bpmn_id(id));
         let ir = match dag.to_ir() {
             Ok(ir) => ir,
             Err(e) => {
@@ -3961,11 +4090,11 @@ async fn session_utterance_endpoint(
         .and_then(|board| {
             let context = utterance_engine::context::project_ir(
                 &ir,
-                body.anchor.as_deref(),
+                anchor_key.and(body.anchor.as_deref()),
                 board.semantic_snapshot.as_str(),
                 &graph_identity,
             )?;
-            let focus = gameboard_focus(body.anchor.as_deref())?;
+            let focus = gameboard_focus(body.anchor.as_deref(), anchor_key.is_some())?;
             let (history_hash, attempts) = design_history_projection(&record_session)?;
             let position = utterance_engine::bpmn_board::build_bpmn_design_position(
                 &dag,
@@ -3992,6 +4121,18 @@ async fn session_utterance_endpoint(
                 &attempts,
                 previous_belief.as_ref(),
             )?;
+            let game_disposition = utterance_engine::bpmn_board::decide_bpmn_game_disposition(
+                &board,
+                &position,
+                &evidence.move_evidence,
+                &belief,
+                &body.text,
+                semantic_decision_contracts::MoveAttemptId::new(format!(
+                    "session-{id}-turn-{}",
+                    record_session.events.len()
+                ))?,
+                &attempts,
+            )?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -4009,6 +4150,7 @@ async fn session_utterance_endpoint(
                 position,
                 belief,
                 history_hash,
+                game_disposition,
             ))
         })
         // Carry the reconstruction forward for binding extraction —
@@ -4022,6 +4164,7 @@ async fn session_utterance_endpoint(
                 Some((dag, anchor_key, graph_identity, t.4, t.5)),
                 Some(t.6),
                 Some(t.7),
+                Some(t.8),
             )
         })
     } else {
@@ -4088,19 +4231,27 @@ async fn session_utterance_endpoint(
         // Legacy DSL-source sessions have no DesignerDag — no binding
         // extraction, no proposals (the graph-edit surface is the only
         // mutation path they lack anyway).
-        .map(|t| (t.0, t.1, t.2, t.3, None, None, None))
+        .map(|t| (t.0, t.1, t.2, t.3, None, None, None, None))
     };
-    let (board, disposition, record, context, graph_ctx, gameboard_belief, history_projection_hash) =
-        match pipeline_result {
-            Ok(t) => t,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("utterance pipeline: {e}") })),
-                )
-                    .into_response();
-            }
-        };
+    let (
+        board,
+        disposition,
+        record,
+        context,
+        graph_ctx,
+        gameboard_belief,
+        history_projection_hash,
+        game_disposition,
+    ) = match pipeline_result {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("utterance pipeline: {e}") })),
+            )
+                .into_response();
+        }
+    };
     let design_position = match &graph_ctx {
         Some((_, _, _, _, position)) => match serde_json::to_value(position) {
             Ok(position) => position,
@@ -4117,7 +4268,27 @@ async fn session_utterance_endpoint(
         None => serde_json::Value::Null,
     };
     let mut message = if demo.mapper_rollout.suggestions_enabled() {
-        render_disposition(&disposition, board.as_ref())
+        match (&game_disposition, &graph_ctx) {
+            (Some(game), Some((_, _, _, semantic_board, position))) => {
+                match utterance_engine::bpmn_board::render_bpmn_game_disposition(
+                    game,
+                    semantic_board,
+                    position,
+                ) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": format!("game disposition render: {error}")
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+            }
+            _ => render_disposition(&disposition, board.as_ref()),
+        }
     } else {
         "Mapper evidence recorded in shadow; no suggestion or workbook was served.".to_string()
     };
@@ -4127,34 +4298,65 @@ async fn session_utterance_endpoint(
     // a separate shared workbook and can never overwrite it.
     let mut staged_proposal: Option<PendingProposal> = None;
     let mut dry_run_diagnostics: Vec<String> = Vec::new();
+    let selected_game_move = game_disposition.as_ref().and_then(|game| {
+        matches!(
+            game.kind(),
+            semantic_decision_contracts::GameDispositionKind::ProposeMove
+                | semantic_decision_contracts::GameDispositionKind::RequestMoveArguments
+        )
+        .then(|| game.selected_moves().first())
+        .flatten()
+    });
+    let correction_context = design_history_projection(&record_session)
+        .ok()
+        .and_then(|(_, attempts)| attempts.last().cloned())
+        .filter(|attempt| {
+            matches!(
+                attempt.outcome(),
+                semantic_decision_contracts::MoveAttemptOutcome::RejectedByUser
+                    | semantic_decision_contracts::MoveAttemptOutcome::Applied
+            )
+        })
+        .map(|attempt| {
+            (
+                attempt
+                    .correction_of()
+                    .cloned()
+                    .unwrap_or_else(|| attempt.attempt_id().clone()),
+                attempt
+                    .correction_kind()
+                    .unwrap_or(semantic_decision_contracts::CorrectionKind::FollowUp),
+            )
+        });
     if let (
         true,
         Some((dag, anchor_key, graph_identity, semantic_board, position)),
-        utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
+        Some(move_id),
     ) = (
         demo.mapper_rollout.workbooks_enabled(),
         &graph_ctx,
-        &disposition,
+        selected_game_move,
     ) {
-        let canonical_id =
-            match semantic_decision_contracts::CanonicalCandidateId::new(candidate_id.clone()) {
-                Ok(candidate_id) => candidate_id,
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(
-                            serde_json::json!({ "error": format!("candidate identity: {error}") }),
-                        ),
-                    )
-                        .into_response();
-                }
-            };
+        let candidate_id = match position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.move_id() == move_id)
+        {
+            Some(legal_move) => legal_move.candidate_id().as_str().to_string(),
+            None => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": "game disposition move is stale" })),
+                )
+                    .into_response();
+            }
+        };
         let mut workbook = match crate::proposal::start_workbook(
             dag,
             *anchor_key,
             semantic_board,
+            crate::proposal::SelectedMove { position, move_id },
             &record,
-            &canonical_id,
             &body.text,
             0,
         ) {
@@ -4168,58 +4370,40 @@ async fn session_utterance_endpoint(
             }
         };
         let mut bound = None;
+        let mut preview_delta = None;
         if workbook.status() == semantic_decision_contracts::ProposalStatus::ReadyForDryRun {
-            let materialized = match crate::proposal::materialize_operations(dag, &workbook) {
-                Ok(materialized) => materialized,
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": format!("materialization: {error}") })),
-                    )
-                        .into_response();
-                }
-            };
-            let dry = designer_graph::productions::apply_production(
+            match utterance_engine::bpmn_board::preview_bpmn_workbook(
                 dag,
-                materialized.ops.clone(),
-                designer_graph::schema::Provenance::default(),
-            );
-            match dry {
-                Ok(staged) => match staged.candidate.admit() {
-                    Ok(_) => {
-                        if let Err(error) = workbook.transition(
-                            semantic_decision_contracts::ProposalStatus::ReadyForRatification,
-                        ) {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
-                            )
-                                .into_response();
-                        }
-                        message = format!(
-                            "Proposed: {}. Ratify to apply, or reject.",
-                            materialized.description
-                        );
+                &workbook,
+                position.graph_revision().as_str(),
+                position.graph_hash().as_str(),
+            ) {
+                Ok(preview) => {
+                    let materialized = crate::proposal::BoundProposal {
+                        ops: preview.bound().operations().to_vec(),
+                        description: preview.bound().description().to_string(),
+                    };
+                    if let Err(error) = workbook.transition(
+                        semantic_decision_contracts::ProposalStatus::ReadyForRatification,
+                    ) {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
+                        )
+                            .into_response();
                     }
-                    Err(errors) => {
-                        dry_run_diagnostics =
-                            errors.iter().map(|error| error.message.clone()).collect();
-                        if let Err(error) = workbook.transition(
-                            semantic_decision_contracts::ProposalStatus::DryRunRefused,
-                        ) {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
-                            )
-                                .into_response();
-                        }
-                        message = format!(
-                            "Proposal for '{candidate_id}' does not admit — nothing staged."
-                        );
-                    }
-                },
-                Err(error) => {
-                    dry_run_diagnostics = vec![error.to_string()];
+                    message = format!(
+                        "Proposed: {}. Ratify to apply, or reject.",
+                        materialized.description
+                    );
+                    preview_delta = Some(preview.delta().clone());
+                    bound = Some(materialized);
+                }
+                Err(utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused {
+                    diagnostics,
+                    ..
+                }) => {
+                    dry_run_diagnostics = diagnostics;
                     if let Err(error) = workbook
                         .transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
                     {
@@ -4229,12 +4413,17 @@ async fn session_utterance_endpoint(
                         )
                             .into_response();
                     }
-                    message = format!(
-                        "Proposal for '{candidate_id}' refused at staging — nothing staged."
-                    );
+                    message =
+                        format!("Proposal for '{candidate_id}' does not admit — nothing staged.");
+                }
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": format!("workbook preview: {error}") })),
+                    )
+                        .into_response();
                 }
             }
-            bound = Some(materialized);
         } else {
             let prompts = workbook
                 .slots()
@@ -4250,106 +4439,60 @@ async fn session_utterance_endpoint(
                 .collect::<Vec<_>>();
             message = format!("More information is required: {}", prompts.join(" "));
         }
-        staged_proposal = Some(PendingProposal {
+        let mut pending = PendingProposal {
             session_id: id,
             workbook,
             bound,
+            preview_delta,
             source_utterance_text: body.text.clone(),
             staged_against_hash: graph_identity.clone(),
             dry_run_diagnostics: dry_run_diagnostics.clone(),
             audit_event_seq: None,
             design_position: position.clone(),
             gameboard_attempt_receipt_json: None,
-        });
-    }
-
-    let gameboard_attempt = match &graph_ctx {
-        Some((_, _, _, _, position)) => {
-            use semantic_decision_contracts::{MoveAttemptId, MoveAttemptOutcome, ProposalStatus};
-
-            let outcome = match (&disposition, staged_proposal.as_ref()) {
-                (_, Some(pending)) => match pending.workbook.status() {
-                    ProposalStatus::NeedsArguments => Some(MoveAttemptOutcome::Incomplete),
-                    ProposalStatus::DryRunRefused => Some(MoveAttemptOutcome::CompilerRefused),
-                    ProposalStatus::Rejected => Some(MoveAttemptOutcome::RejectedByUser),
-                    ProposalStatus::Expired => Some(MoveAttemptOutcome::Stale),
-                    ProposalStatus::Ratified => Some(MoveAttemptOutcome::Applied),
-                    ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification => None,
-                },
-                (utterance_engine::policy::ProposalDisposition::Ambiguous { .. }, None) => {
-                    Some(MoveAttemptOutcome::Ambiguous)
-                }
-                (utterance_engine::policy::ProposalDisposition::MissingArguments { .. }, None)
-                | (utterance_engine::policy::ProposalDisposition::Compound { .. }, None) => {
-                    Some(MoveAttemptOutcome::Incomplete)
-                }
-                (utterance_engine::policy::ProposalDisposition::OutOfScope, None) => {
-                    Some(MoveAttemptOutcome::Inapplicable)
-                }
-                (utterance_engine::policy::ProposalDisposition::EscalateToSage { .. }, None) => {
-                    Some(MoveAttemptOutcome::Ambiguous)
-                }
-                (utterance_engine::policy::ProposalDisposition::Candidate { .. }, None) => None,
-            };
-            match outcome {
-                Some(outcome) => {
-                    let candidate_id = match &disposition {
-                        utterance_engine::policy::ProposalDisposition::Candidate {
-                            candidate_id,
-                        }
-                        | utterance_engine::policy::ProposalDisposition::MissingArguments {
-                            candidate_id,
-                            ..
-                        } => Some(candidate_id.as_str()),
-                        _ => None,
-                    };
-                    let attempted_move = candidate_id.and_then(|candidate_id| {
-                        position
-                            .legal_moves()
-                            .iter()
-                            .find(|legal_move| legal_move.candidate_id().as_str() == candidate_id)
-                            .map(|legal_move| legal_move.move_id().clone())
-                    });
-                    let attempt_id = match MoveAttemptId::new(format!(
-                        "session-{id}-turn-{}",
-                        record_session.events.len()
-                    )) {
-                        Ok(attempt_id) => attempt_id,
-                        Err(error) => {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "error": format!("attempt identity: {error}")
-                                })),
-                            )
-                                .into_response();
-                        }
-                    };
-                    match utterance_engine::bpmn_board::record_bpmn_attempt(
-                        position,
-                        attempt_id,
-                        attempted_move,
-                        &body.text,
-                        outcome,
-                        None,
-                        None,
-                    ) {
-                        Ok(receipt) => Some(receipt),
-                        Err(error) => {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "error": format!("attempt receipt: {error}")
-                                })),
-                            )
-                                .into_response();
-                        }
-                    }
-                }
-                None => None,
+            correction_of: correction_context
+                .as_ref()
+                .map(|(attempt_id, _)| attempt_id.clone()),
+            correction_kind: correction_context.as_ref().map(|(_, kind)| *kind),
+        };
+        if matches!(
+            pending.workbook.status(),
+            semantic_decision_contracts::ProposalStatus::DryRunRefused
+        ) || (matches!(
+            pending.workbook.status(),
+            semantic_decision_contracts::ProposalStatus::NeedsArguments
+        ) && game_disposition.as_ref().is_some_and(|game| {
+            game.kind() == semantic_decision_contracts::GameDispositionKind::ProposeMove
+        })) {
+            if let Err(error) = attach_terminal_gameboard_attempt(&mut pending) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+                )
+                    .into_response();
             }
         }
-        None => None,
+        staged_proposal = Some(pending);
+    }
+
+    let gameboard_attempt = match staged_proposal
+        .as_ref()
+        .and_then(|pending| pending.gameboard_attempt_receipt_json.as_deref())
+        .map(serde_json::from_str)
+    {
+        Some(Ok(receipt)) => Some(receipt),
+        Some(Err(error)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("pending attempt decode: {error}")
+                })),
+            )
+                .into_response();
+        }
+        None => game_disposition
+            .as_ref()
+            .and_then(|game| game.attempt_receipt().cloned()),
     };
 
     let gameboard_attempt_receipt_json = match gameboard_attempt.as_ref().map(serde_json::to_string)
@@ -4370,6 +4513,17 @@ async fn session_utterance_endpoint(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("belief serialize: {error}") })),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let gameboard_disposition_json = match game_disposition.as_ref().map(serde_json::to_string) {
+        Some(Ok(json)) => Some(json),
+        Some(Err(error)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("disposition serialize: {error}") })),
             )
                 .into_response();
         }
@@ -4462,6 +4616,7 @@ async fn session_utterance_endpoint(
                 context_projection: Some(context.serialize_canonical()),
                 gameboard_attempt_receipt_json,
                 gameboard_belief_json,
+                gameboard_disposition_json,
                 history_projection_hash,
             },
         )
@@ -4470,7 +4625,7 @@ async fn session_utterance_endpoint(
         Ok(seq) => {
             // The pending proposal is registered only once its source
             // utterance is durably appended (the audit anchor).
-            let (proposal_json, workbook_json, proposal_status, proposal_id_json) =
+            let (proposal_json, workbook_json, proposal_status, proposal_id_json, preview_json) =
                 match staged_proposal {
                     Some(mut pending) => {
                         pending.workbook.source_utterance_seq = seq;
@@ -4501,6 +4656,11 @@ async fn session_utterance_endpoint(
                                 )
                             })
                             .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
+                        let preview_json = pending
+                            .preview_delta
+                            .as_ref()
+                            .and_then(|preview| serde_json::to_value(preview).ok())
+                            .unwrap_or(serde_json::Value::Null);
                         let audit_seq =
                             match append_proposal_audit(demo.as_ref(), id, &pending, "created")
                                 .await
@@ -4526,12 +4686,14 @@ async fn session_utterance_endpoint(
                                 "proposal_id": proposal_id,
                                 "operations": ops_json,
                                 "description": description,
+                                "preview": preview_json.clone(),
                                 "workbook": workbook_json.clone(),
                                 "status": status_json.clone(),
                             }),
                             workbook_json,
                             status_json,
                             serde_json::json!(proposal_id),
+                            preview_json,
                         )
                     }
                     None => (
@@ -4539,23 +4701,34 @@ async fn session_utterance_endpoint(
                         serde_json::Value::Null,
                         serde_json::Value::Null,
                         serde_json::Value::Null,
+                        serde_json::Value::Null,
                     ),
                 };
-            let served_disposition = if demo.mapper_rollout.suggestions_enabled() {
+            let served_inference_disposition = if demo.mapper_rollout.suggestions_enabled() {
                 serde_json::to_value(&disposition).unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            };
+            let served_game_disposition = if demo.mapper_rollout.suggestions_enabled() {
+                game_disposition
+                    .as_ref()
+                    .and_then(|game| serde_json::to_value(game).ok())
+                    .unwrap_or_else(|| served_inference_disposition.clone())
             } else {
                 serde_json::Value::Null
             };
             Json(serde_json::json!({
                 "seq": seq,
                 "message": message,
-                "inference_disposition": served_disposition.clone(),
-                "disposition": served_disposition,
+                "inference_disposition": served_inference_disposition,
+                "game_disposition": served_game_disposition.clone(),
+                "disposition": served_game_disposition,
                 "decision_record_hash": record.decision_record_hash,
                 "workbook": workbook_json,
                 "proposal_status": proposal_status,
                 "dry_run_diagnostics": dry_run_diagnostics,
                 "proposal_id": proposal_id_json,
+                "preview": preview_json,
                 "board_hash": board.board_hash(),
                 "board_schema": board.schema_label(),
                 "board_pack_identity": board.pack_identity(),
@@ -6855,7 +7028,8 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Unknown anchor: fail-closed 422, not a silent whole-graph fallback.
+        // Unknown anchor: a typed, non-mutating turn is retained against an
+        // explicit unknown focus; it never becomes a whole-graph proposal.
         let response = app
             .clone()
             .oneshot(post_json(
@@ -6864,7 +7038,15 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.status(), StatusCode::OK);
+        let unknown = body_json(response).await;
+        assert_eq!(unknown["disposition"]["kind"], "change_focus_or_context");
+        assert_eq!(
+            unknown["disposition"]["attempt_receipt"]["outcome"],
+            "inapplicable"
+        );
+        assert_eq!(unknown["design_position"]["focus"]["kind"], "unknown");
+        assert!(unknown["proposal"].is_null());
 
         // Enable the explicitly consented development capture so this
         // endpoint test can prove the semantic board is retained in full.
@@ -7037,7 +7219,14 @@ mod tests {
             .iter()
             .filter_map(|e| e["kind"].get("Utterance"))
             .collect::<Vec<_>>();
-        let utterance_event = utterance_events.first().expect("utterance event present");
+        let utterance_event = utterance_events
+            .iter()
+            .find(|event| {
+                event["context_projection"].as_str().is_some_and(|context| {
+                    context.contains("anchor: service_task review_documents")
+                })
+            })
+            .expect("anchored utterance event present");
         let ctx_text = utterance_event["context_projection"].as_str().unwrap();
         assert!(
             ctx_text.contains("anchor: service_task review_documents"),
@@ -7435,16 +7624,14 @@ mod tests {
 
         let before = graph_body(&app, &session_id).await;
         let utter = utter_bindable(&app, &session_id).await;
-        assert!(
-            utter["disposition"].get("Candidate").is_some(),
-            "utterance must resolve to a Candidate disposition: {utter:?}"
-        );
+        assert_eq!(utter["disposition"]["kind"], "propose_move", "{utter:?}");
         let proposal = &utter["proposal"];
         assert!(
             proposal["proposal_id"].is_string(),
             "proposal staged: {utter:?}"
         );
         assert_eq!(proposal["operations"].as_array().unwrap().len(), 1);
+        assert!(proposal["preview"]["delta_hash"].is_string());
         assert!(
             proposal["operations"][0].get("InsertAfter").is_some(),
             "bound op is InsertAfter: {proposal:?}"
@@ -7625,6 +7812,139 @@ mod tests {
         let workbook: serde_json::Value =
             serde_json::from_str(rejected["workbook_json"].as_str().unwrap()).unwrap();
         assert_eq!(workbook["status"], "rejected");
+    }
+
+    #[tokio::test]
+    async fn correction_is_linked_previewed_ratified_and_compiler_admitted() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let unwanted = utter_bindable(&app, &session_id).await;
+        let unwanted_id = unwanted["proposal_id"].as_str().unwrap();
+        let applied = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{unwanted_id}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(applied.status(), StatusCode::OK);
+
+        let session = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let applied_attempt: semantic_decision_contracts::MoveAttemptReceipt = session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "ratified")
+            .and_then(|audit| audit["gameboard_attempt_receipt_json"].as_str())
+            .map(serde_json::from_str)
+            .transpose()
+            .unwrap()
+            .unwrap();
+
+        let offer = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/utterance"),
+                    serde_json::json!({
+                        "text": "that was wrong",
+                        "anchor": "review_documents",
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            offer["disposition"]["kind"], "offer_correction",
+            "{offer:?}"
+        );
+        assert_eq!(
+            offer["disposition"]["attempt_receipt"]["correction_of"],
+            applied_attempt.attempt_id().as_str()
+        );
+        assert!(offer["proposal"].is_null());
+
+        let correction = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/utterance"),
+                    serde_json::json!({
+                        "text": "insert before",
+                        "anchor": "review_documents",
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            correction["disposition"]["kind"], "request_move_arguments",
+            "{correction:?}"
+        );
+        let correction_id = correction["proposal_id"].as_str().unwrap();
+        let answered = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/proposals/{correction_id}/answers"),
+                    identifier_answer("node", "corrected_step"),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(answered["proposal_status"], "ready_for_ratification");
+        assert!(answered["preview"]["delta_hash"].is_string());
+
+        let ratified = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{correction_id}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ratified.status(), StatusCode::OK);
+
+        let session = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let corrected_attempt: semantic_decision_contracts::MoveAttemptReceipt = session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter_map(|event| event["kind"].get("ProposalAudit"))
+            .find(|audit| audit["outcome"] == "ratified")
+            .and_then(|audit| audit["gameboard_attempt_receipt_json"].as_str())
+            .map(serde_json::from_str)
+            .transpose()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            corrected_attempt.outcome(),
+            semantic_decision_contracts::MoveAttemptOutcome::Corrected
+        );
+        assert_eq!(
+            corrected_attempt.correction_of(),
+            Some(applied_attempt.attempt_id())
+        );
+        let graph = graph_body(&app, &session_id).await.to_string();
+        assert!(graph.contains("collect_documents"));
+        assert!(graph.contains("corrected_step"));
     }
 
     /// Drift: a manual graph-edit lands between staging and ratify →

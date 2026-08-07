@@ -33,6 +33,7 @@ mod belief;
 pub mod board;
 pub mod bpmn_board;
 mod bpmn_pack;
+mod clarification;
 pub mod context;
 mod fusion;
 mod game_state;

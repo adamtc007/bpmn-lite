@@ -1,0 +1,12 @@
+{
+  "fixture_id": "bpmn-mid-sequence-third-ranked-v1",
+  "ranking": [
+    { "candidate_id": "op.attach_guard", "score": 0.55 },
+    { "candidate_id": "op.replace_node", "score": 0.54 },
+    { "candidate_id": "op.insert_before", "score": 0.53 }
+  ],
+  "gold_candidate_id": "op.insert_before",
+  "gold_rank": 3,
+  "expected_disposition": "clarify_moves",
+  "expected_dimension": "argument"
+}

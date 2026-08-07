@@ -1,0 +1,18 @@
+{
+  "schema": "semantic-gameboard-disposition-fixture-receipt-v1",
+  "phase": 5,
+  "date": "2026-08-07",
+  "fixture": "utterance-engine/tests/fixtures/gameboard-top3.json",
+  "measurement": "utterance-engine/tests/gameboard_disposition.rs",
+  "fixture_count": 1,
+  "gold_in_top_three_count": 1,
+  "gold_in_top_three_rate": 1.0,
+  "clarification_success_count": 1,
+  "clarification_success_rate": 1.0,
+  "gold_rank": 3,
+  "gold_candidate_id": "op.insert_before",
+  "observed_disposition": "ClarifyMoves",
+  "observed_dimension": "Argument",
+  "governed_prompt_present": true,
+  "off_board_moves_observed": 0
+}

@@ -446,7 +446,10 @@ pub(crate) fn materialize_workbook(
     dag: &DesignerDag,
     workbook: &ProposalWorkbook,
 ) -> Result<BpmnBoundProposal, BpmnBoardError> {
-    if workbook.status() != ProposalStatus::ReadyForDryRun {
+    if !matches!(
+        workbook.status(),
+        ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification
+    ) {
         return Err(BpmnBoardError::WorkbookNotReady {
             status: workbook.status(),
         });

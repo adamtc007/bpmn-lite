@@ -12,5 +12,7 @@ fn main() {
     let _ = utterance_engine::bpmn_board::project_bpmn_attempt_history;
     let _ = utterance_engine::bpmn_board::record_bpmn_attempt;
     let _ = utterance_engine::bpmn_board::update_bpmn_design_belief;
+    let _ = utterance_engine::bpmn_board::decide_bpmn_game_disposition;
+    let _ = utterance_engine::bpmn_board::render_bpmn_game_disposition;
     let _ = DispositionConfig::shadow_v2().policy_hash();
 }

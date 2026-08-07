@@ -1,0 +1,68 @@
+{
+  "schema": "semantic-gameboard-fuzz-receipt-v1",
+  "phase": 5,
+  "date": "2026-08-07",
+  "target": "disposition_workbook_state",
+  "toolchain": "nightly-2026-08-03-aarch64-apple-darwin",
+  "command": "cargo +nightly-2026-08-03 fuzz run --fuzz-dir utterance-engine/fuzz disposition_workbook_state <temporary-corpus> -- -runs=1024 -max_len=64 -rss_limit_mb=1024",
+  "runs": 1024,
+  "crashes": 0,
+  "timeouts": 0,
+  "peak_rss_mb": 550,
+  "seed_packets": 10,
+  "final_live_corpus_entries": 131,
+  "final_coverage_edges": 6706,
+  "final_feature_count": 12189,
+  "dispositions_reached": [
+    "ProposeMove",
+    "ClarifyMoves",
+    "RequestMoveArguments",
+    "ExplainAttempt",
+    "OfferRecoveryMoves",
+    "OfferCorrection",
+    "OutOfScope",
+    "ChangeFocusOrContext",
+    "Escalate",
+    "CompoundPlan"
+  ],
+  "attempt_outcomes_reached": [
+    "Applied",
+    "Incomplete",
+    "Ambiguous",
+    "Inapplicable",
+    "DisclosureSafeRefusal",
+    "Stale",
+    "CompilerRefused",
+    "RejectedByUser",
+    "Corrected",
+    "SystemFailure"
+  ],
+  "invariants": [
+    "every selected move belongs to the recorded position",
+    "disposition and workbook round trips revalidate",
+    "illegal workbook transitions are atomic",
+    "workbook remains position-bound after every operation",
+    "authoritative graph node and edge counts never change",
+    "bounded attempt history replays canonically"
+  ],
+  "artifact_directory": "/tmp/bpmn-phase5-fuzz-nightly.OjF6VN/artifacts",
+  "artifacts_emitted": 0,
+  "committed_corpus_modified": false,
+  "committed_lockfile_modified_by_harness": false,
+  "all_discovered_target_seed_replay": {
+    "command_budget": "-runs=0 -max_len=4096 -rss_limit_mb=1024",
+    "temporary_corpus_copies": true,
+    "targets": [
+      { "name": "disposition_workbook_state", "seed_packets": 10, "exit_code": 0 },
+      { "name": "evidence_fusion", "seed_packets": 7, "exit_code": 0 },
+      { "name": "history_belief_state", "seed_packets": 4, "exit_code": 0 },
+      { "name": "legal_move_enumeration", "seed_packets": 1, "exit_code": 0 },
+      { "name": "phrase_index", "seed_packets": 1, "exit_code": 0 },
+      { "name": "preview_compilation", "seed_packets": 1, "exit_code": 0 },
+      { "name": "semantic_board_decode", "seed_packets": 1, "exit_code": 0 },
+      { "name": "v3_route_admission", "seed_packets": 1, "exit_code": 0 },
+      { "name": "workbook_transition", "seed_packets": 1, "exit_code": 0 }
+    ]
+  },
+  "note": "An initial stable-toolchain invocation refused nightly sanitizer flags before target execution; the receipted run explicitly selected the installed pinned nightly toolchain."
+}

@@ -29,6 +29,17 @@ pub(super) fn extract(utterance: &str) -> Vec<ExtractedArgument> {
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
     let mut extracted = Vec::new();
+    let has_quoted_identifier = utterance
+        .split(['\'', '"'])
+        .enumerate()
+        .any(|(index, value)| index % 2 == 1 && !value.trim().is_empty());
+    if has_quoted_identifier {
+        extracted.push(ExtractedArgument::new(
+            ArgumentKind::Identifier,
+            1.0,
+            "bpmn.extract.quoted-identifier.v1",
+        ));
+    }
     let has_duration = tokens
         .windows(2)
         .any(|pair| pair[0].parse::<u64>().is_ok() && is_duration_unit(pair[1]));
@@ -128,7 +139,7 @@ pub(super) fn score(
     let relevant = legal_move
         .arguments()
         .iter()
-        .filter(|argument| argument.required())
+        .filter(|argument| argument.required() && argument.value().is_none())
         .collect::<Vec<_>>();
     if relevant.is_empty() {
         return 0.0;
@@ -181,5 +192,13 @@ mod tests {
         assert!(!count
             .iter()
             .any(|value| value.kind == ArgumentKind::Duration));
+    }
+
+    #[test]
+    fn quoted_identifier_is_typed_evidence_without_binding_authority() {
+        let extracted = extract("insert after 'collect_documents'");
+        assert!(extracted
+            .iter()
+            .any(|value| value.kind == ArgumentKind::Identifier && value.confidence == 1.0));
     }
 }

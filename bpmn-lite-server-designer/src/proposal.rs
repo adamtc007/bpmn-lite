@@ -10,10 +10,11 @@ use designer_graph::ops::Operation;
 #[cfg(test)]
 use designer_graph::productions;
 use designer_graph::schema::{DesignerDag, NodeKey};
+#[cfg(test)]
+use semantic_decision_contracts::CanonicalCandidateId;
 use semantic_decision_contracts::{
-    ArgumentKind, BindingProvenance, CanonicalCandidateId, EvidenceRecordHash, ProposalStatus,
-    ProposalWorkbook, SemanticDecisionBoard, SlotRequirement, SlotValue, SlotValueState,
-    WorkbookId, WorkbookSlot,
+    ArgumentKind, BindingProvenance, EvidenceRecordHash, ProposalStatus, ProposalWorkbook,
+    SemanticDecisionBoard, SlotRequirement, SlotValue, SlotValueState, WorkbookId, WorkbookSlot,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,6 +31,7 @@ pub(crate) enum ProposalError {
     InvalidAnswer(String),
     #[error("proposal graph resolution failed: {0}")]
     Graph(String),
+    #[cfg(test)]
     #[error("proposal materialization failed: {0}")]
     Materialization(String),
 }
@@ -47,6 +49,11 @@ pub(crate) struct SlotAnswer {
 pub(crate) struct BoundProposal {
     pub ops: Vec<Operation>,
     pub description: String,
+}
+
+pub(crate) struct SelectedMove<'a> {
+    pub(crate) position: &'a semantic_decision_contracts::DesignPosition,
+    pub(crate) move_id: &'a semantic_decision_contracts::LegalMoveId,
 }
 
 #[cfg(test)]
@@ -321,8 +328,8 @@ pub(crate) fn start_workbook(
     dag: &DesignerDag,
     anchor: Option<NodeKey>,
     board: &SemanticDecisionBoard,
+    selected: SelectedMove<'_>,
     decision: &utterance_engine::policy::DecisionRecord,
-    candidate_id: &CanonicalCandidateId,
     utterance: &str,
     source_utterance_seq: u64,
 ) -> Result<ProposalWorkbook, ProposalError> {
@@ -331,16 +338,15 @@ pub(crate) fn start_workbook(
             "decision record and semantic board hashes differ".to_string(),
         ));
     }
-    match &decision.disposition {
-        utterance_engine::policy::ProposalDisposition::Candidate {
-            candidate_id: selected,
-        } if selected == candidate_id.as_str() => {}
-        _ => {
-            return Err(ProposalError::Contract(
-                "workbook candidate does not match the inference disposition".to_string(),
-            ));
-        }
-    }
+    let legal_move = selected
+        .position
+        .legal_moves()
+        .iter()
+        .find(|legal_move| legal_move.move_id() == selected.move_id)
+        .ok_or_else(|| {
+            ProposalError::Contract("selected move is absent from the position".into())
+        })?;
+    let candidate_id = legal_move.candidate_id();
     let candidate = board
         .candidates
         .iter()
@@ -430,14 +436,14 @@ pub(crate) fn start_workbook(
         });
     }
 
-    ProposalWorkbook::new(
+    ProposalWorkbook::new_position_bound(
         1,
         WorkbookId::new(Uuid::new_v4().to_string())
             .map_err(|error| ProposalError::Contract(error.to_string()))?,
         source_utterance_seq,
         board.board_hash.clone(),
-        board.graph_revision.clone(),
-        candidate_id.clone(),
+        selected.position,
+        selected.move_id.clone(),
         slots,
         EvidenceRecordHash::new(decision.decision_record_hash.clone())
             .map_err(|error| ProposalError::Contract(error.to_string()))?,
@@ -549,6 +555,7 @@ pub(crate) fn apply_explicit_answers(
 /// The capability facade owns deterministic identity derivation and exhaustive
 /// mutation semantics; this application wrapper retains its existing internal
 /// storage shape without becoming a second binder implementation.
+#[cfg(test)]
 pub(crate) fn materialize_operations(
     dag: &DesignerDag,
     workbook: &ProposalWorkbook,
@@ -710,6 +717,26 @@ mod tests {
             .candidates
             .iter()
             .any(|candidate| candidate.canonical_id == candidate_id));
+        let position = utterance_engine::bpmn_board::build_bpmn_design_position(
+            &dag,
+            &board,
+            "revision-1",
+            &"a".repeat(64),
+            "compiler-profile-test",
+            &"b".repeat(64),
+            semantic_decision_contracts::DesignFocus::element(
+                semantic_decision_contracts::GraphElementRef::new("review").unwrap(),
+            ),
+            None,
+        )
+        .unwrap();
+        let move_id = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id() == &candidate_id)
+            .unwrap()
+            .move_id()
+            .clone();
         let decision = DecisionRecord {
             board_hash: board.board_hash.as_str().to_string(),
             retrieved_subset_hash: "subset".to_string(),
@@ -731,8 +758,11 @@ mod tests {
             &dag,
             Some(anchor),
             &board,
+            SelectedMove {
+                position: &position,
+                move_id: &move_id,
+            },
             &decision,
-            &candidate_id,
             "Send 'onboarding_request' and wait for its response",
             7,
         )
