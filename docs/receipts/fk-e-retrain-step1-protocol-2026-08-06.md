@@ -78,3 +78,31 @@ did not correct it. Disposition returns to Adam: revert the pack
 wording (+ ob-poc pin), keep it on clarity grounds despite no
 measured gain, or fund a multi-seed replication before deciding.
 Artifacts: /tmp/retrain-step1/{control-out,treatment-out}/.
+
+## Augmentation experiment + the embed-generation confound (2026-08-07)
+
+**claude_natural_v1 (125 natural-register utterances, train-only,
+frozen instruments): NOT adopted.** Frozen template test 0.7588 →
+0.7059 (−5.3pp; saturated classes parallel_branch_interior +6,
+start_anchor +3, or_gateway +1 improved, the rest paid for it);
+starter-seed 8/34 control vs 7/34 augmented — noise at n=34. Bank
+parked (`claude_natural_v1.json.parked`), retest after the fix below.
+
+**The discovery that matters: every corpus regenerated in this series
+was built WITHOUT the `embed` feature** — corpus_gen fell back to the
+lexical tier-0 for retrieval-list composition, which "structurally
+excludes the context-sensitivity pairs tier-1 exists to resolve"
+(designer state doc). The historical corpus was embed-generated.
+Consequence: all three of tonight's bundles (control / treatment /
+augmented) score 21–24% on starter-seed where the 2026-08-03 bundle
+scored 44.1% — an internally consistent series on a silently degraded
+pipeline configuration. The control-vs-treatment wording verdict
+stands (fair internal comparison); every ABSOLUTE number from this
+series is non-comparable to history.
+
+**Corrective action (next training act):** regenerate the corpus with
+`--features embed`, retrain the control-equivalent, verify starter-seed
+recovers to ~44%, and add a fail-closed generation gate: corpus_gen
+must refuse to run (or the card must record and the trainer refuse)
+a retrieval-producer identity other than the one the standing corpus
+declares — the same producer-identity discipline serving already has.
