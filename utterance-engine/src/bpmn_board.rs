@@ -4,8 +4,9 @@ use designer_graph::board_candidate::{CandidateId, LegalityOracle};
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
-    CandidateSemanticSlice, DecisionBoardError, DomainIdentity, GraphRevision, ResolvedPosition,
-    SemanticDecisionBoard,
+    BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignFocus, DesignPosition,
+    DomainIdentity, GameboardContractError, GraphContentHash, GraphRevision, HistoryHash,
+    ResolvedPosition, SemanticDecisionBoard,
 };
 use thiserror::Error;
 
@@ -32,6 +33,9 @@ pub enum BpmnBoardError {
     /// A shared semantic invariant rejected the adapter output.
     #[error(transparent)]
     Shared(#[from] DecisionBoardError),
+    /// A reusable gameboard invariant rejected a compatibility projection.
+    #[error(transparent)]
+    Gameboard(#[from] GameboardContractError),
 }
 
 /// Build the complete model-visible semantic board at a resolved BPMN position.
@@ -86,6 +90,36 @@ pub fn build_bpmn_semantic_board(
         },
         candidates,
         policy_fingerprint(policy),
+    )
+    .map_err(BpmnBoardError::from)
+}
+
+/// Project the production semantic board into the reusable gameboard position
+/// contract without changing legality, disposition, workbook or mutation flow.
+///
+/// Authority-bearing values absent from the legacy board are mandatory inputs;
+/// this adapter never synthesizes them. The board domain is retained as one
+/// opaque path segment so the shared mechanism does not interpret BPMN naming.
+#[allow(clippy::too_many_arguments)]
+pub fn project_design_position(
+    board: &SemanticDecisionBoard,
+    graph_hash: &str,
+    compiler_profile: &str,
+    history_hash: &str,
+    focus: DesignFocus,
+    current_proposal_hash: Option<&str>,
+) -> Result<DesignPosition, BpmnBoardError> {
+    DesignPosition::from_semantic_board(
+        board,
+        BoardPath::new(vec![board.domain.as_str().to_string()])?,
+        GraphContentHash::new(graph_hash)?,
+        compiler_profile,
+        board.policy_fingerprint.clone(),
+        HistoryHash::new(history_hash)?,
+        focus,
+        current_proposal_hash
+            .map(GraphContentHash::new)
+            .transpose()?,
     )
     .map_err(BpmnBoardError::from)
 }
@@ -166,7 +200,7 @@ mod tests {
     use designer_graph::board_candidate::OperationKind;
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::Provenance;
-    use semantic_decision_contracts::ABSTENTION_CANDIDATE_ID;
+    use semantic_decision_contracts::{GraphElementRef, ABSTENTION_CANDIDATE_ID};
     use uuid::Uuid;
 
     use super::*;
@@ -217,6 +251,47 @@ mod tests {
             first.candidates.last().unwrap().canonical_id.as_str(),
             ABSTENTION_CANDIDATE_ID
         );
+    }
+
+    #[test]
+    fn legacy_board_projects_to_a_canonical_design_position() {
+        let (dag, _, task) = fixture();
+        let revision = "a".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let focus = DesignFocus::element(GraphElementRef::new("task-1").unwrap());
+
+        let position = project_design_position(
+            &board,
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            focus,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(position.domain().as_str(), "bpmn.designer");
+        assert_eq!(
+            position.board_path().segments().collect::<Vec<_>>(),
+            vec!["bpmn.designer"]
+        );
+        assert_eq!(position.graph_revision().as_str(), revision);
+        assert_eq!(position.graph_hash().as_str(), "b".repeat(64));
+        assert_eq!(position.history_hash().as_str(), "c".repeat(64));
+        assert_eq!(position.compiler_profile(), "compiler-profile-v1");
+        assert_eq!(position.policy_identity(), board.policy_fingerprint);
+        assert_eq!(position.legal_moves().len(), board.candidates.len());
+        assert!(position.current_proposal_hash().is_none());
+
+        let wire = serde_json::to_value(&position).unwrap();
+        let decoded: DesignPosition = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, position);
     }
 
     #[test]

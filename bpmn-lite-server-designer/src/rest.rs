@@ -2830,6 +2830,44 @@ fn graph_identity_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String 
     hasher.finalize().to_hex().to_string()
 }
 
+/// Canonical SHA-256 content identity of the authoritative graph edit log.
+/// This is deliberately separate from the legacy blake3 revision identity,
+/// whose bytes remain unchanged for board and proposal compatibility.
+fn graph_content_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"bpmn-lite-designer-graph-content-v1");
+    for payload in record.graph_edit_payloads() {
+        hasher.update((payload.len() as u64).to_be_bytes());
+        hasher.update(payload.as_bytes());
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// Canonical SHA-256 identity of the append-only history observed when a
+/// position is derived. The current attempt is appended later and therefore
+/// belongs to the next position, never retroactively to this one.
+fn design_history_hash(
+    record: &bpmn_lite_store::DesignSessionRecord,
+) -> Result<String, serde_json::Error> {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"bpmn-lite-design-history-v1");
+    for event in &record.events {
+        let bytes = serde_json::to_vec(event)?;
+        hasher.update((bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Versioned compatibility identity for the compiler/verifier admission
+/// profile used by the existing Designer path. This is application adapter
+/// metadata, not a shared gameboard rule or semantic-pack vocabulary.
+const DESIGNER_COMPILER_PROFILE_IDENTITY: &str = "bpmn-lite-compiler-v1";
+
 #[derive(Deserialize)]
 pub(crate) struct SessionGraphEditBody {
     /// The `Vec<designer_graph::ops::Operation>` to stage and, on
@@ -3869,6 +3907,86 @@ async fn session_utterance_endpoint(
                 .into_response();
         }
     };
+    let design_position = match &graph_ctx {
+        Some((_, _, _, semantic_board)) => {
+            let focus = match body.anchor.as_deref() {
+                Some(anchor) => semantic_decision_contracts::DesignFocus::element(
+                    match semantic_decision_contracts::GraphElementRef::new(anchor) {
+                        Ok(anchor) => anchor,
+                        Err(error) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "error": format!("design focus: {error}")
+                                })),
+                            )
+                                .into_response();
+                        }
+                    },
+                ),
+                None => match semantic_decision_contracts::DesignFocus::absent(
+                    semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+                    None,
+                ) {
+                    Ok(focus) => focus,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": format!("design focus: {error}")
+                            })),
+                        )
+                            .into_response();
+                    }
+                },
+            };
+            let history_hash = match design_history_hash(&record_session) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("design history identity: {error}")
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+            match utterance_engine::bpmn_board::project_design_position(
+                semantic_board,
+                &graph_content_hash(&record_session),
+                DESIGNER_COMPILER_PROFILE_IDENTITY,
+                &history_hash,
+                focus,
+                // The legacy proposal cache permits several pending proposals
+                // and designates no single current one. Do not guess one.
+                None,
+            ) {
+                Ok(position) => match serde_json::to_value(position) {
+                    Ok(position) => position,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": format!("design position serialize: {error}")
+                            })),
+                        )
+                            .into_response();
+                    }
+                },
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("design position: {error}")
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        None => serde_json::Value::Null,
+    };
     let mut message = if demo.mapper_rollout.suggestions_enabled() {
         render_disposition(&disposition, board.as_ref())
     } else {
@@ -4194,6 +4312,7 @@ async fn session_utterance_endpoint(
                 "board_hash": board.board_hash(),
                 "board_schema": board.schema_label(),
                 "board_pack_identity": board.pack_identity(),
+                "design_position": design_position,
                 "model_bundle_hash": record.model_bundle_hash.clone(),
                 "evidence_producer": record.model_bundle_hash,
                 "mapper_rollout": {
@@ -5635,6 +5754,10 @@ mod tests {
         assert_eq!(r1["capture"], "suppressed_no_charter");
         assert_eq!(r1["board_schema"], "legacy_thin_v1");
         assert_eq!(r1["board_pack_identity"], "pack.none");
+        assert!(
+            r1["design_position"].is_null(),
+            "legacy source sessions have no authoritative DesignerDag position"
+        );
         let h1 = r1["board_hash"].as_str().unwrap().to_owned();
         assert_eq!(h1.len(), 64);
 
@@ -6395,6 +6518,33 @@ mod tests {
         assert_eq!(utterance["board_schema"], "semantic_decision_board_v1");
         assert_ne!(utterance["board_pack_identity"], "pack.none");
         let anchored_hash = utterance["board_hash"].as_str().unwrap().to_owned();
+        let anchored_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(utterance["design_position"].clone()).unwrap();
+        assert_eq!(anchored_position.domain().as_str(), "bpmn.designer");
+        assert_eq!(
+            anchored_position
+                .board_path()
+                .segments()
+                .collect::<Vec<_>>(),
+            vec!["bpmn.designer"]
+        );
+        assert_eq!(
+            anchored_position.compiler_profile(),
+            DESIGNER_COMPILER_PROFILE_IDENTITY
+        );
+        assert_eq!(anchored_position.graph_revision().as_str().len(), 64);
+        assert_eq!(anchored_position.graph_hash().as_str().len(), 64);
+        assert_eq!(anchored_position.history_hash().as_str().len(), 64);
+        assert!(anchored_position.current_proposal_hash().is_none());
+        assert!(matches!(
+            anchored_position.focus(),
+            semantic_decision_contracts::DesignFocus::Element { element }
+                if element.as_str() == "review_documents"
+        ));
+        assert!(!anchored_position.legal_moves().is_empty());
+        assert!(anchored_position.legal_moves().iter().all(|legal_move| {
+            legal_move.graph_revision() == anchored_position.graph_revision()
+        }));
 
         // Position is part of semantic authority: the same graph at a
         // whole-graph position must not reuse the anchored board hash.
@@ -6408,6 +6558,19 @@ mod tests {
             .unwrap();
         let whole_graph = body_json(response).await;
         assert_ne!(anchored_hash, whole_graph["board_hash"]);
+        let whole_graph_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(whole_graph["design_position"].clone()).unwrap();
+        assert!(matches!(
+            whole_graph_position.focus(),
+            semantic_decision_contracts::DesignFocus::Absent {
+                reason: semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+                policy_decision: None,
+            }
+        ));
+        assert_ne!(
+            anchored_position.state_id(),
+            whole_graph_position.state_id()
+        );
 
         let capture = body_json(
             app.clone()

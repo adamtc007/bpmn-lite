@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "dsl_types"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
 dependencies = [
  "serde",
  "serde_json",
@@ -1903,7 +1903,7 @@ dependencies = [
 [[package]]
 name = "sem_os_ontology"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1922,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "sem_os_types"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
 dependencies = [
  "chrono",
  "serde",
@@ -1934,10 +1934,11 @@ dependencies = [
 [[package]]
 name = "semantic-decision-contracts"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror 1.0.69",
 ]
@@ -1945,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "semantic-pack"
 version = "0.2.2"
-source = "git+https://github.com/adamtc007/dsl?rev=a38eefe1e8d039bd8b52e52477ffd58ba39c3058#a38eefe1e8d039bd8b52e52477ffd58ba39c3058"
+source = "git+https://github.com/adamtc007/dsl?rev=bc547723e6831cdb46fb8028071db3f537129d77#bc547723e6831cdb46fb8028071db3f537129d77"
 dependencies = [
  "dsl_types",
  "hex",

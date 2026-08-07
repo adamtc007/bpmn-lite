@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "phase": 1,
+  "recorded_at": "2026-08-07T10:47:04Z",
+  "shared_revision": "bc547723e6831cdb46fb8028071db3f537129d77",
+  "runs_per_target": 64,
+  "max_len": 2048,
+  "targets": [
+    {
+      "target": "attempt_receipt_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {
+        "attempt_outcome": [
+          "ambiguous",
+          "applied",
+          "compiler_refused",
+          "corrected",
+          "disclosure_safe_refusal",
+          "inapplicable",
+          "incomplete",
+          "rejected_by_user",
+          "stale",
+          "system_failure"
+        ]
+      }
+    },
+    {
+      "target": "design_belief_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {}
+    },
+    {
+      "target": "design_position_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {}
+    },
+    {
+      "target": "feedback_option_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {
+        "disclosure_class": [
+          "authenticated",
+          "policy_hidden",
+          "public",
+          "restricted",
+          "technical"
+        ]
+      }
+    },
+    {
+      "target": "legal_move_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {}
+    },
+    {
+      "target": "rule_explanation_contract",
+      "exit_code": 0,
+      "required_semantic_counters_complete": true,
+      "semantic_counters": {
+        "disclosure_class": [
+          "authenticated",
+          "policy_hidden",
+          "public",
+          "restricted",
+          "technical"
+        ]
+      }
+    }
+  ],
+  "regressions": {
+    "manifest_sha256": "1ffa0742d65e6abf10f8f2bf427b8b5a7fd0d0117dfccbc8fe3f73d44958f046",
+    "count": 1,
+    "design_belief_float_round_trip_sha256": "8b32f5fb2d5ce8555470aebda7e5776b75c7faa1590d4392d4314c46ca4750b0"
+  }
+}
