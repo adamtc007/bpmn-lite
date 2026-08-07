@@ -163,6 +163,8 @@ pub(crate) struct PendingProposal {
     staged_against_hash: String,
     dry_run_diagnostics: Vec<String>,
     audit_event_seq: Option<u64>,
+    design_position: semantic_decision_contracts::DesignPosition,
+    gameboard_attempt_receipt_json: Option<String>,
 }
 
 impl DesignerState {
@@ -317,6 +319,7 @@ impl DesignerState {
         board: &dyn utterance_engine::board::InferenceBoard,
         context: &utterance_engine::context::ContextProjection,
         position: Option<&semantic_decision_contracts::DesignPosition>,
+        attempts: &[semantic_decision_contracts::MoveAttemptReceipt],
     ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
         let finalize = |result,
                         lane: semantic_decision_contracts::EvidenceLane,
@@ -330,7 +333,7 @@ impl DesignerState {
                     result,
                     lane,
                     vec![bundle],
-                    &[],
+                    attempts,
                 );
             }
             if let Some(semantic_board) = board.semantic_board() {
@@ -2870,22 +2873,54 @@ fn graph_content_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Canonical SHA-256 identity of the append-only history observed when a
-/// position is derived. The current attempt is appended later and therefore
-/// belongs to the next position, never retroactively to this one.
-fn design_history_hash(
+/// Reconstruct the bounded typed-attempt projection observed by a position.
+/// Raw dialogue and opaque proposal payloads never enter the ranker preimage.
+fn design_history_projection(
     record: &bpmn_lite_store::DesignSessionRecord,
-) -> Result<String, serde_json::Error> {
-    use sha2::{Digest, Sha256};
+) -> anyhow::Result<(String, Vec<semantic_decision_contracts::MoveAttemptReceipt>)> {
+    const MAX_WINDOW: usize = 64;
+    let mut encoded = record
+        .events
+        .iter()
+        .rev()
+        .filter_map(|event| match &event.kind {
+            DesignSessionEventKind::Utterance {
+                gameboard_attempt_receipt_json: Some(receipt),
+                ..
+            }
+            | DesignSessionEventKind::ProposalAudit {
+                gameboard_attempt_receipt_json: Some(receipt),
+                ..
+            } => Some(receipt.as_str()),
+            _ => None,
+        })
+        .take(MAX_WINDOW)
+        .collect::<Vec<_>>();
+    encoded.reverse();
+    let attempts = encoded
+        .into_iter()
+        .map(serde_json::from_str)
+        .collect::<Result<Vec<_>, _>>()?;
+    utterance_engine::bpmn_board::project_bpmn_attempt_history(&attempts)
+        .map_err(anyhow::Error::from)
+}
 
-    let mut hasher = Sha256::new();
-    hasher.update(b"bpmn-lite-design-history-v1");
-    for event in &record.events {
-        let bytes = serde_json::to_vec(event)?;
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
-    }
-    Ok(hex::encode(hasher.finalize()))
+fn latest_gameboard_belief(
+    record: &bpmn_lite_store::DesignSessionRecord,
+) -> anyhow::Result<Option<semantic_decision_contracts::DesignBelief>> {
+    record
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.kind {
+            DesignSessionEventKind::Utterance {
+                gameboard_belief_json: Some(belief),
+                ..
+            } => Some(serde_json::from_str(belief)),
+            _ => None,
+        })
+        .transpose()
+        .map_err(anyhow::Error::from)
 }
 
 fn gameboard_focus(
@@ -3063,6 +3098,7 @@ fn proposal_audit_event(
         dry_run_diagnostics_hash: blake3::hash(&diagnostics_preimage).to_hex().to_string(),
         decision_record_hash: pending.workbook.evidence_record_hash.as_str().to_string(),
         related_event_seq: pending.audit_event_seq,
+        gameboard_attempt_receipt_json: pending.gameboard_attempt_receipt_json.clone(),
     })
 }
 
@@ -3077,6 +3113,40 @@ async fn append_proposal_audit(
         .store
         .append_design_session_event(&demo.tenant_id, session_id, &event)
         .await?)
+}
+
+fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::Result<()> {
+    use semantic_decision_contracts::{MoveAttemptId, MoveAttemptOutcome, ProposalStatus};
+
+    let outcome = match pending.workbook.status() {
+        ProposalStatus::NeedsArguments => MoveAttemptOutcome::Incomplete,
+        ProposalStatus::DryRunRefused => MoveAttemptOutcome::CompilerRefused,
+        ProposalStatus::Ratified => MoveAttemptOutcome::Applied,
+        ProposalStatus::Rejected => MoveAttemptOutcome::RejectedByUser,
+        ProposalStatus::Expired => MoveAttemptOutcome::Stale,
+        ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification => return Ok(()),
+    };
+    let attempted_move = pending
+        .design_position
+        .legal_moves()
+        .iter()
+        .find(|legal_move| legal_move.candidate_id() == &pending.workbook.candidate_id)
+        .map(|legal_move| legal_move.move_id().clone());
+    let receipt = utterance_engine::bpmn_board::record_bpmn_attempt(
+        &pending.design_position,
+        MoveAttemptId::new(format!(
+            "workbook-{}-{:?}",
+            pending.workbook.workbook_id.as_str(),
+            pending.workbook.status()
+        ))?,
+        attempted_move,
+        &pending.source_utterance_text,
+        outcome,
+        None,
+        None,
+    )?;
+    pending.gameboard_attempt_receipt_json = Some(serde_json::to_string(&receipt)?);
+    Ok(())
 }
 
 /// POST /api/dsl/sessions/:id/proposals/:pid/answers — atomically apply typed
@@ -3130,6 +3200,13 @@ async fn answer_proposal_endpoint(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("workbook expiry: {error}") })),
+            )
+                .into_response();
+        }
+        if let Err(error) = attach_terminal_gameboard_attempt(&mut expired) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
             )
                 .into_response();
         }
@@ -3281,13 +3358,19 @@ async fn answer_proposal_endpoint(
         dry_run_diagnostics: diagnostics.clone(),
         ..pending
     };
-    let outcome = if workbook.status()
-        == semantic_decision_contracts::ProposalStatus::ReadyForRatification
-    {
-        "dry_run_admitted"
-    } else {
-        "dry_run_refused"
-    };
+    if let Err(error) = attach_terminal_gameboard_attempt(&mut updated) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+        )
+            .into_response();
+    }
+    let outcome =
+        if workbook.status() == semantic_decision_contracts::ProposalStatus::ReadyForRatification {
+            "dry_run_admitted"
+        } else {
+            "dry_run_refused"
+        };
     match append_proposal_audit(demo.as_ref(), id, &updated, outcome).await {
         Ok(audit_seq) => updated.audit_event_seq = Some(audit_seq),
         Err(error) => {
@@ -3412,6 +3495,13 @@ async fn ratify_proposal_endpoint(
             )
                 .into_response();
         }
+        if let Err(error) = attach_terminal_gameboard_attempt(&mut expired) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+            )
+                .into_response();
+        }
         if let Err(error) =
             append_proposal_audit(demo.as_ref(), id, &expired, "expired_graph_drift").await
         {
@@ -3510,24 +3600,49 @@ async fn ratify_proposal_endpoint(
         .await
     {
         Ok(seq) => {
-            let mut workbook = pending.workbook;
-            let transition =
-                workbook.transition(semantic_decision_contracts::ProposalStatus::Ratified);
-            consume();
-            match transition {
-                Ok(()) => Json(serde_json::json!({
-                    "seq": seq,
-                    "applied": description,
-                    "proposal_status": workbook.status(),
-                    "workbook": workbook,
-                }))
-                .into_response(),
-                Err(error) => (
+            let mut ratified = pending.clone();
+            if let Err(error) = ratified
+                .workbook
+                .transition(semantic_decision_contracts::ProposalStatus::Ratified)
+            {
+                consume();
+                return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": format!("workbook transition: {error}") })),
                 )
-                    .into_response(),
+                    .into_response();
             }
+            if let Err(error) = attach_terminal_gameboard_attempt(&mut ratified) {
+                consume();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
+                )
+                    .into_response();
+            }
+            let audit_seq =
+                match append_proposal_audit(demo.as_ref(), id, &ratified, "ratified").await {
+                    Ok(audit_seq) => audit_seq,
+                    Err(error) => {
+                        consume();
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": format!("ratification audit append: {error}")
+                            })),
+                        )
+                            .into_response();
+                    }
+                };
+            consume();
+            Json(serde_json::json!({
+                "seq": seq,
+                "audit_seq": audit_seq,
+                "applied": description,
+                "proposal_status": ratified.workbook.status(),
+                "workbook": ratified.workbook,
+            }))
+            .into_response()
         }
         Err(e) => {
             consume();
@@ -3569,6 +3684,13 @@ async fn reject_proposal_endpoint(
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": format!("cannot reject: {error}") })),
+        )
+            .into_response();
+    }
+    if let Err(error) = attach_terminal_gameboard_attempt(&mut rejected) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("attempt receipt: {error}") })),
         )
             .into_response();
     }
@@ -3844,7 +3966,7 @@ async fn session_utterance_endpoint(
                 &graph_identity,
             )?;
             let focus = gameboard_focus(body.anchor.as_deref())?;
-            let history_hash = design_history_hash(&record_session)?;
+            let (history_hash, attempts) = design_history_projection(&record_session)?;
             let position = utterance_engine::bpmn_board::build_bpmn_design_position(
                 &dag,
                 &board,
@@ -3855,8 +3977,21 @@ async fn session_utterance_endpoint(
                 focus,
                 None,
             )?;
-            let evidence =
-                demo.retrieve_utterance_evidence(&body.text, &board, &context, Some(&position))?;
+            let evidence = demo.retrieve_utterance_evidence(
+                &body.text,
+                &board,
+                &context,
+                Some(&position),
+                &attempts,
+            )?;
+            let previous_belief = latest_gameboard_belief(&record_session)?;
+            let belief = utterance_engine::bpmn_board::update_bpmn_design_belief(
+                &dag,
+                &position,
+                &evidence.move_evidence,
+                &attempts,
+                previous_belief.as_ref(),
+            )?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -3872,6 +4007,8 @@ async fn session_utterance_endpoint(
                 context,
                 board,
                 position,
+                belief,
+                history_hash,
             ))
         })
         // Carry the reconstruction forward for binding extraction —
@@ -3883,6 +4020,8 @@ async fn session_utterance_endpoint(
                 t.2,
                 t.3,
                 Some((dag, anchor_key, graph_identity, t.4, t.5)),
+                Some(t.6),
+                Some(t.7),
             )
         })
     } else {
@@ -3929,7 +4068,8 @@ async fn session_utterance_endpoint(
                 None,
                 node_kind_counts,
             )?;
-            let evidence = demo.retrieve_utterance_evidence(&body.text, &board, &context, None)?;
+            let evidence =
+                demo.retrieve_utterance_evidence(&body.text, &board, &context, None, &[])?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -3948,18 +4088,19 @@ async fn session_utterance_endpoint(
         // Legacy DSL-source sessions have no DesignerDag — no binding
         // extraction, no proposals (the graph-edit surface is the only
         // mutation path they lack anyway).
-        .map(|t| (t.0, t.1, t.2, t.3, None))
+        .map(|t| (t.0, t.1, t.2, t.3, None, None, None))
     };
-    let (board, disposition, record, context, graph_ctx) = match pipeline_result {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("utterance pipeline: {e}") })),
-            )
-                .into_response();
-        }
-    };
+    let (board, disposition, record, context, graph_ctx, gameboard_belief, history_projection_hash) =
+        match pipeline_result {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("utterance pipeline: {e}") })),
+                )
+                    .into_response();
+            }
+        };
     let design_position = match &graph_ctx {
         Some((_, _, _, _, position)) => match serde_json::to_value(position) {
             Ok(position) => position,
@@ -3988,7 +4129,7 @@ async fn session_utterance_endpoint(
     let mut dry_run_diagnostics: Vec<String> = Vec::new();
     if let (
         true,
-        Some((dag, anchor_key, graph_identity, semantic_board, _)),
+        Some((dag, anchor_key, graph_identity, semantic_board, position)),
         utterance_engine::policy::ProposalDisposition::Candidate { candidate_id },
     ) = (
         demo.mapper_rollout.workbooks_enabled(),
@@ -4117,8 +4258,123 @@ async fn session_utterance_endpoint(
             staged_against_hash: graph_identity.clone(),
             dry_run_diagnostics: dry_run_diagnostics.clone(),
             audit_event_seq: None,
+            design_position: position.clone(),
+            gameboard_attempt_receipt_json: None,
         });
     }
+
+    let gameboard_attempt = match &graph_ctx {
+        Some((_, _, _, _, position)) => {
+            use semantic_decision_contracts::{MoveAttemptId, MoveAttemptOutcome, ProposalStatus};
+
+            let outcome = match (&disposition, staged_proposal.as_ref()) {
+                (_, Some(pending)) => match pending.workbook.status() {
+                    ProposalStatus::NeedsArguments => Some(MoveAttemptOutcome::Incomplete),
+                    ProposalStatus::DryRunRefused => Some(MoveAttemptOutcome::CompilerRefused),
+                    ProposalStatus::Rejected => Some(MoveAttemptOutcome::RejectedByUser),
+                    ProposalStatus::Expired => Some(MoveAttemptOutcome::Stale),
+                    ProposalStatus::Ratified => Some(MoveAttemptOutcome::Applied),
+                    ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification => None,
+                },
+                (utterance_engine::policy::ProposalDisposition::Ambiguous { .. }, None) => {
+                    Some(MoveAttemptOutcome::Ambiguous)
+                }
+                (utterance_engine::policy::ProposalDisposition::MissingArguments { .. }, None)
+                | (utterance_engine::policy::ProposalDisposition::Compound { .. }, None) => {
+                    Some(MoveAttemptOutcome::Incomplete)
+                }
+                (utterance_engine::policy::ProposalDisposition::OutOfScope, None) => {
+                    Some(MoveAttemptOutcome::Inapplicable)
+                }
+                (utterance_engine::policy::ProposalDisposition::EscalateToSage { .. }, None) => {
+                    Some(MoveAttemptOutcome::Ambiguous)
+                }
+                (utterance_engine::policy::ProposalDisposition::Candidate { .. }, None) => None,
+            };
+            match outcome {
+                Some(outcome) => {
+                    let candidate_id = match &disposition {
+                        utterance_engine::policy::ProposalDisposition::Candidate {
+                            candidate_id,
+                        }
+                        | utterance_engine::policy::ProposalDisposition::MissingArguments {
+                            candidate_id,
+                            ..
+                        } => Some(candidate_id.as_str()),
+                        _ => None,
+                    };
+                    let attempted_move = candidate_id.and_then(|candidate_id| {
+                        position
+                            .legal_moves()
+                            .iter()
+                            .find(|legal_move| legal_move.candidate_id().as_str() == candidate_id)
+                            .map(|legal_move| legal_move.move_id().clone())
+                    });
+                    let attempt_id = match MoveAttemptId::new(format!(
+                        "session-{id}-turn-{}",
+                        record_session.events.len()
+                    )) {
+                        Ok(attempt_id) => attempt_id,
+                        Err(error) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "error": format!("attempt identity: {error}")
+                                })),
+                            )
+                                .into_response();
+                        }
+                    };
+                    match utterance_engine::bpmn_board::record_bpmn_attempt(
+                        position,
+                        attempt_id,
+                        attempted_move,
+                        &body.text,
+                        outcome,
+                        None,
+                        None,
+                    ) {
+                        Ok(receipt) => Some(receipt),
+                        Err(error) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "error": format!("attempt receipt: {error}")
+                                })),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+                None => None,
+            }
+        }
+        None => None,
+    };
+
+    let gameboard_attempt_receipt_json = match gameboard_attempt.as_ref().map(serde_json::to_string)
+    {
+        Some(Ok(json)) => Some(json),
+        Some(Err(error)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("attempt serialize: {error}") })),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let gameboard_belief_json = match gameboard_belief.as_ref().map(serde_json::to_string) {
+        Some(Ok(json)) => Some(json),
+        Some(Err(error)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("belief serialize: {error}") })),
+            )
+                .into_response();
+        }
+        None => None,
+    };
 
     let record_json = match serde_json::to_string(&record) {
         Ok(j) => j,
@@ -4204,6 +4460,9 @@ async fn session_utterance_endpoint(
                 response: message.clone(),
                 decision_record_json: Some(record_json),
                 context_projection: Some(context.serialize_canonical()),
+                gameboard_attempt_receipt_json,
+                gameboard_belief_json,
+                history_projection_hash,
             },
         )
         .await
@@ -4733,8 +4992,8 @@ async fn session_gameboard_endpoint(
             }
         },
     };
-    let history_hash = match design_history_hash(&session) {
-        Ok(hash) => hash,
+    let history_hash = match design_history_projection(&session) {
+        Ok((hash, _)) => hash,
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -6716,6 +6975,16 @@ mod tests {
             palette_position.move_set_hash(),
             whole_graph_position.move_set_hash()
         );
+        assert_ne!(
+            palette_position.history_hash(),
+            whole_graph_position.history_hash(),
+            "the terminal wrong attempt must advance bounded history"
+        );
+        assert_eq!(
+            palette_position.graph_revision(),
+            whole_graph_position.graph_revision(),
+            "history evidence must not mutate the authoritative graph"
+        );
 
         let capture = body_json(
             app.clone()
@@ -6762,12 +7031,13 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        let utterance_event = record["events"]
+        let utterance_events = record["events"]
             .as_array()
             .unwrap()
             .iter()
-            .find_map(|e| e["kind"].get("Utterance"))
-            .expect("utterance event present");
+            .filter_map(|e| e["kind"].get("Utterance"))
+            .collect::<Vec<_>>();
+        let utterance_event = utterance_events.first().expect("utterance event present");
         let ctx_text = utterance_event["context_projection"].as_str().unwrap();
         assert!(
             ctx_text.contains("anchor: service_task review_documents"),
@@ -6776,6 +7046,35 @@ mod tests {
         assert!(
             ctx_text.contains("nodes:\n"),
             "node census present: {ctx_text:?}"
+        );
+        let wrong_attempt = utterance_events.last().unwrap();
+        let receipt: semantic_decision_contracts::MoveAttemptReceipt = serde_json::from_str(
+            wrong_attempt["gameboard_attempt_receipt_json"]
+                .as_str()
+                .expect("wrong attempt has a typed receipt"),
+        )
+        .unwrap();
+        assert!(matches!(
+            receipt.outcome(),
+            semantic_decision_contracts::MoveAttemptOutcome::Ambiguous
+                | semantic_decision_contracts::MoveAttemptOutcome::Inapplicable
+        ));
+        let belief: semantic_decision_contracts::DesignBelief = serde_json::from_str(
+            wrong_attempt["gameboard_belief_json"]
+                .as_str()
+                .expect("turn has a position-bound belief snapshot"),
+        )
+        .unwrap();
+        assert_eq!(belief.position_id(), whole_graph_position.state_id());
+        assert_eq!(
+            record["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| event["kind"].get("GraphEdit").is_some())
+                .count(),
+            1,
+            "wrong attempts never append an authoritative graph edit"
         );
     }
 

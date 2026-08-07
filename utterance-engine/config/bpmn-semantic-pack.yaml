@@ -974,6 +974,48 @@ evidence:
   - lane: abstention
     weight_millis: 1000
   deterministic_gates: []
+motifs:
+- id: motif.reminder_then_escalate
+  version: 1
+  preconditions:
+  - fact: graph.has_guard_host
+    expected: true
+  completion_facts:
+  - graph.has_boundary_guard
+  likely_next_candidates:
+  - op.attach_guard
+  - op.attach_rearming_guard
+  - prod.reminder_then_escalate
+  discriminating_contrasts:
+  - prod.interrupting_timeout
+  - prod.non_interrupting_notification
+  completion_conditions:
+  - fact: graph.has_boundary_guard
+    expected: true
+  abandonment_conditions:
+  - fact: graph.has_guard_host
+    expected: false
+- id: motif.request_and_wait
+  version: 1
+  preconditions:
+  - fact: graph.has_flow_node
+    expected: true
+  completion_facts:
+  - graph.has_message_wait
+  - graph.has_send_task
+  likely_next_candidates:
+  - op.set_correlation_source
+  - prod.request_and_wait
+  discriminating_contrasts:
+  - op.connect
+  completion_conditions:
+  - fact: graph.has_message_wait
+    expected: true
+  - fact: graph.has_send_task
+    expected: true
+  abandonment_conditions:
+  - fact: graph.has_flow_node
+    expected: false
 rule_explanations:
 - rule_code: bpmn.applicability
   message_key: bpmn.applicability

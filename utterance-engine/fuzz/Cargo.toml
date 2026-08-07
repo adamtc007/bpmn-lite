@@ -14,7 +14,7 @@ libfuzzer-sys = "0.4"
 serde_json = "1"
 utterance-engine = { path = "..", features = ["candle-probe"] }
 candle-core = "0.8"
-semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a" }
 designer-graph = { path = "../../designer-graph" }
 bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
 uuid = "1"
@@ -64,6 +64,13 @@ bench = false
 [[bin]]
 name = "evidence_fusion"
 path = "fuzz_targets/evidence_fusion.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "history_belief_state"
+path = "fuzz_targets/history_belief_state.rs"
 test = false
 doc = false
 bench = false

@@ -4015,6 +4015,9 @@ mod design_session_tests {
                     response: "applied bounded-retry macro".into(),
                     decision_record_json: None,
                     context_projection: None,
+                    gameboard_attempt_receipt_json: None,
+                    gameboard_belief_json: None,
+                    history_projection_hash: None,
                 },
             )
             .await

@@ -317,7 +317,10 @@ pub(crate) fn semantic_snapshot_identity() -> SnapshotIdentity {
             .expect("candidate schema identity is valid"),
         ResolvedPosition {
             anchor: None,
-            context_hash: "full-bpmn-semantic-profile".to_string(),
+            context_hash: format!(
+                "full-bpmn-semantic-profile:{}",
+                compiled_semantic_pack().receipt().artifact_hash.as_str()
+            ),
         },
         specs.into_iter().map(|spec| spec.semantic).collect(),
         "semantic-profile-content-address-v1".to_string(),
@@ -439,8 +442,8 @@ mod tests {
                     .to_owned(),
             ),
             (
-                "bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9".to_owned(),
-                "965381b5ec50a388977df9fd7a8a940587a0cb74b01bcd49a44026c9cdc4b963".to_owned(),
+                "bpmn-semantic-profile-v1:0ff6747b192aa4df8181b17d0d922d779994a161cadc39c4d3ca36fd7568edc8".to_owned(),
+                "c3dd92720bb671729970c6ef3530b79572c6b8bdd8be2b4d548f8717e5fa0d2a".to_owned(),
             )
         );
     }
@@ -451,7 +454,7 @@ mod tests {
         let lock = include_str!("../config/bpmn-semantic-pack.lock");
         assert_eq!(
             receipt.source_hash.as_str(),
-            "fe1174906c5a0bdad127abaaeb1c1fee748b0c6edac79457066a0c01356faca7"
+            "4764ffb9a402d910abd635d5c4c1a21512107c600dbf60c12aee95b362dd0d68"
         );
         assert!(lock.contains(receipt.source_hash.as_str()));
         assert!(lock.contains(receipt.artifact_hash.as_str()));

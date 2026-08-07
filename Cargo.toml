@@ -72,11 +72,11 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid"
 chrono = { version = "0.4", features = ["serde"] }
 futures-executor = "0.3"
 # Shared contracts: exact immutable DSL workspace revision, version 0.2.2.
-sem_os_ontology = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d" }
-sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d" }
-semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d" }
-semantic-pack = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d" }
-semantic-embedder = { git = "https://github.com/adamtc007/dsl", rev = "f3f781cc42c61066dfb2728c441389f4c34a595d", default-features = false }
+sem_os_ontology = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a" }
+sem_os_policy = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a" }
+semantic-pack = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a" }
+semantic-embedder = { git = "https://github.com/adamtc007/dsl", rev = "4858d305248f80f2035891b90c4474affb66ec8a", default-features = false }
 # dmn-lite workspace deps (carried over)
 smallvec = { version = "1", features = ["serde"] }
 toml = "0.8"

@@ -5,11 +5,12 @@ use designer_graph::ops::Operation;
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
-    ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignFocus,
-    DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane, FeedbackOption, GameDomainId,
-    GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision, HistoryHash,
-    LegalMoveId, MoveAttemptReceipt, ProposalWorkbook, ResolvedPosition, RuleExplanation,
-    SemanticDecisionBoard, GAMEBOARD_SCHEMA_VERSION,
+    ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignBelief,
+    DesignFocus, DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane, FeedbackOption,
+    GameDomainId, GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision,
+    HistoryHash, LegalMoveId, MoveAttemptId, MoveAttemptOutcome, MoveAttemptReceipt,
+    ProposalWorkbook, ResolvedPosition, RuleExplanation, SemanticDecisionBoard,
+    GAMEBOARD_SCHEMA_VERSION,
 };
 use thiserror::Error;
 
@@ -142,6 +143,9 @@ pub enum BpmnBoardError {
     /// A canonical preview payload could not be encoded.
     #[error("graph preview encoding failed: {0}")]
     PreviewEncoding(String),
+    /// Bounded history or belief evidence could not be projected.
+    #[error("gameboard continuity projection failed: {0}")]
+    Continuity(String),
     /// A workbook has not completed its typed binding transition.
     #[error("proposal workbook is not ready for materialization: {status:?}")]
     WorkbookNotReady {
@@ -323,6 +327,58 @@ pub fn finalize_bpmn_move_evidence(
         bundle_identities,
         attempts,
     )
+}
+
+/// Validate and content-address the bounded attempt window supplied by the
+/// application composition root. The returned receipts are the exact evidence
+/// window used by ranking; neither the projection nor its hash grants authority.
+pub fn project_bpmn_attempt_history(
+    attempts: &[MoveAttemptReceipt],
+) -> Result<(String, Vec<MoveAttemptReceipt>), BpmnBoardError> {
+    let projection = crate::history::project(attempts)
+        .map_err(|error| BpmnBoardError::Continuity(error.to_string()))?;
+    Ok((
+        projection.hash().as_str().to_string(),
+        projection.attempts().to_vec(),
+    ))
+}
+
+/// Record one terminal attempt using governed explanation and recovery
+/// resources from the admitted BPMN semantic pack. No graph state is touched.
+#[allow(clippy::too_many_arguments)]
+pub fn record_bpmn_attempt(
+    position: &DesignPosition,
+    attempt_id: MoveAttemptId,
+    attempted_move: Option<LegalMoveId>,
+    observed_intent: &str,
+    outcome: MoveAttemptOutcome,
+    correction_of: Option<MoveAttemptId>,
+    correction_kind: Option<semantic_decision_contracts::CorrectionKind>,
+) -> Result<MoveAttemptReceipt, BpmnBoardError> {
+    crate::history::receipt(
+        position.semantic_snapshot().as_str(),
+        attempt_id,
+        position.state_id().clone(),
+        attempted_move,
+        observed_intent,
+        outcome,
+        correction_of,
+        correction_kind,
+    )
+    .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
+}
+
+/// Produce a bounded non-authoritative belief snapshot from the current legal
+/// move evidence, governed motifs, graph facts and retained attempt window.
+pub fn update_bpmn_design_belief(
+    dag: &DesignerDag,
+    position: &DesignPosition,
+    evidence: &[semantic_decision_contracts::MoveEvidence],
+    attempts: &[MoveAttemptReceipt],
+    previous: Option<&DesignBelief>,
+) -> Result<DesignBelief, BpmnBoardError> {
+    crate::belief::update(dag, position, evidence, attempts, previous)
+        .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
 }
 
 /// Materialize a complete typed workbook with deterministic content-derived graph
@@ -992,5 +1048,267 @@ mod tests {
             map_legal_candidate(CandidateId::Operation(OperationKind::AppendNode), &denied)
                 .expect("a policy-denied candidate must not error");
         assert!(excluded.is_none());
+    }
+
+    #[test]
+    fn belief_replays_and_rejection_reduces_evidence_without_changing_legality() {
+        use semantic_decision_contracts::{EvidenceLane, MoveAttemptId, MoveAttemptOutcome};
+
+        let (dag, _, task) = fixture();
+        let revision = "4".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let (history_hash, history) = project_bpmn_attempt_history(&[]).unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"5".repeat(64),
+            "compiler-profile-v1",
+            &history_hash,
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        let raw = LexicalTier0
+            .retrieve("remind then escalate", &board)
+            .unwrap();
+        let evidence = finalize_bpmn_move_evidence(
+            &board,
+            &position,
+            "remind then escalate",
+            raw,
+            EvidenceLane::Lexical,
+            vec!["test.lexical".into()],
+            &history,
+        )
+        .unwrap();
+        let first =
+            update_bpmn_design_belief(&dag, &position, &evidence.move_evidence, &history, None)
+                .unwrap();
+        let replay =
+            update_bpmn_design_belief(&dag, &position, &evidence.move_evidence, &history, None)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&replay).unwrap()
+        );
+        assert!(first
+            .motifs()
+            .iter()
+            .any(|motif| motif.motif_id() == "motif.reminder_then_escalate"));
+
+        let target = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id().as_str() == "prod.reminder_then_escalate")
+            .unwrap();
+        let rejected = record_bpmn_attempt(
+            &position,
+            MoveAttemptId::new("rejected-reminder").unwrap(),
+            Some(target.move_id().clone()),
+            "not that",
+            MoveAttemptOutcome::RejectedByUser,
+            None,
+            None,
+        )
+        .unwrap();
+        let (_, history) = project_bpmn_attempt_history(&[rejected]).unwrap();
+        let reduced = update_bpmn_design_belief(
+            &dag,
+            &position,
+            &evidence.move_evidence,
+            &history,
+            Some(&first),
+        )
+        .unwrap();
+        assert!(reduced
+            .motifs()
+            .iter()
+            .any(|motif| motif.motif_id() == "motif.reminder_then_escalate"));
+        let probability = |belief: &DesignBelief| {
+            belief
+                .likely_moves()
+                .iter()
+                .find(|probability| probability.move_id() == target.move_id())
+                .unwrap()
+                .probability()
+                .get()
+        };
+        assert!(probability(&reduced) < probability(&first));
+        let legal_before = position
+            .legal_moves()
+            .iter()
+            .map(|legal_move| legal_move.move_id())
+            .collect::<Vec<_>>();
+        drop(reduced);
+        assert_eq!(
+            legal_before,
+            position
+                .legal_moves()
+                .iter()
+                .map(|legal_move| legal_move.move_id())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn legal_unwanted_replacement_and_correction_are_both_replayable() {
+        use semantic_decision_contracts::{CorrectionKind, MoveAttemptId, MoveAttemptOutcome};
+
+        let (dag, _, task) = fixture();
+        let end = NodeKey(Uuid::from_u128(30));
+        let original = apply(
+            &dag,
+            Operation::AppendNode {
+                anchor: task,
+                key: end,
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow-end".into(),
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        original.admit().unwrap();
+        let revision = "6".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &original,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let (empty_history, _) = project_bpmn_attempt_history(&[]).unwrap();
+        let before = build_bpmn_design_position(
+            &original,
+            &board,
+            &revision,
+            &"7".repeat(64),
+            "compiler-profile-v1",
+            &empty_history,
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        let replacement_move = before
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id().as_str() == "op.replace_node")
+            .unwrap()
+            .move_id()
+            .clone();
+        let unwanted_key = NodeKey(Uuid::from_u128(31));
+        let unwanted = apply(
+            &original,
+            Operation::ReplaceNode {
+                target: task,
+                key: unwanted_key,
+                node: IRNode::ServiceTask {
+                    id: "task-1".into(),
+                    name: "Unwanted".into(),
+                    task_type: "wrong".into(),
+                },
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        unwanted.admit().unwrap();
+        let original_attempt = MoveAttemptId::new("legal-unwanted").unwrap();
+        let applied = record_bpmn_attempt(
+            &before,
+            original_attempt.clone(),
+            Some(replacement_move),
+            "replace review",
+            MoveAttemptOutcome::Applied,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let after_board = build_bpmn_semantic_board(
+            &unwanted,
+            Some((unwanted_key, "task-1")),
+            &"8".repeat(64),
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let (after_history, _) =
+            project_bpmn_attempt_history(std::slice::from_ref(&applied)).unwrap();
+        let after = build_bpmn_design_position(
+            &unwanted,
+            &after_board,
+            &"8".repeat(64),
+            &"9".repeat(64),
+            "compiler-profile-v1",
+            &after_history,
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        let corrective_move = after
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id().as_str() == "op.replace_node")
+            .unwrap()
+            .move_id()
+            .clone();
+        let corrected_graph = apply(
+            &unwanted,
+            Operation::ReplaceNode {
+                target: unwanted_key,
+                key: NodeKey(Uuid::from_u128(32)),
+                node: IRNode::ServiceTask {
+                    id: "task-1".into(),
+                    name: "Review".into(),
+                    task_type: "review".into(),
+                },
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        corrected_graph.admit().unwrap();
+        let correction = record_bpmn_attempt(
+            &after,
+            MoveAttemptId::new("correct-legal-unwanted").unwrap(),
+            Some(corrective_move),
+            "restore review",
+            MoveAttemptOutcome::Corrected,
+            Some(original_attempt),
+            Some(CorrectionKind::Replacement),
+        )
+        .unwrap();
+        let (_, replayable) = project_bpmn_attempt_history(&[applied, correction]).unwrap();
+        assert_eq!(replayable.len(), 2);
+        assert_eq!(replayable[0].outcome(), MoveAttemptOutcome::Applied);
+        assert_eq!(replayable[1].outcome(), MoveAttemptOutcome::Corrected);
+        assert_eq!(
+            replayable[1].correction_of(),
+            Some(replayable[0].attempt_id())
+        );
+        let final_task = corrected_graph
+            .to_ir()
+            .unwrap()
+            .node_weights()
+            .find_map(|node| match node {
+                IRNode::ServiceTask {
+                    id,
+                    name,
+                    task_type,
+                } if id == "task-1" => Some((name.clone(), task_type.clone())),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(final_task, ("Review".into(), "review".into()));
     }
 }

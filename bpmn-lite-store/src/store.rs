@@ -41,6 +41,16 @@ pub enum DesignSessionEventKind {
         /// recorded before the disposition pipeline ran.
         #[serde(default)]
         decision_record_json: Option<String>,
+        /// Phase 4 Semantic Gameboard: a terminal typed attempt receipt.
+        /// Kept opaque so persistence does not depend on capability contracts.
+        #[serde(default)]
+        gameboard_attempt_receipt_json: Option<String>,
+        /// Non-authoritative belief snapshot produced for this position.
+        #[serde(default)]
+        gameboard_belief_json: Option<String>,
+        /// Bounded history projection used to construct the observed position.
+        #[serde(default)]
+        history_projection_hash: Option<String>,
     },
     /// WS-B.4 (2026-07-27): a validated slice of the Designer edit log —
     /// a `Vec<designer_graph::ops::Operation>` that staged and admitted
@@ -76,6 +86,9 @@ pub enum DesignSessionEventKind {
         decision_record_hash: String,
         #[serde(default)]
         related_event_seq: Option<u64>,
+        /// Optional terminal Semantic Gameboard attempt, opaque to the store.
+        #[serde(default)]
+        gameboard_attempt_receipt_json: Option<String>,
     },
 }
 

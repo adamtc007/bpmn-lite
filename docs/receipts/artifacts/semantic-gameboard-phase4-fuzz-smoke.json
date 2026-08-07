@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "phase": 4,
+  "date": "2026-08-07",
+  "target": "utterance-engine/fuzz/history_belief_state",
+  "toolchain": "nightly-2026-08-03",
+  "command": "cargo +nightly-2026-08-03 fuzz run history_belief_state <isolated-corpus> -- -runs=256 -max_len=96 -print_final_stats=1",
+  "committed_seed_count": 4,
+  "runs": 256,
+  "coverage_edges": 8052,
+  "feature_edges": 18189,
+  "corpus_entries": 168,
+  "corpus_bytes": 6191,
+  "peak_rss_mb": 531,
+  "crashes": 0,
+  "semantic_counters": [
+    "incomplete",
+    "ambiguous",
+    "inapplicable",
+    "compiler_refused",
+    "rejected",
+    "applied",
+    "corrected",
+    "stale",
+    "correction",
+    "resource_bound",
+    "motif_abandoned",
+    "motif_active",
+    "motif_completed"
+  ],
+  "corpus_policy": "isolated temporary corpus; no committed corpus or lockfile was mutated by the run",
+  "status": "pass"
+}

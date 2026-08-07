@@ -9,5 +9,8 @@ fn main() {
     let _ = utterance_engine::bpmn_board::preview_bpmn_workbook;
     let _ = utterance_engine::bpmn_board::bpmn_legal_move_id_for_operation;
     let _ = utterance_engine::bpmn_board::explain_bpmn_candidate;
+    let _ = utterance_engine::bpmn_board::project_bpmn_attempt_history;
+    let _ = utterance_engine::bpmn_board::record_bpmn_attempt;
+    let _ = utterance_engine::bpmn_board::update_bpmn_design_belief;
     let _ = DispositionConfig::shadow_v2().policy_hash();
 }
