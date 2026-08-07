@@ -106,3 +106,30 @@ recovers to ~44%, and add a fail-closed generation gate: corpus_gen
 must refuse to run (or the card must record and the trainer refuse)
 a retrieval-producer identity other than the one the standing corpus
 declares — the same producer-identity discipline serving already has.
+
+## Correction (2026-08-07): the embed hypothesis is dead; the regression is the v3 corpus regime
+
+The embed-generated corpus is materially identical to the lexical one
+(0/3301 records differ in tier1_list or pair text — only producer-id
+hashes in example_ids differ), and the retrained bundle scored 7/34 on
+starter-seed again. Corrected finding: **the ~44% → ~21% real-language
+halving rode in with the v2→v3 corpus regime switch itself** (v2 bake-off
+era: 4,133 train examples, starter-seed 15/34; every v3-corpus bundle:
+2,629–2,702 train examples, starter-seed 7–8/34) — and starter-seed was
+never run across that switch until tonight, so the regression sat
+unmeasured through the 08-03 and 08-04 receipts. Serving-path blame is
+unlikely (admission checks green) but not yet excluded.
+
+Decisive next experiments:
+1. Score a surviving 07-28 v2-era bundle (gte-modernbert weights intact)
+   on starter-seed via today's serving path (one-line CANONICAL_BASE
+   test override) — exonerates or implicates serving.
+2. If serving exonerated: close the v3 corpus's volume/breadth gap —
+   v3 trains on ~35% fewer examples across more classes than v2 did;
+   per-class paraphrase volume (including the parked claude_natural_v1
+   bank, retested fairly) is the lever, measured on starter-seed.
+
+State note: bundles/modernbert-base currently holds the embed-recovery
+run's weights (nothing is promoted; shadow only). All absolute template
+-eval numbers in this receipt are internally consistent but NOT
+comparable to pre-merge history.
