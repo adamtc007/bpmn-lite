@@ -10,6 +10,24 @@
       "input_sha256": "c37b46303eeb6ff309336d098ec16dfc14f5ba46bdc6ca1583d3167eb48bb561",
       "source_artifact_path": "bpmn-lite-engine/fuzz/seeds/xml_compile/regress-f8-compiler-001.xml",
       "source_artifact_sha256": "ac493c15a6a787cfea8dfc255c05ad84c4f4dd3340fb1ca31e839f10af077b62"
+    },
+    {
+      "finding_id": "GAMEBOARD-PHASE6-BOUND-EVIDENCE-ORDER-001",
+      "target": "preview_compilation",
+      "regression_path": "utterance-engine/fuzz/regressions/preview_compilation/phase6-bound-evidence-order.seed",
+      "fixed_commit": "phase6-bound-projection",
+      "expected_current_outcome": "bound projection is invariant to evidence order and audit-sequence assignment",
+      "input_sha256": "9a14c667e463f227b7bcd57b2053c21adf9b16483d43cc7047fddef8c4ad2107",
+      "source_artifact_path": "utterance-engine/fuzz/seeds/preview_compilation/insert-after.bin",
+      "source_artifact_sha256": "9a14c667e463f227b7bcd57b2053c21adf9b16483d43cc7047fddef8c4ad2107"
+    },
+    {
+      "finding_id": "GAMEBOARD-PHASE6-MODEL-BOUNDARY-001",
+      "target": "model_boundary",
+      "regression_path": "utterance-engine/fuzz/regressions/model_boundary/phase6-model-boundary.seed",
+      "fixed_commit": "phase6-model-boundary",
+      "expected_current_outcome": "bounded offline and learned-score boundaries preserve full boards or return typed refusals without panic",
+      "input_sha256": "08e38843209f12329301635236c18842909b3c6fd3f25d3a6d885ac775424ed0"
     }
   ]
 }

@@ -1,7 +1,7 @@
 #![no_main]
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use bpmn_lite_compiler::IRNode;
 use designer_graph::ops::Operation;
@@ -10,12 +10,15 @@ use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 use libfuzzer_sys::fuzz_target;
 use semantic_decision_contracts::{
     validate_attempt_history, ArgumentKind, BindingProvenance, BoardHash, CanonicalCandidateId,
-    CorrectionKind, DesignStateId, EvidenceRecordHash, GraphContentHash, GraphRevision,
-    MoveAttemptId, MoveAttemptOutcome, MoveAttemptReceipt, ProposalWorkbook, SlotRequirement,
-    SlotValue, SlotValueState, WorkbookId, WorkbookSlot, GAMEBOARD_SCHEMA_VERSION,
+    CorrectionKind, DesignBelief, DesignFocus, DesignStateId, EvidenceRecordHash, FiniteScore,
+    GraphContentHash, GraphElementRef, GraphRevision, MoveAttemptId, MoveAttemptOutcome,
+    MoveAttemptReceipt, MoveEvidence, ProducerIdentity, ProposalStatus, ProposalWorkbook,
+    SlotRequirement, SlotValue, SlotValueState, WorkbookId, WorkbookSlot, GAMEBOARD_SCHEMA_VERSION,
 };
+use utterance_engine::board::PolicyFilter;
 use utterance_engine::bpmn_board::{
-    materialize_bpmn_workbook, preview_bpmn_workbook, BpmnBoardError,
+    build_bpmn_design_position, build_bpmn_semantic_board, materialize_bpmn_workbook,
+    preview_bpmn_workbook, project_bpmn_bound_game_turn, BpmnBoardError,
 };
 use uuid::Uuid;
 
@@ -43,6 +46,7 @@ const EXECUTABLE_CANDIDATES: &[&str] = &[
 
 static OPERATION_COUNTERS: AtomicU32 = AtomicU32::new(0);
 static ATTEMPT_COUNTERS: AtomicU32 = AtomicU32::new(0);
+static BOUND_PROJECTION_OBSERVED: AtomicBool = AtomicBool::new(false);
 
 fn observe_operation(index: usize, candidate: &str) {
     let bit = 1_u32 << index;
@@ -384,6 +388,104 @@ fn insertion_workbook(step: usize, graph_revision: &str) -> ProposalWorkbook {
     )
 }
 
+fn exercise_bound_projection(dag: &DesignerDag, graph_revision: &str, step: usize) {
+    let graph_hash = revision(100);
+    let board = build_bpmn_semantic_board(
+        dag,
+        Some((NodeKey(Uuid::from_u128(1)), "start")),
+        graph_revision,
+        &PolicyFilter::default(),
+    )
+    .unwrap();
+    let position = build_bpmn_design_position(
+        dag,
+        &board,
+        graph_revision,
+        &graph_hash,
+        "fuzz.compiler-profile.v1",
+        &revision(200),
+        DesignFocus::element(GraphElementRef::new("start").unwrap()),
+        None,
+    )
+    .unwrap();
+    let origin = position
+        .legal_moves()
+        .iter()
+        .find(|legal_move| legal_move.candidate_id().as_str() == "op.insert_after")
+        .unwrap();
+    let mut workbook = ProposalWorkbook::new_position_bound(
+        GAMEBOARD_SCHEMA_VERSION,
+        WorkbookId::new(format!("bound-preview-{step}")).unwrap(),
+        0,
+        board.board_hash.clone(),
+        &position,
+        origin.move_id().clone(),
+        shape_slots("op.insert_after", step as u8),
+        EvidenceRecordHash::new("e".repeat(64)).unwrap(),
+    )
+    .unwrap();
+    let preview = preview_bpmn_workbook(
+        dag,
+        &workbook,
+        position.graph_revision().as_str(),
+        position.graph_hash().as_str(),
+    )
+    .unwrap();
+    workbook
+        .transition(ProposalStatus::ReadyForRatification)
+        .unwrap();
+    let evidence = position
+        .legal_moves()
+        .iter()
+        .map(|legal_move| {
+            MoveEvidence::new(
+                GAMEBOARD_SCHEMA_VERSION,
+                legal_move.move_id().clone(),
+                Vec::new(),
+                FiniteScore::new(0.0).unwrap(),
+                FiniteScore::new(0.0).unwrap(),
+                Vec::new(),
+                ProducerIdentity::new("fuzz.bound-projection.v1").unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let belief = DesignBelief::new(
+        GAMEBOARD_SCHEMA_VERSION,
+        position.state_id().clone(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        ProducerIdentity::new("fuzz.bound-projection.v1").unwrap(),
+    )
+    .unwrap();
+    let first =
+        project_bpmn_bound_game_turn(&position, &evidence, &belief, &workbook, preview.delta())
+            .unwrap();
+    let mut reversed = evidence;
+    reversed.reverse();
+    workbook.source_utterance_seq = step as u64 + 1;
+    let replay =
+        project_bpmn_bound_game_turn(&position, &reversed, &belief, &workbook, preview.delta())
+            .unwrap();
+    assert_eq!(first, replay);
+    assert_ne!(first.origin_move_id(), first.bound_move_id());
+    assert_eq!(position.current_proposal_hash(), None);
+    assert_eq!(
+        first
+            .position()
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.move_id() == first.bound_move_id())
+            .unwrap()
+            .preview(),
+        Some(preview.delta())
+    );
+    if !BOUND_PROJECTION_OBSERVED.swap(true, Ordering::Relaxed) {
+        eprintln!("semantic-counter bound_game_projection=canonical_replay");
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
     let suffix = data.first().copied().unwrap_or_default();
     let mut dag = fixture();
@@ -400,6 +502,7 @@ fuzz_target!(|data: &[u8]| {
         match byte % 8 {
             0 => {
                 let current = revision(actual_revision);
+                exercise_bound_projection(&dag, &current, step);
                 let workbook = insertion_workbook(step, &current);
                 let before = dag.node_count();
                 let preview =

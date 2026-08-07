@@ -1,0 +1,49 @@
+{
+  "schema": "semantic-gameboard-fuzz-smoke-receipt-v1",
+  "phase": 6,
+  "date": "2026-08-07",
+  "toolchain": "nightly-aarch64-apple-darwin",
+  "targets": [
+    {
+      "target": "preview_compilation",
+      "runs": 1000,
+      "duration_seconds": 8,
+      "peak_rss_mib": 561,
+      "result": "pass",
+      "semantic_counters": [
+        "bound_game_projection=canonical_replay"
+      ],
+      "regression": {
+        "path": "utterance-engine/fuzz/regressions/preview_compilation/phase6-bound-evidence-order.seed",
+        "sha256": "9a14c667e463f227b7bcd57b2053c21adf9b16483d43cc7047fddef8c4ad2107",
+        "replay": "pass"
+      }
+    },
+    {
+      "target": "model_boundary",
+      "runs": 1000,
+      "duration_seconds": 0,
+      "peak_rss_mib": 122,
+      "result": "pass",
+      "semantic_counters": [
+        "valid_unicode_full_board",
+        "empty_candidate",
+        "oversized_candidate",
+        "token_budget",
+        "bundle_card_mismatch",
+        "incomplete_board",
+        "duplicate_move",
+        "oversized_prompt",
+        "declared_budget_bound"
+      ],
+      "regression": {
+        "path": "utterance-engine/fuzz/regressions/model_boundary/phase6-model-boundary.seed",
+        "sha256": "08e38843209f12329301635236c18842909b3c6fd3f25d3a6d885ac775424ed0",
+        "replay": "pass"
+      }
+    }
+  ],
+  "committed_corpus_modified": false,
+  "generated_artifacts_location": "/tmp",
+  "promotion_evidence": false
+}

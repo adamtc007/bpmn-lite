@@ -5,12 +5,13 @@ use designer_graph::ops::Operation;
 use designer_graph::positional::PositionalLegality;
 use designer_graph::schema::{DesignerDag, NodeKey};
 use semantic_decision_contracts::{
-    ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError, DesignBelief,
-    DesignFocus, DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane, FeedbackOption,
-    GameDomainId, GameboardContractError, GraphContentHash, GraphDeltaPreview, GraphRevision,
-    HistoryHash, LegalMoveId, MoveAttemptId, MoveAttemptOutcome, MoveAttemptReceipt,
-    ProposalWorkbook, ResolvedPosition, RuleExplanation, SemanticDecisionBoard,
-    GAMEBOARD_SCHEMA_VERSION,
+    ApplicabilityFact, ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError,
+    DesignBelief, DesignFocus, DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane,
+    FeedbackOption, GameDisposition, GameDomainId, GameboardContractError, GraphContentHash,
+    GraphDeltaPreview, GraphRevision, HistoryHash, LegalMove, LegalMoveId, MoveArgument,
+    MoveAttemptId, MoveAttemptOutcome, MoveAttemptReceipt, MoveEvidence, MoveProbability,
+    ProposalStatus, ProposalWorkbook, ResolvedPosition, RuleExplanation, SemanticDecisionBoard,
+    SlotRequirement, SlotValueState, GAMEBOARD_SCHEMA_VERSION,
 };
 use thiserror::Error;
 
@@ -71,6 +72,53 @@ impl BpmnWorkbookPreview {
     /// Canonical graph delta admitted against a clone of the supplied graph.
     pub fn delta(&self) -> &GraphDeltaPreview {
         &self.delta
+    }
+}
+
+/// Canonical gameboard projection of one fully bound, compiler-admitted workbook.
+///
+/// The originating position and move remain unchanged in the workbook history. This
+/// value instead names the new move identity created by explicit argument binding and
+/// the exact compiler preview which must be replayed before ratification.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BpmnBoundGameTurnProjection {
+    origin_move_id: LegalMoveId,
+    bound_move_id: LegalMoveId,
+    position: DesignPosition,
+    evidence: Vec<MoveEvidence>,
+    belief: DesignBelief,
+    disposition: GameDisposition,
+}
+
+impl BpmnBoundGameTurnProjection {
+    /// Unbound legal move selected when the workbook was opened.
+    pub fn origin_move_id(&self) -> &LegalMoveId {
+        &self.origin_move_id
+    }
+
+    /// Newly content-addressed move carrying the resolved arguments and preview.
+    pub fn bound_move_id(&self) -> &LegalMoveId {
+        &self.bound_move_id
+    }
+
+    /// Proposal-qualified position containing the bound move in place of its origin.
+    pub fn position(&self) -> &DesignPosition {
+        &self.position
+    }
+
+    /// Complete evidence projected onto the proposal-qualified move set.
+    pub fn evidence(&self) -> &[MoveEvidence] {
+        &self.evidence
+    }
+
+    /// Non-authoritative belief projected onto the proposal-qualified position.
+    pub fn belief(&self) -> &DesignBelief {
+        &self.belief
+    }
+
+    /// Deterministic proposal disposition naming exactly the bound move.
+    pub fn disposition(&self) -> &GameDisposition {
+        &self.disposition
     }
 }
 
@@ -405,6 +453,95 @@ pub fn decide_bpmn_game_disposition(
     .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
 }
 
+/// Assemble the complete, content-addressed game-turn evaluation packet from
+/// explicit production-path inputs. Time and identities are injected by the
+/// application; this function performs no I/O and owns no transition authority.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_bpmn_game_turn(
+    session_id: semantic_decision_contracts::GameSessionId,
+    turn_id: semantic_decision_contracts::DesignTurnId,
+    sequence: u64,
+    observed_at_epoch_ms: u64,
+    board: &SemanticDecisionBoard,
+    position: DesignPosition,
+    evidence: Vec<semantic_decision_contracts::MoveEvidence>,
+    belief: DesignBelief,
+    disposition: semantic_decision_contracts::GameDisposition,
+    observed_intent: &str,
+    answer: semantic_decision_contracts::GameTurnAnswer,
+    chosen_move: Option<LegalMoveId>,
+    delta: Option<semantic_decision_contracts::GraphDeltaPreview>,
+    attempt: semantic_decision_contracts::GameTurnAttempt,
+    compiler_result: semantic_decision_contracts::GameTurnCompilerResult,
+    related_attempts: Vec<MoveAttemptReceipt>,
+) -> Result<semantic_decision_contracts::GameTurnRecord, BpmnBoardError> {
+    use semantic_decision_contracts::{
+        GameTurnRecord, GraphContentHash, HarmClass, SemanticFamilyId, GAMEBOARD_SCHEMA_VERSION,
+    };
+    use sha2::{Digest, Sha256};
+
+    let selected_candidates = chosen_move
+        .iter()
+        .chain(disposition.selected_moves().iter())
+        .filter_map(|move_id| {
+            position
+                .legal_moves()
+                .iter()
+                .find(|legal_move| legal_move.move_id() == move_id)
+                .and_then(|legal_move| board.candidate(legal_move.candidate_id().as_str()))
+        })
+        .collect::<Vec<_>>();
+    let family_candidate = selected_candidates
+        .first()
+        .copied()
+        .or_else(|| board.candidates.first())
+        .ok_or_else(|| BpmnBoardError::Continuity("game turn board has no candidates".into()))?;
+    let semantic_family = SemanticFamilyId::new(
+        format!("action.{:?}", family_candidate.action_class).to_ascii_lowercase(),
+    )?;
+    let risk_candidates = if selected_candidates.is_empty() {
+        board.candidates.iter().collect::<Vec<_>>()
+    } else {
+        selected_candidates
+    };
+    let risk_class = risk_candidates
+        .into_iter()
+        .map(|candidate| candidate.risk)
+        .max_by_key(|risk| match risk {
+            HarmClass::ReadOnly => 0,
+            HarmClass::Reversible => 1,
+            HarmClass::Irreversible => 2,
+            HarmClass::Destructive => 3,
+        })
+        .unwrap_or(HarmClass::ReadOnly);
+    let mut input_hasher = Sha256::new();
+    input_hasher.update(b"bpmn-lite-observed-intent-v1");
+    input_hasher.update((observed_intent.len() as u64).to_be_bytes());
+    input_hasher.update(observed_intent.as_bytes());
+    let input_hash = GraphContentHash::new(format!("{:x}", input_hasher.finalize()))?;
+
+    Ok(GameTurnRecord::new(
+        GAMEBOARD_SCHEMA_VERSION,
+        session_id,
+        turn_id,
+        sequence,
+        observed_at_epoch_ms,
+        semantic_family,
+        risk_class,
+        input_hash,
+        position,
+        evidence,
+        belief,
+        disposition,
+        answer,
+        chosen_move,
+        delta,
+        attempt,
+        compiler_result,
+        related_attempts,
+    )?)
+}
+
 /// Render only admitted pack text referenced by a game disposition. The host
 /// supplies layout; it does not invent domain wording, rules or recovery policy.
 pub fn render_bpmn_game_disposition(
@@ -489,6 +626,232 @@ pub fn preview_bpmn_workbook(
         current_graph_revision,
         &GraphContentHash::new(graph_hash)?,
     )
+}
+
+/// Bind a completed workbook into a newly enumerated move and position using the
+/// exact compiler preview supplied by the production preview boundary.
+///
+/// This is a pure projection: it performs no graph mutation and grants no authority.
+/// The workbook must still validate against its original position. Evidence and belief
+/// are only re-keyed from that origin move to the content-addressed bound move; they do
+/// not influence legality or the compiler preview.
+pub fn project_bpmn_bound_game_turn(
+    position: &DesignPosition,
+    evidence: &[MoveEvidence],
+    belief: &DesignBelief,
+    workbook: &ProposalWorkbook,
+    delta: &GraphDeltaPreview,
+) -> Result<BpmnBoundGameTurnProjection, BpmnBoardError> {
+    use sha2::{Digest, Sha256};
+
+    if !matches!(
+        workbook.status(),
+        ProposalStatus::ReadyForDryRun | ProposalStatus::ReadyForRatification
+    ) {
+        return Err(BpmnBoardError::WorkbookNotReady {
+            status: workbook.status(),
+        });
+    }
+    workbook.validate_position(position)?;
+    if delta.from_graph() != position.graph_hash() {
+        return Err(BpmnBoardError::Binding(
+            "compiler preview does not start from the workbook position graph".to_string(),
+        ));
+    }
+    let binding = workbook.position_binding().ok_or_else(|| {
+        BpmnBoardError::Binding("workbook has no position-bound legal move".to_string())
+    })?;
+    let origin = position
+        .legal_moves()
+        .iter()
+        .find(|legal_move| legal_move.move_id() == binding.move_id())
+        .ok_or_else(|| BpmnBoardError::Binding("workbook origin move is stale".to_string()))?;
+
+    if origin.arguments().len() != workbook.slots().len() {
+        return Err(BpmnBoardError::Binding(
+            "workbook slots differ from the origin move arguments".to_string(),
+        ));
+    }
+    let mut arguments = Vec::with_capacity(workbook.slots().len());
+    for slot in workbook.slots() {
+        let origin_argument = origin
+            .arguments()
+            .iter()
+            .find(|argument| argument.name() == slot.name)
+            .ok_or_else(|| {
+                BpmnBoardError::Binding(format!(
+                    "workbook slot '{}' is absent from the origin move",
+                    slot.name
+                ))
+            })?;
+        let required = slot.requirement == SlotRequirement::Required;
+        if origin_argument.kind() != slot.kind || origin_argument.required() != required {
+            return Err(BpmnBoardError::Binding(format!(
+                "workbook slot '{}' changed its admitted type or requirement",
+                slot.name
+            )));
+        }
+        let (value, provenance) = match (&slot.value, &slot.provenance) {
+            (SlotValueState::Missing, None) if !required => (None, None),
+            (SlotValueState::Resolved(value), Some(provenance)) => {
+                let encoded = serde_json::to_string(provenance)
+                    .map_err(|error| BpmnBoardError::PreviewEncoding(error.to_string()))?;
+                (Some(value.clone()), Some(encoded))
+            }
+            (SlotValueState::Missing, _) if required => {
+                return Err(BpmnBoardError::Binding(format!(
+                    "required workbook slot '{}' is unresolved",
+                    slot.name
+                )));
+            }
+            _ => {
+                return Err(BpmnBoardError::Binding(format!(
+                    "workbook slot '{}' has inconsistent value provenance",
+                    slot.name
+                )));
+            }
+        };
+        arguments.push(MoveArgument::new(
+            &slot.name, slot.kind, required, value, provenance,
+        )?);
+    }
+
+    let applicability = origin
+        .applicability()
+        .iter()
+        .map(|fact| {
+            ApplicabilityFact::new(
+                fact.rule_code().clone(),
+                if fact.state() == ApplicabilityState::Incomplete {
+                    ApplicabilityState::Applicable
+                } else {
+                    fact.state()
+                },
+                fact.explanation_id().cloned(),
+                fact.provenance(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bound_move = LegalMove::new(
+        origin.schema_version(),
+        origin.candidate_id().clone(),
+        origin.graph_revision().clone(),
+        origin.requires_anchor(),
+        origin.anchor().cloned(),
+        arguments,
+        applicability,
+        Some(delta.clone()),
+    )?;
+    if !bound_move.binding_state().is_complete() {
+        return Err(BpmnBoardError::Binding(
+            "bound workbook did not produce a complete move".to_string(),
+        ));
+    }
+
+    let mut proposal_hasher = Sha256::new();
+    proposal_hasher.update(b"semantic-gameboard-bound-proposal-v1");
+    for value in [
+        position.state_id().as_str(),
+        binding.move_id().as_str(),
+        workbook.workbook_id.as_str(),
+        workbook.candidate_id.as_str(),
+        workbook.evidence_record_hash.as_str(),
+        delta.delta_hash().as_str(),
+    ] {
+        proposal_hasher.update((value.len() as u64).to_be_bytes());
+        proposal_hasher.update(value.as_bytes());
+    }
+    for slot in workbook.slots() {
+        let encoded = serde_json::to_vec(slot)
+            .map_err(|error| BpmnBoardError::PreviewEncoding(error.to_string()))?;
+        proposal_hasher.update((encoded.len() as u64).to_be_bytes());
+        proposal_hasher.update(encoded);
+    }
+    let proposal_hash = GraphContentHash::new(format!("{:x}", proposal_hasher.finalize()))?;
+
+    let origin_move_id = binding.move_id().clone();
+    let bound_move_id = bound_move.move_id().clone();
+    let mut legal_moves = position.legal_moves().to_vec();
+    let origin_index = legal_moves
+        .iter()
+        .position(|legal_move| legal_move.move_id() == &origin_move_id)
+        .ok_or_else(|| BpmnBoardError::Binding("workbook origin move is stale".to_string()))?;
+    legal_moves[origin_index] = bound_move;
+    let bound_position = DesignPosition::new(
+        position.schema_version(),
+        position.domain().clone(),
+        position.board_path().clone(),
+        position.semantic_snapshot().clone(),
+        position.graph_revision().clone(),
+        position.graph_hash().clone(),
+        position.compiler_profile(),
+        position.policy_identity(),
+        Some(proposal_hash),
+        position.focus().clone(),
+        position.history_hash().clone(),
+        legal_moves,
+    )?;
+
+    let mut found_origin_evidence = false;
+    let mut bound_evidence = evidence
+        .iter()
+        .map(|item| {
+            let move_id = if item.move_id() == &origin_move_id {
+                found_origin_evidence = true;
+                bound_move_id.clone()
+            } else {
+                item.move_id().clone()
+            };
+            MoveEvidence::new(
+                item.schema_version(),
+                move_id,
+                item.lanes().to_vec(),
+                item.final_score(),
+                item.probability(),
+                item.explanation_codes().to_vec(),
+                item.producer().clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    bound_evidence.sort_by(|left, right| left.move_id().cmp(right.move_id()));
+    if !found_origin_evidence {
+        return Err(BpmnBoardError::Continuity(
+            "complete evidence has no entry for the workbook origin move".to_string(),
+        ));
+    }
+
+    let likely_moves = belief
+        .likely_moves()
+        .iter()
+        .map(|probability| {
+            MoveProbability::new(
+                if probability.move_id() == &origin_move_id {
+                    bound_move_id.clone()
+                } else {
+                    probability.move_id().clone()
+                },
+                probability.probability(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bound_belief = DesignBelief::new(
+        belief.schema_version(),
+        bound_position.state_id().clone(),
+        likely_moves,
+        belief.motifs().to_vec(),
+        belief.unresolved_dimensions().to_vec(),
+        belief.producer().clone(),
+    )?;
+    let disposition = GameDisposition::propose_move(&bound_position, bound_move_id.clone())?;
+
+    Ok(BpmnBoundGameTurnProjection {
+        origin_move_id,
+        bound_move_id,
+        position: bound_position,
+        evidence: bound_evidence,
+        belief: bound_belief,
+        disposition,
+    })
 }
 
 /// Resolve a direct graph operation to the same governed move identity when the
@@ -1464,6 +1827,256 @@ mod tests {
                 .map(|legal_move| legal_move.move_id())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn game_turn_capture_reuses_the_complete_production_board_and_evidence() {
+        use semantic_decision_contracts::{
+            DesignTurnId, EvidenceLane, GameSessionId, GameTurnAnswer, GameTurnAnswerAbsenceReason,
+            GameTurnAttempt, GameTurnCompilerResult, MoveAttemptId,
+        };
+
+        let (dag, _, task) = fixture();
+        let revision = "6".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let (history_hash, history) = project_bpmn_attempt_history(&[]).unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"7".repeat(64),
+            "compiler-profile-v1",
+            &history_hash,
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        let evidence = finalize_bpmn_move_evidence(
+            &board,
+            &position,
+            "remind then escalate",
+            LexicalTier0
+                .retrieve("remind then escalate", &board)
+                .unwrap(),
+            EvidenceLane::Lexical,
+            vec!["test.lexical".into()],
+            &history,
+        )
+        .unwrap();
+        let belief =
+            update_bpmn_design_belief(&dag, &position, &evidence.move_evidence, &history, None)
+                .unwrap();
+        let disposition = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &evidence.move_evidence,
+            &belief,
+            "remind then escalate",
+            MoveAttemptId::new("capture-attempt").unwrap(),
+            &history,
+        )
+        .unwrap();
+        let turn_attempt = disposition
+            .attempt_receipt()
+            .cloned()
+            .map_or_else(GameTurnAttempt::not_attempted, GameTurnAttempt::terminal);
+        let record = capture_bpmn_game_turn(
+            GameSessionId::new("session-capture").unwrap(),
+            DesignTurnId::new("turn-capture").unwrap(),
+            4,
+            1_786_128_010_000,
+            &board,
+            position.clone(),
+            evidence.move_evidence.clone(),
+            belief.clone(),
+            disposition.clone(),
+            "remind then escalate",
+            GameTurnAnswer::not_observed(GameTurnAnswerAbsenceReason::NotRequested),
+            None,
+            None,
+            turn_attempt.clone(),
+            GameTurnCompilerResult::not_requested(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(record.position(), &position);
+        assert_eq!(record.evidence(), evidence.move_evidence);
+        assert_eq!(record.belief(), &belief);
+        assert_eq!(record.disposition(), &disposition);
+        assert_eq!(record.semantic_family().as_str(), "action.create");
+
+        let mut reversed = evidence.move_evidence;
+        reversed.reverse();
+        let replay = capture_bpmn_game_turn(
+            GameSessionId::new("session-capture").unwrap(),
+            DesignTurnId::new("turn-capture").unwrap(),
+            4,
+            1_786_128_010_000,
+            &board,
+            position,
+            reversed,
+            belief,
+            disposition,
+            "remind then escalate",
+            GameTurnAnswer::not_observed(GameTurnAnswerAbsenceReason::NotRequested),
+            None,
+            None,
+            turn_attempt,
+            GameTurnCompilerResult::not_requested(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(record.record_hash(), replay.record_hash());
+    }
+
+    #[test]
+    fn completed_workbook_gets_a_new_move_identity_and_replays_after_audit_sequencing() {
+        use semantic_decision_contracts::{
+            BindingProvenance, EvidenceRecordHash, SlotRequirement, SlotValue, SlotValueState,
+            WorkbookId, WorkbookSlot,
+        };
+
+        let (dag, _, task) = fixture();
+        let end = NodeKey(Uuid::from_u128(3));
+        let dag = apply(
+            &dag,
+            Operation::AppendNode {
+                anchor: task,
+                key: end,
+                node: IRNode::End {
+                    id: "end-1".into(),
+                    terminate: false,
+                },
+                edge_id: "flow-end".into(),
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        let revision = "a".repeat(64);
+        let board = build_bpmn_semantic_board(
+            &dag,
+            Some((task, "task-1")),
+            &revision,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let position = build_bpmn_design_position(
+            &dag,
+            &board,
+            &revision,
+            &"b".repeat(64),
+            "compiler-profile-v1",
+            &"c".repeat(64),
+            DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+            None,
+        )
+        .unwrap();
+        let origin = position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.candidate_id().as_str() == "op.insert_after")
+            .unwrap();
+        let slots = origin
+            .arguments()
+            .iter()
+            .map(|argument| {
+                let (value, provenance) = if argument.name() == "node" {
+                    (
+                        SlotValueState::Resolved(SlotValue::Identifier("review-new".into())),
+                        Some(BindingProvenance {
+                            source: "explicit_answer".into(),
+                            detail: "typed user answer".into(),
+                        }),
+                    )
+                } else {
+                    (
+                        SlotValueState::Resolved(argument.value().unwrap().clone()),
+                        Some(BindingProvenance {
+                            source: "position".into(),
+                            detail: argument.provenance().unwrap().into(),
+                        }),
+                    )
+                };
+                WorkbookSlot {
+                    name: argument.name().into(),
+                    kind: argument.kind(),
+                    requirement: if argument.required() {
+                        SlotRequirement::Required
+                    } else {
+                        SlotRequirement::Optional
+                    },
+                    value,
+                    provenance,
+                    clarification_prompt: format!("Bind {}", argument.name()),
+                }
+            })
+            .collect();
+        let mut workbook = ProposalWorkbook::new_position_bound(
+            GAMEBOARD_SCHEMA_VERSION,
+            WorkbookId::new("workbook-bound-replay").unwrap(),
+            0,
+            board.board_hash.clone(),
+            &position,
+            origin.move_id().clone(),
+            slots,
+            EvidenceRecordHash::new("d".repeat(64)).unwrap(),
+        )
+        .unwrap();
+        let preview = preview_bpmn_workbook(
+            &dag,
+            &workbook,
+            position.graph_revision().as_str(),
+            position.graph_hash().as_str(),
+        )
+        .unwrap();
+        workbook
+            .transition(ProposalStatus::ReadyForRatification)
+            .unwrap();
+        let evidence = controlled_evidence(&position, &Default::default());
+        let belief = empty_belief(&position);
+        let projection =
+            project_bpmn_bound_game_turn(&position, &evidence, &belief, &workbook, preview.delta())
+                .unwrap();
+
+        assert_eq!(projection.origin_move_id(), origin.move_id());
+        assert_ne!(projection.bound_move_id(), origin.move_id());
+        assert_eq!(position.current_proposal_hash(), None);
+        assert!(projection.position().current_proposal_hash().is_some());
+        let bound_move = projection
+            .position()
+            .legal_moves()
+            .iter()
+            .find(|legal_move| legal_move.move_id() == projection.bound_move_id())
+            .unwrap();
+        assert_eq!(bound_move.preview(), Some(preview.delta()));
+        assert_eq!(
+            projection.belief().position_id(),
+            projection.position().state_id()
+        );
+        assert_eq!(
+            projection.disposition().selected_moves(),
+            &[projection.bound_move_id().clone()]
+        );
+
+        workbook.source_utterance_seq = 19;
+        let mut reversed_evidence = evidence;
+        reversed_evidence.reverse();
+        let replay = project_bpmn_bound_game_turn(
+            &position,
+            &reversed_evidence,
+            &belief,
+            &workbook,
+            preview.delta(),
+        )
+        .unwrap();
+        assert_eq!(projection, replay);
     }
 
     #[test]

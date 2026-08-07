@@ -14,7 +14,7 @@ libfuzzer-sys = "0.4"
 serde_json = "1"
 utterance-engine = { path = "..", features = ["candle-probe"] }
 candle-core = "0.8"
-semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "cc6e31be7da622fd36e2ad5c9f65be10b645a587" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "452342edffde74164719707a1174bc17fad0f493" }
 designer-graph = { path = "../../designer-graph" }
 bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
 uuid = "1"
@@ -78,6 +78,13 @@ bench = false
 [[bin]]
 name = "disposition_workbook_state"
 path = "fuzz_targets/disposition_workbook_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "model_boundary"
+path = "fuzz_targets/model_boundary.rs"
 test = false
 doc = false
 bench = false

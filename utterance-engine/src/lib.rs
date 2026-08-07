@@ -41,6 +41,8 @@ mod graph_features;
 mod history;
 mod legal_moves;
 mod motifs;
+mod resolver_comparison;
+mod structured_choice;
 // Q9-GATED user capture: compiled ONLY under `q9-capture` (off by
 // default, absent from every release build in this repo -- DIR-004
 // Phase 1.2, `scripts/check-q9-capture-gate.sh` enforces it). A
@@ -50,10 +52,10 @@ mod motifs;
 pub mod capture;
 // WS-1.3: the decomposed quality funnel over captured+adjudicated turns
 // — meaningless without the capture module, so it shares the gate.
-#[cfg(feature = "q9-capture")]
-pub mod funnel;
 pub mod contract;
 pub mod corpus_schema;
+#[cfg(feature = "q9-capture")]
+pub mod funnel;
 // Dev-session capture: Adam's own testing only, always compiled,
 // structurally distinct from the Q9-gated path above (DIR-004 Phase 1,
 // Option B ruling). See `dev_capture.rs`'s module doc.
@@ -74,5 +76,17 @@ pub mod policy;
 #[cfg(test)]
 mod property_tests;
 pub mod retrieval;
+pub use resolver_comparison::{
+    compare_resolvers, BoundedOfflineCandidateText, BoundedOfflineRankerRequest,
+    ProportionInterval, ResolverBoardPacket, ResolverBoundaryRefusal, ResolverCandidateScore,
+    ResolverComparisonCase, ResolverComparisonReport, ResolverMetrics, ResolverVariant,
+    MAX_OFFLINE_CANDIDATE_BYTES, MAX_OFFLINE_PROMPT_BYTES, MAX_OFFLINE_TOKEN_BUDGET,
+    MAX_RESOLVER_BOARD_SIZE,
+};
+pub use structured_choice::{
+    BoardSizeBucket, StructuredChoiceCalibration, StructuredChoiceCalibrationCell,
+    StructuredChoiceCalibrationObservation, StructuredChoiceFitConfig, StructuredChoiceModel,
+    StructuredChoiceObservation, StructuredChoiceScore,
+};
 #[cfg(feature = "candle-probe")]
 pub mod trained_ranker;

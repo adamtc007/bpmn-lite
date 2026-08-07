@@ -14,5 +14,12 @@ fn main() {
     let _ = utterance_engine::bpmn_board::update_bpmn_design_belief;
     let _ = utterance_engine::bpmn_board::decide_bpmn_game_disposition;
     let _ = utterance_engine::bpmn_board::render_bpmn_game_disposition;
+    let _ = utterance_engine::StructuredChoiceFitConfig::new;
+    let _ = utterance_engine::StructuredChoiceModel::fit;
+    let _ = utterance_engine::StructuredChoiceCalibration::fit_validation;
+    let _ = utterance_engine::ResolverBoardPacket::ranked;
+    let _ = utterance_engine::BoundedOfflineRankerRequest::new;
+    let _ = utterance_engine::compare_resolvers;
+    let _ = utterance_engine::MAX_RESOLVER_BOARD_SIZE;
     let _ = DispositionConfig::shadow_v2().policy_hash();
 }

@@ -67,5 +67,17 @@ required-features = ["candle-probe"]
 name = "starter_seed_eval"
 required-features = ["candle-probe"]
 
+[[example]]
+name = "adjudicate_game_turn"
+required-features = ["q9-capture"]
+
+[[example]]
+name = "freeze_real_turn_split"
+required-features = ["q9-capture"]
+
+[[example]]
+name = "fit_phase6_structured_baseline"
+required-features = ["q9-capture"]
+
 [lints]
 workspace = true
