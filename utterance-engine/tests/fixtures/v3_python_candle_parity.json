@@ -1,0 +1,35 @@
+{
+  "schema": "bpmn.python-candle-parity.v1",
+  "bundle_base": "modernbert-base",
+  "pair_serializer_id": "bpmn.candidate-pair.v1",
+  "pair_serializer_hash": "7c2f337a995d08cdfc29923d8cf1732ce249d4378321dad2f78b1f538ba4ae17",
+  "max_length": 256,
+  "absolute_tolerance": 0.0002,
+  "pairs": [
+    {
+      "candidate_id": "op.connect",
+      "side_a": "[UTTERANCE] add the next step here [TURN] ctxproj.v1 pack: bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9 graph: class:start_anchor anchor: start start predecessors: successors: - service_task finalise_case attached_guards: nodes: - data_object x1 - end x1 - service_task x1 - start x1 [END_TURN]",
+      "side_b": "[CANDIDATE] op.connect [SEMANTICS] {\"schema\":\"bpmn.candidate-semantic-json.v1\",\"canonical_id\":\"op.connect\",\"title\":\"Connect existing nodes\",\"intent_summary\":\"Add a typed forward connector between two existing BPMN nodes\",\"applicability\":\"Both endpoints exist and the connector preserves acyclicity\",\"effect\":\"Adds one sequence flow without creating a new branch body\",\"arguments\":[{\"name\":\"condition\",\"kind\":\"Condition\"},{\"name\":\"from\",\"kind\":\"NodeReference\"},{\"name\":\"to\",\"kind\":\"NodeReference\"}],\"phrases\":[{\"role\":\"Canonical\",\"text\":\"connect these nodes\"},{\"role\":\"Paraphrase\",\"text\":\"link this to that\"}],\"positive_examples\":[\"Connect the validation task to the existing approval task\"],\"negative_contrasts\":[{\"candidate_id\":\"op.create_branch\",\"distinction\":\"Create-branch adds a distinct gateway outcome and branch body; connect only joins existing nodes\"}]} [EFFECT] Adds one sequence flow [CONTRASTS] op.create_branch: Create-branch adds a [END_CANDIDATE]"
+    },
+    {
+      "candidate_id": "op.create_inclusive_region",
+      "side_a": "[UTTERANCE] add the next step here [TURN] ctxproj.v1 pack: bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9 graph: class:start_anchor anchor: start start predecessors: successors: - service_task finalise_case attached_guards: nodes: - data_object x1 - end x1 - service_task x1 - start x1 [END_TURN]",
+      "side_b": "[CANDIDATE] op.create_inclusive_region [SEMANTICS] {\"schema\":\"bpmn.candidate-semantic-json.v1\",\"canonical_id\":\"op.create_inclusive_region\",\"title\":\"Create an inclusive region\",\"intent_summary\":\"Create conditional branches where one or more named outcomes may run\",\"applicability\":\"The anchor is a non-terminal flow node and each branch has a governed condition\",\"effect\":\"Creates a matched inclusive split/join region with non-empty selection\",\"arguments\":[{\"name\":\"anchor\",\"kind\":\"NodeReference\"},{\"name\":\"branch_count\",\"kind\":\"Count\"},{\"name\":\"conditions\",\"kind\":\"Condition\"}],\"phrases\":[{\"role\":\"Canonical\",\"text\":\"create inclusive branches\"},{\"role\":\"Paraphrase\",\"text\":\"run any matching branches\"}],\"positive_examples\":[\"Run enhanced due diligence and tax review when their conditions apply\"],\"negative_contrasts\":[{\"candidate_id\":\"op.create_parallel_region\",\"distinction\":\"Parallel runs every branch; inclusive runs the non-empty subset whose conditions hold\"}]} [EFFECT] Creates a matched inclusive [CONTRASTS] op.create_parallel_region: Parallel runs every [END_CANDIDATE]"
+    },
+    {
+      "candidate_id": "op.create_multi_instance_region",
+      "side_a": "[UTTERANCE] add the next step here [TURN] ctxproj.v1 pack: bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9 graph: class:start_anchor anchor: start start predecessors: successors: - service_task finalise_case attached_guards: nodes: - data_object x1 - end x1 - service_task x1 - start x1 [END_TURN]",
+      "side_b": "[CANDIDATE] op.create_multi_instance_region [SEMANTICS] {\"schema\":\"bpmn.candidate-semantic-json.v1\",\"canonical_id\":\"op.create_multi_instance_region\",\"title\":\"Create a multi-instance region\",\"intent_summary\":\"Repeat one bounded body for each item in a declared collection\",\"applicability\":\"A typed collection source and positive declared maximum are available\",\"effect\":\"Creates one SESE multi-instance body with a verified concurrency ceiling\",\"arguments\":[{\"name\":\"anchor\",\"kind\":\"NodeReference\"},{\"name\":\"collection\",\"kind\":\"DataReference\"},{\"name\":\"declared_max\",\"kind\":\"Count\"}],\"phrases\":[{\"role\":\"Canonical\",\"text\":\"for each item\"},{\"role\":\"Paraphrase\",\"text\":\"repeat with a ceiling\"}],\"positive_examples\":[\"Check each account in the portfolio, up to fifty accounts\"],\"negative_contrasts\":[{\"candidate_id\":\"op.create_parallel_region\",\"distinction\":\"Parallel declares different branches; multi-instance repeats one body over collection elements\"}]} [EFFECT] Creates one SESE multi-instance [CONTRASTS] op.create_parallel_region: Parallel declares different [END_CANDIDATE]"
+    }
+  ],
+  "expected_python_logits": [
+    4.396847724914551,
+    1.3561034202575684,
+    1.2450464963912964
+  ],
+  "expected_ranking": [
+    "op.connect",
+    "op.create_inclusive_region",
+    "op.create_multi_instance_region"
+  ]
+}

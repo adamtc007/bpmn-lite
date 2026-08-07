@@ -44,6 +44,10 @@ jobs:
         run: bash scripts/check-q9-capture-gate.sh --self-test
       - name: Q9 capture-gate guard
         run: bash scripts/check-q9-capture-gate.sh
+      - name: Install public API boundary checker
+        run: cargo install cargo-public-api --version 0.52.0 --locked
+      - name: Semantic Gameboard API and dependency boundary
+        run: python3 scripts/check-semantic-gameboard-boundaries.py
       - name: Checked BPMN invocation-pack gate
         run: cargo run -p xtask -- pack-check bpmn
       - name: BPMN semantic mapper contract gates
@@ -154,3 +158,11 @@ jobs:
         run: cargo install cargo-fuzz --locked
       - name: Run regression corpus
         run: cargo run -p xtask -- fuzz regress
+      - name: Semantic-v3 route admission smoke
+        run: |
+          smoke_corpus=$(mktemp -d)
+          cp utterance-engine/fuzz/seeds/v3_route_admission/v3-card-legacy-candidate.txt \
+            "$smoke_corpus/seed"
+          cd utterance-engine/fuzz
+          cargo fuzz run v3_route_admission "$smoke_corpus" -- \
+            -runs=64 -max_len=1024 -print_final_stats=1

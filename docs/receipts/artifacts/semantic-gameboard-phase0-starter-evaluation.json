@@ -1,0 +1,5361 @@
+{
+  "adjudications_applied": 0,
+  "corpus_schema_id": "bpmn.semantic-corpus.v3",
+  "disposition_policy_hash": "dc8aed3c8e9f10c73aec9d2ff1fc1ecf6260594e70de96922c35438a1940d589",
+  "dispositions": {
+    "candidate": 16,
+    "escalate_to_sage": 8,
+    "out_of_scope": 10
+  },
+  "historical_comparison": "The prior legacy-textualisation result remains historical but is invalid for semantic-v3 serving and was not overwritten.",
+  "instrument": "semantic-gameboard.phase0.v3-serving-parity.v1",
+  "model_bundle_hash": "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7",
+  "pair_serializer_hash": "7c2f337a995d08cdfc29923d8cf1732ce249d4378321dad2f78b1f538ba4ae17",
+  "pair_serializer_id": "bpmn.candidate-pair.v1",
+  "per_category": {
+    "correlation_messages": {
+      "model_top1_matches_hypothesis": 2,
+      "model_top3_contains_hypothesis": 2,
+      "n": 3,
+      "nota_top1": 0
+    },
+    "declarations": {
+      "model_top1_matches_hypothesis": 2,
+      "model_top3_contains_hypothesis": 2,
+      "n": 2,
+      "nota_top1": 1
+    },
+    "guards_rollback": {
+      "model_top1_matches_hypothesis": 3,
+      "model_top3_contains_hypothesis": 4,
+      "n": 4,
+      "nota_top1": 3
+    },
+    "mi_collections": {
+      "model_top1_matches_hypothesis": 2,
+      "model_top3_contains_hypothesis": 2,
+      "n": 3,
+      "nota_top1": 0
+    },
+    "off_board": {
+      "model_top1_matches_hypothesis": 2,
+      "model_top3_contains_hypothesis": 5,
+      "n": 5,
+      "nota_top1": 2
+    },
+    "routing_xor": {
+      "model_top1_matches_hypothesis": 6,
+      "model_top3_contains_hypothesis": 7,
+      "n": 7,
+      "nota_top1": 0
+    },
+    "vague_compound": {
+      "model_top1_matches_hypothesis": 2,
+      "model_top3_contains_hypothesis": 2,
+      "n": 4,
+      "nota_top1": 2
+    },
+    "waits_timers_reminders": {
+      "model_top1_matches_hypothesis": 3,
+      "model_top3_contains_hypothesis": 4,
+      "n": 6,
+      "nota_top1": 2
+    }
+  },
+  "rows": [
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "d3cf8df5247ce3ff83daebc1c788c8fcebf5f8ebce00e766986d30e243344cc8"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "a815ce60f68ec72cd9f9e984d8f7fc9868011a5fe396039cfda9c743e70576bf"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "4071fcefeee586a3438d55cbc505c66a01659cc48803964e06483484b4b8e7e6"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "f6681a320e1f2e803aacd44f62b8802974900475c431bc8f8fabf00c5045f56d"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "0673dcbf2896d32744d197560539bdeca7ee7b556384e02b1d2052c4d987f8ae"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "aee8df4bedb22a9fcf935ad100d19c626f97432661a7d3c727670900f78ec1d9"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "63b51c0db2b8d765f6048aca49b720f137a446a6a276b310078c323c98ac0f29"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "353c5410f7ba098c39a9bd395d76fd2eec09a0052019542a3096aa3c6c665e00"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "27fbf43d515cb666b9521b6a1bfa46bdb51000c9399211c10b53629080687c75"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "c2d9d395c38b1ec6c7358f5c7666545dcbb409f6b36a8e2c456d4881b9286198"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "c446f483128e262cbcc992b69c882d33636c8af67656017e839b6a36c965cde4"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "f6bd13acbd9d28de35c126c6962415d31b7d21aedfe1e01806877aa78ba74395",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_parallel_region"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_branch",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_branch",
+      "ranking": [
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.6307945657454532
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.2169865248850726
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.0668423343984976
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.03305337666668731
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.026928866112593798
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.010421527263054923
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.004889208446850227
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.004773346542632165
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.0029320017545108783
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0016015129711315272
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0007767352135156811
+        }
+      ],
+      "seq": 1,
+      "text": "split here on the risk outcome",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_parallel_region",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "2d56981d241860bf7c328838ac2982077bfd0575d48b634a95a38fdfb5bdc856"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "5f86044472fb421169fcbc9983cf550984f5fbb0922e5dab0c598647c7978a41"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "ba7a37a17c89be755a7446a999f8233d26050911087bfb807a2c531637f050e7"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "fd893f354d2109c43bff2531d632b256b7e695a087a87cabd00f2b26fc482d83"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "a0eafb6ad79de2c69d95a2e20c6c2d3ecf2d5a7a63de2023372ce00493e138a4"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "9bd71a334d36bee90f36ee207786c4d2599523d08cf9b0d8abdf3d7d1940ccb2"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "a19f003e55ae7a5e4ddadc7cd7bccbb723be3b8b779721594ba436f51c0a96f0"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "bea52fe6c297896f64178b458aee9131503bfb5c9d21c5eb93b84acf75fa3cf9"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "c09e3cd34deefdb33f757c8b95ba7c33eb68ab97f539ecd4c4480bccfd66a939"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "2a755e809d1b3a7127bd945b16750f2984d31d5055c67f6ad86649d201becd9d"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "dd4ece3ee6d7d6bdeb72b17f6dbe47815dc90b10c85f5a5dd7bd8cb8c401677f"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "86380415a79454e4c59d8ff94db1cafe1f408aa2b97c71eeff71ad8a70ea92f3",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_branch"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_branch",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_branch",
+      "ranking": [
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.5931576534520098
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.34463446727013713
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.02471171975685808
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.010391242501512785
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.009021367814822266
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.008623094328572759
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.005622525352781669
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0017469162180724297
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.001590631878593741
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.00027984718625297664
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.00022053424038637719
+        }
+      ],
+      "seq": 2,
+      "text": "add another way out of this check",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_branch",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "a43b50e0ccc948d1f4c48c29de786cdbfce066f73ca4671bfb231548b4716b27",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "2f7d829369167bd1fa22f020cba239fd5de94fe8008d9f310404edf08953e5c7"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "33b7e02be42229ca92ff1d1d46b048789b3b6976e1c7812aa0e144adcc3ad372"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "44021dbd8d47ed1a5abbc63d4d09b36fb757793f5382fe8e5cc3840d4acd8808"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "54003d064424d2ba2c6f5c313711d28ea49b9e04a514e12d2fcb9a0167f3cbab"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "2cbf120ff09a3924390239e89b90910cc399c7fe5250e5edbb7f5a1c30c859c0"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "aa2863015426918197563c6c2b0e40312298d863a21b1990f21237b9a7a75bf8"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "2af38ddd7c41a40b3671d8f47c2302b67dd49d8353f82f048fea6a974ec9f9db"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "db59562aa494d5b30d30867069dd74ef63cc182293853fdf13ec2d1a837d9fbd"
+        },
+        {
+          "candidate_id": "op.set_correlation_source",
+          "pair_hash": "36a042255157b9e90328fbd73d7818e70055d1188404e6c707950d4222e4ba42"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "ef82dd3e6bf81d003a1a2815bdca9d6411bdd7965e6615696b12e1d19db1a6b8"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "c0cb6e0e52ee2babc2d5b9585901b9b1b22d885379858aed17f49c409abf8088"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "send_task",
+      "context_projection_hash": "62776825821798580f10b222e3da1cee50d6e6c8ae43871a24d4c8ff4768d938",
+      "decision_record_hash": "884609b34fed60928173dc917380da42955985ba5af43000e5f601d81a21da9e",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.insert_before"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "op.set_correlation_source",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.insert_before",
+      "nota_top1": false,
+      "original_hypothesis": "op.insert_before",
+      "ranking": [
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.9705261765436304
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.016482533334650384
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.003054662983559019
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.0027945334584609125
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0026207395673133686
+        },
+        {
+          "candidate_id": "op.set_correlation_source",
+          "score": 0.0024219782565856767
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0006460121162534564
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0005912455291351197
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.00032935031137542974
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00028366337273674953
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.00024910452629933315
+        }
+      ],
+      "seq": 3,
+      "text": "put a review step in before the send",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.insert_before",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "53687f2a6eed030f5dec6496ae057553a0de2156bf07c7720eb75c1b4cd51e76"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "d4f6be12f8e142da2b9df3df620404dd9051f0af796463bb4e63fc931fc6ea40"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "3eb88575f5e462647f6629fe6a7ddb57f1b0a35174085366d68fddbaa70bbfb8"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "27f6cfe298d02c40850ddfbde7ce0dde669242d54487b060c25b13a3cfa9ca90"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "3763c88a82b8f0fdbcfedb2e03e9478d20538c29069e1c3a8eae9a48050d89b7"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "f9ca1e3e0d62f36fb6aaf6902d233163ec2d8a32fa466320d7d8d24336a87fc0"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "10599bf80c83c0b0202e490ff68ae5c44efad495f4243b8f69ed936752e3ea04"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "5c40219236e28d9fd27e9e45d384c00be81912f3eda6a3c08c46cab44e24e5ef"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "c07a9c61440afb06a164998d056ed0e837339695d6b3786f4db02f9e14e3864e"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "d28557a49b83d77f449a9e4300c82ac711bfd7dd97008b3f441c3d7831560ca2"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "bb262292d668ca43989cc22a93effb82ffbf5fc117687bcae7639ed1b0ba61e3"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "3c09f3d88611328ff1e7d3cae570720d1424bec7166250d134d4eb8b25883edc",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.443 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "self-correcting mid-utterance ('actually where does rejected go'): could be Connect to a specific (unstated) target, or the question half should dominate and route to NONE_OF_THE_ABOVE/clarification since no target node is named.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.connect",
+      "nota_top1": false,
+      "original_hypothesis": "op.connect",
+      "ranking": [
+        {
+          "candidate_id": "op.connect",
+          "score": 0.44304338718968983
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.2981837454461964
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.13445363909379326
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.06468666731129068
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.023175492998161826
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.013208379628303589
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.01231335611986859
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.005603357348709674
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.003291785672303556
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0012177953962976351
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0008223937953851442
+        }
+      ],
+      "seq": 4,
+      "text": "wire the rejected path back to... actually where does rejected go",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.connect",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "d6ac0dfb05d24fad5e1cafeb72b31eb0873d13a00bfc01f4c092a69b7f8c51df"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "42d9b0fa8db8ec0987a6dec28a9340598d93b8b9c7f17536c8ff8f15b46cd2d4"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "efe1b7f11006877c2fa494345e94516be307d4955b86f5702ae0fc6302288a84"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "c5aed829f6cb6a8bac60462f3fb9e7bf2137935c5f8235d6fc859220598e734e"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "e13e112f9cb7eb1daa373a93ef6dba4a77adf7fb78ba7f4b7b1534cc22a7ca95"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "b0935aba3d50f58af45b45857dbeb7ae27d0149252972922b09c3d29f09d9e6f"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "2cb096f9d70bdd3c1e3f70fe4747f4acdef1d1ece116747cbc4fcd25422f2d02"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "0e2d55a97e76a92aa2ab8d4e4d08be94e0d0ddbf617814b93629a34a5dc12959"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "fa31a716526c38b3d71837ce25c2dd68f8730c196838f9ba03864537a0c58398"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "76c85582abe96b74dbc6dbed0b5629677c60d79c651ffd0d6b1e31f82c1813f4"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "35564f378e4019618893072b32e6bf3d3f92456a1d15497e265745978e5d982e"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "0a5f4596403f357a70a3d7147cf718056a9339df4f09949d61f9a400eb58c522",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_branch"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_branch",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_branch",
+      "ranking": [
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.7042810661005157
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.1543035820279669
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.057272007483799264
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.03711637787126389
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.029561255684267554
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.007821146009715691
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.003462820554582969
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.0023051644095968726
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.00179384324753291
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0015712268502306738
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0005115097605273544
+        }
+      ],
+      "seq": 5,
+      "text": "branch this three ways",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_branch",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "c14c3dc79d999eac8368dbbe88129a14ef2a63cb3be0dccf1c7810fe566bc6e5"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "294eff027762a134966ea64e429f180f417c16a7b1712a9057e94df058954708"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "cc72115ba75d880c14758aa1bb97cac7cc5d61873ae714a80631d8919b47e04d"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "ea84413f8ee43473924e31c82ac21e75bea655f85e9f59665b3d0b10d8bebd4f"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "f97fda2c4cd32e0eeae0b480753d1483dd2cea80eb2df24e63457bfa74681b19"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "e8cc67a45f7ee8e2f336a2b736bebbf96cf28c24d87d9717a06253a1fa350487"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "f4d15a234ab60e50ff72525c8203a5130b71a2c9c4f597307613d3834b532598"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "a8e24d443d9434044b06bd8203ddd9b77101a91bd00a7405c1d7a8f001dad275"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "0773d00454f27697ba6a6483bb023cb679cb7a560144bfe38c8464d4e3a58429"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "6aae1ed15c113e4cc3ebffb347329d87ea349e904d936573eecd2aad0ce02288"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "2da2f4d8e25111eccda4dd36a5d8c821090359ad76fc75a413f831ee46fe343d"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "15f16ec13f4b39a6d758920094086f944ee4e5f890cdc8f660dc5ca2ce6a3a84"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "187ae73a52cba6e11e4bec7aab85f77f9682acddc7f7c817edb8613e17df5df2"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "51d20c72d4d5f0c1c2d685c5fe3b0114a8a85073beaefadec9ec13a271028052"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "22fe6f01c93323ae834331049a33a1525e66e2f580faa17cfe9dbc540009e3b6"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "7e003e90bb28b1de5b7c65b3023d6f0f068600f3c7ce96a3cb66ee6c4aeb9dba",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.453 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.connect",
+      "nota_top1": false,
+      "original_hypothesis": "op.connect",
+      "ranking": [
+        {
+          "candidate_id": "op.connect",
+          "score": 0.4528046098810866
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.2483366856243916
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0630463270116727
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.05526099536074384
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.03510778635875201
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.0329424201020025
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.022051428465993818
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.01751378075083916
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.014433596971876567
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.014001988001578657
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.012368676396435485
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.010399017520370573
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.00940710482545957
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.008659422321707915
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.0036661604070886413
+        }
+      ],
+      "seq": 6,
+      "text": "link the upload straight to review",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.connect",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "8e14cb9fb4cb2194224ef7870b96670d865fe46d8cfbe30263e7ff946870013b"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "31088e5cd1c04f6f2f6c779bb9fc07318ad0ab6ded7805f8cd6c203e4c52a3cd"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "c30ea0129c41849df989b9d53b11c6ca988d5a8becbfb24f7fea42625cfe7d23"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "1473915fbafdf60a9cd3d97d6f5e9b63b4e8aab4115f6d2510838c2634bc5bca"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "e2b81244b488961111ae13dab3b020e23bdb96d96115e4f815e32bab3f612aa1"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "3e7a0a72c32e013c67ede9ddb736c10cef0e66a6baaffe46c926fb3a6c39b4c0"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "1c2fbf90ebac324edb2fee09eb57141f9660f48123acfae3640bba23f71872da"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "b8ca973cad6bde3311fb0b80c8e355fdae6b7e0edfd34b59981e44b0a48f6a44"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "51247fb0c1b542b3ff66aeefdcc7e962d27c1aa9de435594dc3d0f47fe7cdcc8"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "a5290c7656302e8bcd39c41bd97b87e83e68609866da179a0c2de0380f4c3681"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "e01a755e76048746a42d8becfac5e273ea9809adc3972c5ad00030ffdeb9a294"
+        }
+      ],
+      "category": "routing_xor",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "1a9006fd4dc06ae46ae95c1a0265b618ec06ed98d9f7d3e4bcf17d3f19e2cca3",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_branch"
+        }
+      },
+      "dispute_note": "could be read as CreateBranch (a new outgoing route for the timeout outcome) or as configuring a guard's timer (op.attach_guard / op.set_guard_trigger) if 'timeout' refers to a boundary guard rather than a gateway outcome.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_branch",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_branch",
+      "ranking": [
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.7992891024185151
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.0754042493230876
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.05573219873829134
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.022318273908379992
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.021929770753403438
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0070500339512284595
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.005861452712463186
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.004645511554531349
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.004088849349960059
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.0026517416049701183
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.00102881568516914
+        }
+      ],
+      "seq": 7,
+      "text": "give the timeout its own route",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_branch",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "1f1d27545cb141750aa9628dbbfd04ab569cd4484aed395225175c64014321ed"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "ef2fe629fd9430afa38ae3f252899483ea4dab2f1be7eb4b3165321f77fa1523"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "cf3b3383f447cdb0cdbd2b92b1233ae02b8d5d3df6c7b2ad7aef2ec2a3236906"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "f7ccf62604700212efe003591278a3417faa4e2d9d8f66a9148cbc7df5f6724e"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "94a26406ecf6fc7d6c89497ad7fa7c893a4886f58d832906b1c6d58e32949e75"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "68434b8fb8e029255462a2ce740977a0cfb737c255fac194be2abc6cd2c172d5"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "ac7a4a7f4e92ecec69158d54efdbe5cd18c12bedcb5572fec3eda7874664ee35"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "58fc7c45375067fed851c0e8b16aec8cbd2b2471a62cc1a2afc1567aa5e81e61"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "34537d53bf46ea52afe642e5c026e386295918047c9053c7c7785f896ef7f275"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "8255bc6428ff58c53f06243df8ecc5f73c64b0fad5b9c65ea17cbe15fe2927a0"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "3c03ce1ce2a655ad24787acecd72552cafa232b17111f74541dbef77896fd4a1"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "aec6442185265900f1ee9e5f14e52f0e12a2b74a8bb958f8c04e33665e25675c"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "055728504d276e3805095bde025d4a614fd26c6ba0b623b014d1adcb5dce7618"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "be58f93e1ef4804dba9ee396ad630af56fe594fbfdc7df2a872a6e5bdcacac67"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "e40d3ce52530977cd93df337d14ff9d20a246837d00063de30ca0f2723d1320b"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "5a139c255a98b50c709a215abd554c5cc3266087a3c5ac0ad1a4e54d3b9f32fd",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "prod.reminder_then_escalate"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.reminder_then_escalate",
+      "nota_top1": false,
+      "original_hypothesis": "prod.reminder_then_escalate",
+      "ranking": [
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.8252533009581013
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.08469234607669232
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.06819698118998078
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.008685395436994607
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.004399646634961535
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.0033933548842430892
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.0018173106631211467
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.000990151117516128
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0008709532797739449
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.000532562136057772
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0004424595749498155
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0002736198356693987
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.00020530779128781444
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.00018301917693505838
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00006359124371533152
+        }
+      ],
+      "seq": 8,
+      "text": "wait a week then chase",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "prod.reminder_then_escalate",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "fef81ffcaf87f34ee6964ff82f365bccc1e46580d762e70b0894c64be994b1ef"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "83d970d8f196a3b564cc46085c86c42bc628e712863f1cd64e530522efaca19e"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "403a43100d822f5c6bf4ed4b011a08bf179fbbdb487a26f45dc39af5148dab44"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "8e846fb15c2bd9ff92bd8c479894547d180dd98d0d742257458d93db100725b5"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "edc0f6bd49d3cb4ef5c7b1c5a1355d0f9754ce5c40ef1d46c0936a5c623a3aaa"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "c43cb84182583b28635820b5c418514922a0bbe4d300e71a8612766e43e178b2"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "5ef143e7aaea947e1969b5e609e948135cec3bd42ff6f6a3aa512d9ad582a5a2"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "e9652bc9caff340d89909a87d0b4780d91b6a1289a25e38cde5a6051f4f8f324"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "7b7b017cb8493d597b7c5e1d4fb205f34ba166a3013aca19bebc68965115627d"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "b271b148b1aadebdce781345558865f96d3bfe7deed8a9261a44dc11e43ceddf"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "f45434ad44acc09d15cb843025244e621746e8b86e4471f066b2ea0a268d3b47"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "96bcc1b99cfec65f11d387772940ccf659025da811330112c86e67c1f3874b26"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "d677b06a76c549f47c469e7d32c1c675b8e416b4d60b42ed701ce16215fda048"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "aa7de36ce8355d5511b031f207f856e61f20e936079c3cc0a80e32d59e88e8aa"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "d1dc2f3f2df1683502588007cd01752204f72dadee92b9e88ba05b84157d4251"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "22f86d3854e75894d590981f2e2b3253dfb5ac76be4b00f2441ea25b37fcfe18",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "prod.reminder_then_escalate"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.reminder_then_escalate",
+      "nota_top1": false,
+      "original_hypothesis": "prod.reminder_then_escalate",
+      "ranking": [
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.9831992046156988
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.008418038441924685
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.002454306489907978
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.0021327864472747175
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.0020236670607255438
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.00044359953157802447
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.00042236755230378934
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.00028970149805140823
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00023317090567857103
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.00020998929018080443
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.00005992278391455184
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.00003330155892573898
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.000029365657277386524
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.00002709969187017382
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.00002347847468785885
+        }
+      ],
+      "seq": 9,
+      "text": "remind them twice then give up and escalate",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "prod.reminder_then_escalate",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "3a0e95739782415d415df2831b7c7b1a8298112bb33acf50aa2fd18a1f00d709"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "90f33b39acb1e5cc10306ff1a6242b2809e08d0bab5c9b1da50b0d27bfce946b"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "643222f0019182b491f25856130de7f92f5a9b48278a0010a6debd561595af0d"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "5426f4cfbb521959e56f9e85e426c983348c0d776bb153735629bf42d8c19f5b"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "4daf79ecb0643a89e8636b0c11cc2abcdcf56d750da87711e3ec58b88422a7cc"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "239ce56b15ba314c03166a3345b0998c9d94c9fa0094d7ecd447a104b69cc732"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "6418f2e6d72f1fece544784a62b1dc4bc70a176445c700d4b3fc08caa0c4a45f"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "2d5d2cb063473accb63e08deb8864cacf7e37b0f9648022f81db9360568e5aa7"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "2a61e754c2c63a08228181046a647675de40055e67fe35a5463c8fb12f5e85a4"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "7da5ca60df90ebe3df7a776af977cc95f0f9fa4eccfab0221de3ab61945f71c4"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "88565055de74c0cbedee8abc64507b0cf255d6295475883b5d89ba105eea2205"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "0f99a256c86b2678b966174fc01d24e419d55ca29f343694be45ce25dd17ae0e"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "151cd8f4fc7695a71b4cd96285f4455adc33653252106cd0f3ba1edc25502c44"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "5c4c2341ff7390957c4b062be063f4b3dd3a3c71d1ec5f377fc941b604672458"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "71d5e59d8b536856a6cfcb7706bfb42e7d09250aa2962de61385aef812994126"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "70328e423e9ec208d23c098b202fc84fa8eaf674bcc450ce5e263cbad1e1af84",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_multi_instance_region"
+        }
+      },
+      "dispute_note": "reads as directly configuring a rearming guard (cycle + max_fires), but could also be read as the reminder_then_escalate production if the 'nudge' is meant to end in an escalation not stated here.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.attach_rearming_guard",
+      "nota_top1": false,
+      "original_hypothesis": "op.attach_rearming_guard",
+      "ranking": [
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.8978133717666819
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.08714633190088841
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.007985366596011737
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.0028160433089782022
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.002177679371694887
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.001114568035727105
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0006196751233089455
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0001497794910226578
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00004581553025888478
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.00002922894319929677
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.000027622023355676535
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.000025319199102739744
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.000018888801063531
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.000016291548074020064
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.000014018360631471848
+        }
+      ],
+      "seq": 10,
+      "text": "nudge every 48 hours, three times max",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "op.create_multi_instance_region",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "88ddc4d1d37ddd3bdbc24c7804ecc6680824e64a50c4777363e5af624469c08e"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "d9ac70b5aabeffa6209f2d949fd7d8a648b091a73a479d68c1552dd1911d4eeb"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "195e65c7042ed9895a2b7653cb638a72115cf3d88bbd9cde837b52069ee5645e"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "c76472ad32822a4be3a7ee44ce162470921e59d9cfb4d4d0a27df750bdf36800"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "7d3eee3106492aad0a6f335d417e1171e7f30b3e2cf385cf4deabf362bb33d0f"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "9a78d5d70e43abf1ac7fb2d19c259984d89ae90e5b604a54678d55aea5b35245"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "0249dbff47cbc8cb756a1dc97b2a4c59c4c410ff4b3bc9ef17e3dc18634bff03"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "e29449e9a008e4b8af680c4f8459db0ff1c2bfd1f4a1a33f5729da79e66de90c"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "c3b8e778a18b37f0cb553f03878766830945f27a29e330db7a80046d3d16e46f"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "c20d1c38099add409466e55a56bf87158d44e6b2e49708f49be41f0443ecb2b9"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "26c799533c0485e2a18dcea275aa3595bbd41cc4376781bd28b62fae18edbc8b"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "fcf3653d04d8f29071da92274212279dcf9e3ce8ef9577c95552827d145ee8ac"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "5d88605454968f7b77f78beebddaaeacc25c85f2a56a9140b52478a00181e98d"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "0e1e5da080b1f3f855281f18c9e8ea33f52c866e203231d065775fa486bde78f"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "0307500f1538c669f22f6ec9da8b9826461ab36117acbd390049a673df92b443"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "9e4b8ea7816dccb5a2652fbfb0f9f27607e34d3ef46b59cca75fe2803d70a178",
+      "disposition": "OutOfScope",
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.interrupting_timeout",
+      "nota_top1": true,
+      "original_hypothesis": "prod.interrupting_timeout",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.3313922701826645
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.23089720556171492
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.1657163594740436
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.13854820120959613
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.05571917232302547
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.029175036362173258
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.01906114213432646
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.008168312073536592
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.006099667195920477
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.005772864888922159
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.004254464472199281
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0019261570315406847
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.001748835306730438
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0010713443275575498
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.0004489674560484398
+        }
+      ],
+      "seq": 11,
+      "text": "if nothing comes back by Friday, kill it",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "ebddc81348fffa66321c38d3476e94ef82cea3d5f108157fed9cdb473515b49b"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "9397be582c4c207e5dfa1819e0bcbca9fa3d2f79c82125a374c3db46ed6e8828"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "2e5b881e6d9fb24471afa9c0afcbd5b942addd509de5a74f6c8e1f0d8788c5ee"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "b09b0d8b9890468565c271a13d0e9eaac7aab414a508e7b4e0b703257b326fd4"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "5698a8280403c1aa7c42fff54ac07bd558946011f82d7e184dadc68a8807f416"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "184f39dd4fa899856688e3e00d50a90b035c073332d2911d7c8315e611bcf367"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "2b91ae9d8dbdd196e5ffc0bab1635f572576d443b8b66a4cfb9710ffe64cd659"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "72cc0e5a880a62d38dfdadba5e2f5324cf7f147f362d985928f5bda5ba80b470"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "4f16220cc2204b0dea650eb1d34dd1c3133051801668d4144ffd978d92cc6281"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "f6e8649bcd79745198ed6192af42be159f847b7d3a92bb4c1d6dea0cc4d76edb"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "99636026673019e4dab87f16918aca3e7e139effc2ef4286455753e8d77cab08"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "30d839a616eb689b97112a3391650d2bc952d2f0cc7888d7c789726475d3ab88"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "886aa020fa37d0f3613fcb8a63123637841f0a9f9e9dff60dd20027492fd1b67"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "23099b9fe5f3452d56813f6fc76d6dac92eb5399d32a07c56de77274915dda35"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "49b0b0480d3f1ab208d396bb0def9b8fc4c5038f53104e0def4c6279b63160dd"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "0f7f9be3bb126ca34bbd816274083ecbfe1459ec372a7522a653140f9050067b",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.208 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "closest catalogue match is the request_and_wait production, but 'park' could equally mean a plain wait-node insertion with no outbound request half -- the production may overspecify what was actually asked.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.request_and_wait",
+      "nota_top1": false,
+      "original_hypothesis": "prod.request_and_wait",
+      "ranking": [
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.2082660043046268
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.1711260996375552
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.13208656327528515
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.1003636751927305
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0887410635505266
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.05820398812066962
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.044981815082998346
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.044289549127084056
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.043553387052674954
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.023887197185464722
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.022248899066811535
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.018871108947234944
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.018024086629417877
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.01529156724242534
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.010064995584494378
+        }
+      ],
+      "seq": 12,
+      "text": "park this until the document shows up",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.insert_after",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "c9e63142849b5b278c2957ba532574010e15aed996c44fefc3434ad9ca4cbd42"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "a4a22343c25c1818fbfb111714741c472a3ce3bf6b0665a41c9601c49e588c1d"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "b206ecc23f122ccab8acce537556ddec0662c7f1d8aa226739f2fb23e6300e5e"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "bad38e8ed77d2468f26de8168abff51b13b8c23700512efbde9ada6671b0ea0a"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "ebf86e7004cdd35ec1e27355861d306b168b9607121b31cb8799fb599899c7a6"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "48b03de69bfe1b669d088115e82be68bc209592b2bf23bbe4d4758be661c24c2"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "af10882bc0d02c9c9cf5206bc9a4ae56c0d408bf7a0d23d23c2b54a596f8e564"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "b1e8c178b5a600814e71b879dd33c0c2ec1f566eac84b4d435003e01fa259b7f"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "7a992f7f0f53703d0f7136d6a3153c2ee14930ef202665e005eb0283c1b5d2ab"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "380c0f35ffb56a28f6279c80451474309049da4fb367c85571c412fe162a0ab7"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "0d45a9901c399223cb1973dc8fbf0ec18e5409868f9ae3ce7ea1e897beeee6f6"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "ef2c244d3b0468bcfc5c09fbf2845db5a0b7df3b3cca78bb86683de74ea49840"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "2d5870c55ffc5e575d5ac1d183089f4eaa8891a120d73a254977422e216235ae"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "f8e66ea15e8ed32a86d2790570a043ef7cb779f9892dd06890173cc2d2262f9f"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "2168c6ca74bfd32bf023f60ba56f06c624de639e9853ea617228ddf495f7e6e6"
+        }
+      ],
+      "category": "waits_timers_reminders",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "19b945f728861e9afab564e3fa6bc84a825c8a47a88fdabb33fb947b995b0921",
+      "disposition": "OutOfScope",
+      "dispute_note": "TimerMessageRace is excluded from every board (2026-07-27 trace: no frontend path, kernel-complete/IR-absent) -- NOTA is the correct board-legal answer despite living in the 'waits' bucket.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.6617111674095718
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.24278947036642795
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.023188104690342777
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.016801329034436423
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.012915236774569043
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.011411877672129967
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.007928805144912544
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.007113692486843009
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.005731759877722472
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.0042208096936892266
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.0034351294231192366
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.0014122202590751121
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0006590686458467341
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0004673592429944126
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00021396927831924284
+        }
+      ],
+      "seq": 13,
+      "text": "race the upload against ten days",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "626086546c7894460ae6d8803e7ac93e9518e56182e8291965a20647128f5074"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "2153ee9682f25984e8ccf36d47862366df28442e21a37ca2644198cc54b685b8"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "114876f524024fb5aa2229db20190c7bd53482023438329f70bbcce4d0c3f08f"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "cb0c67065a4737b3fc9eded107e04b1453a6f5b6021d872a02177c752a578085"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "cb0af3dfdd8a026b92fb01ee19f6ce5025c955a3617b3c392301ed81d24591b1"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "e02c5c3f415b327dddd8fe28161e40677fa96c1de52d76aec1c38a785833f2a0"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "3faa7ffef313757bddc406c707c5773516436e9e02c0bba0414d369eac66648e"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "fb17f20058de4ee563c42f112b8b34789cea032cf402337d5d52990d7b08ba83"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "2b57ee45a6c4c9381897b912525ff8831fbb15fcd84c2ff04c7720173c0d3eb7"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "df1c7eda0fcda9ffe33416c198d1d15c7401782dfe81eddb0393babde576b057"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "9b0057698c3852b4419f79e7b08f3128b4a358a9842009253ca281f085324093"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "3993f0de29aefe3bdf54f31fdb314d65b0f050f7193e40b8a7decc6c30601625"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "51dc331c4c49989cb624cd334afabbcea77da71046b1a833513f59800570d67a"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "348bede6c2e6c770f4c44e8a9c4c669de26bd0f48f0a00dcb3a93007f1c7c2c6"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "f5265d22a395498d1a10b9935875b4a281fcb1adf86c50f2a7fdd38fc47b4993"
+        }
+      ],
+      "category": "guards_rollback",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "d068f3642df982e979303803bc914ee1cacdc4442dd493e177de6fa7a470466c",
+      "disposition": "OutOfScope",
+      "dispute_note": "AttachRollbackGuard is excluded from every board (unimplemented frontend path) -- NOTA is the board-legal answer even though the request is a coherent rollback-guard ask.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.46138287915062837
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.10627186160908003
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.09352498992086354
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.09050416575719213
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.08395406504717977
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.05933223055318875
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.02695656884159464
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.026147537864421866
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.011218994133209774
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.010629346102239666
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.009340566109290484
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.007746301095073022
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.007216885214330621
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00376272481597989
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0020108837857276247
+        }
+      ],
+      "seq": 14,
+      "text": "if the service dies mid-flight, unwind the lot",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "9726acd39bf6ac13ef02ed4ad3381a21e00bb9b0ff818ffca598fbea507dddd0"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "ab07b3893de0e348b44cdeaf3bccf6edd2dd0bc4cd384afe8af33324924a2f6c"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "212661e70fc78f100b5d463c885b3a8fe5cfa924e20a358e8665c171bb856e45"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "39adb3241ad4b6321cdaf5bb62ae72e7ca4f2b59cc76234cfcab83981d38790e"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "7d7fbe94ae8091304aa117c44e4c563792f808b11efd51be8f61de01e8767458"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "8d2a95ee3e97451c1e383148c1de570d731d2a3966b5e74af5bbe7f6f29261e4"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "3ac591e9a0b796721bfbcbbddcfc63abb4e848db935cfa79f1b515bc4f4f624c"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "3df1283e766aebb4db53733dab635a8e2963bd21be1bfa886adb8d1239049873"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "fc340890fbfe9d59f42dd6601bab7d47bcf3a156bfbd601ffa14328c1c1f6bf3"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "f933068feb9f9a0afa0eb13dfa7c881ae0567cb9d197dbb7025251e9721e480c"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "ad72186980cd66b14483e76cf9077b627b46007188e1841e3c42df6cb0ca66f9"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "13a37a6a120924d69a1a24e5d512eaf649cc3d874c5406402928b9557290d832"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "02e52ad9200e8df3596824b87fea977dd67f00c0c72d69431b40d56efc3bfe07"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "b3d37d99a8feb89eb05d5cd0ff29a728e71e8d08eb35aef7343dd2c2fd59ebba"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "d89b74d91a791b3263ef433edf39df8571ee9018a2e1b53e3d5d72b1bfaabdc9"
+        }
+      ],
+      "category": "guards_rollback",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "fa463c23a6efc36fbe597a7010012531cb4ca4363a46d55f6b20494270de5d71",
+      "disposition": "OutOfScope",
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.attach_guard",
+      "nota_top1": true,
+      "original_hypothesis": "op.attach_guard",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.6236299029031728
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.1210653712025085
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.05955439782949432
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.04101342030772285
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.031870885221568675
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.020811925388451603
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.016761280941492512
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.014957731976217858
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.01406531280643573
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.013283001781279186
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.011902409931304262
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.011620838744524586
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.011131341047627181
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0051393621645051835
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.003192817753694707
+        }
+      ],
+      "seq": 15,
+      "text": "watch for a cancel the whole time this is running",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "34dd36843314782304160f398521c240e3d1c98e8b4d314451407a9abc3c2259"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "d45654aba0f827f030a7fc158435f030e8b8473afe7dceed658765bbbab1642f"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "ce95ccd9a740e9d4661794ec679d7063158dbb8a1d8cc9ae0edf0b8e993ed21d"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "e6f5559ce8d4ccd088d4678c17230d0de16e9ccab58a81e7ad22c9c4cb9aad10"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "a03d29a2b5f6c6f1482b47c99705b4e41ff74c2bfaa39361e7ddbbe883287f59"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "945f98e36fd9e5c1ce4c3ca65a0ccb27df10c48ae043d8784a9c1079ed888b0f"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "6276b372165fadae21fe4e35a0dcee1775458a8f8491d97a7cfa99c12168a486"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "944e5a0f36566c59f7cfcfc03221f70ac97da59aa13d8d808acebb8f0cc65214"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "83c9164d47e3d82d3c5c9d1c396b2682bfa77409f6b4cfccff7ffa86bb69343b"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "41052503d4226f6db1ff63283be906b86b331f039949d53f9b4933bd47552f22"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "d6d28b2e4a2ba92a2c439960968cbb09fbecae723f71255a2e61a77e420da942"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "9bfc1a6efbe6ffe9e42ab6c514eef67d56705845d049662debd4285168a55757"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "0f030a98890a959a45ba57bec21366721cba67520215b9d9f9c838d21b15144b"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "e3a72d319d7325ea74630c12e3a931dd6436a71534bcf42fe3002694b271ac96"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "59c55f6ad38d289dab4cbdbe4e10eae400f0349732b4b2d1ce618011f0cb3e79"
+        }
+      ],
+      "category": "guards_rollback",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "b3c181c0cf5404767926ca7e9bbddbcddb0d585d79aae94c8922fe3c082de8c0",
+      "disposition": "OutOfScope",
+      "dispute_note": "rollback semantics ('put everything back') again route to the excluded AttachRollbackGuard -- NOTA is board-legal.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.3399734595275085
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.2356184628054316
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.18503457298588477
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.07086523444118903
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.048797034794003664
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.025783889506158498
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.02428708967164706
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.013745342431551085
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.012593352849124826
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.009939667049096572
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.009623128123610655
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.009538681488089253
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.008372676106974597
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.005590808416404823
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00023659980332527052
+        }
+      ],
+      "seq": 16,
+      "text": "on failure put everything back how it was but keep count of the tries",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "43fe81f94958e92035e1d2d64f666cf4aff3c1ff676c8724fe3787e16de53eff"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "4cf49e147c5c6afabefb8b43f1fcd410bc4e032c59a42c9415c2f2ea0d510aa8"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "1b132e6decc7e658e5bc8ce624e3f925fcda2ee72673dea2f663405d389f97ad"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "e84df086eae3942c1726fa5f937ba1461be2d83fa3f6d1e02c9d211d1df450ef"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "ed1b7e9f5deae3bddc6e09f3cdcede769563ee6d9842ace51d0d7efe1a2d5c83"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "390179c29044603ecbd67b03322239e972ef2e32afaf2d3f9f36a71ac27b3799"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "928978a7767e53ceec7b22912c77721c8ee6f6e75675a89ff6b1a79675a43329"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "c1d0675f3a5d71746c30f1a456283be5b74a946c880140848a1f149d7983fb48"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "1d084b3e47b62122f4383ab2c12e586aa25911d3b9987380c78ce8b1227aadd4"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "5745406cf68f4e05c8543bd79b03b57de108b1fd963055a9ec8ba3f81d02a01f"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "44e8622964b6a78c0927757c291e88b40cc92eebd2e1a3a7a3df9facab7e74e0"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "17fb3afe05fc3ed1c29a801458612dcf6fd2f7eea503d336eb254173f9722aeb"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "a30023a3726a1ab96f67386f7677b2a33664d004cb87a29bbb32a3a5946707c8"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "ef7b844eff7a59c6e4a67b08e7cc65810d8dc2fb633306854cf845f5d3ff7c93"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "9a7d099fcc3fa19dcfd91b4a473a38ab840509a79b0a6797e775da62c40298ee"
+        }
+      ],
+      "category": "guards_rollback",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "ce481f5a7b0d7fc18c05a4c7bc65dd83f5678fff53361efb24fac88e051bb08e",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "prod.non_interrupting_notification"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.non_interrupting_notification",
+      "nota_top1": false,
+      "original_hypothesis": "prod.non_interrupting_notification",
+      "ranking": [
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.5868880937141994
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.2656561732578376
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.07868205666163669
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.03183727912552748
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.017697813392660574
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.010632643461692492
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0019970679172299013
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0014280674096847205
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0012777834809856337
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0010218549700317999
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.0009594591959572669
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.0007139272471413405
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.000698844300954125
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.00035365933831204915
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.00015527652614908685
+        }
+      ],
+      "seq": 17,
+      "text": "don't interrupt the work, just fire a heads-up",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "prod.non_interrupting_notification",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "8cd83c8c7fc5952fdbe104aac71c3363368d3da4257c3b5de83d7d2b8136d226"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "5c065bc1570d6997bc0d20f171fca0b79fbca93d6004bd3389055d235554727b"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "69eb38eda86933ce8c87d74291ec3dfe554eb8f32d775ee7afa0beb3896ff235"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "b2f4b864071adfdba51cd56cf6a2d9ab1e7f22e997c2a02845a123a6d8e9723a"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "0324cf1565f0a4cdfe7802080f3f25dcca3d530d81eeab9c259a43a1c703ec3a"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "37bd87675bd0b2e2c06356e09f464218b1cd87fc6560169519491e5de610d7ee"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "7ca7f654f1b6e4527d14e425d6499b39a36d69dc503268e8700baf6ce6c3e920"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "1175989057da4a9fe674856458f2e3e80cab7049e11da566903fac3de26dba30"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "5bb35212c1feca1062635ad9400ae4c11bbad4e2851e315428af8e805caa97d3"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "3cca0a2503c86d9ddef68182c91b87fa401f970d391b725e300100f92d341bc5"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "ece7fa21896391c68d0ccf8ff7b7f71a801cba5e739dbdb9c87d495795ad9314"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "54ae56e1814769f2899966f91afb59e95de431d2911436ccd6a62dcc7e4e31d4"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "40c88132b077bd7fdd70de4392826b19c5b1961a3e3acd98925680f67d316f27"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "cad523c7527fc19fd7eb1c8de984e0d8792eccd2cdd1c0e5a0cb4b1cf38fcabc"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "0b671163e489c52b26cd024c82950e9b61dd511cd6b9c62617e430f4ef06020b"
+        }
+      ],
+      "category": "mi_collections",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "f1969e27e08ffed130b09f484c00da545c7b4599c02d3e5b5fa24a9810052bd6",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.478 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "no explicit ceiling stated; MI regions require a declared max (bounded-loops rule) -- a stricter reading routes this to a clarification (NOTA) rather than direct construction.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_multi_instance_region",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_multi_instance_region",
+      "ranking": [
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.47774275895778956
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.14277523504596273
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.13325307437578443
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.06413640927667444
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.032314581712922626
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.023847409942214407
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.018682840693851507
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.01810551934935179
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.01782212915943073
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.015266698730538762
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.013740641647050151
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.013650518028465002
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.01037715453472327
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.009953122433495826
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.008331906111744747
+        }
+      ],
+      "seq": 18,
+      "text": "do this for each director",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_multi_instance_region",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "9ea81ab0d276eb02d674aad13fd25004c75a92e930e71bf3b72ca6029bd12ad7"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "27064680b5fa46d7f578dfc743a084f92dc163c3b706c9ff820f4103b8114837"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "c0600fc90512287560f2f5dd39a191afce8ba31a5c4f5d08bf8052f6badd40b2"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "19763d60aa694c8616e0d8aaa32cc31098ead0f0b2dde42f2927d8594a0e18d4"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "5415718a9d7c915b5e594f461b58403d86a5a2df4e22da329cf7d310752ed57b"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "546ee06559db74f805bd6b3ed9ad5ac3ac982baea48dda7149ecfc4e52f6f324"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "173aac9239603db1fbcacf84d7f9817ef517e0c5f7aa26206976b35db83e774c"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "95ebacba52976cea9b3a1e0be9a79a035b2bbda7aaf3cf9e0b7eff7d75cbad9c"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "5da80aac92e56c9d177683f2deb24e18f63229a2d0e846d1bbb599215123c12c"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "4cc1de1f05c4b3d628e3c904de5ca18977b46de739f85472c721764462bb75f4"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "0cbcc9b5cb6217c9c7804ab67586c2384acdc930d77d759ea30b2720d8a21b34"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "bd0cdf9e9c1dc40a88f2ef39a28bd5756e28d2deaf5478cf1dcdd59a9a2dbf95"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "eebbc6cbab8ece4c53271b003f6adaac1f8e7aa6e33d9b0075175935b024931c"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "892aea169e7d55374db75c619eda018f55f3ff2f53aaf8b3c547a11e5d0407f0"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "02d853e64afe384da6d4397e2c869e076ff2d80dc8e2cf943e2d703ad632d805"
+        }
+      ],
+      "category": "mi_collections",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "89e0aae5c852ceb81e9ee7346843826dddd4cde7d28bf2fec076ba83833e6b1b",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.create_multi_instance_region"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.create_multi_instance_region",
+      "nota_top1": false,
+      "original_hypothesis": "op.create_multi_instance_region",
+      "ranking": [
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.9940096294022049
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.0022310325326163347
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.0010601497700047494
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.0009246562347992754
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.0007011571107642271
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.00048063415437812066
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0001324606207625197
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00012650033448992324
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.00010334132132269863
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.00006958170583857991
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.00004720317069104053
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.00004319309521321874
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.000031137483128274376
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.00002588551578989374
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.000013437547996172312
+        }
+      ],
+      "seq": 19,
+      "text": "one request per signatory, cap it at ten",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_multi_instance_region",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "acc93489b86abb18cbc18cf10f7dc9fa485772b2f7403ffa7417a0f7479a057c",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "20ceed765a4c88c0ca27e6d658d746b688a96f420d51289f61c745f7430ed4d7"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "47f005b9e62a5eb1fbab4b21f82c942db5babd77ab81fe040e2cda78165c6ef6"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "1372b1604b4369faa90a4033050fc553a4b7138c8524dc5ab84bd4ab9142e9f9"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "64af4b3173b73a46121b99cb88836d42ae4f85af0b5c4b4ea0e7593dfc4c3a5f"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "093f3ef257c52c6730697724893557254512efafcac209d4bd36237a898540d9"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "6a052b3e635110a9972d51aaab1f278b10af25f4cad6b45dbe80c30b81627dff"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "0cbaa98a7efcfd9c8d47ea79e4fc7482dffc43071f9582e280a5068b168ca05d"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "6639fa02f1fadf9a9b7b2b919b033d1effff1d0a545cc2c8224cfde414cbc4f9"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "13c17544d85a2bbcd76cfa6bfce4037e2978f9b99d0d8f0e28ea07061cb62c60"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "f46f10e09bffb21fbaf86876c25edd5a2ee0b73ab1f6a52726f68255545d0f14"
+        }
+      ],
+      "category": "mi_collections",
+      "class_id": "mi_node",
+      "context_projection_hash": "9a95eade75f08636b8fe4d31246c6f8e31abcfd52e1a2c09a318605c17573cc5",
+      "decision_record_hash": "d712611855eae8c793d833568dd757d0ec337abc7ce444ac57e6e73e0ca6f0ea",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.496 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "a question, not a command -- per the directive's own annotation, expected disposition is clarify/escalate (NOTA), not a patch.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.4957450737740015
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.12962623472428256
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.12561923373840497
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.05859086403530074
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.05748740577251322
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.043466166889550864
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.03661696265234131
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.032781261788595
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.014992176060279501
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.005074620564730175
+        }
+      ],
+      "seq": 20,
+      "text": "what happens if the list is empty",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "op.delete_subgraph",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "b15775699623c8d04851e5a5f78b79bf0ca58234bb4aa6fad17e9df31c5d6544",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "c0747dacb0fa3754c76064da349db941f4de55e16f306edc0fce5d48430c125d"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "5cc215ff7b7f1a1f0d3369ee0129bc469a1cacd1bd342f116932448648503f1d"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "10eed5a656a99800092ae40eb172d3651dbd98935d14fcf0cb4c4ebc76e54ca1"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "fd88be1977a9ab0f9bb928b231ea5ffefe874662e303de6f6ce76822d1fe5340"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "fe6ef45e68a7a7b0987898fb507fa06c6aa102d05d0a072a2aadf6397004e8d1"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "16247ef6a726979d6df299193e62a8ce2891f7ef46938d086b19bf1c9e54e05a"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "04c06815a5a8ec78970dcc3dbb3f73ad82b305117559c2eda8e1b4eefc83a64f"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "a864c521dc1d791b734ac9818e8cf98af0b4b6e89197cb071ef1093b946113f6"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "e0d628df9ac7785306349e88baec6cc9ab7a45702d31db458bc4220a5187f6bb"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "b34e1a764bff370958791f7a0a872e3067733ff823249a8340c8a004eefe9dac"
+        },
+        {
+          "candidate_id": "op.set_correlation_source",
+          "pair_hash": "0ae06f1248b65ff5b39f7d4609a126498ad2d78789408c229c9acfe1c0d65b92"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "88d3ddf3b6a7518dc59e56846e9bf9a99a2e61649091c1cf8282bb231de66886"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "ef9490146dcc713d08a99b650fe999212aeb15aa392680938abb3ffb255334b4"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "aefc2720689e25c265bd1a4f91b9ad095b38dd174401c190a51b485f48e32b5f"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "efcf8b5de0346940147d8d3e07e2fc064c5e8c6b018c17d6ef384e7dd7e3945f"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "c087dacd33486a73c5ab90037f73843579336c69c48e457f7147bec8b7a82a38"
+        }
+      ],
+      "category": "correlation_messages",
+      "class_id": "message_wait",
+      "context_projection_hash": "6bff6567277b435771f669f8430bec54f693ffa997c135c02bcaf89ec7535ea2",
+      "decision_record_hash": "d5f58a91e863c82dc8b32dfc6c56eeb7506159db64f29e9095910a72503ff643",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.set_correlation_source"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "op.set_correlation_source",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.set_correlation_source",
+      "nota_top1": false,
+      "original_hypothesis": "op.set_correlation_source",
+      "ranking": [
+        {
+          "candidate_id": "op.set_correlation_source",
+          "score": 0.7859736494641418
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.07974030899094553
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.05431491046522943
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.02725852043590236
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.022424355120078492
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.016073904854862438
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.007484748622430145
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.001771078000583319
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0017146217395739417
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0008055578894891842
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.0007882188955889389
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.0006219725415797836
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.0004023190359896225
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.0002952013554764213
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.0002260019636226648
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.00010463062450581843
+        }
+      ],
+      "seq": 21,
+      "text": "match the reply by case id",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.set_correlation_source",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "7232f8828fb2c8e84312d4a9d2355dbc9a473dd7f0f15142eb78c7316dcb1dc8"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "529a6b65d71a9442069abc34ab0e5a7fe0d4c379acfb73c35b5753329b96aa47"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "db0ec6d88b6e1fd6342da8432386d04088abe39c8d6fb3506cb7891d20a94282"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "4a5407b27f578e632ccd6411673e88daf63759c6d75bd91db6d7e465178a515e"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "6249fca3683e7f33593551f50a843a5508b2bcb8899780a8763937cc91127d57"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "d3d72982c46945ef1eadc094dd644f3f55f5c49813e4f61f51cc7e8a09b67a82"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "395189200a4e3512958e1bb7aad1da3641adbd8e23e8e79312ceb67c709847e0"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "16ecfa672eccb331f873b36c2486a92e2d7750c6dfac40103e041db427a563a5"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "ab82af8067382e916c568616c346d0f59b56bd8ae9bfe78e038f903f12e4220c"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "3ad848e853068ee6ecc9356b6616987500cc48ca0e76d65e51f560eff306d47b"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "6416c4570308a06ff51f8ce2891977d73342356dc64686ae9886b4ccf2bc21d5"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "2ab428935674874b611ce5e401bcabb0f03a3828feb1568d5b1a9a5abeb1be25"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "7852916cf6fb16327530107cad8faad6579d93e6e31fcfcc41e3993b41d9ccf5"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "0cbaa910454b8827ece9bfba9ee310b9d4864246ddddaf2cc5bfe7544aef3b74"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "0cb4a4d6b1a39ec819a4b8db9284c6494df775f0295bc9cad32ff0e7a854bd8c"
+        }
+      ],
+      "category": "correlation_messages",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "a311b4ba83185c4cc88876a779c6fa8ca8d39129fa7fd2054ef6dd1e8a407e48",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.431 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "describes creating a correlated wait from a task anchor -- request_and_wait is the closest production, but a bare MessageWait append with no outbound request half is also a defensible reading.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "prod.request_and_wait",
+      "nota_top1": false,
+      "original_hypothesis": "prod.request_and_wait",
+      "ranking": [
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.43092650665449733
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.14856761791012163
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.14396184587150904
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.06653155124780229
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.05054904034824382
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.026889132278424006
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.02601486465855864
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.025464842703393012
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.02256569770515298
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.016836577770504298
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.015742131638186302
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.01041346597050241
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.007250391618629398
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.00663650352509838
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.0016498300993767457
+        }
+      ],
+      "seq": 22,
+      "text": "when their answer lands, wake this up",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "op.delete_subgraph",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "b15775699623c8d04851e5a5f78b79bf0ca58234bb4aa6fad17e9df31c5d6544",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "88a150657d8070b99f59d6e188c39ed9f73eb9aebda7267af32d2e739d478f1a"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "180ca8f17930809595364b6cceb2f0b236f162d418edd3caac6f07845b9889ba"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "458f8ea3d418bcb57dd66622bbfd7bd6e3cc806bfdd178347c1dcbb191f911a5"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "3978c408ed7cd6fd9930dade6b445b5a03cdcd3c5398ee0857470b174d8684d7"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "9913d412fc48bfbcad19221c1d21296c8dfe9ee39ab51fa220ba9498b0d8b21b"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "4987c351e8278884846e02fa6886476857b05db206f4c92e9ffe5206091859bd"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "5dbfad33a0d0e1f656dbfc21bcd1c752ea6b422bef63e3596d4fb91d7163db17"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "230d3a56e0b7c8c48eb7726d78dcb2be091fefef0ddf5bf41fdcf0cf6ed5980f"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "93c81972f736201452f5ed52b5a737838590d40cc07f95a260cbb3311da2f53f"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "9dc022e0832f307d2d4b2bed5e586739ca2cbbc09b18e8f88c3788b0c9e94804"
+        },
+        {
+          "candidate_id": "op.set_correlation_source",
+          "pair_hash": "8d3f5685c98cfd5880c9842126d90e5655d80035e88c6e5855b035af0fd43964"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "742e417cf04bb0321a7925182bdf3c84c5acfe14e770d30666776b768a93d490"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "f2904457af3f985dfaf7660b85a9470f3d5ab38a6502faa4ea3551da4b6da35c"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "284a2778d20881e12e96852747b023da7637b8ed72d4328e5af192ee9a71e2e5"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "7741a768ef8b57691ffc8eff8f55365d0404cc8708378e21c0bb65bf678ea1ec"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "b66f928d4b712b7677e64ea0ad517037395c32bb2d9e174b058887bee134736b"
+        }
+      ],
+      "category": "correlation_messages",
+      "class_id": "message_wait",
+      "context_projection_hash": "6bff6567277b435771f669f8430bec54f693ffa997c135c02bcaf89ec7535ea2",
+      "decision_record_hash": "0df2ba7f4c6c85969fc5c59760d670f96ecd6d47a4e439c4dd621642fb974286",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.set_correlation_source"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "op.set_correlation_source",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.set_correlation_source",
+      "nota_top1": false,
+      "original_hypothesis": "op.set_correlation_source",
+      "ranking": [
+        {
+          "candidate_id": "op.set_correlation_source",
+          "score": 0.9999372815616372
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.000018573652085533902
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.000016954257713364515
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 9.841054839776567e-6
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 3.4504206991516518e-6
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 2.5255328769967406e-6
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 2.111718316757284e-6
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 1.6941911092740442e-6
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 1.6740744296714753e-6
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 1.5140933973290652e-6
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 1.2511740018312205e-6
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 9.366709148765131e-7
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 7.638431410271754e-7
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 6.259833990236891e-7
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 5.379020961740503e-7
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 2.638693415585827e-7
+        }
+      ],
+      "seq": 23,
+      "text": "key the wait on the request reference",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.set_correlation_source",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "e1f1e5b136abca43b94f3d4ca2031647c669788f341a95d6df2add4606e8b5c4",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "ab96a254b10d2b713c752254ac7ec55ce1cd3e1f4333c8492ba25d218a941c4b"
+        },
+        {
+          "candidate_id": "op.set_guard_budget",
+          "pair_hash": "c0af3e14220f51df4ce831f4de5cd66809c8daf1f36d8690e3e89b6892710fd3"
+        },
+        {
+          "candidate_id": "op.set_guard_trigger",
+          "pair_hash": "3e1df29a051ef6bc0e1fc5f2ce914bfa549142086c4b393027639cbe91fa0068"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "027981639f37375605dbaffa0f9502d7c69beb87e063bab681023bba43505084"
+        }
+      ],
+      "category": "declarations",
+      "class_id": "guard_node",
+      "context_projection_hash": "187cd7a824d585d7296a969eee370f260a051e1310695d33d27cb69f84a774f1",
+      "decision_record_hash": "7b3c0b102f7f05b81f135f30aa62ddf5ed90367a2ac6d6740f97be4515e39c9a",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.set_guard_budget"
+        }
+      },
+      "dispute_note": "",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.delete_subgraph",
+        "op.set_guard_budget",
+        "op.set_guard_trigger",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "op.set_guard_budget",
+      "nota_top1": false,
+      "original_hypothesis": "op.set_guard_budget",
+      "ranking": [
+        {
+          "candidate_id": "op.set_guard_budget",
+          "score": 0.8388281015318978
+        },
+        {
+          "candidate_id": "op.set_guard_trigger",
+          "score": 0.05739587094471997
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.05494817030182543
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.048827857221556664
+        }
+      ],
+      "seq": 24,
+      "text": "give this guard five strikes",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.set_guard_budget",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "5b5f22a367e93b9f46611286f3f91344cac681791abc2ebebd6b840d3ddc331c",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "11927d3e6af688a518bc71398043e223d81043b53cd80072dae3c805547c8b08"
+        }
+      ],
+      "category": "declarations",
+      "class_id": "empty_graph",
+      "context_projection_hash": "fec3bc9ab452af6f428d9cc4a73342c30406994504a5200ad3477be6c9140a41",
+      "decision_record_hash": "fe0903e5ef48ba901130b2f143925ab191a3661af706418fdb24ac0f955d8de2",
+      "disposition": "OutOfScope",
+      "dispute_note": "a workflow-level default declaration has no board candidate in the current node-scoped catalogue (every guard op is per-node) -- NOTA/escalation is the best current answer, but this may indicate a missing declaration-level candidate class, flagged for Adam rather than decided here.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 1.0
+        }
+      ],
+      "seq": 25,
+      "text": "make the default budget three for the whole flow",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "6f4c7ef4a42fc9c005f637f237f84e11cea811082b8c8d1c472ef80152e37f9e",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "ae6ae5b25d20e93670bcd9451364b3002f36140c9482058686c5fdb2de13f45c"
+        },
+        {
+          "candidate_id": "op.create_branch",
+          "pair_hash": "a5a094ac0d76f47070e5e8ee183c1d2a0b39e8a175cfac2136385d69a8ac3efd"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "724111a5907ba65e44c1c933eaad99228f1e10328c05df1ffc36a369b3d9bf10"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "152aeb5354620eb909b32ec32b0860f60976cd1c899e5e49f80a0b29046f82f6"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "d9bdef8dd2ccc85f242aec59c9a9648f620d6eed8d2196da5f5adf7488675245"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "ee65effc8ce841555f3e478be6ffec2f2011747a3ca7f1ddb2127689726226ab"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "5c9a0cd4d95de00969230550e6e92e8036c46a0cf84e5423d7890982d1eee768"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "ea357f8e77c39913032b86131a8e169121322f373a863291dc73f159d6127d48"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "adad92e20b0bc381bd18d32a88553a61c86425ee44ea3a8928bc3c89756034fa"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "c7519ce4e7ab5719c01f8903db784c02c4043a713f5d6506c0c44c49a17b367d"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "7edf358455827fba33f1966db267b0dc6f737548075536058d810380823926f0"
+        }
+      ],
+      "category": "off_board",
+      "class_id": "xor_gateway",
+      "context_projection_hash": "3a9c85289715ac3c5783cb1c6a17386d92f6ad42629d648783d2769ca7e36721",
+      "decision_record_hash": "69d38b4d23f700ea8080acb6adab1ef760ef41f515545f7a4879c929e66a4176",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.497 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "unbounded loop -- violates the finitely-bounded-loops rule; no board candidate represents it.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_branch",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.create_branch",
+          "score": 0.4966797894714943
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.11614912527458468
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.1002416068774057
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.07035069421259446
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.04826858173785153
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.036759847288311616
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0317235260092815
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.02891355939759331
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.028568948738131445
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.02757920899919152
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.01476511199355986
+        }
+      ],
+      "seq": 26,
+      "text": "loop back until it passes",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.create_branch",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "ee9eca5712ac1d8d63084422d840ffb63c40146f5d577b2428f788ef25f830d9",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "d85f361af0349a92ce90459cadca2ba9e164168ba2b5ca5e90cf5f7c68991fa3"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "c0a88ae755e6d1a3ef502d41c1c18f02b8867de7404b7a06fc5ffc0da0eb03fb"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "b6d665043bd6a26a5bc94b3a296143e040a5453245e8d9f77d175687bd8c0e9e"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "e5714430b42ab8a64cb61fc745e832937951a49f237f1e56a586ab1de3bc97eb"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "ccbabcea50ed68c6a29b54a4a221e3660aef61e4a59b6b614302499afa259831"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "1c687524c7d1528845d90c46b3249130a897efba95606547e09b4bdf93dbc52b"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "fe7237ca8011c626d9e343aa053f965200851b6c8019e2e69be1897c9918f9ef"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "39ddac2c6b7aea85ed598bd83d0446e05c6d01af887d30239ad10b0d72ec9948"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "ada6f37f3327bfd4e4bc30ab32a33237587f2a489432303b7917622095c6ed64"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "f42c1a6a76004e59220f8f6cc8e0276defc0234d1ced8026859753f8e672f56b"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "025b9cfc01cd4915f84058b191e80bb06a6048acc556f221093141076592cb80"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "70d8c8ed7633193aef0726c74ab717254fe8bbe5ebac68e90d9408a3291bbdd2"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "355a2bcdd6402b557085a623f610ef3e65159fe8163c1799b403bd05471596e7"
+        }
+      ],
+      "category": "off_board",
+      "class_id": "guarded_task",
+      "context_projection_hash": "8df71723f7960ccc114b1d0cbae0e2b9cf11ec751e3ad905292d997a205282cb",
+      "decision_record_hash": "aaca6e0d4be3c53e2d5a6613ee6f377186aa5eb6b81529fab42a64544e8b2087",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.connect"
+        }
+      },
+      "dispute_note": "no compensation-handler concept exists in the current catalogue.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.insert_after",
+        "op.insert_before",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.connect",
+          "score": 0.5297001926190961
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.07633878670100068
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.07110711720494742
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.06520256922146142
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.056672919569736344
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.05314137190716607
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.032852001494561044
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.03123887006043097
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.02617028287307712
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.021063768400069023
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.016747821707265714
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.012017727344946709
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.00774657089624138
+        }
+      ],
+      "seq": 27,
+      "text": "add a compensation handler",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.connect",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "b98d0b02940be58fe494f4542ced4c6ba5b1e0aec089438c8ff0e724ab0224a4",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "aecf3f8b6b66bb4150d537dcf9e942213caacc1cbd14b70d5c0a980ea66141f7"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "ed105f88635878b69ebcea9cb2d07fd24ae170f4086bb4da7d3b80af7cdd971c"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "4bbc3f9631fdd07c8bfa54f5566141dea848f934deb23cd98b77baa5868de2bf"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "e77991bd46221d862e3d8c8690fe647fea6538ea1bb100e701c41b4e3ea6016b"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "bb7fe8f529e7a9ca6ffa23be872eeb19c726c678d233dec14a9e245b8eae89c5"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "3709b0d2a03d9ca6e2a39e04c7cb81c02d6b652dde92e52c6cf77f784a8a5f9a"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "5bde6db938e74c40c0b90f4994e882045735cf70e4a00f851780175deafdbab2"
+        }
+      ],
+      "category": "off_board",
+      "class_id": "start_anchor",
+      "context_projection_hash": "5ea38e3446c2ecdd6e54290117051bb93f539317faa63d92d2b767596eedff55",
+      "decision_record_hash": "c4e2272b45b55263c06bbbb0a2577c0e1a7121c190397346df83c5143bd7c712",
+      "disposition": "OutOfScope",
+      "dispute_note": "event-triggered workflow start is not represented; boards seed from a plain Start node only.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.insert_after",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.46242044463870474
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.16943721320876176
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.14082040994291176
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.11204526973467967
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.062141389387508364
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.045022646769344955
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.008112626318088546
+        }
+      ],
+      "seq": 28,
+      "text": "start this workflow whenever an email arrives",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "e1f1e5b136abca43b94f3d4ca2031647c669788f341a95d6df2add4606e8b5c4",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "48fe01bf27316a654708c575c657ed24f467fa465f81fdd545ef01baee9ceafe"
+        },
+        {
+          "candidate_id": "op.set_guard_budget",
+          "pair_hash": "8eb8a0cb0654ba6634b317e7b97d61e7dd2345bfb177f1b67e13aa702087b5bd"
+        },
+        {
+          "candidate_id": "op.set_guard_trigger",
+          "pair_hash": "1f212c1144efbf98652ca58e5ce3bdff97bd72654d3ad2905fec876fc04beb96"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "de7285300f705d60183fbfe83deef14cf83fa97cbc3d5b54ea286a891de6855c"
+        }
+      ],
+      "category": "off_board",
+      "class_id": "guard_node",
+      "context_projection_hash": "187cd7a824d585d7296a969eee370f260a051e1310695d33d27cb69f84a774f1",
+      "decision_record_hash": "53b75e6b54fee90a88f8d4e91c50d83132636613982cfd963513b3474cd8deb8",
+      "disposition": "OutOfScope",
+      "dispute_note": "unbounded retry -- violates the finite-max-fires/bounded-budget rule.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.delete_subgraph",
+        "op.set_guard_budget",
+        "op.set_guard_trigger",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.44685466120366085
+        },
+        {
+          "candidate_id": "op.set_guard_trigger",
+          "score": 0.41789665928055625
+        },
+        {
+          "candidate_id": "op.set_guard_budget",
+          "score": 0.13325481288094604
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.0019938666348368267
+        }
+      ],
+      "seq": 29,
+      "text": "retry forever, every hour",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "b5a35b5224215533c00546ad002d195a272d1fc8d6b8f9f9f966145ca45bdd39"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "3e3a8888cddc45f111deec9be425684a9b95a90df39bc6ee63afe965d8171d69"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "14d07dd3e5531054fe2e74d6ddd71a75375ad1eb8216f7d1cbad82061d9317fd"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "1d08ac82fff838de94e40f353a96306afb6ee0fb9d4313fb2f32b026689f2553"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "eaa143a4e4608670867afb9b50dbda9942a29144d58d76c0b5a0b3c5411274a3"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "fbae9e4e7d0cc9149bbe58886a6be030ea226532e45966cf9ef28669a43f5492"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "8e5f07feb8c2af20ee00eb3bd8ee135db864cf03a86b8b6175832b3d90ea787c"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "957ccaacb3b5f7ba92ee11b54dfe2f74a8bed039790924cfbd430860d6a9db34"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "7a40d0a93b51622ae5ed6ceeb863f1dc50434eda05bc5bcdb49f36482696b1db"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "2d795de50c9ec8d4ce4095ea3472be536844ad52386e76e3af047d83f231f5e9"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "a897a68bd7b9f84470002a120eda3825e4e997ed54bdb2139e6c40db849d0d92"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "84e4adb49195eb83662c03fad8c6c01a9592f4ce4ef882973f787ff10ac7a722"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "612537cd5f38b1839a39264f45936db941c7582fbc9fbc002913caa98b0f5809"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "829d08c771b55c2a0aee25deb4e986c2d50ae68bbe430ee554f856c3d8362e1d"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "8f7113d950e8db718725a8ff3c4e037be709e74d2175061903ee829e1b45789b"
+        }
+      ],
+      "category": "off_board",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "efa3b1ccfc5392c47dfe1fbcf4d800ddff5867c2d7dd1ce180ac2ddf0422263a",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.connect"
+        }
+      },
+      "dispute_note": "CallSubprocess/direct external calls are excluded from every board (kernel-complete, IR-absent frontend path).",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.connect",
+          "score": 0.5436297123481114
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.14173559405980982
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.05620319043050831
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.05215014079899584
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.0310716088726407
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.0298884462797936
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.02636063295383167
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.025602481702437178
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.023278922159902137
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.02295047572240879
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.01401545453545342
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.01160617748219368
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.00807875670538998
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.007295924268445571
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.006132481680078103
+        }
+      ],
+      "seq": 30,
+      "text": "just call out to a REST endpoint from here",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "op.connect",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "c362f7966d4fc1063f020f8c751cad2da90d9a7129aebbc4e27df0c1b8ecb866"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "350e7fc27f3aff666ae90dfe58e8ac9ae10ecf15a87be4103c84260c4b155fce"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "1ab46109bb92ec49dbbfd27d6729f9cfa04bb2ab1bcb27ae1fe5e2e29fb0c4fb"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "598e2f40db0a0f932909a0a131241b184fae7ca8a23063cf58b61adb596e326e"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "8d181e3aa705781b2bc42c8c1332cb24e9f8340f172547828a2fc9776d5aa0f3"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "df3bc1d3df449ad239a13733b009ea4eccfd4525ca713fc6a6af9116df51dd9a"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "cbb9c0bce57657d752c2a7daf1cfbb611ff794b138975e29ec5cd2a393de2127"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "ed39eeb7e0692c45c408496de575695d47b27d0bca9eb04fd705b9ce92f77e2b"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "1fc0c89de56468715d7981eeb34154336ee20adfe1fcc1511a3f00802f857330"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "f41240f71fcae0807ff09a727528725d7db2266e8d99dbdf6dcfdb08b2410757"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "a4e1573dc786c5063b967e646be85890c3226522a12d27e7a6bc10db3db8e435"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "405beae821760a413137721e815d9650ac310101a2d78f75b4d153f241f8f761"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "e0dd9c0e9e13032f86aa6a5d07afebfdb6f1232c4d58d8c001f7819ac88799d8"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "62c9e3ef68e6970eb6f3c46085396a694b4f67a8c0d75ae8a139c34e44fba80e"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "9f2a9ba27e4ca7f54c883165ef7e985a9992d84752c40e05498db3ec84ac0c33"
+        }
+      ],
+      "category": "vague_compound",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "bcdb214100c225485c5521e75efcb3c69b4107291f58a2a92022ca745ddb18b1",
+      "disposition": "OutOfScope",
+      "dispute_note": "no specific operation named; expected disposition is clarify/Sage escalation.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.1933152041529127
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.14889519949973884
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.14427983267073335
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.08794697417268678
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.07693724180464614
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.05983528614192094
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.05559462020478979
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.047685985046680104
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.047407684139084236
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.031630463614308844
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.03106141513494348
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.023601758544951765
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.022012083167419885
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.021008806597986686
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.008787445107196626
+        }
+      ],
+      "seq": 31,
+      "text": "make this more robust",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "c915b688091c44443d8bbcbf833a9c1e49645d365076c3480b9757560754d2fb"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "2d1cc0d245ff2d122ecadcd2d76501cb9c8d5c7fcdd5da641ebb91141e79ca98"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "f2b4f5b901fac91f361d57c64e8d1075c8032706faa08f06066bb19d11dd484e"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "ce661567b4844321c1f30889913c3314d48d4b923f8556485176d77edf3fa851"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "cdbc309656ff960c238ebffc0f6d30b53b0ca259ae0f22b2567e1091fb925256"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "6bb32e51bfcb8e7ca29d249ca7ef0c6ca7fc90a7207adf2fc31aa55631ee95fe"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "12849c70be87d28aac31a8f14a890ea643de1f1f74eef474069d0a5da06dfdbc"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "a31c0cb3700044d5d9fcab55e27f090765035fa8f8a1d3a11ee70c51d6cc257a"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "7697791f81c8f610b41568f9825bc6dd904043f47bf677e6d4f1cc80854fd98b"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "7780a003f3aa0e655735bf239d96c2540b365952de2df25b841a6c408a146d63"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "307e446f724a7dad9265262ad18aba7e2e94030bbdf5b7466fe47862b72db0cc"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "7da0b212dc4b80b2c0e126f8bc88fa0a9fb78ba8d8d73b837e89a0368ccee26f"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "3853977ea0b24f19ef54ec768e2eecfc60b944255e108bc106924406e9af6c08"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "15d5c1909e0d16cf0661edd941cf3f5c6ea4e29a57731bfe1a5ee297007f0f6c"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "092fb00282dad8cf9c11824cd400c2bd4798576c634ceb9612aa3085dc024938"
+        }
+      ],
+      "category": "vague_compound",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "db5576b38a7ec637abc5b6402cf7e2c5a792f895a383f28f52d5654e5d15eae0",
+      "disposition": "OutOfScope",
+      "dispute_note": "compound ask (a reminder plus a conditional branch to legal) -- NOTA/escalation is the safe default, but a looser reading could score this against prod.reminder_then_escalate if the second clause is treated as a follow-on request rather than part of this one.",
+      "disputed": true,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": true,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.594539708359506
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.08691362316856975
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.07754934981793135
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.041912037791542164
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.041451294815980644
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.03785517934468385
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.032245637821745846
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.0256269826777115
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.01944086794119738
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.017269694655409108
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.01349515904452231
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.005079272221025217
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0025837708288716115
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.00208360274610783
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.0019538187651956733
+        }
+      ],
+      "seq": 32,
+      "text": "chase them and also loop legal in if it's high risk",
+      "top3_contains_hypothesis": true,
+      "top_candidate": "abstain.none_of_the_above",
+      "top_matches_hypothesis": true
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "229a7d869e127b171e764335ac171f06d8248fc3e2040c15473786781671697b"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "bb413c051c09d183a804972e2917f51532816a1cc35ae235673b40e0e99710ee"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "e1c8410f70344bf943d14016f8c0d52fbd0b978de44104d480c1ce6653ecdeb2"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "ee4313a3c2a34615d739f69eb1ea32eed042e0a1a16f44c9ce565877891b31d6"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "59f389a9c1ad0df4688f589fa4d267cf8c319f3d2ad6287adcd144a4d76ac1a3"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "15253737ae461a1a0705729210e2d6e31c0fce15af1b225aa8eb6b2bd7e635a6"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "aaf86e1c672aeed0999e8b88fc2506eb2b9ab46af80b92ce287ccfe8975d1996"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "aec6eeb66ca670f7fa1bc5b5231349a51ac5988e5105c4ba3d4245ea938d5ddc"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "0fe4e9a7319bb11f52bba5e0073c93361749bd9776a11f9f2e75670fa699bc53"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "588f0ffb7b72d3c568eed4ea0f338469b692992c1305298e3c4492300e7d7de5"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "1e7a450872ab116717eac8f101a7372094f2b4286e902d34fcda2f4ee6b97833"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "e9f6143c503a8b261f586a612e1f252f9431a7f2134310fe0a92135ac5f8cb68"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "73699faf54b553c2d11ba81f3cac3dd0d17e0bec57b15972dac636458945ddf1"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "1814ff56eb2307474024c4112a99be99dcf88b036245c1e57f901fc0f0a9b784"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "b16e34ea6696de767675d7be4bd2f7f0ade70f79f8c03d997e30e4447731fad9"
+        }
+      ],
+      "category": "vague_compound",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "4912c0d5344cc6c2989c2cc6af6ba21df32e4e40343de01d8458a9520e32f8e1",
+      "disposition": {
+        "EscalateToSage": {
+          "reason": "top score 0.485 below acceptance floor 0.500"
+        }
+      },
+      "dispute_note": "domain-jargon reference to an unstated multi-step process; no single candidate names it.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.connect",
+          "score": 0.48458638668350695
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.17570079200933755
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.10963368249189619
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.08527183896781758
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.06329997408644206
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.027085024640462453
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.025800247390933034
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.00897588686123232
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.0061996190664081316
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.004804331178691226
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.0030365798913789383
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.0024680946125695442
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.0018553838999540828
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.000706642419644605
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.0005755157997254761
+        }
+      ],
+      "seq": 33,
+      "text": "the usual document dance for a new fund",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "op.connect",
+      "top_matches_hypothesis": false
+    },
+    {
+      "adjudicated": false,
+      "board_hash": "4de058681cbe951a7b963de83d6de830d8c962923525ef692c13629d83e9c0ba",
+      "candidate_pair_hashes": [
+        {
+          "candidate_id": "op.attach_guard",
+          "pair_hash": "0f68ee66c2196e54b148d59ce6d52ef0fb06998cba95ee812fe43791d19c49aa"
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "pair_hash": "6f88bc6c9d4cad022ec06fce57d156dda788e54c3d0ac16db5b42bb162f8e994"
+        },
+        {
+          "candidate_id": "op.connect",
+          "pair_hash": "f9aa069841167a99f64fbb6460f82c52a6f17abcabef059026937f6a4ec62cd6"
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "pair_hash": "862f8d591c2e32a489f3785759ae397b637daae50095b509dda70a153427e1fb"
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "pair_hash": "731f7d3a119524056dee5e80488ec52cae7f15c03d5e764d242e49fa1c99d081"
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "pair_hash": "f59ba1dbb7301429506fecd1bc75dd21e1d5f55d62825f71b4782185946b466f"
+        },
+        {
+          "candidate_id": "op.delete_subgraph",
+          "pair_hash": "3707f0c87ab134c8267cef708195b10e10ba37f1bc467e1252f05790c10dd0a2"
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "pair_hash": "4ec5b47ed787bce8aef9c0bf34fa22892dd84fff7dfdff9db20c1fdcf69565ac"
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "pair_hash": "983eaea944789e83c30c663fcffe8225259ff15b7a93f5020cfd75f196d0ff40"
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "pair_hash": "d7881d9fb0090383e24afccceff13e80b181d3063510e5e702113ad136c778f2"
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "pair_hash": "0c854f838178f606fbb457b9b286108c1cbdf466e13391eae8c0e5f865366f58"
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "pair_hash": "e3de5ce9ff0705ccd409a6f369877d2414600e473f75a846ace5ca947a03eb30"
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "pair_hash": "6b6c984d43d50824eaf97b34fd2330aabfafbf6114113d4cd1bf642235172195"
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "pair_hash": "489ab13bc365855a755aab9e857649670e41e9ed5fd290b458b707fb7ce85ea4"
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "pair_hash": "77327d9f58c86378a7c42a81e7fd4fbde6c24bdbda1df38ff5ee64d7f16b8fb1"
+        }
+      ],
+      "category": "vague_compound",
+      "class_id": "mid_sequence_task",
+      "context_projection_hash": "11671e84191da12d394750a14a08c2912a63b1db9efd191828179895a91c8f7f",
+      "decision_record_hash": "3acbfd8fb4c84030712f5a33e50e8e012261e146ab4ebb4c7c3c81bf89a9804f",
+      "disposition": {
+        "Candidate": {
+          "candidate_id": "op.delete_subgraph"
+        }
+      },
+      "dispute_note": "no specific operation named; expected disposition is clarify/Sage escalation.",
+      "disputed": false,
+      "evidence_trace": {
+        "bundle_identities": [
+          "slm.trained.modernbert-base@8949b909#fc18f8ceb8ae7cf370b8935c669ca9e65aac5a9abebcde3d9ee5ae4bb42ea1c7"
+        ],
+        "candidate_serializer_hash": "0c84d7c43af45e4e1735d0a99ecacb4fb8c317f38951ab3bdd5e45b32387792e",
+        "exact_collision": [],
+        "lanes": [
+          "candle_cross_encoder"
+        ],
+        "served_full_board": true,
+        "turn_serializer_hash": "2560ad1fed89478bd7c933581afc642b74c00e9f559071afa1135c1077832b31"
+      },
+      "exact_match": "None",
+      "full_served_list": [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.delete_subgraph",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+        "abstain.none_of_the_above"
+      ],
+      "hypothesis_label": "abstain.none_of_the_above",
+      "nota_top1": false,
+      "original_hypothesis": "abstain.none_of_the_above",
+      "ranking": [
+        {
+          "candidate_id": "op.delete_subgraph",
+          "score": 0.6387536473024024
+        },
+        {
+          "candidate_id": "op.connect",
+          "score": 0.1158042019336378
+        },
+        {
+          "candidate_id": "op.replace_node",
+          "score": 0.04441975105589094
+        },
+        {
+          "candidate_id": "op.create_multi_instance_region",
+          "score": 0.03813191711544659
+        },
+        {
+          "candidate_id": "op.insert_after",
+          "score": 0.02468665246474893
+        },
+        {
+          "candidate_id": "op.attach_guard",
+          "score": 0.02159858740866587
+        },
+        {
+          "candidate_id": "op.create_parallel_region",
+          "score": 0.020029494955825847
+        },
+        {
+          "candidate_id": "prod.interrupting_timeout",
+          "score": 0.018598014573087154
+        },
+        {
+          "candidate_id": "prod.non_interrupting_notification",
+          "score": 0.01621045765028009
+        },
+        {
+          "candidate_id": "abstain.none_of_the_above",
+          "score": 0.01465326584509747
+        },
+        {
+          "candidate_id": "op.insert_before",
+          "score": 0.014575667284960275
+        },
+        {
+          "candidate_id": "op.create_inclusive_region",
+          "score": 0.01345405580867977
+        },
+        {
+          "candidate_id": "op.attach_rearming_guard",
+          "score": 0.012397735998229123
+        },
+        {
+          "candidate_id": "prod.request_and_wait",
+          "score": 0.003440857669884782
+        },
+        {
+          "candidate_id": "prod.reminder_then_escalate",
+          "score": 0.0032456929331629134
+        }
+      ],
+      "seq": 34,
+      "text": "tidy this up",
+      "top3_contains_hypothesis": false,
+      "top_candidate": "op.delete_subgraph",
+      "top_matches_hypothesis": false
+    }
+  ],
+  "semantic_pack_identity": "bpmn-semantic-profile-v1:a2c8a4003d3a02e765ba5b7d75b664a268e40d5ab2c39b2daa3f1e5a725316d9",
+  "status": "corrected_measurement; evidence_not_acceptance_gate",
+  "suite": "starter-seed-v1",
+  "totals": {
+    "model_top1_matches_hypothesis": 22,
+    "model_top3_contains_hypothesis": 28,
+    "n": 34,
+    "nota_top1": 10
+  }
+}

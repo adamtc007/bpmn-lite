@@ -12,7 +12,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
-utterance-engine = { path = ".." }
+utterance-engine = { path = "..", features = ["candle-probe"] }
+candle-core = "0.8"
 semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "a38eefe1e8d039bd8b52e52477ffd58ba39c3058" }
 
 [[bin]]
@@ -32,6 +33,13 @@ bench = false
 [[bin]]
 name = "workbook_transition"
 path = "fuzz_targets/workbook_transition.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "v3_route_admission"
+path = "fuzz_targets/v3_route_admission.rs"
 test = false
 doc = false
 bench = false

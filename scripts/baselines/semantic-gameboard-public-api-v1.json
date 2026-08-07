@@ -1,0 +1,19 @@
+{
+  "cargo_public_api_version": "0.52.0",
+  "simplification": "-sss",
+  "surfaces": [
+    {"package": "utterance-engine", "features": "", "items": 347, "sha256": "29bbeeb847d3ebff7bfb2a8d93661417cfb24ada4c22b620c7c5db86b04dfa03"},
+    {"package": "utterance-engine", "features": "candle-probe", "items": 373, "sha256": "1b7728c76ad506cbddd210f9c3a4f8ea22acf5e2a329d14ebfc731a049ac4717"},
+    {"package": "utterance-engine", "features": "embed,candle-probe", "items": 383, "sha256": "632440593dc7a1df152f33363398a9a71578414c194add8bc9565b21c18e1628"},
+    {"package": "utterance-engine", "features": "q9-capture", "items": 401, "sha256": "e0bb39b4a04d89fe40605780c4d0f201b3326242d885833987dc21bc023cadd9"},
+    {"package": "bpmn-lite-server-designer", "features": "", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
+    {"package": "bpmn-lite-server-designer", "features": "candle-probe", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
+    {"package": "bpmn-lite-server-designer", "features": "embed,candle-probe", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
+    {"package": "bpmn-lite-server-designer", "features": "q9-capture", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"}
+  ],
+  "approved_pub_modules": {
+    "utterance-engine/src/lib.rs": ["board", "bpmn_board", "capture", "context", "contract", "corpus_schema", "dev_capture", "disposition", "exact", "fixtures", "funnel", "metrics", "pair", "policy", "retrieval", "trained_ranker"],
+    "designer-graph/src/lib.rs": ["board_candidate", "ops", "positional", "productions", "schema"],
+    "bpmn-lite-server-designer/src/lib.rs": ["rest"]
+  }
+}

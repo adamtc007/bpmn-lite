@@ -142,3 +142,14 @@ Tier-1's multiplicative uplift over tier-0 holds (~2.5x here vs ~2x on the synth
 ### 10.4 Standing state after this addendum
 
 Promotion ladder untouched: shadow → suggest-only still gates on G3, thresholds still Adam's. Nothing retrained. Open on Adam's desk: the Q9 charter (critical path, unchanged), corpus-v2/retrain timing (informed by §10.2's action item and the starter-seed-v1 lessons), and the starter-seed-v1 label adjudication (§10.3's 8 disputed items) at first testing.
+
+## 11. Measurement invalidation addendum (2026-08-07, Semantic Gameboard Phase 0)
+
+Section 10.3 is preserved as historical evidence, but its tier-1 result is invalid for
+the semantic-v3 serving route. That evaluator supplied legacy description text to a
+candidate-pair bundle and did not construct the live semantic board. The corrected,
+no-retraining run is **22/34 top-1, 28/34 top-3, 10/34 NOTA top-1**, with deterministic
+dispositions **16 candidate / 8 Sage escalation / 10 out-of-scope**. See the Phase 0
+receipt artifact for the full board, pair, evidence and decision identities. Neither
+the 15/34 result above nor the later 7–8/34 results may be used for a live-v3 trend
+claim.

@@ -172,3 +172,30 @@ glossary (2026-08-07) is the first artifact of that posture.
 Accept/amend the §6 questions; in particular rule on **R1 (the prompt-ranker spike)**
 — it is the single cheapest experiment that can resolve the weighting question Adam
 raised, and every gate, contract, and receipt built this week applies to it unchanged.
+
+## 8. Semantic Gameboard Phase 0 correction (2026-08-07)
+
+The live-v3 performance claims in §§2.2–2.4 are withdrawn. The evaluator behind the
+7–8/34 result built a legacy thin board, recorded no `semantic_v3` closure and sent a
+bundle admitted for `bpmn.candidate-pair.v1` through the old
+utterance/context-plus-description scorer. The same defect also prevents the older
+15/34 result from being used as a semantic-v3 comparator. Those numbers remain
+historical records of the invalid instrument; their files were not overwritten.
+
+The corrected Phase 0 instrument uses the graph-position semantic board, the admitted
+snapshot, the production candidate-pair serializer, every current-board candidate,
+the Candle full-board ranker, semantic evidence finalisation and deterministic
+`shadow_v2` disposition. Without retraining or changing a corpus/bundle, the frozen 34
+utterances produced:
+
+- top-1 matching the provisional/adjudicated hypothesis: **22/34**;
+- top-3 containing the hypothesis: **28/34**;
+- NOTA ranked first: **10/34**;
+- dispositions: **16 candidate, 8 escalate-to-Sage, 10 out-of-scope**.
+
+The claimed “~44% → ~21% real-language cliff” therefore did **not** reproduce under
+the live-v3 route and is withdrawn, along with the causal attribution to the v2→v3
+corpus regime. The broader architectural questions in §§5–7 remain legitimate design
+questions, but the invalid cliff is no longer evidence for them. The corrected packet,
+per-turn hashes and dispositions are in
+`docs/receipts/artifacts/semantic-gameboard-phase0-starter-evaluation.json`.

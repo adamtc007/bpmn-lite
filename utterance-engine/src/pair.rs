@@ -41,6 +41,39 @@ pub enum SerializationError {
     BudgetTooSmall { minimum: usize },
 }
 
+/// Re-establish the content identities on a stored pair before it is admitted
+/// to a learned-evidence producer. This is crate-internal deliberately: callers
+/// create pairs through [`serialize_candidate_pair`], while corpus/bundle
+/// adapters may validate persisted bytes without gaining an unchecked
+/// constructor.
+#[cfg(any(feature = "candle-probe", test))]
+pub(crate) fn validate_serialized_candidate_pair(
+    pair: &SerializedCandidatePair,
+) -> Result<(), String> {
+    if pair.serializer_id != PAIR_SERIALIZER_ID {
+        return Err(format!(
+            "pair serializer mismatch: expected '{PAIR_SERIALIZER_ID}', found '{}'",
+            pair.serializer_id
+        ));
+    }
+    if pair.budget.side_a_tokens < 16 || pair.budget.side_b_tokens < 16 {
+        return Err("stored pair carries an inadmissible token budget".to_string());
+    }
+    let side_a_hash = hash(&pair.side_a);
+    let side_b_hash = hash(&pair.side_b);
+    let pair_hash = hash(&format!(
+        "{PAIR_SERIALIZER_ID}:{}:{side_a_hash}:{}:{side_b_hash}",
+        pair.budget.side_a_tokens, pair.budget.side_b_tokens
+    ));
+    if pair.side_a_hash != side_a_hash
+        || pair.side_b_hash != side_b_hash
+        || pair.pair_hash != pair_hash
+    {
+        return Err("stored pair content identities do not match its bytes".to_string());
+    }
+    Ok(())
+}
+
 /// Construct the one bounded utterance/turn × semantic-candidate pair.
 ///
 /// Budgets are independently applied before tokenizer pair encoding. Each side
@@ -200,5 +233,16 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.side_a.split_whitespace().count() <= budget.side_a_tokens);
         assert!(first.side_b.split_whitespace().count() <= budget.side_b_tokens);
+        validate_serialized_candidate_pair(&first).unwrap();
+    }
+
+    #[test]
+    fn stored_pair_validation_fails_closed_on_tampering() {
+        let turn = ContextProjection::new("pack", "graph", None, vec![]).unwrap();
+        let mut pair =
+            serialize_candidate_pair("insert", &turn, &candidate(), PairTokenBudget::default())
+                .unwrap();
+        pair.side_b.push_str(" changed");
+        assert!(validate_serialized_candidate_pair(&pair).is_err());
     }
 }

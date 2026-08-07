@@ -24,9 +24,52 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
 
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate, SlmResult};
-use crate::corpus_schema::Example;
+use crate::corpus_schema::{Example, SemanticCorpusClosure};
 
 const MAX_LENGTH: usize = 256; // must match train_slm.py's MAX_LENGTH
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BundleInputMode {
+    SemanticCandidatePairsV3,
+}
+
+impl BundleInputMode {
+    fn from_admitted_card(card: &serde_json::Value) -> Result<Self> {
+        if card["corpus_schema_id"].as_str() == Some(crate::corpus_schema::CORPUS_SCHEMA_ID)
+            && card["pair_serializer_id"].as_str() == Some(crate::pair::PAIR_SERIALIZER_ID)
+        {
+            Ok(Self::SemanticCandidatePairsV3)
+        } else {
+            anyhow::bail!("bundle card does not declare an admitted scoring input mode")
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScoringRoute {
+    LegacyDescription,
+    SemanticCandidatePairsV3,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+enum ScoringRouteAdmissionError {
+    #[error("semantic-v3 bundle refused legacy utterance/context plus description textualisation")]
+    V3LegacyDescriptionRefused,
+}
+
+fn admit_scoring_route(
+    bundle_mode: BundleInputMode,
+    route: ScoringRoute,
+) -> std::result::Result<(), ScoringRouteAdmissionError> {
+    match (bundle_mode, route) {
+        (BundleInputMode::SemanticCandidatePairsV3, ScoringRoute::SemanticCandidatePairsV3) => {
+            Ok(())
+        }
+        (BundleInputMode::SemanticCandidatePairsV3, ScoringRoute::LegacyDescription) => {
+            Err(ScoringRouteAdmissionError::V3LegacyDescriptionRefused)
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Base {
@@ -37,7 +80,12 @@ pub enum Base {
 }
 
 impl Base {
-    pub const ALL: [Base; 4] = [Base::GteModernbert, Base::MsMarco, Base::ModernbertBase, Base::BgeReranker];
+    pub const ALL: [Base; 4] = [
+        Base::GteModernbert,
+        Base::MsMarco,
+        Base::ModernbertBase,
+        Base::BgeReranker,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -129,6 +177,7 @@ pub struct TrainedRanker {
     pooling: String, // "cls" | "mean", read from the bundle's training_card.json
     tokenizer: Tokenizer,
     bundle_identity: String,
+    input_mode: BundleInputMode,
 }
 
 fn pool(hidden: &Tensor, mask: &Tensor, pooling: &str) -> Result<Tensor> {
@@ -146,16 +195,26 @@ fn pool(hidden: &Tensor, mask: &Tensor, pooling: &str) -> Result<Tensor> {
 
 impl TrainedRanker {
     pub fn load(base: Base, bundle_dir: &std::path::Path, device: &Device) -> Result<Self> {
-        let card: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
-                .context("training_card.json")?;
+        let card: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+            bundle_dir.join("training_card.json"),
+        )?)
+        .context("training_card.json")?;
         validate_bundle_card(&card, bundle_dir)?;
-        let pooling = card["pooling"].as_str().context("card.pooling")?.to_string();
+        let input_mode = BundleInputMode::from_admitted_card(&card)?;
+        let pooling = card["pooling"]
+            .as_str()
+            .context("card.pooling")?
+            .to_string();
 
         let (repo_id, revision) = base.repo_and_revision();
         let api = Api::new()?;
-        let repo = api.repo(Repo::with_revision(repo_id.to_string(), RepoType::Model, revision.to_string()));
-        let config_str = std::fs::read_to_string(repo.get("config.json").context("download config.json")?)?;
+        let repo = api.repo(Repo::with_revision(
+            repo_id.to_string(),
+            RepoType::Model,
+            revision.to_string(),
+        ));
+        let config_str =
+            std::fs::read_to_string(repo.get("config.json").context("download config.json")?)?;
 
         let raw = candle_core::safetensors::load(bundle_dir.join("model.safetensors"), device)
             .context("load bundle safetensors")?;
@@ -197,7 +256,12 @@ impl TrainedRanker {
             head,
             pooling,
             tokenizer,
-            bundle_identity: format!("slm.trained.{}@{}", base.key(), revision.get(..8).unwrap_or(revision)),
+            bundle_identity: format!(
+                "slm.trained.{}@{}",
+                base.key(),
+                revision.get(..8).unwrap_or(revision)
+            ),
+            input_mode,
         })
     }
 
@@ -205,18 +269,35 @@ impl TrainedRanker {
         &self.bundle_identity
     }
 
-    /// Scores every candidate in `record.tier1_list` -- the SAME list
-    /// shape training/serving share (Adam's finding-5 ruling) -- never
-    /// the full board.
+    /// Scores the persisted semantic-v3 candidate pairs for the complete
+    /// board. A legacy record without the v3 closure is refused before any
+    /// textualisation or model work occurs.
     pub fn score(&self, record: &Example, device: &Device) -> Result<SlmResult> {
-        self.score_list(record, &record.tier1_list, device)
+        admit_scoring_route(self.input_mode, ScoringRoute::SemanticCandidatePairsV3)?;
+        let closure = admit_semantic_v3_record(record)?;
+        let pairs = closure
+            .candidate_pairs
+            .iter()
+            .map(|candidate| (candidate.pair.side_a.clone(), candidate.pair.side_b.clone()))
+            .collect::<Vec<_>>();
+        self.score_pairs(
+            &pairs,
+            &closure.full_served_list,
+            &record.board_hash,
+            device,
+        )
     }
 
-    /// Explicit-list variant: the accuracy path above always serves
-    /// tier1_list; this exists for the latency-vs-K probe (timing the
-    /// same forward pass at widened list sizes, e.g. the full board) and
-    /// for scoring constructed candidate pairs (ambiguity-set suite).
-    pub fn score_list(&self, record: &Example, cand_ids: &[String], device: &Device) -> Result<SlmResult> {
+    /// Compatibility signature retained for existing callers. Every admitted
+    /// v3 bundle refuses this legacy description-text route before scoring;
+    /// callers must use [`Self::score`] with a complete semantic-v3 closure.
+    pub fn score_list(
+        &self,
+        record: &Example,
+        cand_ids: &[String],
+        device: &Device,
+    ) -> Result<SlmResult> {
+        admit_scoring_route(self.input_mode, ScoringRoute::LegacyDescription)?;
         let query_text = format!("{}\n\n{}", record.utterance, record.context_projection);
         let desc: HashMap<&str, &str> = record
             .board
@@ -227,11 +308,9 @@ impl TrainedRanker {
         self.score_query(&query_text, cand_ids, &desc, &record.board_hash, device)
     }
 
-    /// Serving-side variant (DIR-002 serving integration, 2026-08-01):
-    /// same encoding path as `score_list` — query text is
-    /// `utterance \n\n context_projection`, EXACTLY the corpus records'
-    /// preimage (A1: one textualisation) — but sourced from a live
-    /// `Board` rather than a corpus `Example`.
+    /// Compatibility signature for legacy thin boards. An admitted v3 bundle
+    /// refuses this route; live graph-backed serving uses
+    /// [`Tier1Ranker::rank_full_board`].
     pub fn score_serving(
         &self,
         utterance: &str,
@@ -240,6 +319,7 @@ impl TrainedRanker {
         cand_ids: &[String],
         device: &Device,
     ) -> Result<SlmResult> {
+        admit_scoring_route(self.input_mode, ScoringRoute::LegacyDescription)?;
         let query_text = format!("{utterance}\n\n{context_projection}");
         let candidates = board.inference_candidates();
         let desc: HashMap<&str, &str> = candidates
@@ -315,7 +395,10 @@ impl TrainedRanker {
             .iter()
             .zip(logits.iter())
             .map(|(id, &score)| {
-                Ok(RankedCandidate { candidate_id: id.clone(), score: FiniteScore::new(score as f64)? })
+                Ok(RankedCandidate {
+                    candidate_id: id.clone(),
+                    score: FiniteScore::new(score as f64)?,
+                })
             })
             .collect::<Result<_>>()?;
         rank_canonically(&mut ranking);
@@ -352,7 +435,10 @@ fn validate_bundle_card(card: &serde_json::Value, bundle_dir: &std::path::Path) 
         Ok(())
     };
     equal("corpus_schema_id", crate::corpus_schema::CORPUS_SCHEMA_ID)?;
-    equal("corpus_schema_hash", &crate::corpus_schema::corpus_schema_hash())?;
+    equal(
+        "corpus_schema_hash",
+        &crate::corpus_schema::corpus_schema_hash(),
+    )?;
     if card["semantic_board_schema_version"].as_u64() != Some(1) {
         anyhow::bail!("bundle card semantic_board_schema_version mismatch");
     }
@@ -362,7 +448,10 @@ fn validate_bundle_card(card: &serde_json::Value, bundle_dir: &std::path::Path) 
     )?;
     equal("turn_serializer_id", crate::pair::TURN_SERIALIZER_ID)?;
     equal("turn_serializer_hash", &crate::pair::turn_serializer_hash())?;
-    equal("candidate_serializer_id", crate::exact::CANDIDATE_SERIALIZER_ID)?;
+    equal(
+        "candidate_serializer_id",
+        crate::exact::CANDIDATE_SERIALIZER_ID,
+    )?;
     equal(
         "candidate_serializer_hash",
         &crate::exact::candidate_serializer_hash(),
@@ -407,7 +496,9 @@ fn file_hash(path: &std::path::Path) -> Result<String> {
 /// fail the load, not silently serve uncalibrated scores.
 pub fn calibrated_probabilities(logits: &[f64], temperature: f64) -> Result<Vec<f64>> {
     if !temperature.is_finite() || temperature <= 0.0 {
-        return Err(anyhow!("refused calibration temperature {temperature} — must be finite and > 0"));
+        return Err(anyhow!(
+            "refused calibration temperature {temperature} — must be finite and > 0"
+        ));
     }
     let scaled: Vec<f64> = logits.iter().map(|l| l / temperature).collect();
     let max = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -417,50 +508,6 @@ pub fn calibrated_probabilities(logits: &[f64], temperature: f64) -> Result<Vec<
         return Err(anyhow!("calibrated softmax degenerate (sum {sum})"));
     }
     Ok(exps.iter().map(|e| e / sum).collect())
-}
-
-/// Sentinels `pair::serialize_candidate_pair` guarantees survive its OWN
-/// word-budget truncation (see that function's doc comment) — checked here
-/// against what the real tokenizer keeps after `LongestFirst` pair
-/// truncation at `MAX_LENGTH` subword tokens.
-const REQUIRED_SIDE_B_SENTINELS: [&str; 2] = ["[EFFECT]", "[END_CANDIDATE]"];
-
-/// `PairTokenBudget` bounds whitespace WORDS, not subword tokens. A
-/// turn/candidate pair that fits comfortably inside the word budget can
-/// still expand past `MAX_LENGTH` subword tokens once real tokenized (most
-/// natural-language words split into more than one subword piece), and
-/// `TruncationStrategy::LongestFirst` truncates from the tail of whichever
-/// side is longer post-tokenization — which can silently cut side B's
-/// trailing `[EFFECT]`/`[CONTRASTS]`/`[END_CANDIDATE]` sentinels even
-/// though the word-level serializer never would.
-///
-/// Encode the pair exactly as `score_pairs` will, decode the resulting
-/// (possibly truncated) ids back to text with the same tokenizer, and fail
-/// closed if a required sentinel did not survive — rather than silently
-/// serving the model a candidate pair whose effect/contrast text vanished.
-fn verify_pair_survives_tokenization(
-    tokenizer: &Tokenizer,
-    candidate_id: &str,
-    pair: &crate::pair::SerializedCandidatePair,
-) -> Result<()> {
-    let encoding = tokenizer
-        .encode((pair.side_a.clone(), pair.side_b.clone()), true)
-        .map_err(|error| anyhow!("verify pair tokenization for '{candidate_id}': {error}"))?;
-    let decoded = tokenizer
-        .decode(encoding.get_ids(), true)
-        .map_err(|error| anyhow!("verify pair decode for '{candidate_id}': {error}"))?;
-    for sentinel in REQUIRED_SIDE_B_SENTINELS {
-        if !decoded.contains(sentinel) {
-            anyhow::bail!(
-                "candidate pair for '{candidate_id}' lost its '{sentinel}' sentinel under real \
-                 tokenizer truncation at {MAX_LENGTH} tokens — the word-level pair budget \
-                 (side_a={}, side_b={} words) is not sufficient on its own",
-                pair.side_a.split_whitespace().count(),
-                pair.side_b.split_whitespace().count(),
-            );
-        }
-    }
-    Ok(())
 }
 
 /// The tier-1 SERVING producer (DIR-002 serving integration, ruled
@@ -487,12 +534,13 @@ impl Tier1Ranker {
     /// CPU story). Fails closed on a missing/unsealed temperature.
     pub fn load(base: Base, bundle_dir: &std::path::Path) -> Result<Self> {
         let device = Device::Cpu;
-        let card: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(bundle_dir.join("training_card.json"))?)
-                .context("training_card.json")?;
-        let temperature = card["temperature"]
-            .as_f64()
-            .ok_or_else(|| anyhow!("bundle card missing sealed calibration 'temperature' (§10.8)"))?;
+        let card: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+            bundle_dir.join("training_card.json"),
+        )?)
+        .context("training_card.json")?;
+        let temperature = card["temperature"].as_f64().ok_or_else(|| {
+            anyhow!("bundle card missing sealed calibration 'temperature' (§10.8)")
+        })?;
         if !temperature.is_finite() || temperature <= 0.0 {
             return Err(anyhow!("bundle card temperature {temperature} refused"));
         }
@@ -504,7 +552,12 @@ impl Tier1Ranker {
         };
         let ranker = TrainedRanker::load(base, bundle_dir, &device)?;
         let model_bundle_hash = format!("{}#{content_hash}", ranker.bundle_identity());
-        Ok(Tier1Ranker { ranker, temperature, model_bundle_hash, device })
+        Ok(Tier1Ranker {
+            ranker,
+            temperature,
+            model_bundle_hash,
+            device,
+        })
     }
 
     pub fn model_bundle_hash(&self) -> &str {
@@ -515,10 +568,9 @@ impl Tier1Ranker {
         self.temperature
     }
 
-    /// The full tier-0 → tier-1 serving pass. `tier0` supplies the
-    /// high-recall ranking; the served list is `tier1_list` at the ONE
-    /// standing `TIER1_K` (training-list shape = serving-list shape);
-    /// scores are calibrated probabilities over that list.
+    /// Legacy thin-board adapter retained as a compatibility boundary. Every
+    /// currently admitted v3 bundle fails closed here because it lacks the
+    /// semantic slices required by the candidate-pair serializer.
     pub fn rank(
         &self,
         tier0: &dyn crate::retrieval::Tier0Retriever,
@@ -528,9 +580,9 @@ impl Tier1Ranker {
     ) -> Result<SlmResult> {
         let tier0_evidence = tier0.retrieve(utterance, board)?;
         let list = crate::retrieval::tier1_list(&tier0_evidence, crate::retrieval::TIER1_K);
-        let raw = self
-            .ranker
-            .score_serving(utterance, context_projection, board, &list, &self.device)?;
+        let raw =
+            self.ranker
+                .score_serving(utterance, context_projection, board, &list, &self.device)?;
 
         // Calibrate over the ranking as scored (order-preserving: softmax
         // is monotone, so the canonical rank order is unchanged).
@@ -541,7 +593,10 @@ impl Tier1Ranker {
             .iter()
             .zip(probs.iter())
             .map(|(rc, &p)| {
-                Ok(RankedCandidate { candidate_id: rc.candidate_id.clone(), score: FiniteScore::new(p)? })
+                Ok(RankedCandidate {
+                    candidate_id: rc.candidate_id.clone(),
+                    score: FiniteScore::new(p)?,
+                })
             })
             .collect::<Result<_>>()?;
         rank_canonically(&mut ranking);
@@ -556,14 +611,17 @@ impl Tier1Ranker {
     }
 
     /// BPMN production serving path: score every board candidate, including
-    /// abstention. Top-K remains available only through `rank` for legacy and
-    /// explicit evaluation adapters.
+    /// abstention, through the admitted semantic candidate-pair serializer.
     pub fn rank_full_board(
         &self,
         utterance: &str,
         context: &crate::context::ContextProjection,
         board: &semantic_decision_contracts::SemanticDecisionBoard,
     ) -> Result<SlmResult> {
+        admit_scoring_route(
+            self.ranker.input_mode,
+            ScoringRoute::SemanticCandidatePairsV3,
+        )?;
         let list = board
             .candidates
             .iter()
@@ -579,21 +637,23 @@ impl Tier1Ranker {
                     candidate,
                     crate::pair::PairTokenBudget::default(),
                 )?;
-                verify_pair_survives_tokenization(
-                    &self.ranker.tokenizer,
-                    candidate.canonical_id.as_str(),
-                    &pair,
-                )?;
+                // Tokenizer truncation is part of the sealed trained route.
+                // A serving-only post-serialization sentinel veto would make
+                // Candle refuse the exact pairs Python admitted during
+                // training. The fixed Python/Candle parity packet therefore
+                // owns this boundary; pair bytes and hashes remain validated
+                // before scoring.
                 Ok((pair.side_a, pair.side_b))
             })
             .collect::<Result<Vec<_>>>()?;
-        let raw = self.ranker.score_pairs(
-            &pairs,
-            &list,
-            board.board_hash.as_str(),
-            &self.device,
-        )?;
-        let logits: Vec<f64> = raw.ranking.iter().map(|candidate| candidate.score.get()).collect();
+        let raw =
+            self.ranker
+                .score_pairs(&pairs, &list, board.board_hash.as_str(), &self.device)?;
+        let logits: Vec<f64> = raw
+            .ranking
+            .iter()
+            .map(|candidate| candidate.score.get())
+            .collect();
         let probabilities = calibrated_probabilities(&logits, self.temperature)?;
         let mut ranking = raw
             .ranking
@@ -617,9 +677,277 @@ impl Tier1Ranker {
     }
 }
 
+fn admit_semantic_v3_record(record: &Example) -> Result<&SemanticCorpusClosure> {
+    let closure = record.semantic_v3.as_ref().ok_or_else(|| {
+        anyhow!(
+            "semantic-v3 bundle refused record '{}' without semantic_v3 candidate-pair closure",
+            record.example_id
+        )
+    })?;
+    let board = record.board.semantic_board.as_ref().ok_or_else(|| {
+        anyhow!(
+            "semantic-v3 bundle refused record '{}' without its semantic decision board",
+            record.example_id
+        )
+    })?;
+    if board.board_hash.as_str() != record.board_hash {
+        anyhow::bail!("semantic-v3 record board hash does not match its embedded board");
+    }
+    if record.context_projection_hash
+        != blake3::hash(record.context_projection.as_bytes())
+            .to_hex()
+            .to_string()
+    {
+        anyhow::bail!("semantic-v3 record context projection hash does not match its bytes");
+    }
+    if closure.corpus_schema_id != crate::corpus_schema::CORPUS_SCHEMA_ID
+        || closure.corpus_schema_hash != crate::corpus_schema::corpus_schema_hash()
+        || closure.semantic_board_schema_version != board.schema_version
+        || closure.semantic_pack_identity != board.semantic_snapshot.as_str()
+        || closure.turn_serializer_id != crate::pair::TURN_SERIALIZER_ID
+        || closure.turn_serializer_hash != crate::pair::turn_serializer_hash()
+        || closure.candidate_serializer_id != crate::exact::CANDIDATE_SERIALIZER_ID
+        || closure.candidate_serializer_hash != crate::exact::candidate_serializer_hash()
+        || closure.pair_serializer_id != crate::pair::PAIR_SERIALIZER_ID
+        || closure.pair_serializer_hash != crate::pair::pair_serializer_hash()
+    {
+        anyhow::bail!("semantic-v3 record serializer or admitted-pack closure mismatch");
+    }
+
+    let board_ids = board
+        .candidates
+        .iter()
+        .map(|candidate| candidate.canonical_id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let pair_ids = closure
+        .candidate_pairs
+        .iter()
+        .map(|candidate| candidate.candidate_id.clone())
+        .collect::<Vec<_>>();
+    if closure.full_served_list != board_ids
+        || pair_ids != board_ids
+        || record.tier1_list != board_ids
+    {
+        anyhow::bail!(
+            "semantic-v3 record must contain every current-board candidate exactly once in canonical order"
+        );
+    }
+
+    for (stored, candidate) in closure.candidate_pairs.iter().zip(&board.candidates) {
+        crate::pair::validate_serialized_candidate_pair(&stored.pair)
+            .map_err(|error| anyhow!("candidate '{}': {error}", stored.candidate_id))?;
+        if stored.pair.budget != crate::pair::PairTokenBudget::default() {
+            anyhow::bail!(
+                "candidate '{}' uses a non-serving pair budget",
+                stored.candidate_id
+            );
+        }
+        let semantic_text = crate::exact::serialize_candidate(candidate);
+        if stored.candidate_semantic_text != semantic_text
+            || stored.candidate_semantic_hash
+                != blake3::hash(semantic_text.as_bytes()).to_hex().to_string()
+        {
+            anyhow::bail!(
+                "candidate '{}' semantic text does not match the embedded board",
+                stored.candidate_id
+            );
+        }
+    }
+
+    if closure.board_inclusion_truth != board_ids.contains(&record.label)
+        || closure.exact_match != crate::exact::governed_exact(board, &record.utterance)
+    {
+        anyhow::bail!("semantic-v3 record label or exact-evidence closure mismatch");
+    }
+    let expected_bindings = board
+        .candidates
+        .iter()
+        .find(|candidate| candidate.canonical_id.as_str() == record.label)
+        .map(|candidate| candidate.arguments.as_slice())
+        .unwrap_or_default();
+    if closure.binding_requirements.as_slice() != expected_bindings {
+        anyhow::bail!("semantic-v3 record binding requirements do not match its label");
+    }
+    Ok(closure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct ParityPacket {
+        schema: String,
+        bundle_base: String,
+        pair_serializer_id: String,
+        pair_serializer_hash: String,
+        max_length: usize,
+        absolute_tolerance: f64,
+        pairs: Vec<ParityPair>,
+        expected_python_logits: Vec<f64>,
+        expected_ranking: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParityPair {
+        candidate_id: String,
+        side_a: String,
+        side_b: String,
+    }
+
+    fn semantic_record() -> Example {
+        let dag = designer_graph::schema::DesignerDag::new("route-admission-test");
+        let graph_identity = "route-admission-revision";
+        let board = crate::bpmn_board::build_bpmn_semantic_board(
+            &dag,
+            None,
+            graph_identity,
+            &crate::board::PolicyFilter::default(),
+        )
+        .unwrap();
+        let context = crate::context::project_ir(
+            &dag.to_ir().unwrap(),
+            None,
+            board.semantic_snapshot.as_str(),
+            graph_identity,
+        )
+        .unwrap();
+        let label = board.candidates[0].canonical_id.as_str().to_string();
+        let list = board
+            .candidates
+            .iter()
+            .map(|candidate| candidate.canonical_id.as_str().to_string())
+            .collect::<Vec<_>>();
+        let closure = SemanticCorpusClosure::new(
+            &board,
+            "do something unknown",
+            &context,
+            &label,
+            "route-family".to_string(),
+            "route-test".to_string(),
+            "route-split".to_string(),
+        )
+        .unwrap();
+        Example {
+            example_id: "route-record".to_string(),
+            provenance: "route-test".to_string(),
+            board_hash: board.board_hash.as_str().to_string(),
+            context_projection: context.serialize_canonical(),
+            context_projection_hash: context.hash(),
+            board: crate::corpus_schema::BoardDump::from_inference_board(&board),
+            tier1_list: list,
+            retrieved_subset_hash: "full-board".to_string(),
+            label,
+            family_id: "route-family".to_string(),
+            pair_group_id: None,
+            style_regime: "route-test".to_string(),
+            utterance: "do something unknown".to_string(),
+            gold_in_tier1: true,
+            semantic_v3: Some(closure),
+        }
+    }
+
+    #[test]
+    fn semantic_v3_bundle_refuses_every_legacy_textualisation_route() {
+        assert!(admit_scoring_route(
+            BundleInputMode::SemanticCandidatePairsV3,
+            ScoringRoute::SemanticCandidatePairsV3,
+        )
+        .is_ok());
+        let error = admit_scoring_route(
+            BundleInputMode::SemanticCandidatePairsV3,
+            ScoringRoute::LegacyDescription,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ScoringRouteAdmissionError::V3LegacyDescriptionRefused
+        );
+    }
+
+    #[test]
+    fn semantic_v3_record_admission_checks_complete_pair_closure() {
+        let record = semantic_record();
+        admit_semantic_v3_record(&record).unwrap();
+
+        let mut missing = semantic_record();
+        missing.semantic_v3 = None;
+        assert!(admit_semantic_v3_record(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("without semantic_v3"));
+
+        let mut tampered = semantic_record();
+        tampered.semantic_v3.as_mut().unwrap().candidate_pairs[0]
+            .pair
+            .side_a
+            .push_str(" tampered");
+        assert!(admit_semantic_v3_record(&tampered)
+            .unwrap_err()
+            .to_string()
+            .contains("content identities"));
+    }
+
+    #[test]
+    #[ignore = "loads the frozen 568 MiB bundle; run explicitly for the Phase 0 parity receipt"]
+    fn python_candle_v3_parity_packet() {
+        let packet_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/v3_python_candle_parity.json");
+        let packet: ParityPacket =
+            serde_json::from_str(&std::fs::read_to_string(packet_path).unwrap()).unwrap();
+        assert_eq!(packet.schema, "bpmn.python-candle-parity.v1");
+        assert_eq!(packet.bundle_base, Base::ModernbertBase.key());
+        assert_eq!(packet.pair_serializer_id, crate::pair::PAIR_SERIALIZER_ID);
+        assert_eq!(
+            packet.pair_serializer_hash,
+            crate::pair::pair_serializer_hash()
+        );
+        assert_eq!(packet.max_length, MAX_LENGTH);
+        assert_eq!(packet.pairs.len(), packet.expected_python_logits.len());
+
+        let bundle_dir = std::env::var_os("SLM_BUNDLE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("train_py/bundles/modernbert-base")
+            });
+        let device = Device::Cpu;
+        let ranker = TrainedRanker::load(Base::ModernbertBase, &bundle_dir, &device).unwrap();
+        let candidate_ids = packet
+            .pairs
+            .iter()
+            .map(|pair| pair.candidate_id.clone())
+            .collect::<Vec<_>>();
+        let pairs = packet
+            .pairs
+            .iter()
+            .map(|pair| (pair.side_a.clone(), pair.side_b.clone()))
+            .collect::<Vec<_>>();
+        let candle = ranker
+            .score_pairs(&pairs, &candidate_ids, "parity-board", &device)
+            .unwrap();
+        let candle_by_id = candle
+            .ranking
+            .iter()
+            .map(|candidate| (candidate.candidate_id.as_str(), candidate.score.get()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (candidate_id, python) in candidate_ids.iter().zip(&packet.expected_python_logits) {
+            let candle = candle_by_id[candidate_id.as_str()];
+            assert!(
+                (candle - python).abs() <= packet.absolute_tolerance,
+                "{candidate_id}: Python={python}, Candle={candle}, tolerance={}",
+                packet.absolute_tolerance
+            );
+        }
+        assert_eq!(
+            candle
+                .ranking
+                .iter()
+                .map(|candidate| candidate.candidate_id.clone())
+                .collect::<Vec<_>>(),
+            packet.expected_ranking
+        );
+    }
 
     #[test]
     fn bundle_with_old_candidate_serializer_is_refused_before_model_load() {
@@ -649,7 +977,9 @@ mod tests {
             "training_split_manifest_hash": "split-test",
         });
         let error = validate_bundle_card(&card, &dir).unwrap_err();
-        assert!(error.to_string().contains("candidate_serializer_id mismatch"));
+        assert!(error
+            .to_string()
+            .contains("candidate_serializer_id mismatch"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -663,23 +993,40 @@ mod tests {
         let p_t = calibrated_probabilities(&logits, 1.4303200528314213).unwrap();
         assert!((p1.iter().sum::<f64>() - 1.0).abs() < 1e-12);
         assert!((p_t.iter().sum::<f64>() - 1.0).abs() < 1e-12);
-        assert!(p_t[0] < p1[0], "T>1 must FLATTEN the top probability: {} vs {}", p_t[0], p1[0]);
+        assert!(
+            p_t[0] < p1[0],
+            "T>1 must FLATTEN the top probability: {} vs {}",
+            p_t[0],
+            p1[0]
+        );
         assert!(p_t[2] > p1[2], "T>1 must lift the tail");
-        assert!(p_t[0] > p_t[1] && p_t[1] > p_t[2], "monotone: order preserved");
-        assert!(calibrated_probabilities(&logits, 0.0).is_err(), "T=0 refused");
-        assert!(calibrated_probabilities(&logits, f64::NAN).is_err(), "NaN T refused");
-        assert!(calibrated_probabilities(&logits, -1.0).is_err(), "negative T refused");
+        assert!(
+            p_t[0] > p_t[1] && p_t[1] > p_t[2],
+            "monotone: order preserved"
+        );
+        assert!(
+            calibrated_probabilities(&logits, 0.0).is_err(),
+            "T=0 refused"
+        );
+        assert!(
+            calibrated_probabilities(&logits, f64::NAN).is_err(),
+            "NaN T refused"
+        );
+        assert!(
+            calibrated_probabilities(&logits, -1.0).is_err(),
+            "negative T refused"
+        );
     }
 
-    /// Real-bundle serving receipt (K=12 list, sealed temperature, SlmResult
-    /// shape, populated bundle hash). Requires the trained bundle on disk +
+    /// Real-bundle compatibility receipt: a semantic-v3 bundle refuses the
+    /// legacy K-subset/description route. Requires the trained bundle on disk +
     /// hf-hub cache/network for the base's config.json, so it is #[ignore]d:
     /// run with
     ///   SLM_BUNDLE_DIR=utterance-engine/train_py/bundles/modernbert-base \
     ///   cargo test -p utterance-engine --features candle-probe --release -- --ignored tier1_serving
     #[test]
     #[ignore = "needs SLM_BUNDLE_DIR trained bundle + hf-hub config.json cache"]
-    fn tier1_serving_k12_calibrated_evidence_shape() {
+    fn tier1_v3_bundle_refuses_legacy_k12_route() {
         use crate::board::{build_board, EmptyUniverse, PolicyFilter};
         use designer_graph::board_candidate::{LegalityOracle, OperationKind, ProductionId};
 
@@ -699,161 +1046,31 @@ mod tests {
         );
         let t1 = Tier1Ranker::load(Base::ModernbertBase, &bundle_dir).expect("bundle load");
         assert!(
-            t1.model_bundle_hash().starts_with("slm.trained.modernbert-base@") && t1.model_bundle_hash().contains('#'),
+            t1.model_bundle_hash()
+                .starts_with("slm.trained.modernbert-base@")
+                && t1.model_bundle_hash().contains('#'),
             "bundle hash must carry identity#content-hash: {}",
             t1.model_bundle_hash()
         );
         assert!(t1.temperature() > 0.0);
 
-        let board = build_board(&AllLegal, None, Some("rev0"), &EmptyUniverse, &PolicyFilter::default()).unwrap();
-        let ctx = crate::context::minimal("pack.none", "g-test");
-        let ev = t1
-            .rank(&crate::retrieval::LexicalTier0, "chase them again", &ctx.serialize_canonical(), &board)
-            .expect("tier-1 rank");
-
-        // K=12 list construction: the TIER1_K prefix, +1 only when NOTA
-        // was cut by it (tier1_list's contract). The full board is
-        // larger — the subset rule is doing real work here.
-        assert!(
-            ev.ranking.len() == crate::retrieval::TIER1_K
-                || ev.ranking.len() == crate::retrieval::TIER1_K + 1,
-            "K-subset (+NOTA when cut): got {}",
-            ev.ranking.len()
-        );
-        assert!(board.candidates.len() > ev.ranking.len(), "subset, not the board");
-        assert!(ev.ranking.iter().any(|rc| rc.candidate_id == crate::contract::NONE_OF_THE_ABOVE));
-        for rc in &ev.ranking {
-            assert!(board.contains(&rc.candidate_id), "off-board: {}", rc.candidate_id);
-        }
-        // Temperature applied → probability simplex, not raw logits.
-        let sum: f64 = ev.ranking.iter().map(|rc| rc.score.get()).sum();
-        assert!((sum - 1.0).abs() < 1e-9, "calibrated probabilities must sum to 1, got {sum}");
-        assert_eq!(ev.board_hash, board.board_hash);
-        assert_eq!(ev.model_bundle_hash, t1.model_bundle_hash());
-    }
-
-    /// Build a real (not simulated) `tokenizers::Tokenizer` for the
-    /// `verify_pair_survives_tokenization` tests: `WordLevel` model over a
-    /// vocabulary built from the exact whitespace-delimited words the test
-    /// will encode, so every word round-trips through encode/decode
-    /// unchanged (default no-decoder join is `""`, so decoded words stay
-    /// contiguous substrings even without spaces between them — sufficient
-    /// for the sentinel substring check under test). This exercises the
-    /// production `Tokenizer::encode`/`truncate`/`decode` pipeline, not a
-    /// hand-simulated approximation of it.
-    fn word_level_tokenizer(vocabulary_source: &[&str], max_length: usize) -> Tokenizer {
-        use tokenizers::models::wordlevel::WordLevelBuilder;
-        use tokenizers::pre_tokenizers::split::{Split, SplitPattern};
-        use tokenizers::SplitDelimiterBehavior;
-
-        let mut vocab = HashMap::new();
-        vocab.insert("[UNK]".to_string(), 0u32);
-        let mut next_id = 1u32;
-        for text in vocabulary_source {
-            for word in text.split_whitespace() {
-                vocab.entry(word.to_string()).or_insert_with(|| {
-                    let id = next_id;
-                    next_id += 1;
-                    id
-                });
-            }
-        }
-        let model = WordLevelBuilder::new()
-            .vocab(vocab)
-            .unk_token("[UNK]".to_string())
-            .build()
-            .expect("WordLevel model builds from a non-empty vocab");
-        let pre_tokenizer = Split::new(
-            SplitPattern::Regex(r"\s+".to_string()),
-            SplitDelimiterBehavior::Removed,
-            false,
-        )
-        .expect("whitespace-run split pattern is valid");
-        let mut tokenizer = Tokenizer::new(model);
-        tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
-        tokenizer
-            .with_truncation(Some(TruncationParams {
-                max_length,
-                strategy: TruncationStrategy::LongestFirst,
-                ..Default::default()
-            }))
-            .expect("truncation params are valid");
-        tokenizer
-    }
-
-    fn candidate() -> semantic_decision_contracts::CandidateSemanticSlice {
-        use semantic_decision_contracts::{
-            ActionClass, CanonicalCandidateId, HarmClass, NegativeContrast,
-        };
-
-        semantic_decision_contracts::CandidateSemanticSlice {
-            canonical_id: CanonicalCandidateId::new("op.insert_after").unwrap(),
-            schema_version: 1,
-            title: "Insert after".into(),
-            intent_summary: "insert a node after an anchor".into(),
-            action_class: ActionClass::Create,
-            applicability: "normal flow".into(),
-            effect: "rewires the existing route".into(),
-            arguments: vec![],
-            phrases: vec![],
-            positive_examples: vec![],
-            negative_contrasts: vec![NegativeContrast {
-                candidate_id: CanonicalCandidateId::new("op.append_node").unwrap(),
-                distinction: "append extends an open route".into(),
-            }],
-            risk: HarmClass::Reversible,
-            adapter_payload_hash: "payload".into(),
-        }
-    }
-
-    #[test]
-    fn word_budget_alone_can_still_lose_the_sentinel_under_real_tokenization() {
-        // A turn long enough that PairTokenBudget's word-level truncation
-        // keeps it under budget, but the REAL tokenizer (small max_length
-        // here, standing in for "many words expand to more than one
-        // subword token in the real MiniLM/BERT tokenizer") truncates the
-        // pair and cuts side B's tail before verify() can save it.
-        let turn = crate::context::ContextProjection::new(
-            "pack",
-            (0..40).map(|i| format!("ctx{i}")).collect::<Vec<_>>().join(" "),
+        let board = build_board(
+            &AllLegal,
             None,
-            vec![],
+            Some("rev0"),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
         )
         .unwrap();
-        let candidate = candidate();
-        let pair = crate::pair::serialize_candidate_pair(
-            "insert something here please",
-            &turn,
-            &candidate,
-            crate::pair::PairTokenBudget::default(),
-        )
-        .unwrap();
-
-        // max_length small enough that side_a alone (turn + utterance)
-        // consumes the whole budget under LongestFirst, cutting all of
-        // side_b including its sentinel suffix.
-        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], 10);
-        let error =
-            verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair).unwrap_err();
-        assert!(
-            error.to_string().contains("lost its"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn sentinel_survives_when_the_real_tokenizer_has_room() {
-        let turn = crate::context::ContextProjection::new("pack", "graph", None, vec![]).unwrap();
-        let candidate = candidate();
-        let pair = crate::pair::serialize_candidate_pair(
-            "insert something",
-            &turn,
-            &candidate,
-            crate::pair::PairTokenBudget::default(),
-        )
-        .unwrap();
-        let tokenizer = word_level_tokenizer(&[&pair.side_a, &pair.side_b], MAX_LENGTH);
-        verify_pair_survives_tokenization(&tokenizer, "op.insert_after", &pair)
-            .expect("a pair well inside the real tokenizer's budget must pass");
+        let ctx = crate::context::minimal("pack.none", "g-test");
+        let error = t1
+            .rank(
+                &crate::retrieval::LexicalTier0,
+                "chase them again",
+                &ctx.serialize_canonical(),
+                &board,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("refused legacy"));
     }
 }

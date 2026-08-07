@@ -16,8 +16,14 @@ use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, T
 use designer_graph::ops::{apply, GuardTrigger, Operation, RegionBranch};
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 
-fn key() -> NodeKey {
-    NodeKey(uuid::Uuid::new_v4())
+#[derive(Default)]
+struct FixtureKeys(u128);
+
+impl FixtureKeys {
+    fn next(&mut self) -> NodeKey {
+        self.0 += 1;
+        NodeKey(uuid::Uuid::from_u128(self.0))
+    }
 }
 
 fn task(id: &str) -> IRNode {
@@ -39,15 +45,16 @@ pub struct ClassState {
 
 pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     let p = Provenance::default;
+    let mut keys = FixtureKeys::default();
     let mut out = Vec::new();
 
     // Shared base: start [+ corr data object], chain via ops.
-    let base = |with_data: bool| -> Result<(DesignerDag, NodeKey)> {
+    let base = |keys: &mut FixtureKeys, with_data: bool| -> Result<(DesignerDag, NodeKey)> {
         let mut dag = DesignerDag::new("gen-base");
-        let start = dag.seed(key(), IRNode::Start { id: "start".into() }, p())?;
+        let start = dag.seed(keys.next(), IRNode::Start { id: "start".into() }, p())?;
         if with_data {
             dag.seed(
-                key(),
+                keys.next(),
                 IRNode::DataObject {
                     id: "case_ref".into(),
                     name: "case_ref".into(),
@@ -72,8 +79,8 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
 
     // mid_sequence_task: start→t_review_docs→end, anchored on the task.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -84,7 +91,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -108,10 +115,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // the money-receipt regression (context projection `end x1` vs
     // `end x2` on otherwise identical boards).
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let guard = key();
-        let esc = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let guard = keys.next();
+        let esc = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -122,7 +129,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -143,7 +150,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: esc,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end_esc".into(), terminate: false },
                 edge_id: "f4".into(),
             },
@@ -176,9 +183,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // orphaned AppendNode: zero training coverage anywhere in the corpus
     // (2026-08-04 gap, found via bottom-up verb/synonym/utterance trace).
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let guard = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let guard = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -189,7 +196,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -215,9 +222,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
 
     // human_wait: start→prep→human review→end, anchored on the review.
     {
-        let (dag, start) = base(true)?;
-        let t = key();
-        let h = key();
+        let (dag, start) = base(&mut keys, true)?;
+        let t = keys.next();
+        let h = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -239,7 +246,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: h,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f3".into(),
             },
@@ -256,8 +263,8 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
 
     // send_task anchor.
     {
-        let (dag, start) = base(true)?;
-        let s = key();
+        let (dag, start) = base(&mut keys, true)?;
+        let s = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -273,7 +280,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: s,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -291,10 +298,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // xor_gateway (with a legal forward target for CreateBranch) +
     // downstream shared end.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let x = key();
-        let h1 = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let x = keys.next();
+        let h1 = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -317,7 +324,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: h1,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f4".into(),
             },
@@ -334,9 +341,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
 
     // parallel_branch_interior + mi_node: region constructs, anchored inside.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let b1 = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let b1 = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -347,15 +354,15 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
             Operation::CreateParallelRegion {
                 anchor: t,
-                fork_key: key(),
+                fork_key: keys.next(),
                 fork_node_id: "fork1".into(),
-                join_key: key(),
+                join_key: keys.next(),
                 join_node_id: "join1".into(),
                 entry_edge_id: "f_fork".into(),
                 branches: vec![
@@ -367,7 +374,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                         condition: None,
                     },
                     designer_graph::ops::RegionBranch {
-                        key: key(),
+                        key: keys.next(),
                         node: task("screen_pep"),
                         in_edge_id: "b2_in".into(),
                         out_edge_id: "b2_out".into(),
@@ -386,9 +393,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
         });
     }
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let mi = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let mi = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -399,7 +406,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -429,9 +436,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // end_anchor / start_anchor / data_object: positional reuse of a
     // simple chain graph.
     {
-        let (dag, start) = base(true)?;
-        let t = key();
-        let e = key();
+        let (dag, start) = base(&mut keys, true)?;
+        let t = keys.next();
+        let e = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -465,9 +472,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // data_object anchor: dedicated graph so the key is in hand.
     {
         let mut dag = DesignerDag::new("gen-data");
-        let start = dag.seed(key(), IRNode::Start { id: "start".into() }, p())?;
+        let start = dag.seed(keys.next(), IRNode::Start { id: "start".into() }, p())?;
         let d = dag.seed(
-            key(),
+            keys.next(),
             IRNode::DataObject {
                 id: "case_ref".into(),
                 name: "case_ref".into(),
@@ -478,7 +485,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             p(),
         )?;
-        let t = key();
+        let t = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -489,7 +496,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -506,9 +513,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
 
     // message_wait: start→t_send→wait→end, anchored on the wait.
     {
-        let (dag, start) = base(true)?;
-        let t = key();
-        let w = key();
+        let (dag, start) = base(&mut keys, true)?;
+        let t = keys.next();
+        let w = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -529,7 +536,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: w,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f3".into(),
             },
@@ -547,9 +554,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // timer_wait: a bare inline timer (not a boundary guard) — start ->
     // prep -> timer_wait -> end, anchored on the wait itself.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let w = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let w = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -569,7 +576,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: w,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f3".into(),
             },
@@ -588,9 +595,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // escape path (verifier 7c — a boundary guard needs an outgoing flow
     // distinct from its host's). Anchored on the guard itself.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let guard = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let guard = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -601,7 +608,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -620,7 +627,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             &g,
             Operation::AppendNode {
                 anchor: guard,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end_rejected".into(), terminate: false },
                 edge_id: "f_guard_out".into(),
             },
@@ -638,8 +645,8 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // ffi_service_task: bare FFI-dispatched task (Zeebe-style external
     // job), anchored on the task itself.
     {
-        let (dag, start) = base(false)?;
-        let t = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -656,7 +663,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -676,9 +683,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
     // covers the gateway node as the position, closing the gap for
     // utterances that address the gate directly rather than a branch).
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let fork = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let fork = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -689,7 +696,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -697,19 +704,19 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                 anchor: t,
                 fork_key: fork,
                 fork_node_id: "checks_fork".into(),
-                join_key: key(),
+                join_key: keys.next(),
                 join_node_id: "checks_join".into(),
                 entry_edge_id: "f_fork".into(),
                 branches: vec![
                     RegionBranch {
-                        key: key(),
+                        key: keys.next(),
                         node: task("screen_sanctions"),
                         in_edge_id: "b1_in".into(),
                         out_edge_id: "b1_out".into(),
                         condition: None,
                     },
                     RegionBranch {
-                        key: key(),
+                        key: keys.next(),
                         node: task("screen_pep"),
                         in_edge_id: "b2_in".into(),
                         out_edge_id: "b2_out".into(),
@@ -728,9 +735,9 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
         });
     }
     {
-        let (dag, start) = base(false)?;
-        let t = key();
-        let fork = key();
+        let (dag, start) = base(&mut keys, false)?;
+        let t = keys.next();
+        let fork = keys.next();
         let mut g = dag;
         for op in [
             Operation::AppendNode {
@@ -741,7 +748,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             },
             Operation::AppendNode {
                 anchor: t,
-                key: key(),
+                key: keys.next(),
                 node: IRNode::End { id: "end".into(), terminate: false },
                 edge_id: "f2".into(),
             },
@@ -749,12 +756,12 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                 anchor: t,
                 fork_key: fork,
                 fork_node_id: "notify_fork".into(),
-                join_key: key(),
+                join_key: keys.next(),
                 join_node_id: "notify_join".into(),
                 entry_edge_id: "f_fork".into(),
                 branches: vec![
                     RegionBranch {
-                        key: key(),
+                        key: keys.next(),
                         node: task("notify_compliance"),
                         in_edge_id: "b1_in".into(),
                         out_edge_id: "b1_out".into(),
@@ -765,7 +772,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                         }),
                     },
                     RegionBranch {
-                        key: key(),
+                        key: keys.next(),
                         node: task("notify_relationship_manager"),
                         in_edge_id: "b2_in".into(),
                         out_edge_id: "b2_out".into(),

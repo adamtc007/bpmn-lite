@@ -65,4 +65,7 @@ required-features = ["candle-probe"]
 
 [[example]]
 name = "starter_seed_eval"
-required-features = ["embed", "candle-probe"]
+required-features = ["candle-probe"]
+
+[lints]
+workspace = true
