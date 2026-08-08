@@ -3171,6 +3171,61 @@ async fn append_proposal_audit(
         .await?)
 }
 
+/// Recover the durable terminal receipt for a proposal after an ambiguous
+/// client response. The workbook ID is the proposal's canonical request key;
+/// only terminal workbooks may satisfy a retry, so an in-flight workbook can
+/// never be mistaken for a completed mutation.
+async fn terminal_proposal_receipt(
+    demo: &DesignerState,
+    session_id: Uuid,
+    proposal_id: Uuid,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let Some(session) = demo
+        .store
+        .load_design_session(&demo.tenant_id, session_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let proposal_id = proposal_id.to_string();
+    for event in session.events.iter().rev() {
+        let DesignSessionEventKind::ProposalAudit {
+            workbook_json,
+            outcome,
+            gameboard_attempt_receipt_json,
+            ..
+        } = &event.kind
+        else {
+            continue;
+        };
+        let workbook: semantic_decision_contracts::ProposalWorkbook =
+            serde_json::from_str(workbook_json)?;
+        if workbook.workbook_id.as_str() != proposal_id {
+            continue;
+        }
+        if matches!(
+            workbook.status(),
+            semantic_decision_contracts::ProposalStatus::NeedsArguments
+                | semantic_decision_contracts::ProposalStatus::ReadyForDryRun
+                | semantic_decision_contracts::ProposalStatus::ReadyForRatification
+        ) {
+            continue;
+        }
+        let attempt_receipt = gameboard_attempt_receipt_json
+            .as_deref()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()?;
+        return Ok(Some(serde_json::json!({
+            "terminal_audit_seq": event.seq,
+            "outcome": outcome,
+            "proposal_status": workbook.status(),
+            "workbook": workbook,
+            "attempt_receipt": attempt_receipt,
+        })));
+    }
+    Ok(None)
+}
+
 fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::Result<()> {
     use semantic_decision_contracts::{MoveAttemptId, MoveAttemptOutcome, ProposalStatus};
 
@@ -3527,7 +3582,8 @@ async fn answer_proposal_endpoint(
 /// re-stage through EXACTLY the graph-edit validation, append the
 /// GraphEdit event with a "ratified proposal …" note. The pending entry
 /// is removed on success AND on any refusal (fail closed: a proposal
-/// gets one shot against the graph it was staged on).
+/// gets one authority shot against the graph it was staged on); a later
+/// duplicate request may only recover the durable terminal receipt.
 async fn ratify_proposal_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path((id, pid)): Path<(Uuid, Uuid)>,
@@ -3539,16 +3595,39 @@ async fn ratify_proposal_endpoint(
     // must not disturb some other session's pending entry.
     let pending = {
         let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
-        match proposals.get(&pid) {
-            Some(p) if p.session_id == id => p.clone(),
-            _ => {
+        proposals
+            .get(&pid)
+            .filter(|pending| pending.session_id == id)
+            .cloned()
+    };
+    let pending = match pending {
+        Some(pending) => pending,
+        None => match terminal_proposal_receipt(demo.as_ref(), id, pid).await {
+            Ok(Some(receipt)) => {
+                return Json(serde_json::json!({
+                    "proposal_id": pid,
+                    "idempotent": true,
+                    "terminal_receipt": receipt,
+                }))
+                .into_response();
+            }
+            Ok(None) => {
                 return (
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({ "error": "proposal not found" })),
                 )
                     .into_response();
             }
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "terminal proposal receipt unavailable"
+                    })),
+                )
+                    .into_response();
         }
+        },
     };
     let consume = || {
         demo.proposals
@@ -5270,7 +5349,14 @@ async fn palette_select_endpoint(
         Ok(workbook) => workbook,
         Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"error":"selected move cannot open a workbook"}))).into_response(),
     };
-    let pid = Uuid::now_v7();
+    // Proposal identity is the workbook's canonical identity on every entry
+    // path. Reusing it here is required for durable terminal-receipt lookup
+    // after a lost client response; a palette selection must not acquire an
+    // unrelated, process-local proposal key.
+    let pid = match Uuid::parse_str(workbook.workbook_id.as_str()) {
+        Ok(pid) => pid,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette workbook identity unavailable"}))).into_response(),
+    };
     demo.proposals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(pid, PendingProposal {
         session_id: id, workbook, bound: None, preview_delta: None, source_utterance_text: selection_text,
         staged_against_hash: revision, dry_run_diagnostics: Vec::new(), audit_event_seq: None,
@@ -8001,6 +8087,11 @@ mod tests {
         let palette_selection = body_json(palette_selection_response).await;
         assert!(palette_selection["proposal_id"].is_string());
         assert!(palette_selection["workbook"].is_object());
+        assert_eq!(
+            palette_selection["proposal_id"],
+            palette_selection["workbook"]["workbook_id"],
+            "palette and utterance proposals share the canonical workbook identity"
+        );
         assert!(palette_selection["proposal_status"].is_string());
         let sage_history_response = app
             .clone()
@@ -8677,8 +8768,12 @@ mod tests {
             .unwrap()
             .contains(&pid));
 
-        // Proposal consumed: second ratify is a 404.
-        let response = app
+        // Lost-response retry: the second ratify returns the same durable
+        // terminal receipt and cannot append another GraphEdit.
+        let restarted =
+            DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap();
+        let restarted_app = designer_router(restarted);
+        let response = restarted_app
             .clone()
             .oneshot(post_json(
                 &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
@@ -8686,7 +8781,33 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+        let retry = body_json(response).await;
+        assert_eq!(retry["proposal_id"], pid);
+        assert_eq!(retry["idempotent"], true);
+        assert_eq!(retry["terminal_receipt"]["outcome"], "ratified");
+        assert_eq!(retry["terminal_receipt"]["proposal_status"], "ratified");
+        let after_retry = body_json(
+            restarted_app
+                .clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let graph_edits_before = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"].get("GraphEdit").is_some())
+            .count();
+        let graph_edits_after = after_retry["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"].get("GraphEdit").is_some())
+            .count();
+        assert_eq!(graph_edits_after, graph_edits_before);
     }
 
     /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).

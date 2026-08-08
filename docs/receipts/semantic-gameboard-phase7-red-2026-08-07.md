@@ -37,8 +37,11 @@ Status: RED — implementation has not yet converged all input surfaces.
    boundary: gameboard, Sage-board and Sage-guidance requests fail closed rather than
    manufacturing a graph-authoritative position. The Phase 7 removal-call-site audit
    is still outstanding while that rollback window remains open.
-6. Restart/lost-response/duplicate-request and concurrent-revision tape replay through
-   the in-process API adapter is not yet a Phase 7-qualified suite.
+6. A duplicate ratification after a lost response now resolves through the durable
+   terminal proposal audit keyed by the canonical workbook/proposal identity; it
+   returns the retained terminal receipt without appending another graph revision.
+   The broader restart/lost-response/duplicate-request and concurrent-revision tape
+   replay through the in-process API adapter is not yet a Phase 7-qualified suite.
 
 ## Required red assertions
 
