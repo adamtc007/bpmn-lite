@@ -8851,6 +8851,41 @@ mod tests {
         assert_eq!(graph_edits_after, graph_edits_before);
     }
 
+    #[tokio::test]
+    async fn test_concurrent_ratify_applies_one_graph_revision() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let uri = format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify");
+        let responses = futures::future::join_all([
+            app.clone().oneshot(post_json(&uri, serde_json::json!({}))),
+            app.clone().oneshot(post_json(&uri, serde_json::json!({}))),
+        ])
+        .await;
+        let mut bodies = Vec::new();
+        for response in responses {
+            let response = response.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            bodies.push(body_json(response).await);
+        }
+        assert_eq!(bodies.iter().filter(|body| body["idempotent"] == true).count(), 1);
+        assert_eq!(bodies.iter().filter(|body| body["applied"].is_string()).count(), 1);
+        let session = body_json(
+            app.oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            session["events"].as_array().unwrap().iter()
+                .filter(|event| event["kind"].get("GraphEdit").is_some()).count(),
+            2,
+            "seed has one operation tape and concurrent ratification contributes exactly one"
+        );
+    }
+
     /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).
     #[tokio::test]
     async fn test_reject_drops_proposal_graph_unchanged() {
