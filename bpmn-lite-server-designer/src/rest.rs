@@ -7053,6 +7053,19 @@ mod tests {
             .unwrap()
             .to_owned();
 
+        // The compatibility boundary is explicit: a text-backed session may
+        // retain its legacy utterance surface during the rollback window, but
+        // it can never be silently promoted into a graph-authoritative board
+        // or Sage guidance position.
+        for uri in [
+            format!("/api/dsl/sessions/{s1}/gameboard"),
+            format!("/api/dsl/sage/sessions/{s1}/gameboard"),
+            format!("/api/dsl/sage/sessions/{s1}/guidance/op.insert_after"),
+        ] {
+            let response = app.clone().oneshot(get_req(&uri)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        }
+
         let utter = |sid: &str, text: &str| {
             post_json(
                 &format!("/api/dsl/sessions/{sid}/utterance"),

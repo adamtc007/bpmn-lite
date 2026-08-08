@@ -33,8 +33,10 @@ Status: RED — implementation has not yet converged all input surfaces.
    interaction path that actually attempts a move.
 4. General session/event read-back remains broader than the dedicated Sage view; the
    remaining audit/history compatibility boundary has not been receipted.
-5. Legacy text-backed sessions remain isolated in code, but the Phase 7 compatibility
-   boundary and removal-call-site audit have not been receipted.
+5. Legacy text-backed sessions retain only their explicit compatibility utterance
+   boundary: gameboard, Sage-board and Sage-guidance requests fail closed rather than
+   manufacturing a graph-authoritative position. The Phase 7 removal-call-site audit
+   is still outstanding while that rollback window remains open.
 6. Restart/lost-response/duplicate-request and concurrent-revision tape replay through
    the in-process API adapter is not yet a Phase 7-qualified suite.
 
