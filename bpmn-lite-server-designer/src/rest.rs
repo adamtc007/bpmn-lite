@@ -3377,16 +3377,28 @@ async fn answer_proposal_endpoint(
     let _guard = lock.lock().await;
     let pending = {
         let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
-        match proposals.get(&pid) {
-            Some(pending) if pending.session_id == id => pending.clone(),
-            _ => {
+        proposals.get(&pid).filter(|pending| pending.session_id == id).cloned()
+    };
+    let pending = match pending {
+        Some(pending) => pending,
+        None => match terminal_proposal_receipt(demo.as_ref(), id, pid).await {
+            Ok(Some(receipt)) => return Json(serde_json::json!({
+                "proposal_id": pid,
+                "idempotent": true,
+                "terminal_receipt": receipt,
+            })).into_response(),
+            Ok(None) => {
                 return (
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({ "error": "proposal not found" })),
                 )
                     .into_response();
             }
-        }
+            Err(_) => return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"terminal proposal receipt unavailable"})),
+            ).into_response(),
+        },
     };
 
     let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
@@ -4068,18 +4080,15 @@ async fn reject_proposal_endpoint(
 ) -> impl IntoResponse {
     let lock = demo.session_lock(id);
     let _guard = lock.lock().await;
-    let pending = {
-        let proposals = demo.proposals.lock().unwrap_or_else(|p| p.into_inner());
-        match proposals.get(&pid) {
-            Some(pending) if pending.session_id == id => pending.clone(),
-            _ => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({ "error": "proposal not found" })),
-                )
-                    .into_response();
-            }
-        }
+    let pending = demo.proposals.lock().unwrap_or_else(|p| p.into_inner())
+        .get(&pid).filter(|pending| pending.session_id == id).cloned();
+    let pending = match pending {
+        Some(pending) => pending,
+        None => match terminal_proposal_receipt(demo.as_ref(), id, pid).await {
+            Ok(Some(receipt)) => return Json(serde_json::json!({"proposal_id":pid,"idempotent":true,"terminal_receipt":receipt})).into_response(),
+            Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"proposal not found"}))).into_response(),
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"terminal proposal receipt unavailable"}))).into_response(),
+        },
     };
     let mut rejected = pending;
     if let Err(error) = rejected
@@ -8952,6 +8961,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        let duplicate_reject = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/reject"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(duplicate_reject.status(), StatusCode::OK);
+        assert_eq!(body_json(duplicate_reject).await["idempotent"], true);
 
         assert_eq!(
             before,
