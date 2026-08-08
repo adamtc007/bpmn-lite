@@ -47,6 +47,11 @@ Status: RED — implementation has not yet converged all input surfaces.
    capability and application crates across production, Candle, embed+Candle and
    Q9 feature combinations; facade-consumer and forbidden-import/constructor
    fixtures also pass. No public API widening was introduced by this phase.
+8. The designer fuzz target no longer imports private server implementation through
+   a path escape hatch; it now exercises the documented `DesignerDag` → semantic
+   board → retrieval facade and its standalone lockfile is pinned to the workspace
+   shared-contract revision. A bounded libFuzzer smoke remains host-blocked because
+   this environment has no nightly sanitizer-capable Rust toolchain.
 
 ## Required red assertions
 
