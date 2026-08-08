@@ -780,6 +780,17 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/api/dsl/sessions/:id/gameboard",
             get(session_gameboard_endpoint),
         )
+        // Sage receives the same position-bound, policy-filtered board as the
+        // palette. This alias is deliberately read-only: it cannot select,
+        // preview, ratify or mutate a move.
+        .route(
+            "/api/dsl/sage/sessions/:id/gameboard",
+            get(session_gameboard_endpoint),
+        )
+        .route(
+            "/api/dsl/sage/sessions/:id/history",
+            get(sage_session_history_endpoint),
+        )
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route("/designer", get(designer_page))
         .route(
@@ -2966,6 +2977,9 @@ pub(crate) struct SessionGraphEditBody {
 #[derive(Serialize)]
 pub(crate) struct SessionGraphEditResponse {
     seq: u64,
+    /// Raw operation tapes have no asserted semantic move equivalence. They
+    /// remain available only as an explicitly attributable lower-level edit.
+    edit_kind: &'static str,
 }
 
 /// Stage the submitted operations against the session's CURRENT
@@ -3052,6 +3066,14 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
+    let audit_note = if body.note.trim().is_empty() {
+        "lower_level_direct_edit: no semantic move equivalence asserted".to_string()
+    } else {
+        format!(
+            "lower_level_direct_edit: no semantic move equivalence asserted; {}",
+            body.note.trim()
+        )
+    };
     match demo
         .store
         .append_design_session_event(
@@ -3059,12 +3081,16 @@ async fn session_graph_edit_endpoint(
             id,
             &DesignSessionEventKind::GraphEdit {
                 operations_json,
-                note: body.note.clone(),
+                note: audit_note,
             },
         )
         .await
     {
-        Ok(seq) => Json(SessionGraphEditResponse { seq }).into_response(),
+        Ok(seq) => Json(SessionGraphEditResponse {
+            seq,
+            edit_kind: "lower_level_direct_edit",
+        })
+        .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("{e}") })),
@@ -5571,6 +5597,59 @@ async fn session_gameboard_endpoint(
     }
 }
 
+/// Read-only, bounded attempt history for Sage. The response is the same
+/// canonical projection used when constructing the next `DesignPosition`, not
+/// an unbounded transcript or a rendering of server errors.
+async fn sage_session_history_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "session history unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let (history_hash, attempts) = match design_history_projection(&session) {
+        Ok(projection) => projection,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "session history unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let belief = match latest_gameboard_belief(&session) {
+        Ok(belief) => belief,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "session history unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    Json(serde_json::json!({
+        "session_id": id,
+        "history_hash": history_hash,
+        "attempts": attempts,
+        "latest_belief": belief,
+    }))
+    .into_response()
+}
+
 /// Server-built DAG for the designer window (merged T4 / WS-B.2): the
 /// session's CURRENT revision recompiled server-side; compile errors
 /// surface as diagnostics, never a blank canvas. Layout is computed
@@ -7404,6 +7483,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await["edit_kind"],
+            "lower_level_direct_edit",
+            "raw operation submissions must remain visibly distinct from semantic moves"
+        );
 
         // Unknown anchor: a typed, non-mutating turn is retained against an
         // explicit unknown focus; it never becomes a whole-graph proposal.
@@ -7493,6 +7577,36 @@ mod tests {
             palette_position.move_set_hash(),
             anchored_position.move_set_hash(),
             "palette and language paths must observe one canonical move set"
+        );
+        let sage_board_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sage/sessions/{session_id}/gameboard?anchor=review_documents"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(sage_board_response.status(), StatusCode::OK);
+        let sage_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(body_json(sage_board_response).await).unwrap();
+        assert_eq!(
+            sage_position.state_id(),
+            palette_position.state_id(),
+            "Sage and the contemporaneous palette read must share one position identity"
+        );
+        assert_eq!(sage_position.move_set_hash(), palette_position.move_set_hash());
+        let sage_history_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sage/sessions/{session_id}/history"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(sage_history_response.status(), StatusCode::OK);
+        let sage_history = body_json(sage_history_response).await;
+        assert_eq!(
+            sage_history["history_hash"],
+            palette_position.history_hash().as_str(),
+            "Sage history must be the projection bound into the live palette position"
         );
 
         // Position is part of semantic authority: the same graph at a
