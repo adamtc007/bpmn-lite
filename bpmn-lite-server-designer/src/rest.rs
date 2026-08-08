@@ -8880,7 +8880,10 @@ mod tests {
             graph_body(&app, &session_id).await,
             "reject mutates nothing"
         );
-        let response = app
+        let restarted =
+            DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap();
+        let restarted_app = designer_router(restarted);
+        let response = restarted_app
             .clone()
             .oneshot(post_json(
                 &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
@@ -9094,7 +9097,10 @@ mod tests {
             !graph.to_string().contains("collect_documents"),
             "refused proposal must not reach the graph: {graph}"
         );
-        let response = app
+        let restarted =
+            DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap();
+        let restarted_app = designer_router(restarted);
+        let response = restarted_app
             .clone()
             .oneshot(post_json(
                 &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
