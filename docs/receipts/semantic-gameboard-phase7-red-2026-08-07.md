@@ -43,6 +43,10 @@ Status: RED — implementation has not yet converged all input surfaces.
    returns the retained terminal receipt without appending another graph revision.
    The broader restart/lost-response/duplicate-request and concurrent-revision tape
    replay through the in-process API adapter is not yet a Phase 7-qualified suite.
+7. The standing public-surface/dependency-direction gate passes for the affected
+   capability and application crates across production, Candle, embed+Candle and
+   Q9 feature combinations; facade-consumer and forbidden-import/constructor
+   fixtures also pass. No public API widening was introduced by this phase.
 
 ## Required red assertions
 
