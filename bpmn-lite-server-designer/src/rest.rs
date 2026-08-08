@@ -796,6 +796,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             get(sage_session_history_endpoint),
         )
         .route(
+            "/api/dsl/sage/sessions/:id/audit",
+            get(sage_session_audit_endpoint),
+        )
+        .route(
             "/api/dsl/sage/sessions/:id/attempts/:attempt_id",
             get(sage_attempt_endpoint),
         )
@@ -5900,6 +5904,39 @@ async fn sage_session_history_endpoint(
     .into_response()
 }
 
+/// Bounded, typed proposal-audit projection for Sage. It excludes raw
+/// utterance text and operation payloads while retaining the durable workbook,
+/// outcome and terminal attempt identities needed for explanation and recovery.
+async fn sage_session_audit_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"session not found"}))).into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
+    };
+    let mut entries = Vec::new();
+    for event in session.events.iter().rev().filter_map(|event| match &event.kind {
+        DesignSessionEventKind::ProposalAudit { workbook_json, outcome, gameboard_attempt_receipt_json, .. } => {
+            Some((event.seq, workbook_json, outcome, gameboard_attempt_receipt_json))
+        }
+        _ => None,
+    }).take(64).collect::<Vec<_>>().into_iter().rev() {
+        let (seq, workbook_json, outcome, attempt_json) = event;
+        let workbook: semantic_decision_contracts::ProposalWorkbook = match serde_json::from_str(workbook_json) {
+            Ok(workbook) => workbook,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
+        };
+        let attempt = match attempt_json.as_deref().map(serde_json::from_str::<semantic_decision_contracts::MoveAttemptReceipt>).transpose() {
+            Ok(attempt) => attempt,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
+        };
+        entries.push(serde_json::json!({"seq":seq,"outcome":outcome,"workbook":workbook,"attempt":attempt}));
+    }
+    Json(serde_json::json!({"session_id":id,"entries":entries})).into_response()
+}
+
 /// Read one retained attempt receipt through the Sage facade. A receipt is
 /// already the canonical, bounded record of its position, rules, feedback and
 /// correction relation; this endpoint deliberately adds no server rendering or
@@ -8148,6 +8185,12 @@ mod tests {
             palette_position.history_hash().as_str(),
             "Sage history must be the projection bound into the live palette position"
         );
+        let audit_response = app.clone().oneshot(get_req(&format!(
+            "/api/dsl/sage/sessions/{session_id}/audit"
+        ))).await.unwrap();
+        assert_eq!(audit_response.status(), StatusCode::OK);
+        let audit = body_json(audit_response).await;
+        assert!(audit["entries"].as_array().unwrap().iter().any(|entry| entry["outcome"] == "created"));
         let attempt_id = sage_history["attempts"]
             .as_array()
             .unwrap()
