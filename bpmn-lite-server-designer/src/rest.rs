@@ -9439,7 +9439,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(retry.status(), StatusCode::NOT_FOUND);
+        assert_eq!(retry.status(), StatusCode::OK);
+        let retry = body_json(retry).await;
+        assert_eq!(retry["idempotent"], true);
+        assert_eq!(retry["terminal_receipt"]["proposal_status"], "expired");
     }
 
     #[tokio::test]
