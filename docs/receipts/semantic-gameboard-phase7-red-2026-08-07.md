@@ -19,9 +19,10 @@ Status: RED — implementation has not yet converged all input surfaces.
    ratification flow. `POST /api/dsl/sessions/:id/palette/select` now accepts a legal
    move ID, creates an explicit palette-selection receipt and enters that same workbook
    answer/preview/ratification path.
-2. `POST /api/dsl/sessions/:id/graph-edit` now labels every raw operation tape as an
-   attributed `lower_level_direct_edit`; it still does not resolve an equivalent
-   semantic move where one exists.
+2. `POST /api/dsl/sessions/:id/graph-edit` resolves a single direct deletion to its
+   current, fully bound semantic move ID when the legal board proves exact equivalence;
+   all other tapes remain attributed `lower_level_direct_edit`. Broader operation-to-move
+   equivalence remains to be qualified before this route can claim full convergence.
 3. Sage now has a read-only alias for the same policy-filtered board and move IDs as
    the palette, the bounded canonical attempt history projection, and a
    position-bound candidate-guidance endpoint. Guidance returns typed applicability,

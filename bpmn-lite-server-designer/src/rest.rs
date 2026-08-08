@@ -2999,6 +2999,41 @@ pub(crate) struct SessionGraphEditResponse {
     /// Raw operation tapes have no asserted semantic move equivalence. They
     /// remain available only as an explicitly attributable lower-level edit.
     edit_kind: &'static str,
+    /// Present only when the submitted single-operation tape is exactly a
+    /// current, fully bound semantic move. All other tapes remain explicitly
+    /// lower-level edits.
+    semantic_move_id: Option<String>,
+}
+
+fn direct_edit_semantic_move_id(
+    record: &bpmn_lite_store::DesignSessionRecord,
+    dag: &designer_graph::schema::DesignerDag,
+    operations: &[designer_graph::ops::Operation],
+) -> Option<String> {
+    let [operation] = operations else { return None };
+    let designer_graph::ops::Operation::DeleteNode { target } = operation else {
+        return None;
+    };
+    let anchor = dag.to_ir().ok()?.node_weights().find_map(|node| {
+        (dag.key_for_bpmn_id(node.id()) == Some(*target)).then(|| node.id().to_string())
+    })?;
+    let revision = graph_identity_hash(record);
+    let policy = utterance_engine::board::PolicyFilter::default();
+    let board = utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        dag,
+        dag.key_for_bpmn_id(&anchor).zip(Some(anchor.as_str())),
+        &revision,
+        &policy,
+    )
+    .ok()?;
+    let (history_hash, _) = design_history_projection(record).ok()?;
+    let position = utterance_engine::bpmn_board::build_bpmn_design_position(
+        dag, &board, &revision, &graph_content_hash(record), DESIGNER_COMPILER_PROFILE_IDENTITY,
+        &history_hash, gameboard_focus(Some(&anchor), true).ok()?, None,
+    )
+    .ok()?;
+    utterance_engine::bpmn_board::bpmn_legal_move_id_for_operation(dag, &position, operation)
+        .map(|move_id| move_id.as_str().to_string())
 }
 
 /// Stage the submitted operations against the session's CURRENT
@@ -3041,6 +3076,7 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
+    let semantic_move_id = direct_edit_semantic_move_id(&record, &dag, &body.operations);
     if body.operations.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -3085,7 +3121,9 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
-    let audit_note = if body.note.trim().is_empty() {
+    let audit_note = if let Some(move_id) = &semantic_move_id {
+        format!("semantic_move_equivalent: {move_id}")
+    } else if body.note.trim().is_empty() {
         "lower_level_direct_edit: no semantic move equivalence asserted".to_string()
     } else {
         format!(
@@ -3107,7 +3145,12 @@ async fn session_graph_edit_endpoint(
     {
         Ok(seq) => Json(SessionGraphEditResponse {
             seq,
-            edit_kind: "lower_level_direct_edit",
+            edit_kind: if semantic_move_id.is_some() {
+                "semantic_move_equivalent"
+            } else {
+                "lower_level_direct_edit"
+            },
+            semantic_move_id,
         })
         .into_response(),
         Err(e) => (
@@ -7547,12 +7590,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "{:?}",
-            body_json(response).await
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let direct = body_json(response).await;
+        assert_eq!(direct["edit_kind"], "lower_level_direct_edit");
+        assert!(direct["semantic_move_id"].is_null());
         let seq = body_json(
             app.clone()
                 .oneshot(post_json(
