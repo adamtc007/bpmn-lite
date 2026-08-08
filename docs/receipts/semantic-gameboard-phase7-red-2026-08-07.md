@@ -23,8 +23,12 @@ Status: RED — implementation has not yet converged all input surfaces.
    attributed `lower_level_direct_edit`; it still does not resolve an equivalent
    semantic move where one exists.
 3. Sage now has a read-only alias for the same policy-filtered board and move IDs as
-   the palette, plus the bounded canonical attempt history projection. It still lacks
-   typed rule and feedback retrieval with the required snapshot and receipt identities.
+   the palette, the bounded canonical attempt history projection, and a
+   position-bound candidate-guidance endpoint. Guidance returns typed applicability,
+   a pack-derived rule explanation and bounded recovery options; it cannot select,
+   preview, ratify or mutate a move. The response carries its reconstructed
+   `DesignPosition`; attempt receipts remain owned by the interaction path that
+   actually attempts a move.
 4. General session/event read-back remains broader than the dedicated Sage view; the
    remaining audit/history compatibility boundary has not been receipted.
 5. Legacy text-backed sessions remain isolated in code, but the Phase 7 compatibility

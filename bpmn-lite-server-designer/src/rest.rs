@@ -795,6 +795,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/api/dsl/sage/sessions/:id/history",
             get(sage_session_history_endpoint),
         )
+        .route(
+            "/api/dsl/sage/sessions/:id/guidance/:candidate_id",
+            get(sage_move_guidance_endpoint),
+        )
         .route("/api/dsl/sessions/:id/graph", get(session_graph_endpoint))
         .route("/designer", get(designer_page))
         .route(
@@ -5763,6 +5767,161 @@ async fn sage_session_history_endpoint(
     .into_response()
 }
 
+/// Position-bound, pack-governed explanation for a requested candidate shape.
+/// Sage can retrieve this guidance, but cannot use it to select, preview or
+/// mutate a move. Known semantic outcomes remain typed; reconstruction and
+/// storage failures are deliberately reported without leaking Rust errors.
+async fn sage_move_guidance_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path((id, candidate_id)): Path<(Uuid, String)>,
+    Query(query): Query<GameboardQuery>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    if !session.is_graph_backed() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "semantic guidance requires an authoritative DesignerDag session"
+            })),
+        )
+            .into_response();
+    }
+    let dag = match reconstruct_designer_dag(&session) {
+        Ok(dag) => dag,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let anchor_key = match query.anchor.as_deref() {
+        Some(anchor) => match dag.key_for_bpmn_id(anchor) {
+            Some(key) => Some(key),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "anchor names no node in this session's graph"
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let focus = match query.anchor.as_deref() {
+        Some(anchor) => match semantic_decision_contracts::GraphElementRef::new(anchor) {
+            Ok(anchor) => semantic_decision_contracts::DesignFocus::element(anchor),
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": "invalid focus" })),
+                )
+                    .into_response();
+            }
+        },
+        None => match semantic_decision_contracts::DesignFocus::absent(
+            semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+            None,
+        ) {
+            Ok(focus) => focus,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let revision = graph_identity_hash(&session);
+    let policy = utterance_engine::board::PolicyFilter::default();
+    let board = match utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        &dag,
+        anchor_key.zip(query.anchor.as_deref()),
+        &revision,
+        &policy,
+    ) {
+        Ok(board) => board,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let history_hash = match design_history_projection(&session) {
+        Ok((hash, _)) => hash,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let position = match utterance_engine::bpmn_board::build_bpmn_design_position(
+        &dag,
+        &board,
+        &revision,
+        &graph_content_hash(&session),
+        DESIGNER_COMPILER_PROFILE_IDENTITY,
+        &history_hash,
+        focus,
+        None,
+    ) {
+        Ok(position) => position,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    match utterance_engine::bpmn_board::explain_bpmn_candidate(
+        &board,
+        &position,
+        &candidate_id,
+        &policy,
+    ) {
+        Ok(guidance) => Json(serde_json::json!({
+            "position": position,
+            "candidate_id": candidate_id,
+            "applicability": guidance.applicability(),
+            "explanation": guidance.explanation(),
+            "recoveries": guidance.recoveries(),
+        }))
+        .into_response(),
+        Err(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "governed guidance is unavailable for this candidate"
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// Server-built DAG for the designer window (merged T4 / WS-B.2): the
 /// session's CURRENT revision recompiled server-side; compile errors
 /// surface as diagnostics, never a blank canvas. Layout is computed
@@ -7707,6 +7866,46 @@ mod tests {
             "Sage and the contemporaneous palette read must share one position identity"
         );
         assert_eq!(sage_position.move_set_hash(), palette_position.move_set_hash());
+        let guidance_candidate = palette_position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| {
+                legal_move.candidate_id().as_str()
+                    != semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+            })
+            .unwrap()
+            .candidate_id()
+            .as_str()
+            .to_string();
+        let guidance_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sage/sessions/{session_id}/guidance/{guidance_candidate}?anchor=review_documents"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(guidance_response.status(), StatusCode::OK);
+        let guidance = body_json(guidance_response).await;
+        let guidance_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(guidance["position"].clone()).unwrap();
+        assert_eq!(guidance["candidate_id"], guidance_candidate);
+        assert_eq!(guidance_position.state_id(), palette_position.state_id());
+        assert!(guidance["applicability"].is_string());
+        assert!(guidance["explanation"].is_object());
+        assert!(guidance["recoveries"].is_array());
+        let unknown_guidance_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sage/sessions/{session_id}/guidance/not-a-candidate?anchor=review_documents"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(unknown_guidance_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body_json(unknown_guidance_response).await["error"],
+            "governed guidance is unavailable for this candidate",
+            "Sage must not render an internal semantic-board error"
+        );
         let selected_palette_move = palette_position
             .legal_moves()
             .iter()
