@@ -8847,11 +8847,11 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "rejected proposal is gone"
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let retry = body_json(response).await;
+        assert_eq!(retry["idempotent"], true);
+        assert_eq!(retry["terminal_receipt"]["outcome"], "rejected");
+        assert_eq!(retry["terminal_receipt"]["proposal_status"], "rejected");
 
         let record = body_json(
             app.clone()
@@ -9061,11 +9061,11 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "drift consumes the proposal"
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let retry = body_json(response).await;
+        assert_eq!(retry["idempotent"], true);
+        assert_eq!(retry["terminal_receipt"]["outcome"], "expired_graph_drift");
+        assert_eq!(retry["terminal_receipt"]["proposal_status"], "expired");
     }
 
     /// Missing bindings preserve the inference disposition and create a typed,
