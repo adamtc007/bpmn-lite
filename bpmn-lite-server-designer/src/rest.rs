@@ -796,6 +796,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             get(sage_session_history_endpoint),
         )
         .route(
+            "/api/dsl/sage/sessions/:id/attempts/:attempt_id",
+            get(sage_attempt_endpoint),
+        )
+        .route(
             "/api/dsl/sage/sessions/:id/guidance/:candidate_id",
             get(sage_move_guidance_endpoint),
         )
@@ -5767,6 +5771,58 @@ async fn sage_session_history_endpoint(
     .into_response()
 }
 
+/// Read one retained attempt receipt through the Sage facade. A receipt is
+/// already the canonical, bounded record of its position, rules, feedback and
+/// correction relation; this endpoint deliberately adds no server rendering or
+/// inferred state.
+async fn sage_attempt_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path((id, attempt_id)): Path<(Uuid, String)>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "session history unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let (_, attempts) = match design_history_projection(&session) {
+        Ok(projection) => projection,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "session history unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    match attempts
+        .into_iter()
+        .find(|attempt| attempt.attempt_id().as_str() == attempt_id)
+    {
+        Some(attempt) => Json(serde_json::json!({
+            "session_id": id,
+            "attempt": attempt,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "attempt not found" })),
+        )
+            .into_response(),
+    }
+}
+
 /// Position-bound, pack-governed explanation for a requested candidate shape.
 /// Sage can retrieve this guidance, but cannot use it to select, preview or
 /// mutate a move. Known semantic outcomes remain typed; reconstruction and
@@ -7947,6 +8003,26 @@ mod tests {
             palette_position.history_hash().as_str(),
             "Sage history must be the projection bound into the live palette position"
         );
+        let attempt_id = sage_history["attempts"]
+            .as_array()
+            .unwrap()
+            .first()
+            .unwrap()["attempt_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let attempt_response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sage/sessions/{session_id}/attempts/{attempt_id}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(attempt_response.status(), StatusCode::OK);
+        let attempt = body_json(attempt_response).await;
+        assert_eq!(attempt["attempt"]["attempt_id"], attempt_id);
+        assert!(attempt["attempt"]["rule_explanations"].is_array());
+        assert!(attempt["attempt"]["feedback_options"].is_array());
 
         // Position is part of semantic authority: the same graph at a
         // whole-graph position must not reuse the anchored board hash.

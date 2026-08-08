@@ -27,8 +27,10 @@ Status: RED — implementation has not yet converged all input surfaces.
    position-bound candidate-guidance endpoint. Guidance returns typed applicability,
    a pack-derived rule explanation and bounded recovery options; it cannot select,
    preview, ratify or mutate a move. The response carries its reconstructed
-   `DesignPosition`; attempt receipts remain owned by the interaction path that
-   actually attempts a move.
+   `DesignPosition`. Sage can also retrieve a retained attempt receipt by its
+   canonical attempt identity, including its position, rule-explanation,
+   feedback-option and correction identities; attempt receipts remain owned by the
+   interaction path that actually attempts a move.
 4. General session/event read-back remains broader than the dedicated Sage view; the
    remaining audit/history compatibility boundary has not been receipted.
 5. Legacy text-backed sessions remain isolated in code, but the Phase 7 compatibility
