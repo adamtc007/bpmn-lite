@@ -16,8 +16,9 @@ Status: RED — implementation has not yet converged all input surfaces.
 1. `GET /api/dsl/sessions/:id/gameboard` returns a graph-backed
    `DesignPosition` and concrete legal moves, while
    `POST /api/dsl/sessions/:id/utterance` can create a workbook, preview and
-   ratification flow. There is no palette-selection endpoint that accepts a legal move
-   ID and enters that same workbook path.
+   ratification flow. `POST /api/dsl/sessions/:id/palette/select` now accepts a legal
+   move ID, creates an explicit palette-selection receipt and enters that same workbook
+   answer/preview/ratification path.
 2. `POST /api/dsl/sessions/:id/graph-edit` now labels every raw operation tape as an
    attributed `lower_level_direct_edit`; it still does not resolve an equivalent
    semantic move where one exists.

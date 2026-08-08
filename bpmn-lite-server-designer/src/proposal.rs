@@ -56,6 +56,13 @@ pub(crate) struct SelectedMove<'a> {
     pub(crate) move_id: &'a semantic_decision_contracts::LegalMoveId,
 }
 
+/// The provenance that opened a workbook. A palette selection is explicit
+/// user evidence, not a fabricated utterance-policy decision.
+pub(crate) enum WorkbookEvidence<'a> {
+    Decision(&'a utterance_engine::policy::DecisionRecord),
+    PaletteSelection(EvidenceRecordHash),
+}
+
 #[cfg(test)]
 fn fresh_key() -> NodeKey {
     NodeKey(Uuid::new_v4())
@@ -329,15 +336,22 @@ pub(crate) fn start_workbook(
     anchor: Option<NodeKey>,
     board: &SemanticDecisionBoard,
     selected: SelectedMove<'_>,
-    decision: &utterance_engine::policy::DecisionRecord,
+    evidence: WorkbookEvidence<'_>,
     utterance: &str,
     source_utterance_seq: u64,
 ) -> Result<ProposalWorkbook, ProposalError> {
-    if decision.board_hash != board.board_hash.as_str() {
-        return Err(ProposalError::Contract(
-            "decision record and semantic board hashes differ".to_string(),
-        ));
-    }
+    let evidence_record_hash = match evidence {
+        WorkbookEvidence::Decision(decision) => {
+            if decision.board_hash != board.board_hash.as_str() {
+                return Err(ProposalError::Contract(
+                    "decision record and semantic board hashes differ".to_string(),
+                ));
+            }
+            EvidenceRecordHash::new(decision.decision_record_hash.clone())
+                .map_err(|error| ProposalError::Contract(error.to_string()))?
+        }
+        WorkbookEvidence::PaletteSelection(receipt_hash) => receipt_hash,
+    };
     let legal_move = selected
         .position
         .legal_moves()
@@ -445,8 +459,7 @@ pub(crate) fn start_workbook(
         selected.position,
         selected.move_id.clone(),
         slots,
-        EvidenceRecordHash::new(decision.decision_record_hash.clone())
-            .map_err(|error| ProposalError::Contract(error.to_string()))?,
+        evidence_record_hash,
     )
     .map_err(|error| ProposalError::Contract(error.to_string()))
 }
@@ -762,12 +775,31 @@ mod tests {
                 position: &position,
                 move_id: &move_id,
             },
-            &decision,
+            WorkbookEvidence::Decision(&decision),
             "Send 'onboarding_request' and wait for its response",
             7,
         )
         .unwrap();
         assert_eq!(workbook.status(), ProposalStatus::NeedsArguments);
+        let palette_hash = EvidenceRecordHash::new("e".repeat(64)).unwrap();
+        let palette_workbook = start_workbook(
+            &dag,
+            Some(anchor),
+            &board,
+            SelectedMove {
+                position: &position,
+                move_id: &move_id,
+            },
+            WorkbookEvidence::PaletteSelection(palette_hash.clone()),
+            "",
+            7,
+        )
+        .unwrap();
+        assert_eq!(palette_workbook.evidence_record_hash, palette_hash);
+        assert_eq!(
+            palette_workbook.position_binding().unwrap().move_id(),
+            workbook.position_binding().unwrap().move_id()
+        );
         assert_eq!(
             workbook
                 .slots()

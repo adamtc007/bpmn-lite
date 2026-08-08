@@ -741,6 +741,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             post(session_utterance_endpoint),
         )
         .route(
+            "/api/dsl/sessions/:id/palette/select",
+            post(palette_select_endpoint),
+        )
+        .route(
             "/api/dsl/sessions/:id/dev-capture/enable",
             post(dev_capture_enable_endpoint),
         )
@@ -2667,6 +2671,13 @@ pub(crate) struct SessionUtteranceBody {
 }
 
 #[derive(Deserialize)]
+struct PaletteSelectionBody {
+    move_id: String,
+    #[serde(default)]
+    anchor: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct SaveSessionBody {
     template_name: String,
 }
@@ -4489,7 +4500,7 @@ async fn session_utterance_endpoint(
             *anchor_key,
             semantic_board,
             crate::proposal::SelectedMove { position, move_id },
-            &record,
+            crate::proposal::WorkbookEvidence::Decision(&record),
             &body.text,
             0,
         ) {
@@ -5164,6 +5175,108 @@ async fn session_utterance_endpoint(
         )
             .into_response(),
     }
+}
+
+/// Explicit palette choice enters the identical workbook/preview/ratify path
+/// used by utterances. The choice is evidence of intent, never permission to
+/// mutate the graph.
+async fn palette_select_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PaletteSelectionBody>,
+) -> impl IntoResponse {
+    use utterance_engine::board::PolicyFilter;
+    use utterance_engine::retrieval::Tier0Retriever as _;
+
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"session not found"}))).into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
+    };
+    if !session.is_graph_backed() {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"semantic palette requires a graph-backed session"}))).into_response();
+    }
+    let dag = match reconstruct_designer_dag(&session) {
+        Ok(dag) => dag,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
+    };
+    let anchor_key = match body.anchor.as_deref() {
+        Some(anchor) => match dag.key_for_bpmn_id(anchor) {
+            Some(key) => Some(key),
+            None => return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"error":"palette anchor is not on the current graph"}))).into_response(),
+        },
+        None => None,
+    };
+    let revision = graph_identity_hash(&session);
+    let board = match utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        &dag, anchor_key.zip(body.anchor.as_deref()), &revision, &PolicyFilter::default(),
+    ) {
+        Ok(board) => board,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
+    };
+    let (history_hash, attempts) = match design_history_projection(&session) {
+        Ok(history) => history,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
+    };
+    let focus = match gameboard_focus(body.anchor.as_deref(), anchor_key.is_some()) {
+        Ok(focus) => focus,
+        Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"error":"palette focus is invalid"}))).into_response(),
+    };
+    let position = match utterance_engine::bpmn_board::build_bpmn_design_position(
+        &dag, &board, &revision, &graph_content_hash(&session), DESIGNER_COMPILER_PROFILE_IDENTITY,
+        &history_hash, focus, None,
+    ) {
+        Ok(position) => position,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
+    };
+    let move_id = match semantic_decision_contracts::LegalMoveId::new(body.move_id) {
+        Ok(move_id) if position.legal_moves().iter().any(|legal_move| legal_move.move_id() == &move_id) => move_id,
+        _ => return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"selected move is not legal for the current position"}))).into_response(),
+    };
+    let selection_text = format!("palette-selection:{}", move_id.as_str());
+    let evidence = match utterance_engine::retrieval::LexicalTier0.retrieve(&selection_text, &board)
+        .and_then(|result| utterance_engine::bpmn_board::finalize_bpmn_move_evidence(
+            &board, &position, &selection_text, result,
+            semantic_decision_contracts::EvidenceLane::Lexical, vec!["palette-selection-v1".into()], &attempts,
+        )) {
+        Ok(evidence) => evidence,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette evidence unavailable"}))).into_response(),
+    };
+    let belief = match utterance_engine::bpmn_board::update_bpmn_design_belief(
+        &dag, &position, &evidence.move_evidence, &attempts,
+        latest_gameboard_belief(&session).ok().flatten().as_ref(),
+    ) {
+        Ok(belief) => belief,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette evidence unavailable"}))).into_response(),
+    };
+    use sha2::{Digest, Sha256};
+    let receipt_hash = semantic_decision_contracts::EvidenceRecordHash::new(hex::encode(
+        Sha256::digest(format!("palette-selection-v1\\0{}\\0{}", position.state_id().as_str(), move_id.as_str()).as_bytes()),
+    )).expect("sha256 is a valid evidence hash");
+    let workbook = match crate::proposal::start_workbook(
+        &dag, anchor_key, &board, crate::proposal::SelectedMove { position: &position, move_id: &move_id },
+        crate::proposal::WorkbookEvidence::PaletteSelection(receipt_hash), &selection_text, 0,
+    ) {
+        Ok(workbook) => workbook,
+        Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"error":"selected move cannot open a workbook"}))).into_response(),
+    };
+    let pid = Uuid::now_v7();
+    demo.proposals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(pid, PendingProposal {
+        session_id: id, workbook, bound: None, preview_delta: None, source_utterance_text: selection_text,
+        staged_against_hash: revision, dry_run_diagnostics: Vec::new(), audit_event_seq: None,
+        design_position: position, move_evidence: evidence.move_evidence, design_belief: belief,
+        bound_game: None, gameboard_attempt_receipt_json: None, correction_of: None, correction_kind: None,
+    });
+    drop(_guard);
+    answer_proposal_endpoint(
+        State(demo),
+        Path((id, pid)),
+        Json(ProposalAnswersBody { answers: Vec::new() }),
+    )
+    .await
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -7594,6 +7707,33 @@ mod tests {
             "Sage and the contemporaneous palette read must share one position identity"
         );
         assert_eq!(sage_position.move_set_hash(), palette_position.move_set_hash());
+        let selected_palette_move = palette_position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| {
+                legal_move.candidate_id().as_str()
+                    != semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+            })
+            .unwrap()
+            .move_id()
+            .as_str()
+            .to_string();
+        let palette_selection_response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/palette/select"),
+                serde_json::json!({
+                    "move_id": selected_palette_move,
+                    "anchor": "review_documents",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(palette_selection_response.status(), StatusCode::OK);
+        let palette_selection = body_json(palette_selection_response).await;
+        assert!(palette_selection["proposal_id"].is_string());
+        assert!(palette_selection["workbook"].is_object());
+        assert!(palette_selection["proposal_status"].is_string());
         let sage_history_response = app
             .clone()
             .oneshot(get_req(&format!(
