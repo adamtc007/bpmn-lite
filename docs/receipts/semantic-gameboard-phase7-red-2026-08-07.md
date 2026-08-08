@@ -37,7 +37,9 @@ Status: RED — implementation has not yet converged all input surfaces.
 5. Legacy text-backed sessions retain only their explicit compatibility utterance
    boundary: gameboard, Sage-board and Sage-guidance requests fail closed rather than
    manufacturing a graph-authoritative position. The Phase 7 removal-call-site audit
-   is still outstanding while that rollback window remains open.
+   is still outstanding while that rollback window remains open. The live designer
+   and Candle-feature call-site audit confirms no serving path calls legacy
+   `rank`/`score_serving`; those APIs remain isolated to offline/internal uses.
 6. A duplicate ratification after a lost response now resolves through the durable
    terminal proposal audit keyed by the canonical workbook/proposal identity; it
    returns the retained terminal receipt without appending another graph revision.
