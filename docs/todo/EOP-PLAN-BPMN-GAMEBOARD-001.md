@@ -1,6 +1,6 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.5
+**Version:** v0.6
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-07
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
@@ -540,8 +540,12 @@ Widen the current semantic candidate board into concrete, position-bound graph m
    it as legal.
 8. Canonically order moves and calculate `MoveSetHash` from graph revision, focus,
    semantic snapshot, policy and move contents.
-9. Make direct graph actions translate to the same `LegalMoveId` where an equivalent
-   governed move exists.
+9. Make direct BPMN/DSL graph editing the semantic-IDE baseline. For every supported
+   raw operation or production tape, deterministically attempt exact equivalence against
+   the current `DesignPosition`; a resolution must carry the same candidate, typed
+   bindings, `LegalMoveId`, preview, compiler admission result and receipt as the
+   palette/language path. Permit a lower-level audited edit only when no admitted
+   semantic counterpart exists or proof fails, with a typed non-equivalence reason.
 10. Add completeness checks between semantic candidates, `OperationKind`, binder
     support and mutation implementations.
 11. Retain rule/application facts for both admitted and requested-but-inapplicable
@@ -935,8 +939,9 @@ pending; no Phase 7 work may treat it as collected, measured or promotional auth
    move IDs.
 3. Route explicit palette selections through the same workbook, preview and admission
    path as utterances.
-4. Route direct graph manipulations through equivalent typed moves or explicitly mark
-   an audited lower-level edit when no semantic move exists.
+4. Route direct BPMN/DSL graph manipulations through the semantic-IDE equivalence
+   resolver. A supported proven edit must be the same typed move as palette/language;
+   a lower-level audit is allowed only for a typed no-counterpart/non-equivalence result.
 5. Deprecate legacy thin-board serving and K-subset v3 helpers.
 6. Remove duplicate candidate/disposition DTOs after compatibility tests pass.
 7. Keep legacy sessions isolated and clearly identified until their rollback window
@@ -958,6 +963,8 @@ pending; no Phase 7 work may treat it as collected, measured or promotional auth
 
 - One move ID follows palette, language and direct-edit paths through the same compiler
   result.
+- Every supported direct-edit tape either resolves to that same semantic move or emits
+  a typed attributable non-equivalence reason; no unclassified raw-edit fallback exists.
 - No live v3 bundle can enter legacy `score`, `score_list` or `score_serving` text.
 - API compatibility and restart/recovery tests pass.
 - Sage-facing responses cite snapshot, rule and attempt identities and reproduce after

@@ -1,6 +1,6 @@
 # EOP-VS-BPMN-GAMEBOARD-001 — Semantic Gameboard architecture, proven through BPMN
 
-**Version:** v0.5
+**Version:** v0.6
 **Status:** DRAFT FOR RATIFICATION
 **Date:** 2026-08-07
 **Owner:** Adam
@@ -65,6 +65,16 @@ At every turn in the BPMN proof:
 8. a wrong, incomplete, stale or rejected attempt returns a governed feedback receipt
    and recovery options, becoming part of session history without being disguised as
    an infrastructure failure.
+
+Direct BPMN/DSL graph editing is a first-class **semantic IDE** surface, not a
+legacy escape hatch. For each supported raw operation or production tape, Repl must
+deterministically resolve exact equivalence against the current position: candidate,
+anchor, typed bindings, canonical operation tape, preview and compiler admission must
+all agree. A proven edit receives the same move identity and receipt as palette or
+language. A lower-level audit is permitted only when no admitted semantic counterpart
+exists or exact equivalence cannot be proved, and must carry that typed reason. Sage and
+Candle are evidence-only overlays for underspecified direct edits and argument
+completion; they never authorize legality or graph mutation.
 
 The statistical task is therefore not:
 
