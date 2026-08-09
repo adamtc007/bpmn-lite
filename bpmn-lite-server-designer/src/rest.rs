@@ -8977,6 +8977,40 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_api_fault_tape_stale_client_preserves_new_revision() {
+        let state = DesignerState::try_new().unwrap();
+        let mut app = designer_router(state.clone());
+        let (session_id, anchor) = seed_graph_backed_session(&app).await;
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let manual = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor,
+            key: new_key(),
+            node: task_ir("authoritative_intervening_edit"),
+            edge_id: "fault_tape_intervening".into(),
+        }];
+        let edit = app.clone().oneshot(post_json(
+            &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+            serde_json::json!({"operations":manual}),
+        )).await.unwrap();
+        assert_eq!(edit.status(), StatusCode::OK);
+        let uri = format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify");
+        let refused = app.clone().oneshot(post_json(&uri, serde_json::json!({}))).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        app = designer_router(DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap());
+        let retry = app.clone().oneshot(post_json(&uri, serde_json::json!({}))).await.unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
+        let retry = body_json(retry).await;
+        assert_eq!(retry["idempotent"], true);
+        assert_eq!(retry["terminal_receipt"]["proposal_status"], "expired");
+        let record = body_json(app.oneshot(get_req(&format!("/api/dsl/sessions/{session_id}"))).await.unwrap()).await;
+        assert_eq!(record["events"].as_array().unwrap().iter()
+            .filter(|event| event["kind"].get("GraphEdit").is_some()).count(), 2);
+        assert!(graph_body(&designer_router(DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap()), &session_id)
+            .await.to_string().contains("authoritative_intervening_edit"));
+    }
+
     /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).
     #[tokio::test]
     async fn test_reject_drops_proposal_graph_unchanged() {
