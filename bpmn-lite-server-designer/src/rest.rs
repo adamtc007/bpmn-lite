@@ -8938,6 +8938,45 @@ mod tests {
         );
     }
 
+    /// Phase 7 API fault tape: the compact model tracks only authoritative
+    /// graph-event count and whether a terminal receipt must be replayable.
+    /// The adapter is exercised through real in-process HTTP requests.
+    #[tokio::test]
+    async fn test_api_fault_tape_restart_and_lost_ratify_response() {
+        #[derive(Clone, Copy)]
+        enum Step { Ratify, Restart, RetryRatify }
+        let state = DesignerState::try_new().unwrap();
+        let mut app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_bindable(&app, &session_id).await;
+        let pid = utter["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let uri = format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify");
+        let mut expected_graph_edits = 1usize;
+        let mut terminal = false;
+        for step in [Step::Ratify, Step::Restart, Step::RetryRatify] {
+            match step {
+                Step::Ratify => {
+                    let response = app.clone().oneshot(post_json(&uri, serde_json::json!({}))).await.unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    expected_graph_edits += 1;
+                    terminal = true;
+                }
+                Step::Restart => {
+                    app = designer_router(DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap());
+                }
+                Step::RetryRatify => {
+                    let response = app.clone().oneshot(post_json(&uri, serde_json::json!({}))).await.unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(body_json(response).await["idempotent"], true);
+                    assert!(terminal);
+                }
+            }
+            let record = body_json(app.clone().oneshot(get_req(&format!("/api/dsl/sessions/{session_id}"))).await.unwrap()).await;
+            assert_eq!(record["events"].as_array().unwrap().iter()
+                .filter(|event| event["kind"].get("GraphEdit").is_some()).count(), expected_graph_edits);
+        }
+    }
+
     /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).
     #[tokio::test]
     async fn test_reject_drops_proposal_graph_unchanged() {
