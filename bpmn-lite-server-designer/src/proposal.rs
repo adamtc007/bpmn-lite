@@ -5,8 +5,8 @@
 //! missing slots. Graph operations and fresh node identities are created only
 //! after every required slot has resolved.
 
-use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode};
-use designer_graph::ops::Operation;
+use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
+use designer_graph::ops::{GuardTrigger, Operation};
 #[cfg(test)]
 use designer_graph::productions;
 use designer_graph::schema::{DesignerDag, NodeKey};
@@ -287,7 +287,7 @@ fn mentioned_id(ids: &[String], text: &str, used: &[String]) -> Option<String> {
         .cloned()
 }
 
-fn bpmn_id_for_key(dag: &DesignerDag, key: NodeKey) -> Result<String, ProposalError> {
+pub(crate) fn bpmn_id_for_key(dag: &DesignerDag, key: NodeKey) -> Result<String, ProposalError> {
     let graph = dag
         .to_ir()
         .map_err(|error| ProposalError::Graph(error.to_string()))?;
@@ -327,6 +327,176 @@ fn extracted_provenance(detail: impl Into<String>) -> Option<BindingProvenance> 
         source: "deterministic_extraction".to_string(),
         detail: detail.into(),
     })
+}
+
+/// Inverse of `parse_condition`: renders a `ConditionExpr` back to the
+/// `flag==literal` / `flag!=literal` / `flag>literal` / `flag<literal` text
+/// grammar `parse_condition` accepts, byte-for-byte round-trippable.
+fn render_condition(expr: &ConditionExpr) -> String {
+    let op = match expr.op {
+        ConditionOp::Eq => "==",
+        ConditionOp::Neq => "!=",
+        ConditionOp::Gt => ">",
+        ConditionOp::Lt => "<",
+    };
+    let literal = match &expr.literal {
+        ConditionLiteral::Bool(true) => "true".to_string(),
+        ConditionLiteral::Bool(false) => "false".to_string(),
+        ConditionLiteral::I64(n) => n.to_string(),
+    };
+    format!("{}{op}{literal}", expr.flag_name)
+}
+
+/// A raw direct-edit operation's best-effort recovered candidate shape: which
+/// semantic candidate and anchor it MIGHT be, and which typed slot answers to
+/// try. This is a guess, not a proof — the caller (`resolve_direct_edit`)
+/// proves or refutes it by materializing the recovered shape through the
+/// production path and comparing RESULTING graph state, not this shape
+/// itself (v0.8 amendment, `EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9).
+/// One structural arm per representable single-`Operation` candidate;
+/// workbook-synthesized-only fields (`key`, `edge_id`, `guard_id`,
+/// `fork_key`, `join_key`, `entry_edge_id`, `in_edge_id`, `out_edge_id`) are
+/// never read here.
+pub(crate) struct RecoveredShape {
+    pub(crate) candidate_id: &'static str,
+    pub(crate) anchor: NodeKey,
+    pub(crate) answers: Vec<SlotAnswer>,
+}
+
+pub(crate) fn recover_candidate_shape(
+    dag: &DesignerDag,
+    operation: &Operation,
+) -> Option<RecoveredShape> {
+    fn answer(name: &str, value: SlotValue) -> SlotAnswer {
+        SlotAnswer { name: name.to_string(), value }
+    }
+
+    let (candidate_id, anchor, answers): (&'static str, NodeKey, Vec<SlotAnswer>) = match operation
+    {
+        Operation::AppendNode { anchor, node, .. } => (
+            "op.append_node",
+            *anchor,
+            vec![answer("node", SlotValue::Identifier(node.id().to_string()))],
+        ),
+        Operation::InsertAfter { anchor, node, .. } => (
+            "op.insert_after",
+            *anchor,
+            vec![answer("node", SlotValue::Identifier(node.id().to_string()))],
+        ),
+        Operation::InsertBefore { anchor, node, .. } => (
+            "op.insert_before",
+            *anchor,
+            vec![answer("node", SlotValue::Identifier(node.id().to_string()))],
+        ),
+        Operation::ReplaceNode { target, node, .. } => (
+            "op.replace_node",
+            *target,
+            vec![answer(
+                "replacement",
+                SlotValue::Identifier(node.id().to_string()),
+            )],
+        ),
+        Operation::Connect { from, to, condition, .. } => {
+            let to_id = bpmn_id_for_key(dag, *to).ok()?;
+            let mut answers = vec![answer("to", SlotValue::NodeReference(to_id))];
+            if let Some(condition) = condition {
+                answers.push(answer(
+                    "condition",
+                    SlotValue::Condition(render_condition(condition)),
+                ));
+            }
+            ("op.connect", *from, answers)
+        }
+        Operation::CreateBranch { gateway, target, condition, .. } => {
+            let target_id = bpmn_id_for_key(dag, *target).ok()?;
+            let condition = condition.as_ref()?;
+            // The only shape `materialize_workbook` ever produces for this
+            // candidate; anything else structurally cannot be an equivalent
+            // create_branch move, so recovery itself refuses here.
+            if condition.op != ConditionOp::Eq || condition.literal != ConditionLiteral::Bool(true)
+            {
+                return None;
+            }
+            (
+                "op.create_branch",
+                *gateway,
+                vec![
+                    answer("target", SlotValue::NodeReference(target_id)),
+                    answer(
+                        "outcome",
+                        SlotValue::Identifier(condition.flag_name.clone()),
+                    ),
+                ],
+            )
+        }
+        Operation::CreateParallelRegion { anchor, branches, .. } => (
+            "op.create_parallel_region",
+            *anchor,
+            vec![answer(
+                "branch_count",
+                SlotValue::Count(branches.len() as u32),
+            )],
+        ),
+        Operation::CreateInclusiveRegion { anchor, branches, .. } => {
+            let mut conditions = Vec::with_capacity(branches.len());
+            for branch in branches {
+                conditions.push(render_condition(branch.condition.as_ref()?));
+            }
+            (
+                "op.create_inclusive_region",
+                *anchor,
+                vec![
+                    answer("branch_count", SlotValue::Count(branches.len() as u32)),
+                    answer("conditions", SlotValue::Condition(conditions.join(","))),
+                ],
+            )
+        }
+        Operation::CreateMultiInstanceRegion { anchor, node, .. } => {
+            let IRNode::MultiInstance { collection_flag_name, declared_max, .. } = node else {
+                return None;
+            };
+            (
+                "op.create_multi_instance_region",
+                *anchor,
+                vec![
+                    answer(
+                        "collection",
+                        SlotValue::DataReference(collection_flag_name.clone()),
+                    ),
+                    answer("declared_max", SlotValue::Count(*declared_max)),
+                ],
+            )
+        }
+        Operation::SetGuardTrigger { guard, trigger } => {
+            let GuardTrigger::Timer(TimerSpec::Duration { ms }) = trigger else {
+                return None;
+            };
+            (
+                "op.set_guard_trigger",
+                *guard,
+                vec![answer("trigger", SlotValue::DurationMillis(*ms))],
+            )
+        }
+        Operation::SetGuardBudget { guard, failure_budget } => {
+            let budget = (*failure_budget)?;
+            (
+                "op.set_guard_budget",
+                *guard,
+                vec![answer("failure_budget", SlotValue::Count(budget))],
+            )
+        }
+        Operation::SetCorrelationSource { node, corr_key_source } => (
+            "op.set_correlation_source",
+            *node,
+            vec![answer(
+                "data_reference",
+                SlotValue::DataReference(corr_key_source.clone()),
+            )],
+        ),
+        Operation::DeleteNode { target } => ("op.delete_subgraph", *target, Vec::new()),
+        _ => return None,
+    };
+    Some(RecoveredShape { candidate_id, anchor, answers })
 }
 
 /// Start a workbook from exactly the argument schema on the selected semantic
@@ -596,6 +766,98 @@ mod tests {
         assert!(parse_condition("attempts>2").is_ok());
         assert!(parse_condition("approved").is_err());
         assert!(parse_condition("bad flag==true").is_err());
+    }
+
+    #[test]
+    fn condition_render_round_trips_through_parse() {
+        for text in ["approved==true", "approved==false", "attempts>2", "x<3", "y!=1"] {
+            let expr = parse_condition(text).unwrap();
+            assert_eq!(render_condition(&expr), text);
+        }
+    }
+
+    fn tiny_dag() -> (DesignerDag, NodeKey, NodeKey) {
+        let mut dag = DesignerDag::new("recover-shape-test");
+        let start = NodeKey(Uuid::new_v4());
+        dag.seed(start, IRNode::Start { id: "start".into() }, Provenance::default())
+            .unwrap();
+        let t1 = NodeKey(Uuid::new_v4());
+        let staged = designer_graph::productions::apply_production(
+            &dag,
+            vec![Operation::AppendNode {
+                anchor: start,
+                key: t1,
+                node: IRNode::ServiceTask {
+                    id: "t1".into(),
+                    name: "t1".into(),
+                    task_type: "noop".into(),
+                },
+                edge_id: "f1".into(),
+            }],
+            Provenance::default(),
+        )
+        .unwrap();
+        (staged.candidate, start, t1)
+    }
+
+    /// v0.8 regression: folding `op.delete_subgraph` into the general
+    /// recover-synthesize-materialize-compare mechanism must not change what
+    /// gets recovered for it — same candidate id, same anchor, no other
+    /// required arguments, exactly as the pre-existing delete-only path.
+    #[test]
+    fn recover_candidate_shape_delete_node_is_unchanged() {
+        let (dag, _start, t1) = tiny_dag();
+        let shape = recover_candidate_shape(&dag, &Operation::DeleteNode { target: t1 })
+            .expect("delete must recover a candidate shape");
+        assert_eq!(shape.candidate_id, "op.delete_subgraph");
+        assert_eq!(shape.anchor, t1);
+        assert!(shape.answers.is_empty());
+    }
+
+    /// v0.8: `Connect`'s non-anchor endpoint round-trips through
+    /// `bpmn_id_for_key` into a `NodeReference` answer.
+    #[test]
+    fn recover_candidate_shape_connect_resolves_the_far_endpoint() {
+        let (dag, start, t1) = tiny_dag();
+        let shape = recover_candidate_shape(
+            &dag,
+            &Operation::Connect { from: start, to: t1, edge_id: "f2".into(), condition: None },
+        )
+        .expect("connect must recover a candidate shape");
+        assert_eq!(shape.candidate_id, "op.connect");
+        assert_eq!(shape.anchor, start);
+        assert_eq!(shape.answers.len(), 1);
+        assert_eq!(shape.answers[0].name, "to");
+        assert!(matches!(&shape.answers[0].value, SlotValue::NodeReference(id) if id == "t1"));
+    }
+
+    /// v0.8: a `create_branch` condition shape `materialize_workbook` never
+    /// produces (anything but `Eq`/`Bool(true)`) refuses recovery outright
+    /// rather than guessing.
+    #[test]
+    fn recover_candidate_shape_create_branch_refuses_unproducible_condition() {
+        let (dag, start, t1) = tiny_dag();
+        let unproducible = Operation::CreateBranch {
+            gateway: start,
+            target: t1,
+            edge_id: "f2".into(),
+            condition: Some(ConditionExpr {
+                flag_name: "outcome".into(),
+                op: ConditionOp::Neq,
+                literal: ConditionLiteral::Bool(true),
+            }),
+        };
+        assert!(recover_candidate_shape(&dag, &unproducible).is_none());
+    }
+
+    /// v0.8: `set_guard_budget` always materializes `Some(budget)`; a raw
+    /// `None` cannot have come from this candidate, so recovery refuses.
+    #[test]
+    fn recover_candidate_shape_set_guard_budget_refuses_none() {
+        let (dag, _start, t1) = tiny_dag();
+        let never_producible =
+            Operation::SetGuardBudget { guard: t1, failure_budget: None };
+        assert!(recover_candidate_shape(&dag, &never_producible).is_none());
     }
 
     #[test]

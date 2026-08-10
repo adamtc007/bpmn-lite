@@ -1,11 +1,17 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.7
+**Version:** v0.8
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.8 amendment:** generalizes Phase 2 item 9's direct-edit equivalence beyond
+`op.delete_subgraph` to the 12 other single-`Operation` candidates via a
+recover-synthesize-materialize-compare reverse-materializer, comparing resulting
+`to_ir()` graph state rather than raw edit/`Operation` representations. Full contract
+under Phase 2 item 9.
 
 **v0.7 owner-authorized amendment:** the session unit Sage and the REPL author and
 converse in is the pack-level runbook — a template invocation (explicit, power-user) or
@@ -568,6 +574,60 @@ Widen the current semantic candidate board into concrete, position-bound graph m
    bindings, `LegalMoveId`, preview, compiler admission result and receipt as the
    palette/language path. Permit a lower-level audited edit only when no admitted
    semantic counterpart exists or proof fails, with a typed non-equivalence reason.
+
+   **v0.8 amendment — reverse-materializer contract for single-operation tapes.**
+   `bpmn_legal_move_id_for_operation`'s original strategy (search `position.legal_moves()`
+   for a `MoveBindingState::Complete` move) only ever worked for `op.delete_subgraph`: the
+   board auto-binds only the anchor argument, so `delete_subgraph` — the one candidate
+   with no other required argument — is structurally the only candidate that can reach
+   `Complete` at the position layer. Generalizing to the other single-`Operation`
+   candidates (`append_node`, `insert_before`, `insert_after`, `replace_node`, `connect`,
+   `create_branch`, `create_parallel_region`, `create_inclusive_region`,
+   `create_multi_instance_region`, `set_guard_trigger`, `set_guard_budget`,
+   `set_correlation_source`) requires a different mechanism, not an extended search:
+
+   1. `recover_candidate_shape(operation) -> Option<{candidate_id, anchor, arguments}>` —
+      one structural arm per `Operation` variant, pulling typed argument values straight
+      out of the operation's own content fields (e.g. `ReplaceNode.node` → the
+      `replacement` identifier; `CreateBranch.condition` → the `outcome` identifier,
+      refused unless its shape is exactly the `Eq/Bool(true)` form the materializer always
+      emits). Workbook-synthesized-only fields (`key`, `edge_id`, `guard_id`, `fork_key`,
+      `join_key`, `entry_edge_id`, `in_edge_id`, `out_edge_id`) are never part of the
+      recovered shape.
+   2. Locate the matching `LegalMove` (candidate id + anchor; `Incomplete` binding is
+      expected), build a `ProposalWorkbook` directly against its argument slots (anchor
+      slot pre-resolved, everything else `Missing` — no utterance-lexical extraction,
+      since a direct edit has no utterance), then drive it through the production
+      `apply_explicit_answers` typed-answer validation (`bpmn-lite-server-designer/src/proposal.rs`)
+      with the recovered values as the answer batch — the same validation
+      `POST .../answers` runs, not a re-implementation.
+   3. Materialize the completed workbook through
+      `utterance_engine::bpmn_board::materialize_bpmn_workbook` — the single production
+      materializer (`proposal::materialize_operations` is test-only and itself delegates
+      to this facade; there is no second materializer to diverge from).
+   4. Apply both the submitted raw operation(s) and the materialized operation(s) to
+      separate clones of the *same* base `DesignerDag`, reconstruct each via `to_ir()`,
+      and compare the two resulting `IRGraph`s structurally by BPMN element id — same
+      node set, same per-node `IRNode` content, same edges by
+      `(from_bpmn_id, to_bpmn_id, condition)`. This is a resulting-*state* comparison, not
+      an edit-*representation* comparison — internal `NodeKey` handles and wiring-only
+      synthesized ids never enter it, because `to_ir()` never surfaces them as BPMN-visible
+      content in the first place.
+   5. **Considered and rejected:** comparing `GraphDeltaPreview` values directly (already
+      `PartialEq`/`Eq`). Its `payload_hash` is a SHA-256 of the raw serialized `Operation`
+      struct (`legal_moves.rs::preview_operations`), including synthesized fields — the
+      same problem one layer up, with no partial-match granularity to recover from it.
+      Resulting-graph comparison is the only formulation consistent with graph shape (+
+      per-node content) being the deterministic source of truth, not the edit command that
+      produced it.
+   6. Requires adding `PartialEq` to `IRNode`, `TimerSpec`, `ConditionExpr`, `IrLiteral`,
+      `Expression`, `FfiInputBinding`, `FfiOutputBinding`, `IREdge`
+      (`bpmn-lite-compiler/src/ir.rs`) — mechanical, additive, no behavioural change;
+      every field type already supports it (`DataObjectType`/`DataObjectRole` already do).
+   7. Multi-operation candidates (`attach_guard`, `attach_rearming_guard`, the 4 `prod.*`
+      productions) stay refused by the existing `let [operation] = operations else {...}`
+      single-op guard — a separate tranche needing N-op tape comparison, not covered by
+      this amendment.
 10. Add a chain-preview API over an ordered list of hypothetical moves (a template
     invocation or a matched motif line): apply move 1's preview to a clone, derive the
     resulting hypothetical `DesignPosition`, enumerate and preview move 2 against *that*

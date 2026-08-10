@@ -10,7 +10,7 @@ pub enum GatewayDirection {
 }
 
 /// Timer specification.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TimerSpec {
     Duration { ms: u64 },
     Date { deadline_ms: u64 },
@@ -18,7 +18,7 @@ pub enum TimerSpec {
 }
 
 /// Condition expression for XOR gateway edges.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConditionExpr {
     pub flag_name: String,
     pub op: ConditionOp,
@@ -40,7 +40,7 @@ pub enum ConditionLiteral {
 }
 
 /// IR node — one per BPMN element.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum IRNode {
     Start {
         id: String,
@@ -192,7 +192,7 @@ pub enum IRNode {
 /// Literal value types at the IR (pre-lowering) level.
 ///
 /// Maps 1:1 to `bpmn_lite_types::Literal` after lowering.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IrLiteral {
     Bool(bool),
@@ -205,7 +205,7 @@ pub enum IrLiteral {
 ///
 /// Per A2 §5. At lowering time, `VarRef` is resolved against `data_objects`
 /// to produce a `BindingSource`. `Literal` is copied as-is.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "expr", rename_all = "snake_case")]
 pub enum Expression {
     Literal(IrLiteral),
@@ -214,7 +214,7 @@ pub enum Expression {
 }
 
 /// One `<bpmn:input>` element inside a `FfiServiceTask` extension.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FfiInputBinding {
     /// FFI template input field name (`target=` attribute).
     pub target_field: String,
@@ -222,7 +222,7 @@ pub struct FfiInputBinding {
 }
 
 /// One `<bpmn:output>` element inside a `FfiServiceTask` extension.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FfiOutputBinding {
     /// FFI template output field name (`source=` attribute).
     pub source_field: String,
@@ -254,7 +254,7 @@ impl IRNode {
 }
 
 /// IR edge — one per sequence flow.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IREdge {
     pub id: String,
     pub condition: Option<ConditionExpr>,

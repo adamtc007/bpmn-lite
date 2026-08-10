@@ -3015,18 +3015,25 @@ enum DirectEditResolution {
     NonEquivalent(&'static str),
 }
 
+/// v0.8 (`EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9): recover a
+/// best-effort candidate shape from the raw tape, synthesize a workbook for
+/// it, materialize through the same production path the palette/language
+/// route uses, and PROVE equivalence by comparing the raw tape's and the
+/// materialized tape's resulting graph state — not by diffing the edit
+/// representations themselves. `op.delete_subgraph` is folded into this same
+/// general mechanism rather than kept as a separate special case.
 fn resolve_direct_edit(
     record: &bpmn_lite_store::DesignSessionRecord,
     dag: &designer_graph::schema::DesignerDag,
     operations: &[designer_graph::ops::Operation],
 ) -> DirectEditResolution {
     let [operation] = operations else { return DirectEditResolution::NonEquivalent("multi_operation_tape") };
-    let designer_graph::ops::Operation::DeleteNode { target } = operation else {
+    let Some(shape) = crate::proposal::recover_candidate_shape(dag, operation) else {
         return DirectEditResolution::NonEquivalent("no_supported_semantic_counterpart");
     };
-    let Some(anchor) = dag.to_ir().ok().and_then(|ir| ir.node_weights().find_map(|node| {
-        (dag.key_for_bpmn_id(node.id()) == Some(*target)).then(|| node.id().to_string())
-    })) else { return DirectEditResolution::NonEquivalent("unresolved_direct_anchor") };
+    let Ok(anchor) = crate::proposal::bpmn_id_for_key(dag, shape.anchor) else {
+        return DirectEditResolution::NonEquivalent("unresolved_direct_anchor");
+    };
     let revision = graph_identity_hash(record);
     let policy = utterance_engine::board::PolicyFilter::default();
     let Some(board) = utterance_engine::bpmn_board::build_bpmn_semantic_board(
@@ -3043,9 +3050,59 @@ fn resolve_direct_edit(
         dag, &board, &revision, &graph_content_hash(record), DESIGNER_COMPILER_PROFILE_IDENTITY,
         &history_hash, focus, None,
     ).ok() else { return DirectEditResolution::NonEquivalent("position_unavailable") };
-    match utterance_engine::bpmn_board::bpmn_legal_move_id_for_operation(dag, &position, operation) {
-        Some(move_id) => DirectEditResolution::Equivalent(move_id.as_str().to_string()),
-        None => DirectEditResolution::NonEquivalent("no_complete_equivalent_move"),
+    let Some(legal_move) = position.legal_moves().iter().find(|legal_move| {
+        legal_move.candidate_id().as_str() == shape.candidate_id
+            && legal_move.anchor().is_some_and(|a| a.as_str() == anchor)
+    }) else {
+        return DirectEditResolution::NonEquivalent("no_matching_legal_move");
+    };
+    let move_id = legal_move.move_id().clone();
+
+    // A probe workbook exists only to drive the production materializer with
+    // the recovered answers; it is never staged, persisted or ratified.
+    use sha2::{Digest, Sha256};
+    let probe_text = format!("direct-edit-equivalence-probe:{}", shape.candidate_id);
+    let Ok(probe_hash) = semantic_decision_contracts::EvidenceRecordHash::new(hex::encode(
+        Sha256::digest(format!("{probe_text}\0{}\0{}", position.state_id().as_str(), move_id.as_str()).as_bytes()),
+    )) else { return DirectEditResolution::NonEquivalent("probe_evidence_unavailable") };
+    let Ok(workbook) = crate::proposal::start_workbook(
+        dag, Some(shape.anchor), &board,
+        crate::proposal::SelectedMove { position: &position, move_id: &move_id },
+        crate::proposal::WorkbookEvidence::PaletteSelection(probe_hash), &probe_text, 0,
+    ) else { return DirectEditResolution::NonEquivalent("workbook_construction_failed") };
+    let workbook = if shape.answers.is_empty() {
+        workbook
+    } else {
+        match crate::proposal::apply_explicit_answers(dag, workbook, shape.answers) {
+            Ok(workbook) => workbook,
+            Err(_) => return DirectEditResolution::NonEquivalent("recovered_argument_invalid"),
+        }
+    };
+    if !matches!(
+        workbook.status(),
+        semantic_decision_contracts::ProposalStatus::ReadyForDryRun
+            | semantic_decision_contracts::ProposalStatus::ReadyForRatification
+    ) {
+        return DirectEditResolution::NonEquivalent("incomplete_recovered_arguments");
+    }
+    let Ok(bound) = utterance_engine::bpmn_board::materialize_bpmn_workbook(dag, &workbook) else {
+        return DirectEditResolution::NonEquivalent("materialization_failed");
+    };
+
+    let raw_ir = designer_graph::productions::apply_production(
+        dag, operations.to_vec(), designer_graph::schema::Provenance::default(),
+    ).ok().and_then(|staged| staged.candidate.to_ir().ok());
+    let materialized_ir = designer_graph::productions::apply_production(
+        dag, bound.operations().to_vec(), designer_graph::schema::Provenance::default(),
+    ).ok().and_then(|staged| staged.candidate.to_ir().ok());
+    match (raw_ir, materialized_ir) {
+        (Some(raw_ir), Some(materialized_ir))
+            if designer_graph::schema::DesignerDag::ir_graphs_equivalent(&raw_ir, &materialized_ir) =>
+        {
+            DirectEditResolution::Equivalent(move_id.as_str().to_string())
+        }
+        (Some(_), Some(_)) => DirectEditResolution::NonEquivalent("recovered_shape_diverges"),
+        _ => DirectEditResolution::NonEquivalent("materialized_operations_refused"),
     }
 }
 
@@ -7686,6 +7743,75 @@ mod tests {
             events.iter().any(|e| e["kind"].get("GraphEdit").is_some()),
             "GraphEdit event must be persisted: {events:?}"
         );
+    }
+
+    /// v0.8: a raw single-`Operation` direct edit that exactly matches what
+    /// `op.append_node` would materialize for the same anchor and node
+    /// identifier resolves as `semantic_move_equivalent`, not a lower-level
+    /// audited edit — proving the general recover-synthesize-materialize-
+    /// compare mechanism, not just the pre-existing delete-only case.
+    #[tokio::test]
+    async fn test_direct_edit_recovers_append_node_equivalence() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+
+        // t1 (review_documents) already has an outgoing edge to "end"
+        // (seed_graph_backed_session); InsertAfter splices a new node into
+        // that existing edge, unlike AppendNode which requires an open anchor.
+        let ops = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: task_ir("appended_directly"),
+            edge_id: "arbitrary_direct_edge_id".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let direct = body_json(response).await;
+        assert_eq!(direct["edit_kind"], "semantic_move_equivalent");
+        assert!(direct["semantic_move_id"].is_string());
+        assert!(direct["non_equivalence_reason"].is_null());
+    }
+
+    /// v0.8 RED: a raw edit that recovers a plausible candidate shape but
+    /// whose actual content a real workbook can never produce (a non-`noop`
+    /// task type) must diverge on the resulting-graph comparison, not be
+    /// accepted as equivalent by name/anchor alone.
+    #[tokio::test]
+    async fn test_direct_edit_diverges_on_content_a_workbook_cannot_produce() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+
+        let ops = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: bpmn_lite_compiler::IRNode::ServiceTask {
+                id: "appended_directly".into(),
+                name: "appended_directly".into(),
+                task_type: "http_call".into(), // materialize_workbook only ever emits "noop"
+            },
+            edge_id: "arbitrary_direct_edge_id".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let direct = body_json(response).await;
+        assert_eq!(direct["edit_kind"], "lower_level_direct_edit");
+        assert_eq!(direct["non_equivalence_reason"], "recovered_shape_diverges");
     }
 
     /// RED: an operation sequence that refuses to stage (unknown anchor)

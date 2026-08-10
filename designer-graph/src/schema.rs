@@ -248,6 +248,70 @@ impl DesignerDag {
         Ok(ir)
     }
 
+    /// Structural equivalence of two reconstructed graphs by BPMN element
+    /// identity — same node set, same per-node declared content, same edges
+    /// by endpoint identity and condition. This compares resulting *state*,
+    /// not the edit representation that produced it: internal `NodeKey`
+    /// handles never reach `IRGraph` at all, and `IREdge::id` (the
+    /// sequence-flow id string) is deliberately excluded from the edge
+    /// comparison below — it is exactly the kind of workbook/edit-local
+    /// synthesized identifier (like `edge_id`, `guard_id`, `fork_key`,
+    /// `join_key`, `entry_edge_id`) that two independently authored but
+    /// equivalent edits are never expected to agree on (v0.8 amendment,
+    /// `EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9).
+    pub fn ir_graphs_equivalent(a: &IRGraph, b: &IRGraph) -> bool {
+        if a.node_count() != b.node_count() {
+            return false;
+        }
+        let nodes_a: HashMap<&str, &IRNode> = a.node_weights().map(|n| (n.id(), n)).collect();
+        let nodes_b: HashMap<&str, &IRNode> = b.node_weights().map(|n| (n.id(), n)).collect();
+        if nodes_a.len() != a.node_count() || nodes_b.len() != b.node_count() {
+            // A duplicate bpmn id on one side collided in the map above;
+            // never treat that as accidental agreement.
+            return false;
+        }
+        if nodes_a.len() != nodes_b.len() {
+            return false;
+        }
+        for (id, node_a) in &nodes_a {
+            match nodes_b.get(id) {
+                Some(node_b) if node_b == node_a => {}
+                _ => return false,
+            }
+        }
+
+        let edge_key = |graph: &IRGraph,
+                         from: NodeIndex,
+                         to: NodeIndex,
+                         edge: &IREdge|
+         -> (String, String, String) {
+            (
+                graph[from].id().to_owned(),
+                graph[to].id().to_owned(),
+                // `ConditionExpr` has no `Ord`; its `Debug` form is a stable
+                // enough tie-breaker for sorting two same-endpoint edges.
+                format!("{:?}", edge.condition),
+            )
+        };
+        let mut edges_a: Vec<_> = a
+            .edge_indices()
+            .map(|idx| {
+                let (from, to) = a.edge_endpoints(idx).expect("edge endpoints");
+                edge_key(a, from, to, &a[idx])
+            })
+            .collect();
+        let mut edges_b: Vec<_> = b
+            .edge_indices()
+            .map(|idx| {
+                let (from, to) = b.edge_endpoints(idx).expect("edge endpoints");
+                edge_key(b, from, to, &b[idx])
+            })
+            .collect();
+        edges_a.sort();
+        edges_b.sort();
+        edges_a == edges_b
+    }
+
     /// Production-oracle admission — the FULL direct-compilation chain
     /// (review F5): `verify` (structured diagnostics verbatim) →
     /// `Compiler::lower_with_default` (= lowering + `verify_bytecode` +
@@ -465,6 +529,147 @@ mod tests {
         dag.insert_edge(s, t, edge("e1")).unwrap();
         dag.insert_edge(t, e, edge("e2")).unwrap();
         (dag, s, t, e)
+    }
+
+    /// v0.8: two independently authored DAGs with different `NodeKey`s and
+    /// different edge ids but identical BPMN-visible content/topology are
+    /// equivalent — the comparator proves resulting *state*, not the edit
+    /// representation (synthesized keys/edge ids never enter it).
+    #[test]
+    fn ir_graphs_equivalent_ignores_synthesized_key_and_edge_identity() {
+        let (dag_a, ..) = linear("ir-eq-a");
+        let mut dag_b = DesignerDag::new("ir-eq-b");
+        let s = dag_b
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t = dag_b
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        let e = dag_b
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
+        dag_b.insert_edge(s, t, edge("totally-different-edge-id-1")).unwrap();
+        dag_b.insert_edge(t, e, edge("totally-different-edge-id-2")).unwrap();
+
+        assert!(DesignerDag::ir_graphs_equivalent(
+            &dag_a.to_ir().unwrap(),
+            &dag_b.to_ir().unwrap()
+        ));
+    }
+
+    /// v0.8 RED: divergent task content (different declared name) is caught
+    /// even though topology and ids otherwise line up.
+    #[test]
+    fn ir_graphs_equivalent_catches_node_content_divergence() {
+        let (dag_a, ..) = linear("ir-eq-content-a");
+        let mut dag_b = DesignerDag::new("ir-eq-content-b");
+        let s = dag_b
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t = dag_b
+            .insert_node(
+                key(),
+                IRNode::ServiceTask {
+                    id: "t1".into(),
+                    name: "a different declared name".into(),
+                    task_type: "noop".into(),
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let e = dag_b
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
+        dag_b.insert_edge(s, t, edge("e1")).unwrap();
+        dag_b.insert_edge(t, e, edge("e2")).unwrap();
+
+        assert!(!DesignerDag::ir_graphs_equivalent(
+            &dag_a.to_ir().unwrap(),
+            &dag_b.to_ir().unwrap()
+        ));
+    }
+
+    /// v0.8 RED: same node set, but an edge condition diverges — caught by
+    /// the edge comparison, not just the node-content comparison.
+    #[test]
+    fn ir_graphs_equivalent_catches_edge_condition_divergence() {
+        let mut dag_a = DesignerDag::new("ir-eq-cond-a");
+        let gw_a = dag_a
+            .insert_node(
+                key(),
+                IRNode::GatewayXor {
+                    id: "gw".into(),
+                    name: "gw".into(),
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t_a = dag_a
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        dag_a
+            .insert_edge(
+                gw_a,
+                t_a,
+                DesignerEdge {
+                    id: "e1".into(),
+                    condition: Some(bpmn_lite_compiler::ConditionExpr {
+                        flag_name: "approved".into(),
+                        op: bpmn_lite_compiler::ConditionOp::Eq,
+                        literal: bpmn_lite_compiler::ConditionLiteral::Bool(true),
+                    }),
+                    provenance: Provenance::default(),
+                },
+            )
+            .unwrap();
+
+        let mut dag_b = DesignerDag::new("ir-eq-cond-b");
+        let gw_b = dag_b
+            .insert_node(
+                key(),
+                IRNode::GatewayXor {
+                    id: "gw".into(),
+                    name: "gw".into(),
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t_b = dag_b
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        dag_b
+            .insert_edge(
+                gw_b,
+                t_b,
+                DesignerEdge {
+                    id: "different-edge-id".into(),
+                    condition: Some(bpmn_lite_compiler::ConditionExpr {
+                        flag_name: "approved".into(),
+                        op: bpmn_lite_compiler::ConditionOp::Eq,
+                        literal: bpmn_lite_compiler::ConditionLiteral::Bool(false),
+                    }),
+                    provenance: Provenance::default(),
+                },
+            )
+            .unwrap();
+
+        assert!(!DesignerDag::ir_graphs_equivalent(
+            &dag_a.to_ir().unwrap(),
+            &dag_b.to_ir().unwrap()
+        ));
     }
 
     /// GREEN: full-chain admission (verify + lower + bytecode-verify +
