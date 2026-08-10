@@ -3027,9 +3027,17 @@ fn resolve_direct_edit(
     dag: &designer_graph::schema::DesignerDag,
     operations: &[designer_graph::ops::Operation],
 ) -> DirectEditResolution {
-    let [operation] = operations else { return DirectEditResolution::NonEquivalent("multi_operation_tape") };
-    let Some(shape) = crate::proposal::recover_candidate_shape(dag, operation) else {
-        return DirectEditResolution::NonEquivalent("no_supported_semantic_counterpart");
+    if operations.is_empty() {
+        return DirectEditResolution::NonEquivalent("empty_operation_tape");
+    }
+    let shape = match crate::proposal::recover_candidate_shape(dag, operations) {
+        Ok(shape) => shape,
+        Err(crate::proposal::ShapeRefusal::Ambiguous) => {
+            return DirectEditResolution::NonEquivalent("ambiguous_candidate_shape");
+        }
+        Err(crate::proposal::ShapeRefusal::NotProducible) => {
+            return DirectEditResolution::NonEquivalent("no_supported_semantic_counterpart");
+        }
     };
     let Ok(anchor) = crate::proposal::bpmn_id_for_key(dag, shape.anchor) else {
         return DirectEditResolution::NonEquivalent("unresolved_direct_anchor");
@@ -7711,7 +7719,10 @@ mod tests {
         let direct = body_json(response).await;
         assert_eq!(direct["edit_kind"], "lower_level_direct_edit");
         assert!(direct["semantic_move_id"].is_null());
-        assert_eq!(direct["non_equivalence_reason"], "multi_operation_tape");
+        assert_eq!(
+            direct["non_equivalence_reason"], "no_supported_semantic_counterpart",
+            "a raw two-AppendNode tape matches none of the recognized multi-op shapes"
+        );
         let seq = body_json(
             app.clone()
                 .oneshot(post_json(
@@ -7812,6 +7823,131 @@ mod tests {
         let direct = body_json(response).await;
         assert_eq!(direct["edit_kind"], "lower_level_direct_edit");
         assert_eq!(direct["non_equivalence_reason"], "recovered_shape_diverges");
+    }
+
+    // Note on test scope for `attach_guard`, `attach_rearming_guard` and
+    // `request_and_wait`: each of these 2-`Operation` candidates'
+    // standalone materialization leaves something the full compiler
+    // admission chain (`DesignerDag::admit`) independently refuses when
+    // applied alone to a plain seeded session — `attach_guard`/
+    // `attach_rearming_guard` leave the escape task with no outgoing edge
+    // (unreachable-terminal bytecode lowering failure); `request_and_wait`'s
+    // `MessageWait.corr_key_source` must reference an existing
+    // `IRNode::DataObject`, and no `Operation` variant can create one (only
+    // `DesignerDag::seed` can, at DAG-construction time, never through
+    // `/graph-edit`). This is a property of each candidate's own
+    // materialized shape, orthogonal to this change, matching the
+    // `op.delete_subgraph` precedent noted in
+    // `semantic-gameboard-phase2-direct-edit-equivalence-generalization-2026-08-10.md`.
+    // Regression coverage for these three arms is therefore at the
+    // `recover_candidate_shape` unit level
+    // (`proposal::tests::recover_candidate_shape_attach_guard_and_attach_rearming_guard`,
+    // `recover_candidate_shape_request_and_wait_resolves_the_far_endpoint`),
+    // which is precisely the part this change touched; the resulting-graph
+    // comparison and HTTP-level wiring are already proven generically by
+    // the `interrupting_timeout` test below and the ambiguous-shape test
+    // above.
+
+    /// v0.9: same proof at 3 ops — `prod.interrupting_timeout` chains
+    /// AttachGuard -> AppendNode -> AppendNode(End), with both the guard's
+    /// and the continuation End's synthesized ids (`{escape}_guard`,
+    /// `{escape}_end`) reproduced exactly.
+    #[tokio::test]
+    async fn test_direct_edit_recovers_interrupting_timeout_equivalence() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+
+        let guard_key = new_key();
+        let cont_key = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AttachGuard {
+                host: t1,
+                key: guard_key,
+                guard_id: "pause_guard".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Duration { ms: 300_000 },
+                ),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard_key,
+                key: cont_key,
+                node: task_ir("pause"),
+                edge_id: "flow_pause".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: cont_key,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "pause_end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow_pause_end".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let direct = body_json(response).await;
+        assert_eq!(direct["edit_kind"], "semantic_move_equivalent");
+        assert!(direct["semantic_move_id"].as_str().is_some_and(|s| !s.is_empty()));
+    }
+
+    /// v0.9 RED: `prod.reminder_then_escalate` and
+    /// `prod.non_interrupting_notification` materialize byte-for-byte
+    /// identical `Vec<Operation>` shapes (AttachRearmingGuard/Cycle ->
+    /// AppendNode -> End) — nothing in the operation content distinguishes
+    /// them. A raw tape reproducing this shape must fail closed rather than
+    /// guess a label the content can't prove (ruled 2026-08-10).
+    #[tokio::test]
+    async fn test_direct_edit_refuses_ambiguous_reminder_or_notification_shape() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+
+        let guard_key = new_key();
+        let mid_key = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AttachRearmingGuard {
+                host: t1,
+                key: guard_key,
+                guard_id: "x_guard".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Cycle { interval_ms: 60_000, max_fires: 3 },
+                ),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard_key,
+                key: mid_key,
+                node: task_ir("x"),
+                edge_id: "flow_x".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: mid_key,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End { id: "x_end".into(), terminate: false },
+                edge_id: "flow_x_end".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let direct = body_json(response).await;
+        assert_eq!(direct["edit_kind"], "lower_level_direct_edit");
+        assert_eq!(direct["non_equivalence_reason"], "ambiguous_candidate_shape");
+        assert!(direct["semantic_move_id"].is_null());
     }
 
     /// RED: an operation sequence that refuses to stage (unknown anchor)

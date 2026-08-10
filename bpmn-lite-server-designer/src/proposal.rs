@@ -347,30 +347,135 @@ fn render_condition(expr: &ConditionExpr) -> String {
     format!("{}{op}{literal}", expr.flag_name)
 }
 
-/// A raw direct-edit operation's best-effort recovered candidate shape: which
-/// semantic candidate and anchor it MIGHT be, and which typed slot answers to
-/// try. This is a guess, not a proof — the caller (`resolve_direct_edit`)
-/// proves or refutes it by materializing the recovered shape through the
-/// production path and comparing RESULTING graph state, not this shape
-/// itself (v0.8 amendment, `EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9).
-/// One structural arm per representable single-`Operation` candidate;
-/// workbook-synthesized-only fields (`key`, `edge_id`, `guard_id`,
-/// `fork_key`, `join_key`, `entry_edge_id`, `in_edge_id`, `out_edge_id`) are
-/// never read here.
+/// A raw direct-edit operation tape's best-effort recovered candidate shape:
+/// which semantic candidate and anchor it MIGHT be, and which typed slot
+/// answers to try. This is a guess, not a proof — the caller
+/// (`resolve_direct_edit`) proves or refutes it by materializing the
+/// recovered shape through the production path and comparing RESULTING
+/// graph state, not this shape itself (v0.8 amendment,
+/// `EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9). One structural arm per
+/// representable candidate, single- or multi-`Operation` (v0.9 amendment,
+/// same doc, closing the deferred multi-op tranche); workbook-synthesized-
+/// only fields (`key`, `edge_id`, `guard_id`, `fork_key`, `join_key`,
+/// `entry_edge_id`, `in_edge_id`, `out_edge_id`) are never read here.
 pub(crate) struct RecoveredShape {
     pub(crate) candidate_id: &'static str,
     pub(crate) anchor: NodeKey,
     pub(crate) answers: Vec<SlotAnswer>,
 }
 
+/// Why `recover_candidate_shape` could not produce a shape to try.
+/// `Ambiguous` is distinguished from `NotProducible` because it names a real
+/// defect class (fail closed rather than guess): a tape whose content
+/// genuinely cannot distinguish which of two-or-more candidates produced it,
+/// as opposed to a tape that simply matches no candidate at all.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ShapeRefusal {
+    NotProducible,
+    Ambiguous,
+}
+
+fn answer(name: &str, value: SlotValue) -> SlotAnswer {
+    SlotAnswer { name: name.to_string(), value }
+}
+
 pub(crate) fn recover_candidate_shape(
     dag: &DesignerDag,
-    operation: &Operation,
-) -> Option<RecoveredShape> {
-    fn answer(name: &str, value: SlotValue) -> SlotAnswer {
-        SlotAnswer { name: name.to_string(), value }
+    operations: &[Operation],
+) -> Result<RecoveredShape, ShapeRefusal> {
+    match operations {
+        [operation] => {
+            recover_single_operation_shape(dag, operation).ok_or(ShapeRefusal::NotProducible)
+        }
+        [Operation::AttachGuard {
+            host,
+            key: guard_key,
+            trigger: GuardTrigger::Timer(TimerSpec::Duration { ms }),
+            ..
+        }, Operation::AppendNode { anchor, node, .. }]
+            if anchor == guard_key =>
+        {
+            Ok(RecoveredShape {
+                candidate_id: "op.attach_guard",
+                anchor: *host,
+                answers: vec![
+                    answer("escape", SlotValue::Identifier(node.id().to_string())),
+                    answer("trigger", SlotValue::DurationMillis(*ms)),
+                ],
+            })
+        }
+        [Operation::AttachRearmingGuard {
+            host,
+            key: guard_key,
+            trigger: GuardTrigger::Timer(TimerSpec::Cycle { interval_ms, max_fires }),
+            ..
+        }, Operation::AppendNode { anchor, node, .. }]
+            if anchor == guard_key =>
+        {
+            Ok(RecoveredShape {
+                candidate_id: "op.attach_rearming_guard",
+                anchor: *host,
+                answers: vec![
+                    answer("escape", SlotValue::Identifier(node.id().to_string())),
+                    answer("interval", SlotValue::DurationMillis(*interval_ms)),
+                    answer("max_fires", SlotValue::Count(*max_fires)),
+                ],
+            })
+        }
+        [Operation::InsertAfter { anchor, key: send_key, node: send_node, .. }, Operation::InsertAfter {
+            anchor: wait_anchor,
+            node: IRNode::MessageWait { corr_key_source, .. },
+            ..
+        }] if wait_anchor == send_key => Ok(RecoveredShape {
+            candidate_id: "prod.request_and_wait",
+            anchor: *anchor,
+            answers: vec![
+                answer("request", SlotValue::Identifier(send_node.id().to_string())),
+                answer(
+                    "correlation_source",
+                    SlotValue::DataReference(corr_key_source.clone()),
+                ),
+            ],
+        }),
+        [Operation::AttachGuard {
+            host,
+            key: guard_key,
+            trigger: GuardTrigger::Timer(TimerSpec::Duration { ms }),
+            ..
+        }, Operation::AppendNode { anchor: mid_anchor, key: mid_key, node, .. }, Operation::AppendNode { anchor: end_anchor, node: IRNode::End { .. }, .. }]
+            if mid_anchor == guard_key && end_anchor == mid_key =>
+        {
+            Ok(RecoveredShape {
+                candidate_id: "prod.interrupting_timeout",
+                anchor: *host,
+                answers: vec![
+                    answer("escape", SlotValue::Identifier(node.id().to_string())),
+                    answer("duration", SlotValue::DurationMillis(*ms)),
+                ],
+            })
+        }
+        [Operation::AttachRearmingGuard {
+            key: guard_key,
+            trigger: GuardTrigger::Timer(TimerSpec::Cycle { .. }),
+            ..
+        }, Operation::AppendNode { anchor: mid_anchor, key: mid_key, .. }, Operation::AppendNode { anchor: end_anchor, node: IRNode::End { .. }, .. }]
+            if mid_anchor == guard_key && end_anchor == mid_key =>
+        {
+            // prod.reminder_then_escalate and prod.non_interrupting_notification
+            // (`legal_moves.rs` "prod.reminder_then_escalate" |
+            // "prod.non_interrupting_notification" arm) materialize this exact
+            // operation sequence — same AttachRearmingGuard/Cycle + AppendNode +
+            // End — differing only in which workbook slot NAME supplied the
+            // identical typed values. Nothing in the operation content
+            // distinguishes them: fail closed rather than guess a label the
+            // shape doesn't actually prove.
+            Err(ShapeRefusal::Ambiguous)
+        }
+        _ => Err(ShapeRefusal::NotProducible),
     }
+}
 
+fn recover_single_operation_shape(dag: &DesignerDag, operation: &Operation) -> Option<RecoveredShape> {
     let (candidate_id, anchor, answers): (&'static str, NodeKey, Vec<SlotAnswer>) = match operation
     {
         Operation::AppendNode { anchor, node, .. } => (
@@ -807,11 +912,120 @@ mod tests {
     #[test]
     fn recover_candidate_shape_delete_node_is_unchanged() {
         let (dag, _start, t1) = tiny_dag();
-        let shape = recover_candidate_shape(&dag, &Operation::DeleteNode { target: t1 })
+        let shape = recover_candidate_shape(&dag, &[Operation::DeleteNode { target: t1 }])
             .expect("delete must recover a candidate shape");
         assert_eq!(shape.candidate_id, "op.delete_subgraph");
         assert_eq!(shape.anchor, t1);
         assert!(shape.answers.is_empty());
+    }
+
+    /// v0.9 (multi-op tranche): a 2-`Operation` `[AttachGuard, AppendNode]`
+    /// tape chained on the guard's own minted key recovers `op.attach_guard`
+    /// with the escape identifier and duration answers; `[AttachRearmingGuard,
+    /// AppendNode]` with a `Cycle` trigger recovers `op.attach_rearming_guard`
+    /// with escape/interval/max_fires. See the note in `rest.rs` on why these
+    /// two arms are proven at this unit level rather than an HTTP round-trip.
+    #[test]
+    fn recover_candidate_shape_attach_guard_and_attach_rearming_guard() {
+        let (dag, _start, t1) = tiny_dag();
+        let guard_key = fresh_key();
+        let escape_key = fresh_key();
+
+        let shape = recover_candidate_shape(
+            &dag,
+            &[
+                Operation::AttachGuard {
+                    host: t1,
+                    key: guard_key,
+                    guard_id: "escape_guard".into(),
+                    trigger: GuardTrigger::Timer(TimerSpec::Duration { ms: 900_000 }),
+                },
+                Operation::AppendNode {
+                    anchor: guard_key,
+                    key: escape_key,
+                    node: task("escape"),
+                    edge_id: "flow_escape".into(),
+                },
+            ],
+        )
+        .expect("attach_guard must recover a candidate shape");
+        assert_eq!(shape.candidate_id, "op.attach_guard");
+        assert_eq!(shape.anchor, t1);
+        assert_eq!(shape.answers.len(), 2);
+        assert!(matches!(&shape.answers[0].value, SlotValue::Identifier(v) if v == "escape"));
+        assert!(matches!(shape.answers[1].value, SlotValue::DurationMillis(900_000)));
+
+        let guard_key = fresh_key();
+        let escape_key = fresh_key();
+        let shape = recover_candidate_shape(
+            &dag,
+            &[
+                Operation::AttachRearmingGuard {
+                    host: t1,
+                    key: guard_key,
+                    guard_id: "escape_guard".into(),
+                    trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                        interval_ms: 60_000,
+                        max_fires: 5,
+                    }),
+                },
+                Operation::AppendNode {
+                    anchor: guard_key,
+                    key: escape_key,
+                    node: task("escape"),
+                    edge_id: "flow_escape".into(),
+                },
+            ],
+        )
+        .expect("attach_rearming_guard must recover a candidate shape");
+        assert_eq!(shape.candidate_id, "op.attach_rearming_guard");
+        assert_eq!(shape.anchor, t1);
+        assert_eq!(shape.answers.len(), 3);
+        assert!(matches!(&shape.answers[0].value, SlotValue::Identifier(v) if v == "escape"));
+        assert!(matches!(shape.answers[1].value, SlotValue::DurationMillis(60_000)));
+        assert!(matches!(shape.answers[2].value, SlotValue::Count(5)));
+    }
+
+    /// v0.9 (multi-op tranche): a 2-`Operation` chained-`InsertAfter` tape
+    /// `[InsertAfter(anchor->send), InsertAfter(send_key->wait)]` recovers
+    /// `prod.request_and_wait` with the request identifier and correlation
+    /// source answers. See the note in `rest.rs` on why this arm is proven
+    /// at this unit level rather than an HTTP round-trip (no `Operation`
+    /// variant can seed the `IRNode::DataObject` the correlation source
+    /// would need to reference for full compiler admission).
+    #[test]
+    fn recover_candidate_shape_request_and_wait_resolves_the_far_endpoint() {
+        let (dag, _start, t1) = tiny_dag();
+        let send_key = fresh_key();
+        let shape = recover_candidate_shape(
+            &dag,
+            &[
+                Operation::InsertAfter {
+                    anchor: t1,
+                    key: send_key,
+                    node: task("request_quote"),
+                    edge_id: "flow_request_quote".into(),
+                },
+                Operation::InsertAfter {
+                    anchor: send_key,
+                    key: fresh_key(),
+                    node: IRNode::MessageWait {
+                        id: "request_quote_response".into(),
+                        name: "request_quote_response".into(),
+                        corr_key_source: "quote_id".into(),
+                    },
+                    edge_id: "flow_request_quote_response".into(),
+                },
+            ],
+        )
+        .expect("request_and_wait must recover a candidate shape");
+        assert_eq!(shape.candidate_id, "prod.request_and_wait");
+        assert_eq!(shape.anchor, t1);
+        assert_eq!(shape.answers.len(), 2);
+        assert!(matches!(&shape.answers[0].value, SlotValue::Identifier(v) if v == "request_quote"));
+        assert!(
+            matches!(&shape.answers[1].value, SlotValue::DataReference(v) if v == "quote_id")
+        );
     }
 
     /// v0.8: `Connect`'s non-anchor endpoint round-trips through
@@ -821,7 +1035,7 @@ mod tests {
         let (dag, start, t1) = tiny_dag();
         let shape = recover_candidate_shape(
             &dag,
-            &Operation::Connect { from: start, to: t1, edge_id: "f2".into(), condition: None },
+            &[Operation::Connect { from: start, to: t1, edge_id: "f2".into(), condition: None }],
         )
         .expect("connect must recover a candidate shape");
         assert_eq!(shape.candidate_id, "op.connect");
@@ -847,7 +1061,10 @@ mod tests {
                 literal: ConditionLiteral::Bool(true),
             }),
         };
-        assert!(recover_candidate_shape(&dag, &unproducible).is_none());
+        assert!(matches!(
+            recover_candidate_shape(&dag, &[unproducible]),
+            Err(ShapeRefusal::NotProducible)
+        ));
     }
 
     /// v0.8: `set_guard_budget` always materializes `Some(budget)`; a raw
@@ -857,7 +1074,10 @@ mod tests {
         let (dag, _start, t1) = tiny_dag();
         let never_producible =
             Operation::SetGuardBudget { guard: t1, failure_budget: None };
-        assert!(recover_candidate_shape(&dag, &never_producible).is_none());
+        assert!(matches!(
+            recover_candidate_shape(&dag, &[never_producible]),
+            Err(ShapeRefusal::NotProducible)
+        ));
     }
 
     #[test]

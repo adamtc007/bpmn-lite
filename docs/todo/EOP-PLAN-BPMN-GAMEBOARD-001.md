@@ -1,11 +1,23 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.8
+**Version:** v0.9
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.9 amendment:** closes the multi-operation tranche deferred by v0.8 — extends
+`recover_candidate_shape` from `&Operation` to `&[Operation]` and adds 5 mechanical
+multi-op arms (`op.attach_guard`, `op.attach_rearming_guard`, `prod.request_and_wait`,
+`prod.interrupting_timeout`, plus the ambiguous pair below), all reusing the same
+`ir_graphs_equivalent`/`apply_production` machinery unmodified (it already compares
+resulting graph state, not operation count). One genuine fork surfaced and ruled:
+`prod.reminder_then_escalate` and `prod.non_interrupting_notification` materialize
+byte-for-byte identical `Vec<Operation>` shapes — nothing in the operation content
+distinguishes them — so recovery fails closed (`ShapeRefusal::Ambiguous` →
+`"ambiguous_candidate_shape"`) rather than guessing a label the content can't prove.
+Full contract under Phase 2 item 9's v0.9 amendment.
 
 **v0.8 amendment:** generalizes Phase 2 item 9's direct-edit equivalence beyond
 `op.delete_subgraph` to the 12 other single-`Operation` candidates via a
@@ -628,6 +640,42 @@ Widen the current semantic candidate board into concrete, position-bound graph m
       productions) stay refused by the existing `let [operation] = operations else {...}`
       single-op guard — a separate tranche needing N-op tape comparison, not covered by
       this amendment.
+
+   **v0.9 amendment — multi-operation tranche.** Closes item 7 above.
+   `recover_candidate_shape` generalizes from `&Operation` to `&[Operation]`; the
+   single-op arms fold into a `[operation] => ...` case unchanged (renamed
+   `recover_single_operation_shape`). `resolve_direct_edit`'s `apply_production`/
+   `ir_graphs_equivalent` comparison already operated on `&[Operation]` on both sides
+   (raw and materialized) — it required *zero* changes, since it compares resulting
+   `IRGraph` content, never operation count or identity.
+
+   1. Five candidates are mechanical: `op.attach_guard`, `op.attach_rearming_guard`
+      (2-op: `AttachGuard`/`AttachRearmingGuard` chained to an `AppendNode` whose
+      `anchor` equals the guard op's minted `key`), `prod.request_and_wait` (2-op:
+      chained `InsertAfter`/`InsertAfter` ending in `IRNode::MessageWait`),
+      `prod.interrupting_timeout` (3-op: `AttachGuard` chained through two
+      `AppendNode`s, the last an `IRNode::End`).
+   2. **Fork surfaced and ruled (2026-08-10):** `prod.reminder_then_escalate` and
+      `prod.non_interrupting_notification` materialize byte-for-byte identical
+      `Vec<Operation>` shapes (`AttachRearmingGuard`/`Cycle` → `AppendNode` → `End`) —
+      differing only in which workbook slot *name* supplied the same typed values, never
+      reaching the operation content. Ruled: fail closed. A new `ShapeRefusal` enum
+      (`NotProducible` | `Ambiguous`) lets `recover_candidate_shape` name this as a
+      distinct, real defect class rather than folding it into "no candidate matched";
+      `resolve_direct_edit` reports `"ambiguous_candidate_shape"` — never guesses a label
+      the content can't prove.
+   3. **Test-scope finding, matching the `op.delete_subgraph` precedent:** three of the
+      five mechanical candidates' standalone materializations independently fail full
+      compiler admission (`DesignerDag::admit`) when applied alone to a plain seeded
+      session — `attach_guard`/`attach_rearming_guard` leave the escape task with no
+      outgoing edge (unreachable-terminal bytecode lowering failure); `request_and_wait`'s
+      `MessageWait.corr_key_source` must reference an `IRNode::DataObject`, and no
+      `Operation` variant can create one (`DesignerDag::seed` only, never through
+      `/graph-edit`). This is a property of each candidate's own materialized shape,
+      orthogonal to this change. Regression coverage for those three is therefore at the
+      `recover_candidate_shape` unit level; `prod.interrupting_timeout` (self-contained,
+      no external data dependency) and the ambiguous-shape refusal both get full HTTP
+      round-trip proof.
 10. Add a chain-preview API over an ordered list of hypothetical moves (a template
     invocation or a matched motif line): apply move 1's preview to a clone, derive the
     resulting hypothetical `DesignPosition`, enumerate and preview move 2 against *that*
