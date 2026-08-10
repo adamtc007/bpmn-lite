@@ -1,11 +1,37 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.18
+**Version:** v0.19
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.19 amendment — Gate 8 bullet 4 (resource-limit typed failures) closed
+(cross-repo).** `docs/receipts/semantic-gameboard-phase8-resource-limits-2026-08-10.md`.
+A survey found the gap deeper than untyped errors: the shared, exact-pinned
+`semantic-decision-contracts` crate had zero decode-allocation or amplification caps
+at all (`DesignPosition`/`LegalMove`/`ContractText`/`validate_attempt_history`
+admitted unboundedly large inputs), and the one existing product-level size check
+(bpmn-lite's history window) failed via `anyhow::bail!` collapsed into a generic
+string-payload variant. User ruled "Full" scope (design and add the missing caps,
+not just type what existed). In `dsl`: added
+`GameboardContractError::ResourceLimitExceeded{field,limit,actual}` and five new
+bounds (contract-text byte length, move-argument/applicability-fact counts,
+legal-move-set size, delta-operation count, a generic attempt-history size
+backstop); version `0.3.0` → `0.4.0` (breaking: new enum variant), tagged
+`v0.4.0`. In `bpmn-lite`: re-pinned to the new rev (all three independent pins);
+added a shared `BpmnBoardError::ResourceLimit(ResourceLimitExceeded)`; retyped
+history.rs's two existing checks onto it; added a real, previously-absent
+enumeration-amplification cap (`MAX_ENUMERATION_CANDIDATES`) that fires in
+`legal_moves::enumerate` before the expensive per-candidate compiler preview work
+runs, not just after the fact at the contract layer; added an explicit,
+product-owned `DefaultBodyLimit` on the REST router (axum's prior default was an
+unconfigured, unowned 2 MiB floor). Every new typed refusal is proven to leave the
+session usable: a legitimate call at or under each limit still succeeds
+immediately after a refusal in every new test. Public-API baseline updated
+deliberately (5 new reviewed items, confirmed via before/after diff, nothing
+accidental). Full suites green in both repos.
 
 **v0.18 amendment — dead FocusAbsenceReason/DesignFocus surface removed (cross-repo).**
 `docs/receipts/semantic-gameboard-focus-absence-cleanup-2026-08-10.md`. On explicit

@@ -525,8 +525,8 @@ dependencies = [
 
 [[package]]
 name = "dsl_types"
-version = "0.3.0"
-source = "git+https://github.com/adamtc007/dsl?rev=9cf7cb3ae4661742501897ba82622a9834cf8c7c#9cf7cb3ae4661742501897ba82622a9834cf8c7c"
+version = "0.4.0"
+source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
 dependencies = [
  "serde",
  "serde_json",
@@ -1902,8 +1902,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_ontology"
-version = "0.3.0"
-source = "git+https://github.com/adamtc007/dsl?rev=9cf7cb3ae4661742501897ba82622a9834cf8c7c#9cf7cb3ae4661742501897ba82622a9834cf8c7c"
+version = "0.4.0"
+source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1921,8 +1921,8 @@ dependencies = [
 
 [[package]]
 name = "sem_os_types"
-version = "0.3.0"
-source = "git+https://github.com/adamtc007/dsl?rev=9cf7cb3ae4661742501897ba82622a9834cf8c7c#9cf7cb3ae4661742501897ba82622a9834cf8c7c"
+version = "0.4.0"
+source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
 dependencies = [
  "chrono",
  "serde",
@@ -1933,8 +1933,8 @@ dependencies = [
 
 [[package]]
 name = "semantic-decision-contracts"
-version = "0.3.0"
-source = "git+https://github.com/adamtc007/dsl?rev=9cf7cb3ae4661742501897ba82622a9834cf8c7c#9cf7cb3ae4661742501897ba82622a9834cf8c7c"
+version = "0.4.0"
+source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
 dependencies = [
  "hex",
  "serde",
@@ -1945,8 +1945,8 @@ dependencies = [
 
 [[package]]
 name = "semantic-pack"
-version = "0.3.0"
-source = "git+https://github.com/adamtc007/dsl?rev=9cf7cb3ae4661742501897ba82622a9834cf8c7c#9cf7cb3ae4661742501897ba82622a9834cf8c7c"
+version = "0.4.0"
+source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
 dependencies = [
  "dsl_types",
  "hex",

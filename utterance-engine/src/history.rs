@@ -7,6 +7,7 @@ use semantic_decision_contracts::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::bpmn_board::{BpmnBoardError, ResourceLimitExceeded};
 use crate::bpmn_pack::{
     feedback_source, rule_source, APPLICABILITY_RULE_CODE, ARGUMENT_RULE_CODE,
     COMPILER_REFUSAL_RULE_CODE, EVIDENCE_RULE_CODE, POLICY_HIDDEN_RULE_CODE,
@@ -30,16 +31,25 @@ impl HistoryProjection {
     }
 }
 
-pub(super) fn project(attempts: &[MoveAttemptReceipt]) -> anyhow::Result<HistoryProjection> {
+pub(super) fn project(attempts: &[MoveAttemptReceipt]) -> Result<HistoryProjection, BpmnBoardError> {
     if attempts.len() > MAX_HISTORY_ATTEMPTS {
-        anyhow::bail!(
-            "history projection exceeds the product limit of {MAX_HISTORY_ATTEMPTS} attempts"
-        );
+        return Err(ResourceLimitExceeded {
+            field: "history projection attempts",
+            limit: MAX_HISTORY_ATTEMPTS,
+            actual: attempts.len(),
+        }
+        .into());
     }
     validate_attempt_history(attempts)?;
-    let canonical = serde_json::to_vec(attempts)?;
+    let canonical = serde_json::to_vec(attempts)
+        .map_err(|error| BpmnBoardError::Continuity(error.to_string()))?;
     if canonical.len() > MAX_HISTORY_BYTES {
-        anyhow::bail!("history projection exceeds the product limit of {MAX_HISTORY_BYTES} bytes");
+        return Err(ResourceLimitExceeded {
+            field: "history projection bytes",
+            limit: MAX_HISTORY_BYTES,
+            actual: canonical.len(),
+        }
+        .into());
     }
     let mut hasher = Sha256::new();
     hasher.update(b"bpmn-lite-gameboard-history-v1");
@@ -152,7 +162,91 @@ mod tests {
         let over_limit = (0..=MAX_HISTORY_ATTEMPTS)
             .map(|index| attempt(index, None))
             .collect::<Vec<_>>();
-        assert!(project(&over_limit).is_err());
+        let error = match project(&over_limit) {
+            Ok(_) => panic!("attempts beyond MAX_HISTORY_ATTEMPTS must be refused"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            &error,
+            BpmnBoardError::ResourceLimit(limit)
+                if limit.field == "history projection attempts" && limit.limit == MAX_HISTORY_ATTEMPTS
+        ));
+        // Session usable afterwards: a bounded, legitimate window still projects.
+        assert!(project(&attempts).is_ok());
+    }
+
+    #[test]
+    fn oversized_history_bytes_is_a_typed_resource_limit_refusal() {
+        // receipt() (the only production constructor in this module) derives
+        // rule/feedback content from a tiny fixed catalogue keyed by outcome,
+        // so a realistic receipt never approaches MAX_HISTORY_BYTES on its
+        // own — MAX_HISTORY_ATTEMPTS binds first in practice. project() is a
+        // general-purpose bound on any &[MoveAttemptReceipt] though, so
+        // construct receipts directly through the contract constructor with
+        // large rule-explanation/feedback vectors to reach the byte ceiling
+        // with an attempt count well under MAX_HISTORY_ATTEMPTS, proving the
+        // byte guard is a real, independently reachable code path.
+        fn heavy_attempt(tag: usize) -> MoveAttemptReceipt {
+            let explanations = (0..300)
+                .map(|index| {
+                    semantic_decision_contracts::RuleExplanationId::new(format!(
+                        "{:064x}",
+                        tag * 10_000 + index
+                    ))
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let feedback = explanations
+                .iter()
+                .enumerate()
+                .map(|(index, explanation_id)| {
+                    semantic_decision_contracts::FeedbackOption::new(
+                        semantic_decision_contracts::FeedbackOptionKind::Retry,
+                        None,
+                        semantic_decision_contracts::MessageKey::new(format!(
+                            "feedback.{tag}.{index}"
+                        ))
+                        .unwrap(),
+                        Some(explanation_id.clone()),
+                        semantic_decision_contracts::DisclosureClass::Public,
+                    )
+                })
+                .collect::<Vec<_>>();
+            MoveAttemptReceipt::new(
+                GAMEBOARD_SCHEMA_VERSION,
+                MoveAttemptId::new(format!("heavy-attempt-{tag}")).unwrap(),
+                DesignStateId::new("a".repeat(64)).unwrap(),
+                None,
+                GraphContentHash::new("b".repeat(64)).unwrap(),
+                MoveAttemptOutcome::Incomplete,
+                explanations,
+                feedback,
+                None,
+                None,
+            )
+            .unwrap()
+        }
+
+        let heavy = (0..3).map(heavy_attempt).collect::<Vec<_>>();
+        assert!(
+            heavy.len() < MAX_HISTORY_ATTEMPTS,
+            "must stay under the count limit so the byte limit is what trips"
+        );
+        let error = match project(&heavy) {
+            Ok(_) => panic!(
+                "expected a byte-limit refusal; the fixture serializes to {} bytes",
+                serde_json::to_vec(&heavy).unwrap().len()
+            ),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            &error,
+            BpmnBoardError::ResourceLimit(limit)
+                if limit.field == "history projection bytes" && limit.limit == MAX_HISTORY_BYTES
+        ));
+
+        // Session usable afterwards: a small, legitimate window still projects.
+        assert!(project(&[attempt(0, None)]).is_ok());
     }
 
     #[test]

@@ -148,6 +148,18 @@ impl BpmnMoveGuidance {
     }
 }
 
+/// A product-owned resource-safety bound was exceeded. Distinct from every
+/// other `BpmnBoardError` variant so a caller can react to a resource
+/// refusal (log it, leave the session usable, never retry unmodified)
+/// without string-matching an error message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{field} exceeds the resource limit of {limit} ({actual} supplied)")]
+pub struct ResourceLimitExceeded {
+    pub field: &'static str,
+    pub limit: usize,
+    pub actual: usize,
+}
+
 /// Errors returned while binding a shared decision board to a BPMN position.
 #[derive(Debug, Error)]
 pub enum BpmnBoardError {
@@ -171,6 +183,9 @@ pub enum BpmnBoardError {
     /// A reusable gameboard invariant rejected a compatibility projection.
     #[error(transparent)]
     Gameboard(#[from] GameboardContractError),
+    /// A product-owned resource-safety bound was exceeded.
+    #[error(transparent)]
+    ResourceLimit(#[from] ResourceLimitExceeded),
     /// A semantic board still names an anchor absent from the supplied graph.
     #[error("semantic board anchor '{bpmn_id}' is stale for the supplied graph")]
     StaleBoardAnchor { bpmn_id: String },
@@ -383,8 +398,7 @@ pub fn finalize_bpmn_move_evidence(
 pub fn project_bpmn_attempt_history(
     attempts: &[MoveAttemptReceipt],
 ) -> Result<(String, Vec<MoveAttemptReceipt>), BpmnBoardError> {
-    let projection = crate::history::project(attempts)
-        .map_err(|error| BpmnBoardError::Continuity(error.to_string()))?;
+    let projection = crate::history::project(attempts)?;
     Ok((
         projection.hash().as_str().to_string(),
         projection.attempts().to_vec(),

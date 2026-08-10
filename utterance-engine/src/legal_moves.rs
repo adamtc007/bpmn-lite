@@ -14,11 +14,17 @@ use semantic_decision_contracts::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::bpmn_board::{BpmnBoardError, BpmnBoundProposal, BpmnWorkbookPreview};
+use crate::bpmn_board::{BpmnBoardError, BpmnBoundProposal, BpmnWorkbookPreview, ResourceLimitExceeded};
 use crate::bpmn_pack::{candidate_spec, rule_source, BpmnCandidateSpec, APPLICABILITY_RULE_CODE};
 use crate::game_state::BpmnGameState;
 
 const ANCHOR_PROVENANCE: &str = "bpmn.position.anchor.v1";
+
+/// Maximum anchor x candidate pairs `enumerate` will consider before
+/// refusing. Bounds enumeration amplification and the expensive per-candidate
+/// compiler preview work that follows each one, independent of the tighter
+/// `MAX_LEGAL_MOVES` cap the contract layer applies to the resulting set.
+const MAX_ENUMERATION_CANDIDATES: usize = 4096;
 
 pub(crate) const MATERIALIZED_CANDIDATE_IDS: &[&str] = &[
     "op.append_node",
@@ -60,9 +66,19 @@ pub(crate) fn enumerate(
     let oracle = PositionalLegality { dag: state.dag() };
     let mut admitted = Vec::new();
     let mut compiler_refused = Vec::new();
+    let mut considered = 0_usize;
 
     for (key, bpmn_id) in state.anchors()? {
         for raw in oracle.legal_candidates(Some(&key)) {
+            considered += 1;
+            if considered > MAX_ENUMERATION_CANDIDATES {
+                return Err(ResourceLimitExceeded {
+                    field: "legal move enumeration candidates",
+                    limit: MAX_ENUMERATION_CANDIDATES,
+                    actual: considered,
+                }
+                .into());
+            }
             if state.board().candidate(raw.id.canonical_id()).is_none() {
                 continue;
             }
@@ -979,6 +995,70 @@ mod tests {
                 .iter()
                 .map(|item| (&item.candidate_id, &item.anchor, &item.diagnostics))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn enumeration_amplification_beyond_the_limit_is_a_typed_resource_limit_refusal() {
+        let start = NodeKey(Uuid::from_u128(1));
+        let mut dag = DesignerDag::new("phase2-amplification");
+        dag.seed(
+            start,
+            IRNode::Start { id: "start".into() },
+            Provenance::default(),
+        )
+        .unwrap();
+        let mut anchor = start;
+        for index in 0..600_u128 {
+            let key = NodeKey(Uuid::from_u128(1000 + index));
+            dag = apply(
+                &dag,
+                Operation::AppendNode {
+                    anchor,
+                    key,
+                    node: IRNode::ServiceTask {
+                        id: format!("task_{index}"),
+                        name: format!("Task {index}"),
+                        task_type: "noop".into(),
+                    },
+                    edge_id: format!("flow_{index}"),
+                },
+                Provenance::default(),
+            )
+            .unwrap()
+            .candidate;
+            anchor = key;
+        }
+        // Whole-graph (unanchored) board: enumerate walks every node, so this
+        // large a graph is the amplification path the limit exists to bound.
+        let board =
+            build_bpmn_semantic_board(&dag, None, &"a".repeat(64), &PolicyFilter::default())
+                .unwrap();
+        let state = BpmnGameState::new(&dag, &board).unwrap();
+        let result = enumerate(&state, &GraphContentHash::new("b".repeat(64)).unwrap());
+        let error = match result {
+            Ok(_) => panic!("600 nodes must exceed the enumeration amplification limit"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            &error,
+            BpmnBoardError::ResourceLimit(limit)
+                if limit.field == "legal move enumeration candidates"
+                    && limit.limit == MAX_ENUMERATION_CANDIDATES
+        ));
+
+        // Session usable afterwards: a small, legitimate graph still enumerates.
+        let (small_dag, task) = fixture();
+        let small_board = build_bpmn_semantic_board(
+            &small_dag,
+            Some((task, "task")),
+            &"a".repeat(64),
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        let small_state = BpmnGameState::new(&small_dag, &small_board).unwrap();
+        assert!(
+            enumerate(&small_state, &GraphContentHash::new("b".repeat(64)).unwrap()).is_ok()
         );
     }
 }

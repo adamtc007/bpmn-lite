@@ -13,11 +13,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
+
+/// Explicit, product-owned request body ceiling. Axum's unconfigured default
+/// is 2 MiB; legitimate whole-graph/session-save payloads can exceed that, so
+/// this is set generously higher while still bounding decode allocation for
+/// an attacker-supplied body (Gate 8 "decode allocations" resource limit).
+const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -830,6 +836,7 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/bpmn/instances/:id/advance",
             post(advance_instance_endpoint),
         )
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
 
@@ -12180,5 +12187,37 @@ mod tests {
             last["state"], "Completed",
             "spawned instance must complete within 12 advance rounds: {last:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_request_body_is_refused_and_the_server_stays_usable() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let oversized_body = "x".repeat(MAX_REQUEST_BODY_BYTES + 1);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/dsl/sessions")
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(oversized_body))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "a body over the explicit product limit must be refused, not decoded"
+        );
+
+        // The server stays usable: a legitimate request on the same router
+        // still succeeds after the oversized-body refusal.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                "/api/dsl/sessions",
+                serde_json::json!({ "name": "post-refusal session", "dsl_source": "" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
     }
 }
