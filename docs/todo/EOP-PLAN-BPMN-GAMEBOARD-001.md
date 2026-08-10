@@ -1,11 +1,29 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.6
+**Version:** v0.7
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
-**Date:** 2026-08-07
+**Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.7 owner-authorized amendment:** the session unit Sage and the REPL author and
+converse in is the pack-level runbook — a template invocation (explicit, power-user) or
+a matched motif (inferred, generic-utterance) — not the atomic DSL verb. This clarifies
+emphasis, not authority: every step inside a runbook still resolves through the
+unchanged atomic preview/compiler-admission/ratification path (I-4, I-12). It is chess,
+and the sealed pack DAG (SESE, exact pins) is the rulebook, not the line: the DAG bounds
+which move *combinations* are structurally possible, but is not itself a line-legality
+oracle. A `CompoundPlan`/motif/template line must be chain-previewed — each hypothetical
+step re-verified against the *resulting* position of the prior hypothetical step through
+the same non-mutating admission boundary — before any step is offered; reachable-in-the-
+DAG is necessary but not sufficient, the same standard the keystone already sets for a
+single move. Phase 9 rollout gates by utterance-style/user-population in addition to
+capability surface: the deterministic power-user runbook-dictation tier is the REPL
+baseline and must be live and stable before generic non-power-user, Candle/SLM-assisted
+utterance interpretation is exposed to that population. This does not reorder Phase 0-6
+engineering, which builds the complete evidence stack — deterministic and statistical —
+regardless of rollout sequencing, and does not block Phase 7.
 
 **v0.4 amendment:** capability/crate visibility is a release boundary. Only audited
 facades and stable contracts are `pub`; implementation defaults to `pub(crate)` or
@@ -245,6 +263,10 @@ Responsibilities:
 - calculate graph-local and motif features;
 - preview moves through the existing mutation machinery;
 - prove preview admission through the production parser/compiler/verifier path;
+- chain-preview a pack-level runbook line (template invocation or matched motif) by
+  walking each hypothetical step's *resulting* position through the same non-mutating
+  preview/admission path, proving the whole line before any step is offered — not
+  merely that each move is legal in isolation against the current real position;
 - translate a ratified move into the existing `AstMutator` operation.
 
 ### 4.3 Host/session contracts
@@ -546,25 +568,35 @@ Widen the current semantic candidate board into concrete, position-bound graph m
    bindings, `LegalMoveId`, preview, compiler admission result and receipt as the
    palette/language path. Permit a lower-level audited edit only when no admitted
    semantic counterpart exists or proof fails, with a typed non-equivalence reason.
-10. Add completeness checks between semantic candidates, `OperationKind`, binder
+10. Add a chain-preview API over an ordered list of hypothetical moves (a template
+    invocation or a matched motif line): apply move 1's preview to a clone, derive the
+    resulting hypothetical `DesignPosition`, enumerate and preview move 2 against *that*
+    position, and so on. The sealed pack DAG (SESE, exact pins) bounds which
+    combinations are structurally possible but is not a line-legality oracle; each step
+    must independently clear the same production parse/compile/admission boundary as a
+    single-move preview. Stop and typedly refuse the line at the first step that fails,
+    rather than offering a partially-verified remainder.
+11. Add completeness checks between semantic candidates, `OperationKind`, binder
     support and mutation implementations.
-11. Retain rule/application facts for both admitted and requested-but-inapplicable
+12. Retain rule/application facts for both admitted and requested-but-inapplicable
     candidate shapes so `explain_move` can say why an attempt does not fit without
     adding it to the legal move board.
-12. Map known `PositionalLegality`, binder and compiler diagnostics to stable rule codes;
+13. Map known `PositionalLegality`, binder and compiler diagnostics to stable rule codes;
     leave unknown diagnostics typed and unmapped rather than fabricating guidance.
-13. Generate recovery options only from the current legal move set or an explicit
+14. Generate recovery options only from the current legal move set or an explicit
     governed focus/context transition.
-14. Implement a compact abstract design-game reference model covering focus, move
+15. Implement a compact abstract design-game reference model covering focus, move
     availability, binding state, graph revision, apply/refuse and correction linkage.
     It must not reuse `AstMutator` or compiler internals.
-15. Add structured fuzz targets for legal-move enumeration and preview compilation.
-    Byte tapes generate graphs, focus changes, bindings, legal and deliberately wrong
-    attempts; compare abstract outcomes after every operation.
-16. Keep `game_state`, `legal_moves`, preview and operation-specific implementations
+16. Add structured fuzz targets for legal-move enumeration and preview compilation,
+    including chain-preview: byte tapes generate graphs, focus changes, bindings, legal
+    and deliberately wrong attempts, and multi-step lines that go legal-legal-illegal at
+    an arbitrary depth; compare abstract outcomes after every operation and confirm the
+    line refuses at exactly the first illegal step.
+17. Keep `game_state`, `legal_moves`, preview and operation-specific implementations
     private or `pub(crate)`. Export only named gameboard/BPMN adapter facade operations
     and stable contracts from crate roots.
-17. Place generators/reference models in fuzz or non-release test-support ownership;
+18. Place generators/reference models in fuzz or non-release test-support ownership;
     do not expose graph builders or unchecked constructors from production crates.
 
 ### Primary files
@@ -593,12 +625,18 @@ Widen the current semantic candidate board into concrete, position-bound graph m
 - inapplicable attempt returns a non-transition receipt and legal recovery options;
 - policy-hidden attempt returns disclosure-safe feedback without naming hidden pieces;
 - compiler-refused preview preserves graph revision and emits a typed diagnostic;
-- fuzz arbitrary graphs/focus against move enumeration and preview.
+- fuzz arbitrary graphs/focus against move enumeration and preview;
+- chain-preview: an all-legal line previews end to end; a line that goes illegal at step
+  N refuses exactly at N and offers nothing beyond it; chain-preview of a single-step
+  line is identical to ordinary single-move preview.
 
 ### Gate 2
 
 - Palette endpoint and language path observe the same move-set hash.
 - Every offered fully bound move dry-compiles.
+- A `CompoundPlan`/motif/template line is never offered unless every step has been
+  independently chain-previewed against its predecessor's hypothetical resulting
+  position; reachable-in-the-DAG is necessary but not sufficient.
 - Every existing executable semantic candidate maps to at least one tested move shape.
 - No graph mutation or model call is needed to enumerate the legal move board.
 - Sage can retrieve a typed explanation and recovery options for every governed
@@ -694,6 +732,13 @@ complete per-move evidence vector.
 ### Purpose
 
 Represent the user's evolving plan without pretending to know a complete target graph.
+Motifs and templates are the two pack-level mechanisms for this: a motif is the
+system's *inferred* hypothesis of the runbook a less-explicit user might be mid-way
+through; a template (already settled — CLAUDE.md "Template ≠ macro") is a Sage-authored,
+compile-validated, hash-frozen runbook the power user *invokes* explicitly. Both are the
+pack-level unit Sage and the REPL author and converse in; neither gains apply authority
+of its own — every step still resolves through the unchanged atomic preview/admission/
+ratification path (I-4, I-12).
 
 ### Work
 
@@ -751,6 +796,9 @@ Represent the user's evolving plan without pretending to know a complete target 
 - Repeated failure can change explanation/clarification strategy without weakening the
   governing rule.
 - Belief removal has no effect on legality or the ability to use the palette.
+- A template invocation and a matched motif expose the same typed pack-level runbook
+  view through Sage's API — differing only in provenance (asserted vs. inferred), not
+  in shape or in the atomic ratification path underneath.
 - Resource bounds are enforced.
 - Stateful fuzzing reaches every motif lifecycle and correction outcome, reproduces the
   final state from its minimized tape, and cannot produce unbounded feedback/history
@@ -777,7 +825,11 @@ Choose the safest useful interaction, not merely the highest scalar score.
    - `OutOfScope`;
    - `ChangeFocusOrContext`;
    - `Escalate`;
-   - `CompoundPlan` containing non-authoritative motif steps.
+   - `CompoundPlan` containing non-authoritative motif/template steps, each of which
+     must already be chain-previewed (Phase 2 item 10) before the disposition is
+     offered — a line whose step N fails chain-preview is truncated to N-1 or, if N=1,
+     falls back to a single-move disposition; it is never offered with an unverified
+     tail.
 3. Select clarification questions using expected information gain across unresolved
    move, anchor and argument dimensions.
 4. Generate questions only from admitted contrasts and argument schemas.
@@ -819,6 +871,9 @@ Choose the safest useful interaction, not merely the highest scalar score.
 - Every unsuccessful-attempt fixture yields a truthful user response and at least one
   useful next action or an honest terminal explanation.
 - No feedback option names a hidden or currently illegal move.
+- No `CompoundPlan` step is ever offered without a chain-preview verified against its
+  predecessor's actual hypothetical resulting position; reachable-in-the-DAG alone never
+  substitutes for that verification.
 - A correction is itself previewed, ratified and compiler-admitted.
 - Workbook completion, preview, ratification and compiler admission form one stale-safe
   state machine.
@@ -1090,6 +1145,25 @@ Measure by graph size and move-board size:
 
 There is no `auto_apply` stage.
 
+### User-population gating
+
+The six stages above gate *capability surface*. A second, orthogonal axis gates
+*utterance style / user population*, per the v0.7 amendment:
+
+1. `power_user_dictation`: the deterministic power-user tier — session DSL dictated as
+   pack-level runbooks (template invocation) or literal atomic verbs, resolved through
+   the exact/lexical evidence lane without requiring Candle/SLM interpretation. This is
+   the REPL baseline and may progress through the capability-surface stages above on its
+   own schedule.
+2. `generic_utterance`: non-power-user, underspecified or ambiguous utterances requiring
+   Candle/SLM-assisted evidence and motif inference. Exposure to this population at any
+   capability-surface stage requires the power-user tier to already be live and stable
+   at that same or a later stage — a generic-utterance user is never the first to reach
+   a given capability surface.
+
+This does not change Phase 0-6 engineering, which builds the complete deterministic and
+statistical evidence stack regardless of which population is currently exposed to it.
+
 ### Promotion controls
 
 - real adjudicated evidence only;
@@ -1118,6 +1192,8 @@ After the rollback window:
 ### Gate 9
 
 - Ratified real-session thresholds pass for the intended rollout surface.
+- No `generic_utterance` population is exposed to a capability-surface stage the
+  `power_user_dictation` population has not already reached and stabilized at.
 - Rollback rehearsal passes.
 - No legacy production call path remains unintentionally reachable.
 - Documentation, API examples, receipts and deployment configuration describe the
