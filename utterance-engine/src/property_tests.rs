@@ -11,6 +11,305 @@ use semantic_decision_contracts::{
 use crate::contract::{rank_canonically, FiniteScore, RankedCandidate};
 use crate::exact::{governed_exact, ExactMatch};
 
+mod gameboard {
+    //! Property cements for the design-game model (Phase 8, EOP-PLAN-BPMN-
+    //! GAMEBOARD-001 §14). Each case grounds directly in `DesignPosition::
+    //! new`'s own documented field lists (`move_set_hash` over graph_revision
+    //! / semantic_snapshot / focus / policy / compiler_profile / move ids;
+    //! `state_id` additionally over history_hash) rather than re-deriving
+    //! them - the goal is to catch a future accidental change to those field
+    //! lists, not to reimplement the hashing.
+
+    use proptest::prelude::*;
+
+    use bpmn_lite_compiler::IRNode;
+    use designer_graph::ops::{apply, Operation};
+    use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
+    use semantic_decision_contracts::{
+        DesignFocus, FiniteScore as GameboardFiniteScore, GraphElementRef, MoveAttemptId,
+        MoveEvidence, ProducerIdentity, GAMEBOARD_SCHEMA_VERSION,
+    };
+    use uuid::Uuid;
+
+    use crate::board::PolicyFilter;
+    use crate::bpmn_board::{
+        build_bpmn_design_position, build_bpmn_semantic_board, decide_bpmn_game_disposition,
+    };
+
+    fn anchored_task() -> (DesignerDag, NodeKey) {
+        let start = NodeKey(Uuid::from_u128(1));
+        let task = NodeKey(Uuid::from_u128(2));
+        let mut dag = DesignerDag::new("property-fuzz");
+        dag.seed(
+            start,
+            IRNode::Start { id: "start".into() },
+            Provenance::default(),
+        )
+        .unwrap();
+        dag = apply(
+            &dag,
+            Operation::AppendNode {
+                anchor: start,
+                key: task,
+                node: IRNode::ServiceTask {
+                    id: "task-1".into(),
+                    name: "Review".into(),
+                    task_type: "review".into(),
+                },
+                edge_id: "flow-1".into(),
+            },
+            Provenance::default(),
+        )
+        .unwrap()
+        .candidate;
+        (dag, task)
+    }
+
+    const ANCHOR_CANDIDATES: [&str; 13] = [
+        "op.attach_guard",
+        "op.attach_rearming_guard",
+        "op.connect",
+        "op.create_inclusive_region",
+        "op.create_multi_instance_region",
+        "op.create_parallel_region",
+        "op.insert_after",
+        "op.insert_before",
+        "op.replace_node",
+        "prod.interrupting_timeout",
+        "prod.non_interrupting_notification",
+        "prod.reminder_then_escalate",
+        "prod.request_and_wait",
+    ];
+
+    fn policy_from_mask(mask: u16) -> PolicyFilter {
+        let mut filter = PolicyFilter::default();
+        for (index, candidate) in ANCHOR_CANDIDATES.iter().enumerate() {
+            if mask & (1 << index) != 0 {
+                filter.denied.insert((*candidate).to_string());
+            }
+        }
+        filter
+    }
+
+    proptest! {
+        #[test]
+        fn legal_move_set_is_deterministic_and_canonically_ordered_by_move_id(
+            revision_suffix in "[a-f0-9]{4}",
+        ) {
+            let (dag, task) = anchored_task();
+            let revision = format!("{}{}", "a".repeat(60), revision_suffix);
+            let board = build_bpmn_semantic_board(
+                &dag,
+                Some((task, "task-1")),
+                &revision,
+                &PolicyFilter::default(),
+            )
+            .unwrap();
+            let build = || {
+                build_bpmn_design_position(
+                    &dag,
+                    &board,
+                    &revision,
+                    &"b".repeat(64),
+                    "property-compiler-v1",
+                    &"c".repeat(64),
+                    DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+                    None,
+                )
+                .unwrap()
+            };
+            let first = build();
+            let second = build();
+            prop_assert_eq!(&first, &second);
+
+            let ids = first
+                .legal_moves()
+                .iter()
+                .map(|legal_move| legal_move.move_id().as_str().to_string())
+                .collect::<Vec<_>>();
+            let mut sorted = ids.clone();
+            sorted.sort();
+            prop_assert_eq!(ids, sorted);
+        }
+
+        #[test]
+        fn move_set_hash_is_sensitive_to_focus_policy_revision_and_profile_drift(
+            mask_a in 0u16..(1 << ANCHOR_CANDIDATES.len()),
+            mask_b in 0u16..(1 << ANCHOR_CANDIDATES.len()),
+            profile_a in "[a-z]{3,8}",
+            profile_b in "[a-z]{3,8}",
+        ) {
+            prop_assume!(mask_a != mask_b);
+            prop_assume!(profile_a != profile_b);
+            let (dag, task) = anchored_task();
+            let revision_a = "a".repeat(64);
+            let revision_b = "b".repeat(64);
+
+            let position = |revision: &str, mask: u16, profile: &str, focus_id: &str| {
+                let filter = policy_from_mask(mask);
+                let board =
+                    build_bpmn_semantic_board(&dag, Some((task, "task-1")), revision, &filter)
+                        .unwrap();
+                build_bpmn_design_position(
+                    &dag,
+                    &board,
+                    revision,
+                    &"b".repeat(64),
+                    profile,
+                    &"c".repeat(64),
+                    DesignFocus::element(GraphElementRef::new(focus_id).unwrap()),
+                    None,
+                )
+                .unwrap()
+            };
+
+            let base = position(&revision_a, mask_a, &profile_a, "task-1");
+
+            // Policy drift alone (revision/profile/focus held fixed).
+            let policy_drift = position(&revision_a, mask_b, &profile_a, "task-1");
+            prop_assert_ne!(base.move_set_hash(), policy_drift.move_set_hash());
+
+            // Compiler-profile drift alone.
+            let profile_drift = position(&revision_a, mask_a, &profile_b, "task-1");
+            prop_assert_ne!(base.move_set_hash(), profile_drift.move_set_hash());
+
+            // Graph-revision drift alone.
+            let revision_drift = position(&revision_b, mask_a, &profile_a, "task-1");
+            prop_assert_ne!(base.move_set_hash(), revision_drift.move_set_hash());
+
+            // Focus drift alone: changes move_set_hash but never the legal
+            // moves themselves, since the board's own candidate set (not
+            // `DesignFocus`) determines `legal_moves()`.
+            let focus_drift = position(&revision_a, mask_a, &profile_a, "start");
+            prop_assert_ne!(base.move_set_hash(), focus_drift.move_set_hash());
+            prop_assert_eq!(base.legal_moves(), focus_drift.legal_moves());
+        }
+
+        #[test]
+        fn history_hash_never_changes_legal_moves_or_move_set_hash(
+            history_a in "[a-f0-9]{64}",
+            history_b in "[a-f0-9]{64}",
+        ) {
+            prop_assume!(history_a != history_b);
+            let (dag, task) = anchored_task();
+            let revision = "a".repeat(64);
+            let board = build_bpmn_semantic_board(
+                &dag,
+                Some((task, "task-1")),
+                &revision,
+                &PolicyFilter::default(),
+            )
+            .unwrap();
+            let position = |history: &str| {
+                build_bpmn_design_position(
+                    &dag,
+                    &board,
+                    &revision,
+                    &"b".repeat(64),
+                    "property-compiler-v1",
+                    history,
+                    DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+                    None,
+                )
+                .unwrap()
+            };
+            let first = position(&history_a);
+            let second = position(&history_b);
+            // The position's own content identity still differs (history is
+            // part of `state_id`) ...
+            prop_assert_ne!(first.state_id(), second.state_id());
+            // ... but legality itself - what the palette actually offers -
+            // must never be a function of retained history/belief.
+            prop_assert_eq!(first.legal_moves(), second.legal_moves());
+            prop_assert_eq!(first.move_set_hash(), second.move_set_hash());
+        }
+
+        #[test]
+        fn off_board_duplicate_or_incomplete_evidence_is_always_refused(
+            mutation in 0u8..3,
+            fabricated_suffix in "[a-f0-9]{8}",
+        ) {
+            let (dag, task) = anchored_task();
+            let revision = "a".repeat(64);
+            let board = build_bpmn_semantic_board(
+                &dag,
+                Some((task, "task-1")),
+                &revision,
+                &PolicyFilter::default(),
+            )
+            .unwrap();
+            let position = build_bpmn_design_position(
+                &dag,
+                &board,
+                &revision,
+                &"b".repeat(64),
+                "property-compiler-v1",
+                &"c".repeat(64),
+                DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+                None,
+            )
+            .unwrap();
+            let belief = semantic_decision_contracts::DesignBelief::new(
+                GAMEBOARD_SCHEMA_VERSION,
+                position.state_id().clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                ProducerIdentity::new("property.empty-belief.v1").unwrap(),
+            )
+            .unwrap();
+            let evidence_for = |move_id: &semantic_decision_contracts::LegalMoveId| {
+                MoveEvidence::new(
+                    GAMEBOARD_SCHEMA_VERSION,
+                    move_id.clone(),
+                    Vec::new(),
+                    GameboardFiniteScore::new(0.1).unwrap(),
+                    GameboardFiniteScore::new(0.1).unwrap(),
+                    Vec::new(),
+                    ProducerIdentity::new("property.evidence.v1").unwrap(),
+                )
+                .unwrap()
+            };
+            let mut evidence = position
+                .legal_moves()
+                .iter()
+                .map(|legal_move| evidence_for(legal_move.move_id()))
+                .collect::<Vec<_>>();
+            match mutation {
+                0 => {
+                    // Incomplete: drop one entry.
+                    evidence.pop();
+                }
+                1 => {
+                    // Duplicate: repeat the first entry, still missing another.
+                    let first = evidence[0].clone();
+                    evidence.pop();
+                    evidence.push(first);
+                }
+                _ => {
+                    // Off-board: append evidence for a move never on this
+                    // position, on top of an otherwise-complete set.
+                    let off_board = semantic_decision_contracts::LegalMoveId::new(
+                        "0".repeat(56) + &fabricated_suffix,
+                    )
+                    .unwrap();
+                    evidence.push(evidence_for(&off_board));
+                }
+            }
+            let result = decide_bpmn_game_disposition(
+                &board,
+                &position,
+                &evidence,
+                &belief,
+                "property fuzz utterance",
+                MoveAttemptId::new("attempt-property-off-board").unwrap(),
+                &[],
+            );
+            prop_assert!(result.is_err());
+        }
+    }
+}
+
 fn candidate(id: &str, phrase: &str) -> CandidateSemanticSlice {
     CandidateSemanticSlice {
         canonical_id: CanonicalCandidateId::new(id).unwrap(),

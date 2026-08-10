@@ -1,11 +1,26 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.10
+**Version:** v0.11
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.11 amendment — Phase 8 fuzz-target and property-test tranches closed:** both
+`docs/receipts/semantic-gameboard-phase8-fuzz-target-tranche-2026-08-10.md` (the 5
+missing fuzz targets) and
+`docs/receipts/semantic-gameboard-phase8-property-tests-2026-08-10.md` (4 new
+`proptest!` cases grounding "legal move set deterministic/canonically ordered",
+"move-set hash sensitive to focus/policy/revision/profile drift", "history/belief
+cannot change legality", "off-board/duplicate/incomplete evidence always refused") are
+now closed. The property-test receipt corrects an overstatement in the fuzz-target
+receipt: the pre-existing `property_tests.rs` cases all test the pre-gameboard
+compatibility surface, not the gameboard model — none of the ~15 Phase 8 property
+bullets had genuine coverage before this tranche; 4 are closed now, ~11 remain open
+(several already have *some* non-`proptest!` coverage from unit tests or the fuzz
+tranche, not re-audited here). Performance budgets and PostgreSQL fault-tape replay
+remain untouched.
 
 **v0.10 amendment — Phase 8 scope rulings:** Phase 7 closed GREEN
 (`docs/receipts/semantic-gameboard-phase7-gate-2026-08-10.md`); Phase 8 (§14) starts
