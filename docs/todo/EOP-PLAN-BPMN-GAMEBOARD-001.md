@@ -1,11 +1,22 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.12
+**Version:** v0.13
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.13 amendment — performance-budget measurement harness added:**
+`docs/receipts/semantic-gameboard-phase8-perf-budget-2026-08-10.md` adds
+`utterance-engine/benches/gameboard_perf.rs`, closing the *measurement* half of
+Phase 8's performance-budget bullet (legal move enumeration, full disposition, belief
+update, rule/feedback retrieval, serialized position/evidence size). It does not close
+Gate 8's "P95 latency meets the ratified budget" - no budget numbers are ratified
+anywhere in this repo, and inventing thresholds unilaterally would be deciding a fork
+that isn't this agent's to decide. Preview-compilation latency and learned-lane
+scoring latency are named as deliberately deferred, with reasons, not silently
+dropped. Only PostgreSQL fault-tape replay remains completely untouched in Phase 8.
 
 **v0.12 amendment — remaining Phase 8 property bullets audited and closed:**
 `docs/receipts/semantic-gameboard-phase8-property-audit-2026-08-10.md` audits the 11

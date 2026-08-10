@@ -79,5 +79,9 @@ required-features = ["q9-capture"]
 name = "fit_phase6_structured_baseline"
 required-features = ["q9-capture"]
 
+[[bench]]
+name = "gameboard_perf"
+harness = false
+
 [lints]
 workspace = true
