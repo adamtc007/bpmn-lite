@@ -45,7 +45,7 @@
     "telegraphic": 646,
     "terse": 1193
   },
-  "retriever": "tier0.lexical.v1",
+  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@semantic-embedder:5ac7da7",
   "spec": "BPMN semantic mapper corpus v3 / Phase 6",
   "totals": {
     "context_pairs": 386,

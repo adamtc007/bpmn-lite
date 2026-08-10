@@ -14,7 +14,7 @@
       "text": "wire the rejected path back to... actually where does rejected go",
       "tier0_top1": "op.create_branch",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_branch",
+      "tier1_top1": "op.replace_node",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -29,8 +29,8 @@
       "text": "give the timeout its own route",
       "tier0_top1": "op.create_branch",
       "tier0_top1_matches_hypothesis": true,
-      "tier1_top1": "op.create_branch",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.replace_node",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -59,7 +59,7 @@
       "text": "park this until the document shows up",
       "tier0_top1": "prod.interrupting_timeout",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.insert_after",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -72,9 +72,9 @@
       "original_hypothesis": "op.create_multi_instance_region",
       "seq": 18,
       "text": "do this for each director",
-      "tier0_top1": "prod.parallel_checks_and_join",
+      "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "prod.for_each_with_ceiling",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -89,7 +89,7 @@
       "text": "when their answer lands, wake this up",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": true,
-      "tier1_top1": "op.attach_guard",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -119,7 +119,7 @@
       "text": "chase them and also loop legal in if it's high risk",
       "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_inclusive_region",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     }
   ],
@@ -134,12 +134,12 @@
     "declarations": {
       "n": 2,
       "tier0_top1_matches_hypothesis": 1,
-      "tier1_top1_matches_hypothesis": 2
+      "tier1_top1_matches_hypothesis": 1
     },
     "guards_rollback": {
       "n": 4,
       "tier0_top1_matches_hypothesis": 1,
-      "tier1_top1_matches_hypothesis": 2
+      "tier1_top1_matches_hypothesis": 1
     },
     "mi_collections": {
       "n": 3,
@@ -149,17 +149,17 @@
     "off_board": {
       "n": 5,
       "tier0_top1_matches_hypothesis": 0,
-      "tier1_top1_matches_hypothesis": 2
+      "tier1_top1_matches_hypothesis": 0
     },
     "routing_xor": {
       "n": 7,
       "tier0_top1_matches_hypothesis": 2,
-      "tier1_top1_matches_hypothesis": 4
+      "tier1_top1_matches_hypothesis": 1
     },
     "vague_compound": {
       "n": 4,
       "tier0_top1_matches_hypothesis": 0,
-      "tier1_top1_matches_hypothesis": 1
+      "tier1_top1_matches_hypothesis": 0
     },
     "waits_timers_reminders": {
       "n": 6,
@@ -181,7 +181,7 @@
       "text": "split here on the risk outcome",
       "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_parallel_region",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -196,8 +196,8 @@
       "text": "add another way out of this check",
       "tier0_top1": "op.create_branch",
       "tier0_top1_matches_hypothesis": true,
-      "tier1_top1": "op.create_branch",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.delete_subgraph",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -226,7 +226,7 @@
       "text": "wire the rejected path back to... actually where does rejected go",
       "tier0_top1": "op.create_branch",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_branch",
+      "tier1_top1": "op.replace_node",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -241,7 +241,7 @@
       "text": "branch this three ways",
       "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_inclusive_region",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -256,8 +256,8 @@
       "text": "link the upload straight to review",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.connect",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.insert_before",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -271,8 +271,8 @@
       "text": "give the timeout its own route",
       "tier0_top1": "op.create_branch",
       "tier0_top1_matches_hypothesis": true,
-      "tier1_top1": "op.create_branch",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.replace_node",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -286,7 +286,7 @@
       "text": "wait a week then chase",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "prod.interrupting_timeout",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -331,7 +331,7 @@
       "text": "if nothing comes back by Friday, kill it",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.attach_guard",
+      "tier1_top1": "op.replace_node",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -346,7 +346,7 @@
       "text": "park this until the document shows up",
       "tier0_top1": "prod.interrupting_timeout",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.insert_after",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -361,7 +361,7 @@
       "text": "race the upload against ten days",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "prod.interrupting_timeout",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -376,7 +376,7 @@
       "text": "if the service dies mid-flight, unwind the lot",
       "tier0_top1": "prod.interrupting_timeout",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.delete_subgraph",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -391,8 +391,8 @@
       "text": "watch for a cancel the whole time this is running",
       "tier0_top1": "prod.interrupting_timeout",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.attach_guard",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.create_multi_instance_region",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -406,7 +406,7 @@
       "text": "on failure put everything back how it was but keep count of the tries",
       "tier0_top1": "prod.reminder_then_escalate",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.replace_node",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -434,9 +434,9 @@
       "original_hypothesis": "op.create_multi_instance_region",
       "seq": 18,
       "text": "do this for each director",
-      "tier0_top1": "prod.parallel_checks_and_join",
+      "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "prod.for_each_with_ceiling",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -445,14 +445,14 @@
       "class_id": "mid_sequence_task",
       "dispute_note": "",
       "disputed": false,
-      "hypothesis_label": "prod.for_each_with_ceiling",
-      "original_hypothesis": "prod.for_each_with_ceiling",
+      "hypothesis_label": "op.create_multi_instance_region",
+      "original_hypothesis": "op.create_multi_instance_region",
       "seq": 19,
       "text": "one request per signatory, cap it at ten",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
       "tier1_top1": "op.create_multi_instance_region",
-      "tier1_top1_matches_hypothesis": false
+      "tier1_top1_matches_hypothesis": true
     },
     {
       "adjudicated": false,
@@ -464,10 +464,10 @@
       "original_hypothesis": "abstain.none_of_the_above",
       "seq": 20,
       "text": "what happens if the list is empty",
-      "tier0_top1": "prod.for_each_with_ceiling",
+      "tier0_top1": "op.insert_before",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "abstain.none_of_the_above",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.create_multi_instance_region",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -496,7 +496,7 @@
       "text": "when their answer lands, wake this up",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": true,
-      "tier1_top1": "op.attach_guard",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -526,8 +526,8 @@
       "text": "give this guard five strikes",
       "tier0_top1": "op.set_guard_trigger",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.set_guard_budget",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.delete_subgraph",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -556,8 +556,8 @@
       "text": "loop back until it passes",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "abstain.none_of_the_above",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.create_multi_instance_region",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -571,7 +571,7 @@
       "text": "add a compensation handler",
       "tier0_top1": "op.attach_guard",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.attach_rearming_guard",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -586,7 +586,7 @@
       "text": "start this workflow whenever an email arrives",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.insert_after",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -601,7 +601,7 @@
       "text": "retry forever, every hour",
       "tier0_top1": "op.set_guard_trigger",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.set_guard_budget",
+      "tier1_top1": "op.set_guard_trigger",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -616,8 +616,8 @@
       "text": "just call out to a REST endpoint from here",
       "tier0_top1": "prod.request_and_wait",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "abstain.none_of_the_above",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.insert_before",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -631,7 +631,7 @@
       "text": "make this more robust",
       "tier0_top1": "op.replace_node",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.replace_node",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -646,7 +646,7 @@
       "text": "chase them and also loop legal in if it's high risk",
       "tier0_top1": "op.create_inclusive_region",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.create_inclusive_region",
+      "tier1_top1": "op.create_multi_instance_region",
       "tier1_top1_matches_hypothesis": false
     },
     {
@@ -661,8 +661,8 @@
       "text": "the usual document dance for a new fund",
       "tier0_top1": "op.insert_before",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "abstain.none_of_the_above",
-      "tier1_top1_matches_hypothesis": true
+      "tier1_top1": "op.insert_before",
+      "tier1_top1_matches_hypothesis": false
     },
     {
       "adjudicated": false,
@@ -676,7 +676,7 @@
       "text": "tidy this up",
       "tier0_top1": "op.replace_node",
       "tier0_top1_matches_hypothesis": false,
-      "tier1_top1": "op.delete_subgraph",
+      "tier1_top1": "op.insert_before",
       "tier1_top1_matches_hypothesis": false
     }
   ],

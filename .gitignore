@@ -13,3 +13,9 @@ utterance-engine/train_py/bundles/*/model.safetensors
 utterance-engine/train_py/bundles/*/tokenizer.json
 utterance-engine/train_py/train_run.log
 utterance-engine/train_py/__pycache__/
+
+# macOS Finder metadata — never intentionally tracked
+.DS_Store
+
+# Generated training corpus, too large for git (190MB+, exceeds GitHub's 100MB limit)
+utterance-engine/seed/corpus_v3/bpmn-semantic-v3-shadow.jsonl

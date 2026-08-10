@@ -1,0 +1,61 @@
+device: mps
+=== modernbert-base (answerdotai/ModernBERT-base@8949b909) pooling=mean ===
+Loading weights:   0%|          | 0/134 [00:00<?, ?it/s]Loading weights: 100%|██████████| 134/134 [00:00<00:00, 18452.24it/s]
+[transformers] [1mModernBertModel LOAD REPORT[0m from: answerdotai/ModernBERT-base
+Key               | Status     |  | 
+------------------+------------+--+-
+head.norm.weight  | UNEXPECTED |  | 
+decoder.bias      | UNEXPECTED |  | 
+head.dense.weight | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  train=2702 val=358
+  epoch 0 [200/2702] loss=2.2275 acc=0.1550
+  epoch 0 [400/2702] loss=2.1769 acc=0.1925
+  epoch 0 [600/2702] loss=2.1717 acc=0.2167
+  epoch 0 [800/2702] loss=2.1140 acc=0.2475
+  epoch 0 [1000/2702] loss=2.0338 acc=0.2760
+  epoch 0 [1200/2702] loss=1.9581 acc=0.3150
+  epoch 0 [1400/2702] loss=1.8813 acc=0.3486
+  epoch 0 [1600/2702] loss=1.8091 acc=0.3744
+  epoch 0 [1800/2702] loss=1.7478 acc=0.3989
+  epoch 0 [2000/2702] loss=1.6854 acc=0.4210
+  epoch 0 [2200/2702] loss=1.6270 acc=0.4441
+  epoch 0 [2400/2702] loss=1.5709 acc=0.4629
+  epoch 0 [2600/2702] loss=1.5271 acc=0.4812
+epoch 0 DONE train_acc=0.4922 val_acc=0.6061 val_loss=1.2704
+  -> new best (epoch 0, val_loss=1.2704)
+  epoch 1 [200/2702] loss=0.6428 acc=0.8300
+  epoch 1 [400/2702] loss=0.6167 acc=0.8300
+  epoch 1 [600/2702] loss=0.5816 acc=0.8300
+  epoch 1 [800/2702] loss=0.6208 acc=0.8075
+  epoch 1 [1000/2702] loss=0.6349 acc=0.8040
+  epoch 1 [1200/2702] loss=0.6300 acc=0.8025
+  epoch 1 [1400/2702] loss=0.6404 acc=0.8021
+  epoch 1 [1600/2702] loss=0.6252 acc=0.8050
+  epoch 1 [1800/2702] loss=0.6376 acc=0.8022
+  epoch 1 [2000/2702] loss=0.6403 acc=0.8050
+  epoch 1 [2200/2702] loss=0.6322 acc=0.8064
+  epoch 1 [2400/2702] loss=0.6375 acc=0.8063
+  epoch 1 [2600/2702] loss=0.6350 acc=0.8085
+epoch 1 DONE train_acc=0.8094 val_acc=0.6872 val_loss=1.0219
+  -> new best (epoch 1, val_loss=1.0219)
+  epoch 2 [200/2702] loss=0.3048 acc=0.9150
+  epoch 2 [400/2702] loss=0.2690 acc=0.9175
+  epoch 2 [600/2702] loss=0.2738 acc=0.9150
+  epoch 2 [800/2702] loss=0.2780 acc=0.9087
+  epoch 2 [1000/2702] loss=0.2723 acc=0.9100
+  epoch 2 [1200/2702] loss=0.2814 acc=0.9042
+  epoch 2 [1400/2702] loss=0.3002 acc=0.8971
+  epoch 2 [1600/2702] loss=0.2948 acc=0.8981
+  epoch 2 [1800/2702] loss=0.2885 acc=0.9028
+  epoch 2 [2000/2702] loss=0.2956 acc=0.9010
+  epoch 2 [2200/2702] loss=0.3021 acc=0.9018
+  epoch 2 [2400/2702] loss=0.2957 acc=0.9050
+  epoch 2 [2600/2702] loss=0.2977 acc=0.9065
+epoch 2 DONE train_acc=0.9067 val_acc=0.7318 val_loss=0.9467
+  -> new best (epoch 2, val_loss=0.9467)
+loaded best checkpoint: epoch 2, val_loss=0.9467
+bundle written: /Users/adamtc007/dev/bpmn-lite/utterance-engine/train_py/bundles/modernbert-base
+EXIT=0

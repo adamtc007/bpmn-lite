@@ -1,7 +1,12 @@
 {
   "corpus_version": "synthetic-v2-beta.eval_enriched",
   "k": 12,
-  "k8_miss_gold_ranks": [],
+  "k8_miss_gold_ranks": [
+    14,
+    14,
+    14,
+    14
+  ],
   "note": "recall_at_k is the easy bar (gold anywhere in the top-K) -- NOT an uplift baseline. tier0_top1_accuracy (tier1_list[0], the retriever's own #1 rank-ordered pick) IS the apples-to-apples number any trained SLM's top1_end_to_end must be compared against to claim uplift. This card IS the plan's Phase D 'C5 baseline' receipt for whichever retriever this binary was built with. Board completeness should read 1.0 always (every board.candidates entry came from a real build_board call, never invented) -- if it doesn't, the generator is broken, not the eval set.",
   "per_class_recall_at_k": {
     "and_gateway_node": {
@@ -45,13 +50,13 @@
       "total": 9
     },
     "human_wait": {
-      "hits": 6,
-      "recall": 1.0,
+      "hits": 5,
+      "recall": 0.8333333333333334,
       "total": 6
     },
     "message_wait": {
-      "hits": 9,
-      "recall": 1.0,
+      "hits": 7,
+      "recall": 0.7777777777777778,
       "total": 9
     },
     "mi_node": {
@@ -60,8 +65,8 @@
       "total": 6
     },
     "mid_sequence_task": {
-      "hits": 18,
-      "recall": 1.0,
+      "hits": 17,
+      "recall": 0.9444444444444444,
       "total": 18
     },
     "or_gateway_node": {
@@ -97,37 +102,37 @@
   },
   "recall_curve": {
     "01": {
-      "hits": 73,
-      "recall": 0.6186440677966102
+      "hits": 34,
+      "recall": 0.288135593220339
     },
     "02": {
-      "hits": 87,
-      "recall": 0.7372881355932204
+      "hits": 56,
+      "recall": 0.4745762711864407
     },
     "04": {
-      "hits": 100,
-      "recall": 0.847457627118644
+      "hits": 78,
+      "recall": 0.6610169491525424
     },
     "08": {
-      "hits": 113,
-      "recall": 0.9576271186440678
+      "hits": 101,
+      "recall": 0.8559322033898306
     },
     "12": {
-      "hits": 118,
-      "recall": 1.0
+      "hits": 114,
+      "recall": 0.9661016949152542
     },
     "16": {
       "hits": 118,
       "recall": 1.0
     }
   },
-  "retriever": "tier0.embed.BAAI/bge-small-en-v1.5@ob-semantic-matcher:ff3f12c7",
+  "retriever": "tier0.lexical.v1",
   "source": "seed/banks/eval_*.json",
   "totals": {
     "examples": 118,
-    "gold_in_tier1": 118,
-    "recall_at_k": 1.0,
-    "tier0_top1_accuracy": 0.4322033898305085,
-    "tier0_top1_correct": 51
+    "gold_in_tier1": 114,
+    "recall_at_k": 0.9661016949152542,
+    "tier0_top1_accuracy": 0.288135593220339,
+    "tier0_top1_correct": 34
   }
 }
