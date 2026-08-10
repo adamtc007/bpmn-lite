@@ -122,11 +122,15 @@ fn probe(base: Base) -> Result<String> {
         revision.to_string(),
     ));
     let config_path = repo.get("config.json").context("download config.json")?;
-    let tokenizer_path = repo.get("tokenizer.json").context("download tokenizer.json")?;
-    let weights_path = repo.get("model.safetensors").context("download model.safetensors")?;
+    let tokenizer_path = repo
+        .get("tokenizer.json")
+        .context("download tokenizer.json")?;
+    let weights_path = repo
+        .get("model.safetensors")
+        .context("download model.safetensors")?;
 
-    let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
-        .map_err(|e| anyhow!("Tokenizer::from_file: {e}"))?;
+    let mut tokenizer =
+        Tokenizer::from_file(&tokenizer_path).map_err(|e| anyhow!("Tokenizer::from_file: {e}"))?;
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
             .context("VarBuilder::from_mmaped_safetensors")?
@@ -154,7 +158,10 @@ fn probe(base: Base) -> Result<String> {
                 serde_json::from_str(&config_str).context("parse modernbert::Config")?;
             let model = modernbert::ModernBert::load(vb, &cfg).context("ModernBert::load")?;
             let hidden = model.forward(&ids, &mask).context("forward")?;
-            Ok(format!("encoder hidden shape {:?} (pretrained head skipped — see comment)", hidden.shape()))
+            Ok(format!(
+                "encoder hidden shape {:?} (pretrained head skipped — see comment)",
+                hidden.shape()
+            ))
         }
         Base::ModernBertBase => {
             let cfg: modernbert::Config =
@@ -167,7 +174,8 @@ fn probe(base: Base) -> Result<String> {
             Ok(format!("encoder hidden shape {:?}", hidden.shape()))
         }
         Base::MsMarcoMiniLm => {
-            let cfg: bert::Config = serde_json::from_str(&config_str).context("parse bert::Config")?;
+            let cfg: bert::Config =
+                serde_json::from_str(&config_str).context("parse bert::Config")?;
             // Root VarBuilder: BertModel::load retries "{model_type}.*" on a
             // root-prefix miss, and this checkpoint's real keys are under
             // "bert.*" with config.model_type == "bert" (confirmed against
@@ -181,8 +189,8 @@ fn probe(base: Base) -> Result<String> {
             // "classifier.weight"/"classifier.bias" sit at checkpoint root,
             // sibling to "bert.*" — a fresh Linear at vb.pp("classifier"),
             // not part of BertModel::load, matching the real key layout.
-            let classifier = linear(cfg.hidden_size, 1, vb.pp("classifier"))
-                .context("classifier Linear")?;
+            let classifier =
+                linear(cfg.hidden_size, 1, vb.pp("classifier")).context("classifier Linear")?;
             let logits = classifier.forward(&cls).context("classifier forward")?;
             let v: Vec<Vec<f32>> = logits.to_vec2()?;
             Ok(format!("logits shape {:?}, value {:?}", logits.shape(), v))
@@ -231,6 +239,9 @@ fn main() -> Result<()> {
             failures.iter().map(|(k, _)| *k).collect::<Vec<_>>()
         );
     }
-    println!("ALL {} bases PASS — safe to proceed to Phase C fine-tuning", Base::ALL.len());
+    println!(
+        "ALL {} bases PASS — safe to proceed to Phase C fine-tuning",
+        Base::ALL.len()
+    );
     Ok(())
 }

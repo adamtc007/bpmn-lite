@@ -29,8 +29,8 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::{IREdge, IRGraph, IRNode};
 use bpmn_lite_compiler::{verify, Compiler, VerifiedWorkflow, VerifyError};
+use bpmn_lite_compiler::{IREdge, IRGraph, IRNode};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
@@ -126,7 +126,10 @@ impl DesignerDag {
             if !self.key_index.contains_key(&host) {
                 return Err(anyhow!("attached_to_key {host:?} names an unknown node"));
             }
-            if !matches!(ir, IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }) {
+            if !matches!(
+                ir,
+                IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }
+            ) {
                 return Err(anyhow!(
                     "attached_to_key is only legal on boundary nodes (got '{id}')"
                 ));
@@ -184,12 +187,7 @@ impl DesignerDag {
     /// edge, and guard arrives through the staged operation surface
     /// (`ops::apply`), which is where the refusal discipline lives.
     /// Seeding anything else is a typed reject, not a convenience.
-    pub fn seed(
-        &mut self,
-        key: NodeKey,
-        node: IRNode,
-        provenance: Provenance,
-    ) -> Result<NodeKey> {
+    pub fn seed(&mut self, key: NodeKey, node: IRNode, provenance: Provenance) -> Result<NodeKey> {
         match &node {
             IRNode::Start { .. } | IRNode::DataObject { .. } => {
                 self.insert_node(key, node, None, provenance)
@@ -326,7 +324,11 @@ impl DesignerDag {
     /// new endpoints without losing identity (I23/F4 — re-pointing must
     /// not mint a new flow id). Frees the edge id for reuse. Errs if
     /// either node or the edge itself is unknown.
-    pub(crate) fn remove_edge_between(&mut self, from: NodeKey, to: NodeKey) -> Result<DesignerEdge> {
+    pub(crate) fn remove_edge_between(
+        &mut self,
+        from: NodeKey,
+        to: NodeKey,
+    ) -> Result<DesignerEdge> {
         let f = *self
             .key_index
             .get(&from)
@@ -354,7 +356,10 @@ impl DesignerDag {
     /// topology, so none of `insert_node`'s identity/uniqueness checks
     /// apply. Not a public mutation surface; `None` if `key` is unknown.
     pub(crate) fn node_mut(&mut self, key: NodeKey) -> Option<&mut DesignerNode> {
-        self.key_index.get(&key).copied().map(move |idx| &mut self.graph[idx])
+        self.key_index
+            .get(&key)
+            .copied()
+            .map(move |idx| &mut self.graph[idx])
     }
 
     /// ops.rs support: keys of nodes attached to `host` via
@@ -444,10 +449,19 @@ mod tests {
     fn linear(name: &str) -> (DesignerDag, NodeKey, NodeKey, NodeKey) {
         let mut dag = DesignerDag::new(name);
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
-        let e = dag.insert_node(key(), end(), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        let e = dag
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
         dag.insert_edge(s, t, edge("e1")).unwrap();
         dag.insert_edge(t, e, edge("e2")).unwrap();
         (dag, s, t, e)
@@ -471,14 +485,21 @@ mod tests {
         dag.default_guard_budget = Some(3);
         let wf = dag.admit().expect("must admit");
         assert_eq!(
-            wf.envelope().metadata().default_guard_budget().max_failures(),
+            wf.envelope()
+                .metadata()
+                .default_guard_budget()
+                .max_failures(),
             3,
             "designer-declared process default must be sealed into the artifact"
         );
         let (dag_none, ..) = linear("ws-a1-f1b");
         let wf_none = dag_none.admit().expect("must admit");
         assert_eq!(
-            wf_none.envelope().metadata().default_guard_budget().max_failures(),
+            wf_none
+                .envelope()
+                .metadata()
+                .default_guard_budget()
+                .max_failures(),
             bpmn_lite_types::ScopeFailureBudget::conservative_default().max_failures(),
             "undeclared default must fall back to the compiled-in conservative default"
         );
@@ -490,18 +511,30 @@ mod tests {
     fn cyclic_designer_graph_is_refused_by_the_real_verifier() {
         let mut dag = DesignerDag::new("ws-a1-red");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let a = dag.insert_node(key(), task("a"), None, Provenance::default()).unwrap();
-        let b = dag.insert_node(key(), task("b"), None, Provenance::default()).unwrap();
-        let e = dag.insert_node(key(), end(), None, Provenance::default()).unwrap();
+        let a = dag
+            .insert_node(key(), task("a"), None, Provenance::default())
+            .unwrap();
+        let b = dag
+            .insert_node(key(), task("b"), None, Provenance::default())
+            .unwrap();
+        let e = dag
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
         dag.insert_edge(s, a, edge("e1")).unwrap();
         dag.insert_edge(a, b, edge("e2")).unwrap();
         dag.insert_edge(b, a, edge("back")).unwrap();
         dag.insert_edge(b, e, edge("e3")).unwrap();
         let errs = dag.admit().expect_err("cyclic graph must be refused");
         assert!(
-            errs.iter().any(|e| e.message.to_lowercase().contains("cycl")),
+            errs.iter()
+                .any(|e| e.message.to_lowercase().contains("cycl")),
             "refusal must name cyclicity: {errs:?}"
         );
     }
@@ -512,9 +545,16 @@ mod tests {
     fn duplicate_ids_are_refused_at_insertion() {
         let mut dag = DesignerDag::new("ws-a1-f3");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
         let err = dag
             .insert_node(key(), task("t1"), None, Provenance::default())
             .expect_err("duplicate BPMN id must be refused");
@@ -533,12 +573,19 @@ mod tests {
     fn boundary_attachment_projects_the_hosts_current_id() {
         let mut dag = DesignerDag::new("ws-a1-f2");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
         let host = dag
             .insert_node(key(), task("renamed_work"), None, Provenance::default())
             .unwrap();
-        let e = dag.insert_node(key(), end(), None, Provenance::default()).unwrap();
+        let e = dag
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
         dag.insert_node(
             key(),
             IRNode::BoundaryTimer {
@@ -582,10 +629,19 @@ mod tests {
     fn per_node_declarations_ride_the_projection_intact() {
         let mut dag = DesignerDag::new("ws-a1-decl");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("work"), None, Provenance::default()).unwrap();
-        let e = dag.insert_node(key(), end(), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("work"), None, Provenance::default())
+            .unwrap();
+        let e = dag
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
         dag.insert_node(
             key(),
             IRNode::BoundaryTimer {
@@ -613,7 +669,12 @@ mod tests {
 
         let mut par = DesignerDag::new("ws-a1-par");
         let s = par
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
         let f = par
             .insert_node(
@@ -627,8 +688,12 @@ mod tests {
                 Provenance::default(),
             )
             .unwrap();
-        let t1 = par.insert_node(key(), task("p1"), None, Provenance::default()).unwrap();
-        let t2 = par.insert_node(key(), task("p2"), None, Provenance::default()).unwrap();
+        let t1 = par
+            .insert_node(key(), task("p1"), None, Provenance::default())
+            .unwrap();
+        let t2 = par
+            .insert_node(key(), task("p2"), None, Provenance::default())
+            .unwrap();
         let j = par
             .insert_node(
                 key(),
@@ -641,7 +706,9 @@ mod tests {
                 Provenance::default(),
             )
             .unwrap();
-        let e = par.insert_node(key(), end(), None, Provenance::default()).unwrap();
+        let e = par
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
         par.insert_edge(s, f, edge("e1")).unwrap();
         par.insert_edge(f, t1, edge("e2")).unwrap();
         par.insert_edge(f, t2, edge("e3")).unwrap();

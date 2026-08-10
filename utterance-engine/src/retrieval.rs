@@ -158,19 +158,37 @@ mod tests {
     /// determinism across runs.
     #[test]
     fn full_pipeline_board_tier0_policy_record() {
-        let board =
-            build_board(&AllLegal, None, Some("rev0"), &EmptyUniverse, &PolicyFilter::default())
-                .unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            Some("rev0"),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let t0 = LexicalTier0;
         let cfg = DispositionConfig::shadow_v1();
 
         let utter = "zzz qqq xxyzzy nothing matches this";
         let ev1 = t0.retrieve(utter, &board).unwrap();
         let ev2 = t0.retrieve(utter, &board).unwrap();
-        assert_eq!(ev1.retrieved_subset_hash, ev2.retrieved_subset_hash, "determinism");
+        assert_eq!(
+            ev1.retrieved_subset_hash, ev2.retrieved_subset_hash,
+            "determinism"
+        );
 
-        let (d, rec) = decide(&cfg, &board, &ev1, &crate::context::minimal("pack.none", "g-test")).unwrap();
-        assert_eq!(d, ProposalDisposition::OutOfScope, "gibberish must abstain: {d:?}");
+        let (d, rec) = decide(
+            &cfg,
+            &board,
+            &ev1,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
+        assert_eq!(
+            d,
+            ProposalDisposition::OutOfScope,
+            "gibberish must abstain: {d:?}"
+        );
         assert_eq!(rec.board_hash, board.board_hash);
         assert_eq!(rec.model_bundle_hash, "tier0.lexical.v1");
         assert!(!rec.disposition_policy_hash.is_empty());
@@ -182,7 +200,10 @@ mod tests {
     /// NOTA appended when the prefix cut it — 13 served candidates.
     #[test]
     fn tier1_list_at_standing_k12_serves_13_with_nota() {
-        assert_eq!(TIER1_K, 12, "standing K is the ratified 12 (8→12, 2026-08-01)");
+        assert_eq!(
+            TIER1_K, 12,
+            "standing K is the ratified 12 (8→12, 2026-08-01)"
+        );
         // 20 on-ranking candidates, NOTA ranked dead last (cut by any prefix).
         let mut ranking: Vec<RankedCandidate> = (0..20)
             .map(|i| RankedCandidate {
@@ -206,7 +227,13 @@ mod tests {
         };
         let list = tier1_list(&result, TIER1_K);
         assert_eq!(list.len(), TIER1_K + 1, "K-prefix + appended NOTA");
-        assert_eq!(&list[..TIER1_K], (0..TIER1_K).map(|i| format!("op.cand_{i:02}")).collect::<Vec<_>>().as_slice());
+        assert_eq!(
+            &list[..TIER1_K],
+            (0..TIER1_K)
+                .map(|i| format!("op.cand_{i:02}"))
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
         assert_eq!(list[TIER1_K], crate::contract::NONE_OF_THE_ABOVE);
     }
 
@@ -214,13 +241,23 @@ mod tests {
     /// exact-match pin scores 1.0.
     #[test]
     fn lexical_scores_are_boarded_and_exact_match_pins() {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let t0 = LexicalTier0;
         let exact = "Joins two existing nodes with a typed connector";
         let ev = t0.retrieve(exact, &board).unwrap();
         for rc in &ev.ranking {
-            assert!(board.contains(&rc.candidate_id), "off-board evidence: {}", rc.candidate_id);
+            assert!(
+                board.contains(&rc.candidate_id),
+                "off-board evidence: {}",
+                rc.candidate_id
+            );
         }
         let top = &ev.ranking[0];
         assert_eq!(top.candidate_id, "op.connect");
@@ -284,7 +321,10 @@ pub mod embed {
     }
 
     fn dot(a: &[f32], b: &[f32]) -> f64 {
-        a.iter().zip(b).map(|(x, y)| (*x as f64) * (*y as f64)).sum()
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (*x as f64) * (*y as f64))
+            .sum()
     }
 
     impl Tier0Retriever for EmbedTier0 {
@@ -378,8 +418,12 @@ pub mod embed {
             )
             .unwrap();
             let t0 = EmbedTier0::new().expect("model load");
-            let ev1 = t0.retrieve("connect the review task to the end", &board).unwrap();
-            let ev2 = t0.retrieve("connect the review task to the end", &board).unwrap();
+            let ev1 = t0
+                .retrieve("connect the review task to the end", &board)
+                .unwrap();
+            let ev2 = t0
+                .retrieve("connect the review task to the end", &board)
+                .unwrap();
             assert_eq!(ev1.retrieved_subset_hash, ev2.retrieved_subset_hash);
             for rc in &ev1.ranking {
                 assert!(board.contains(&rc.candidate_id));
@@ -434,8 +478,14 @@ pub mod embed {
                  ceiling, run the declared per-element work and join when every instance \
                  completes or the ceiling refuses admission",
             ];
-            let batch_t = t0.embedder.embed_batch_targets(&texts).expect("batch targets");
-            let batch_q = t0.embedder.embed_batch_queries(&texts).expect("batch queries");
+            let batch_t = t0
+                .embedder
+                .embed_batch_targets(&texts)
+                .expect("batch targets");
+            let batch_q = t0
+                .embedder
+                .embed_batch_queries(&texts)
+                .expect("batch queries");
             let mut diverged_components = 0usize;
             for (i, text) in texts.iter().enumerate() {
                 let single_t = t0.embedder.embed_target(text).expect("single target");
@@ -483,7 +533,9 @@ pub mod embed {
             let t0 = EmbedTier0::new().expect("model load");
 
             let t_cold = std::time::Instant::now();
-            let ev1 = t0.retrieve("connect the review task to the end", &board).unwrap();
+            let ev1 = t0
+                .retrieve("connect the review task to the end", &board)
+                .unwrap();
             let cold_elapsed = t_cold.elapsed();
 
             // Cache now warm for every description on this board; a
@@ -491,7 +543,9 @@ pub mod embed {
             // (only embed_query differs — the expensive per-candidate
             // target passes are all cache hits).
             let t_warm = std::time::Instant::now();
-            let ev2 = t0.retrieve("insert a step before this node", &board).unwrap();
+            let ev2 = t0
+                .retrieve("insert a step before this node", &board)
+                .unwrap();
             let warm_elapsed = t_warm.elapsed();
 
             assert!(
@@ -502,14 +556,20 @@ pub mod embed {
 
             // Exactness: re-run the FIRST utterance now that the cache is
             // warm; scores must match the cold run bit-for-bit.
-            let ev1_warm = t0.retrieve("connect the review task to the end", &board).unwrap();
+            let ev1_warm = t0
+                .retrieve("connect the review task to the end", &board)
+                .unwrap();
             assert_eq!(
                 ev1.retrieved_subset_hash, ev1_warm.retrieved_subset_hash,
                 "cached and uncached target embeddings must rank identically"
             );
             for (a, b) in ev1.ranking.iter().zip(ev1_warm.ranking.iter()) {
                 assert_eq!(a.candidate_id, b.candidate_id);
-                assert_eq!(a.score.get().to_bits(), b.score.get().to_bits(), "bit-exact score");
+                assert_eq!(
+                    a.score.get().to_bits(),
+                    b.score.get().to_bits(),
+                    "bit-exact score"
+                );
             }
             let _ = ev2;
         }

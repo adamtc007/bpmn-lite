@@ -294,22 +294,37 @@ mod tests {
         use crate::schema::DesignerEdge;
         let mut dag = DesignerDag::new(name);
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             t,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t,
             e,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         (dag, s, t, e)
@@ -357,7 +372,10 @@ mod tests {
         });
         let staged = apply_production(&base, ops, Provenance::default())
             .expect("request_and_wait production must apply");
-        staged.candidate.admit().expect("request_and_wait must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("request_and_wait must admit");
     }
 
     /// Receipt: `reminder_then_escalate` -> apply_production -> full-chain
@@ -392,20 +410,32 @@ mod tests {
         let (interrupting, spec) = ir
             .node_indices()
             .find_map(|i| match &ir[i] {
-                IRNode::BoundaryTimer { id, interrupting, spec, .. } if id == "reminder_guard" => {
-                    Some((*interrupting, spec.clone()))
-                }
+                IRNode::BoundaryTimer {
+                    id,
+                    interrupting,
+                    spec,
+                    ..
+                } if id == "reminder_guard" => Some((*interrupting, spec.clone())),
                 _ => None,
             })
             .expect("guard projected");
-        assert!(!interrupting, "reminder guard must be non-interrupting (re-arming)");
-        assert!(matches!(spec, TimerSpec::Cycle { .. }), "guard trigger must be Cycle: {spec:?}");
+        assert!(
+            !interrupting,
+            "reminder guard must be non-interrupting (re-arming)"
+        );
+        assert!(
+            matches!(spec, TimerSpec::Cycle { .. }),
+            "guard trigger must be Cycle: {spec:?}"
+        );
 
         // The escalation node sits on the normal (forward) path off the
         // anchor, not a backward edge — confirmed by admission succeeding
         // (a backward edge would be refused at Operation::apply time, not
         // here, but the full chain admitting is the end-to-end witness).
-        staged.candidate.admit().expect("reminder_then_escalate must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("reminder_then_escalate must admit");
     }
 
     /// Receipt (RED): `production_aborts_atomically` — a production whose
@@ -476,13 +506,19 @@ mod tests {
         let (interrupting, spec) = ir
             .node_indices()
             .find_map(|i| match &ir[i] {
-                IRNode::BoundaryTimer { id, interrupting, spec, .. } if id == "itimeout_guard" => {
-                    Some((*interrupting, spec.clone()))
-                }
+                IRNode::BoundaryTimer {
+                    id,
+                    interrupting,
+                    spec,
+                    ..
+                } if id == "itimeout_guard" => Some((*interrupting, spec.clone())),
                 _ => None,
             })
             .expect("guard projected");
-        assert!(interrupting, "interrupting_timeout must produce an INTERRUPTING guard");
+        assert!(
+            interrupting,
+            "interrupting_timeout must produce an INTERRUPTING guard"
+        );
         assert!(
             matches!(spec, TimerSpec::Duration { .. }),
             "guard trigger must be Duration: {spec:?}"
@@ -490,7 +526,10 @@ mod tests {
 
         // The production ALONE must admit — no receipt-added completion
         // ops (slice-5 binding rule).
-        staged.candidate.admit().expect("interrupting_timeout must admit alone");
+        staged
+            .candidate
+            .admit()
+            .expect("interrupting_timeout must admit alone");
     }
 
     /// Receipt (GREEN): `non_interrupting_notification` -> apply_production
@@ -519,9 +558,12 @@ mod tests {
         let (interrupting, spec) = ir
             .node_indices()
             .find_map(|i| match &ir[i] {
-                IRNode::BoundaryTimer { id, interrupting, spec, .. } if id == "notify_guard" => {
-                    Some((*interrupting, spec.clone()))
-                }
+                IRNode::BoundaryTimer {
+                    id,
+                    interrupting,
+                    spec,
+                    ..
+                } if id == "notify_guard" => Some((*interrupting, spec.clone())),
                 _ => None,
             })
             .expect("guard projected");
@@ -529,11 +571,17 @@ mod tests {
             !interrupting,
             "non_interrupting_notification must produce a NON-interrupting guard"
         );
-        assert!(matches!(spec, TimerSpec::Cycle { .. }), "guard trigger must be Cycle: {spec:?}");
+        assert!(
+            matches!(spec, TimerSpec::Cycle { .. }),
+            "guard trigger must be Cycle: {spec:?}"
+        );
 
         // The production ALONE must admit — no receipt-added completion
         // ops (slice-5 binding rule).
-        staged.candidate.admit().expect("non_interrupting_notification must admit alone");
+        staged
+            .candidate
+            .admit()
+            .expect("non_interrupting_notification must admit alone");
     }
 
     /// Receipt (RED): `production_ops_reject_via_ops_gates` — a
@@ -607,18 +655,26 @@ mod tests {
         let ir_direct = staged_direct.candidate.to_ir().unwrap();
         let ir_round_tripped = staged_round_tripped.candidate.to_ir().unwrap();
 
-        let mut node_ids_direct: Vec<&str> =
-            ir_direct.node_indices().map(|i| ir_direct[i].id()).collect();
-        let mut node_ids_round_tripped: Vec<&str> =
-            ir_round_tripped.node_indices().map(|i| ir_round_tripped[i].id()).collect();
+        let mut node_ids_direct: Vec<&str> = ir_direct
+            .node_indices()
+            .map(|i| ir_direct[i].id())
+            .collect();
+        let mut node_ids_round_tripped: Vec<&str> = ir_round_tripped
+            .node_indices()
+            .map(|i| ir_round_tripped[i].id())
+            .collect();
         node_ids_direct.sort();
         node_ids_round_tripped.sort();
         assert_eq!(node_ids_direct, node_ids_round_tripped);
 
-        let mut edge_ids_direct: Vec<&str> =
-            ir_direct.edge_indices().map(|i| ir_direct[i].id.as_str()).collect();
-        let mut edge_ids_round_tripped: Vec<&str> =
-            ir_round_tripped.edge_indices().map(|i| ir_round_tripped[i].id.as_str()).collect();
+        let mut edge_ids_direct: Vec<&str> = ir_direct
+            .edge_indices()
+            .map(|i| ir_direct[i].id.as_str())
+            .collect();
+        let mut edge_ids_round_tripped: Vec<&str> = ir_round_tripped
+            .edge_indices()
+            .map(|i| ir_round_tripped[i].id.as_str())
+            .collect();
         edge_ids_direct.sort();
         edge_ids_round_tripped.sort();
         assert_eq!(edge_ids_direct, edge_ids_round_tripped);
@@ -660,18 +716,26 @@ mod tests {
         let ir_direct = staged_direct.candidate.to_ir().unwrap();
         let ir_round_tripped = staged_round_tripped.candidate.to_ir().unwrap();
 
-        let mut node_ids_direct: Vec<&str> =
-            ir_direct.node_indices().map(|i| ir_direct[i].id()).collect();
-        let mut node_ids_round_tripped: Vec<&str> =
-            ir_round_tripped.node_indices().map(|i| ir_round_tripped[i].id()).collect();
+        let mut node_ids_direct: Vec<&str> = ir_direct
+            .node_indices()
+            .map(|i| ir_direct[i].id())
+            .collect();
+        let mut node_ids_round_tripped: Vec<&str> = ir_round_tripped
+            .node_indices()
+            .map(|i| ir_round_tripped[i].id())
+            .collect();
         node_ids_direct.sort();
         node_ids_round_tripped.sort();
         assert_eq!(node_ids_direct, node_ids_round_tripped);
 
-        let mut edge_ids_direct: Vec<&str> =
-            ir_direct.edge_indices().map(|i| ir_direct[i].id.as_str()).collect();
-        let mut edge_ids_round_tripped: Vec<&str> =
-            ir_round_tripped.edge_indices().map(|i| ir_round_tripped[i].id.as_str()).collect();
+        let mut edge_ids_direct: Vec<&str> = ir_direct
+            .edge_indices()
+            .map(|i| ir_direct[i].id.as_str())
+            .collect();
+        let mut edge_ids_round_tripped: Vec<&str> = ir_round_tripped
+            .edge_indices()
+            .map(|i| ir_round_tripped[i].id.as_str())
+            .collect();
         edge_ids_direct.sort();
         edge_ids_round_tripped.sort();
         assert_eq!(edge_ids_direct, edge_ids_round_tripped);

@@ -98,7 +98,11 @@ pub enum Operation {
     /// BPMN id may equal target's own id — target is removed (freeing
     /// its id) BEFORE the replacement is inserted, so same-BPMN-id
     /// rename-in-place is exactly the common case, not a special one.
-    ReplaceNode { target: NodeKey, key: NodeKey, node: IRNode },
+    ReplaceNode {
+        target: NodeKey,
+        key: NodeKey,
+        node: IRNode,
+    },
     /// Connect two existing nodes (forward-only pre-gate, I23).
     Connect {
         from: NodeKey,
@@ -125,7 +129,10 @@ pub enum Operation {
         trigger: GuardTrigger,
     },
     /// Replace the arming trigger on an existing boundary guard.
-    SetGuardTrigger { guard: NodeKey, trigger: GuardTrigger },
+    SetGuardTrigger {
+        guard: NodeKey,
+        trigger: GuardTrigger,
+    },
     /// Set/override a guard's failure budget (`None` clears to inherit
     /// the workflow default).
     SetGuardBudget {
@@ -502,7 +509,9 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
             let host_id = candidate
                 .node(host)
                 .map(|n| n.ir.id().to_owned())
-                .ok_or_else(|| anyhow!("AttachGuard '{guard_id}' refused: unknown host {host:?}"))?;
+                .ok_or_else(|| {
+                    anyhow!("AttachGuard '{guard_id}' refused: unknown host {host:?}")
+                })?;
             let ir = match trigger {
                 GuardTrigger::Timer(spec) => {
                     // Boundary rule 6 (V&S §4.5 pre-gate): cycle triggers
@@ -538,9 +547,12 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
             guard_id,
             trigger,
         } => {
-            let host_id = candidate.node(host).map(|n| n.ir.id().to_owned()).ok_or_else(|| {
-                anyhow!("AttachRearmingGuard '{guard_id}' refused: unknown host {host:?}")
-            })?;
+            let host_id = candidate
+                .node(host)
+                .map(|n| n.ir.id().to_owned())
+                .ok_or_else(|| {
+                    anyhow!("AttachRearmingGuard '{guard_id}' refused: unknown host {host:?}")
+                })?;
             let ir = match trigger {
                 // Any TimerSpec is legal on a non-interrupting guard —
                 // Cycle-on-non-interrupting is precisely the legal
@@ -642,12 +654,18 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
             }
         }
 
-        Operation::SetGuardBudget { guard, failure_budget } => {
+        Operation::SetGuardBudget {
+            guard,
+            failure_budget,
+        } => {
             {
                 let node = candidate
                     .node(guard)
                     .ok_or_else(|| anyhow!("SetGuardBudget refused: unknown guard {guard:?}"))?;
-                if !matches!(node.ir, IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }) {
+                if !matches!(
+                    node.ir,
+                    IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }
+                ) {
                     // I24: budget on a non-guard is unrepresentable.
                     let label = node.ir.id().to_owned();
                     return Err(anyhow!(
@@ -655,10 +673,16 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                     ));
                 }
             }
-            let node_mut = candidate.node_mut(guard).expect("existence just checked above");
+            let node_mut = candidate
+                .node_mut(guard)
+                .expect("existence just checked above");
             match &mut node_mut.ir {
-                IRNode::BoundaryTimer { failure_budget: fb, .. }
-                | IRNode::BoundaryError { failure_budget: fb, .. } => *fb = failure_budget,
+                IRNode::BoundaryTimer {
+                    failure_budget: fb, ..
+                }
+                | IRNode::BoundaryError {
+                    failure_budget: fb, ..
+                } => *fb = failure_budget,
                 _ => unreachable!("kind checked above"),
             }
         }
@@ -686,9 +710,15 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                 .node_mut(target)
                 .expect("existence just checked above");
             match &mut node_mut.ir {
-                IRNode::MessageWait { corr_key_source, .. }
-                | IRNode::HumanWait { corr_key_source, .. }
-                | IRNode::SendTask { corr_key_source, .. } => *corr_key_source = new_source,
+                IRNode::MessageWait {
+                    corr_key_source, ..
+                }
+                | IRNode::HumanWait {
+                    corr_key_source, ..
+                }
+                | IRNode::SendTask {
+                    corr_key_source, ..
+                } => *corr_key_source = new_source,
                 _ => unreachable!("kind checked above"),
             }
         }
@@ -905,9 +935,16 @@ mod tests {
     fn linear(name: &str) -> (DesignerDag, NodeKey, NodeKey, NodeKey) {
         let mut dag = DesignerDag::new(name);
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
@@ -959,7 +996,10 @@ mod tests {
         let end_targets = staged.candidate.successors(t2_key);
         assert_eq!(end_targets.len(), 1);
 
-        staged.candidate.admit().expect("repointed chain must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("repointed chain must admit");
 
         // I18: base DAG unchanged.
         assert_eq!(base.node_count(), base_count_before);
@@ -989,7 +1029,10 @@ mod tests {
         assert_eq!(staged.candidate.successors(s), vec![t0_key]);
         assert_eq!(staged.candidate.successors(t0_key), vec![t1]);
 
-        staged.candidate.admit().expect("repointed chain must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("repointed chain must admit");
         assert_eq!(base.node_count(), base_count_before);
     }
 
@@ -1000,29 +1043,50 @@ mod tests {
     fn connect_refuses_backward_edge() {
         let mut dag = DesignerDag::new("recv3");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let a = dag.insert_node(key(), task("a"), None, Provenance::default()).unwrap();
-        let b = dag.insert_node(key(), task("b"), None, Provenance::default()).unwrap();
+        let a = dag
+            .insert_node(key(), task("a"), None, Provenance::default())
+            .unwrap();
+        let b = dag
+            .insert_node(key(), task("b"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             a,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             a,
             b,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             b,
             e,
-            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e3".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         let base_count_before = dag.node_count();
@@ -1039,8 +1103,14 @@ mod tests {
         )
         .expect_err("backward connect must be refused");
         let msg = err.to_string();
-        assert!(msg.contains(&format!("{b:?}")), "error must name from-id: {msg}");
-        assert!(msg.contains(&format!("{a:?}")), "error must name to-id: {msg}");
+        assert!(
+            msg.contains(&format!("{b:?}")),
+            "error must name from-id: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("{a:?}")),
+            "error must name to-id: {msg}"
+        );
         assert_eq!(dag.node_count(), base_count_before);
     }
 
@@ -1070,9 +1140,16 @@ mod tests {
     fn delete_refuses_dangling_guard() {
         let mut dag = DesignerDag::new("recv5");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("work"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("work"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
@@ -1093,26 +1170,42 @@ mod tests {
         dag.insert_edge(
             s,
             t,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t,
             e,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
         // RED: deleting the task while the guard still references it.
-        let err = apply(&dag, Operation::DeleteNode { target: t }, Provenance::default())
-            .expect_err("delete of a guarded node must be refused");
+        let err = apply(
+            &dag,
+            Operation::DeleteNode { target: t },
+            Provenance::default(),
+        )
+        .expect_err("delete of a guarded node must be refused");
         let msg = err.to_string();
         assert!(msg.contains("work"), "error must name the task: {msg}");
         assert!(msg.contains("guard"), "error must name the guard: {msg}");
 
         // GREEN: delete the guard first...
-        let staged_guard_gone = apply(&dag, Operation::DeleteNode { target: guard }, Provenance::default())
-            .expect("guard delete must succeed");
+        let staged_guard_gone = apply(
+            &dag,
+            Operation::DeleteNode { target: guard },
+            Provenance::default(),
+        )
+        .expect("guard delete must succeed");
         // ...then the task deletes clean.
         apply(
             &staged_guard_gone.candidate,
@@ -1128,34 +1221,59 @@ mod tests {
     fn deleted_ids_are_reusable() {
         let mut dag = DesignerDag::new("recv6");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t1 = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
-        let t2 = dag.insert_node(key(), task("t2"), None, Provenance::default()).unwrap();
+        let t1 = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        let t2 = dag
+            .insert_node(key(), task("t2"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             t1,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t1,
             t2,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t2,
             e,
-            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e3".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
-        let staged_deleted = apply(&dag, Operation::DeleteNode { target: t2 }, Provenance::default())
-            .expect("delete t2 must succeed");
+        let staged_deleted = apply(
+            &dag,
+            Operation::DeleteNode { target: t2 },
+            Provenance::default(),
+        )
+        .expect("delete t2 must succeed");
 
         apply(
             &staged_deleted.candidate,
@@ -1316,19 +1434,28 @@ mod tests {
 
         let ir = staged.candidate.to_ir().unwrap();
         let (_, interrupting, _) = find_boundary_timer(&ir, "guard1").expect("guard projected");
-        assert!(interrupting, "AttachGuard must produce an INTERRUPTING guard");
+        assert!(
+            interrupting,
+            "AttachGuard must produce an INTERRUPTING guard"
+        );
         let attached_to = ir
             .node_indices()
             .find_map(|i| match &ir[i] {
-                IRNode::BoundaryTimer { id, attached_to, .. } if id == "guard1" => {
-                    Some(attached_to.clone())
-                }
+                IRNode::BoundaryTimer {
+                    id, attached_to, ..
+                } if id == "guard1" => Some(attached_to.clone()),
                 _ => None,
             })
             .unwrap();
-        assert_eq!(attached_to, "t1", "guard must be projected with host's current id");
+        assert_eq!(
+            attached_to, "t1",
+            "guard must be projected with host's current id"
+        );
 
-        staged.candidate.admit().expect("interrupting duration guard must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("interrupting duration guard must admit");
     }
 
     /// Receipt 2 (GREEN): AttachRearmingGuard with a Cycle timer — cycle
@@ -1367,10 +1494,16 @@ mod tests {
 
         let ir = staged.candidate.to_ir().unwrap();
         let (spec, interrupting, _) = find_boundary_timer(&ir, "guard2").expect("guard projected");
-        assert!(!interrupting, "AttachRearmingGuard must produce a NON-interrupting guard");
+        assert!(
+            !interrupting,
+            "AttachRearmingGuard must produce a NON-interrupting guard"
+        );
         assert!(matches!(spec, TimerSpec::Cycle { .. }));
 
-        staged.candidate.admit().expect("non-interrupting cycle guard must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("non-interrupting cycle guard must admit");
     }
 
     /// Receipt 3 (RED): AttachGuard with a Cycle trigger is refused at
@@ -1405,9 +1538,16 @@ mod tests {
         // verifier backstop rejects it too (7b).
         let mut dag = DesignerDag::new("recv9-3-bypass");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
@@ -1431,24 +1571,39 @@ mod tests {
         dag.insert_edge(
             s,
             t,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t,
             e,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             g,
             e,
-            DesignerEdge { id: "g_out".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "g_out".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
-        let errs = dag.admit().expect_err("verifier backstop must also reject cycle-on-interrupting");
+        let errs = dag
+            .admit()
+            .expect_err("verifier backstop must also reject cycle-on-interrupting");
         assert!(
-            errs.iter().any(|e| e.message.to_lowercase().contains("non-interrupting")),
+            errs.iter()
+                .any(|e| e.message.to_lowercase().contains("non-interrupting")),
             "verifier diagnostic must name the rule: {errs:?}"
         );
     }
@@ -1525,7 +1680,10 @@ mod tests {
         let (_, _, budget) = find_boundary_timer(&ir, "guard5").expect("guard projected");
         assert_eq!(budget, Some(9), "declared budget must ride the projection");
 
-        staged.candidate.admit().expect("budgeted guard must still admit end to end");
+        staged
+            .candidate
+            .admit()
+            .expect("budgeted guard must still admit end to end");
     }
 
     /// Receipt 6 (RED): SetGuardBudget on a ServiceTask (not a guard) is
@@ -1542,7 +1700,10 @@ mod tests {
             Provenance::default(),
         )
         .expect_err("SetGuardBudget on a ServiceTask must be refused");
-        assert!(err.to_string().contains("t1"), "refusal must name the node id: {err}");
+        assert!(
+            err.to_string().contains("t1"),
+            "refusal must name the node id: {err}"
+        );
     }
 
     /// Receipt 7: SetCorrelationSource GREEN on a MessageWait (field
@@ -1551,31 +1712,55 @@ mod tests {
     fn set_correlation_source_green_on_wait_red_on_task() {
         let mut dag = DesignerDag::new("recv9-7");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
         let m = dag
-            .insert_node(key(), message_wait("mw", "old_source"), None, Provenance::default())
+            .insert_node(
+                key(),
+                message_wait("mw", "old_source"),
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t1 = dag.insert_node(key(), task("t1"), None, Provenance::default()).unwrap();
+        let t1 = dag
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             m,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             m,
             t1,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t1,
             e,
-            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e3".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
@@ -1593,9 +1778,11 @@ mod tests {
         let corr = ir
             .node_indices()
             .find_map(|i| match &ir[i] {
-                IRNode::MessageWait { id, corr_key_source, .. } if id == "mw" => {
-                    Some(corr_key_source.clone())
-                }
+                IRNode::MessageWait {
+                    id,
+                    corr_key_source,
+                    ..
+                } if id == "mw" => Some(corr_key_source.clone()),
                 _ => None,
             })
             .expect("MessageWait projected");
@@ -1611,7 +1798,10 @@ mod tests {
             Provenance::default(),
         )
         .expect_err("SetCorrelationSource on a ServiceTask must be refused");
-        assert!(err.to_string().contains("t1"), "refusal must name the node id: {err}");
+        assert!(
+            err.to_string().contains("t1"),
+            "refusal must name the node id: {err}"
+        );
     }
 
     /// Receipt 8 (RED): SetGuardTrigger kind-switch is refused — a
@@ -1627,7 +1817,9 @@ mod tests {
                 host: t1,
                 key: guard_key,
                 guard_id: "guard8".into(),
-                trigger: GuardTrigger::Error { error_code: Some("boom".into()) },
+                trigger: GuardTrigger::Error {
+                    error_code: Some("boom".into()),
+                },
             },
             Provenance::default(),
         )
@@ -1654,29 +1846,50 @@ mod tests {
     fn connect_refusal_names_bpmn_ids_alongside_keys() {
         let mut dag = DesignerDag::new("recv9-9");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let a = dag.insert_node(key(), task("a"), None, Provenance::default()).unwrap();
-        let b = dag.insert_node(key(), task("b"), None, Provenance::default()).unwrap();
+        let a = dag
+            .insert_node(key(), task("a"), None, Provenance::default())
+            .unwrap();
+        let b = dag
+            .insert_node(key(), task("b"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             a,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             a,
             b,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             b,
             e,
-            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e3".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
@@ -1692,10 +1905,22 @@ mod tests {
         )
         .expect_err("backward connect must be refused");
         let msg = err.to_string();
-        assert!(msg.contains(&format!("{b:?}")), "must still name from-key: {msg}");
-        assert!(msg.contains(&format!("{a:?}")), "must still name to-key: {msg}");
-        assert!(msg.contains("'a'"), "must name the from-node's BPMN id: {msg}");
-        assert!(msg.contains("'b'"), "must name the to-node's BPMN id: {msg}");
+        assert!(
+            msg.contains(&format!("{b:?}")),
+            "must still name from-key: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("{a:?}")),
+            "must still name to-key: {msg}"
+        );
+        assert!(
+            msg.contains("'a'"),
+            "must name the from-node's BPMN id: {msg}"
+        );
+        assert!(
+            msg.contains("'b'"),
+            "must name the to-node's BPMN id: {msg}"
+        );
     }
 
     // ── WS-A.2 slice 4 — ReplaceNode ───────────────────────────────────
@@ -1728,12 +1953,22 @@ mod tests {
         assert!(staged.candidate.node(t1).is_none(), "target must be gone");
 
         let ir = staged.candidate.to_ir().unwrap();
-        let e1 = ir.edge_indices().find(|&i| ir[i].id == "e1").expect("e1 preserved");
-        let e2 = ir.edge_indices().find(|&i| ir[i].id == "e2").expect("e2 preserved");
+        let e1 = ir
+            .edge_indices()
+            .find(|&i| ir[i].id == "e1")
+            .expect("e1 preserved");
+        let e2 = ir
+            .edge_indices()
+            .find(|&i| ir[i].id == "e2")
+            .expect("e2 preserved");
         let _ = (e1, e2);
 
         staged.candidate.admit().expect("replaced chain must admit");
-        assert_eq!(base.node_count(), base_count_before, "I18: base DAG unchanged");
+        assert_eq!(
+            base.node_count(),
+            base_count_before,
+            "I18: base DAG unchanged"
+        );
         assert_eq!(base.node_count(), 3);
     }
 
@@ -1765,9 +2000,16 @@ mod tests {
     fn replace_under_guard_refused() {
         let mut dag = DesignerDag::new("replace2");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
             .unwrap();
-        let t = dag.insert_node(key(), task("work"), None, Provenance::default()).unwrap();
+        let t = dag
+            .insert_node(key(), task("work"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
@@ -1787,13 +2029,21 @@ mod tests {
         dag.insert_edge(
             s,
             t,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             t,
             e,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
@@ -1904,8 +2154,15 @@ mod tests {
             "the re-pointed t1->end edge id must survive on join->end"
         );
 
-        staged.candidate.admit().expect("closed parallel region must admit");
-        assert_eq!(base.node_count(), base_count_before, "I18: base DAG unchanged");
+        staged
+            .candidate
+            .admit()
+            .expect("closed parallel region must admit");
+        assert_eq!(
+            base.node_count(),
+            base_count_before,
+            "I18: base DAG unchanged"
+        );
     }
 
     /// Receipt 2 (GREEN): 2 conditioned branches on a
@@ -1945,7 +2202,10 @@ mod tests {
         )
         .expect("inclusive region construction must succeed");
 
-        staged.candidate.admit().expect("closed inclusive region must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("closed inclusive region must admit");
     }
 
     /// Receipt 3a (RED): an inclusive-region branch with no condition is
@@ -1982,7 +2242,10 @@ mod tests {
             Provenance::default(),
         )
         .expect_err("unconditioned inclusive branch must be refused");
-        assert!(err.to_string().contains("q2"), "refusal must name the branch id: {err}");
+        assert!(
+            err.to_string().contains("q2"),
+            "refusal must name the branch id: {err}"
+        );
     }
 
     /// Receipt 3b (RED): a parallel-region branch WITH a condition is
@@ -2019,7 +2282,10 @@ mod tests {
             Provenance::default(),
         )
         .expect_err("conditioned parallel branch must be refused");
-        assert!(err.to_string().contains("p2"), "refusal must name the branch id: {err}");
+        assert!(
+            err.to_string().contains("p2"),
+            "refusal must name the branch id: {err}"
+        );
     }
 
     /// Receipt 4 (RED): a single-branch region is refused (>= 2 required).
@@ -2071,7 +2337,10 @@ mod tests {
             Provenance::default(),
         )
         .expect("MultiInstance region construction must succeed");
-        staged.candidate.admit().expect("MultiInstance region must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("MultiInstance region must admit");
 
         let err = apply(
             &base,
@@ -2125,7 +2394,11 @@ mod tests {
             .insert_edge(
                 branch_a,
                 e,
-                DesignerEdge { id: "a_out".into(), condition: None, provenance: Provenance::default() },
+                DesignerEdge {
+                    id: "a_out".into(),
+                    condition: None,
+                    provenance: Provenance::default(),
+                },
             )
             .unwrap();
         candidate
@@ -2135,7 +2408,11 @@ mod tests {
             .insert_edge(
                 branch_b,
                 e,
-                DesignerEdge { id: "b_out".into(), condition: None, provenance: Provenance::default() },
+                DesignerEdge {
+                    id: "b_out".into(),
+                    condition: None,
+                    provenance: Provenance::default(),
+                },
             )
             .unwrap();
 
@@ -2162,7 +2439,10 @@ mod tests {
         )
         .expect("CreateBranch to branchB must succeed");
 
-        staged.candidate.admit().expect("XOR split with 2 conditioned branches + 1 default must admit");
+        staged
+            .candidate
+            .admit()
+            .expect("XOR split with 2 conditioned branches + 1 default must admit");
     }
 
     /// Receipt 7 (RED): CreateBranch that would close a cycle (forward-only
@@ -2171,36 +2451,58 @@ mod tests {
     fn create_branch_backward_refused() {
         let mut dag = DesignerDag::new("region7");
         let s = dag
-            .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
-            .unwrap();
-        let xor = dag
             .insert_node(
                 key(),
-                IRNode::GatewayXor { id: "xor7".into(), name: "xor7".into() },
+                IRNode::Start { id: "start".into() },
                 None,
                 Provenance::default(),
             )
             .unwrap();
-        let b = dag.insert_node(key(), task("b"), None, Provenance::default()).unwrap();
+        let xor = dag
+            .insert_node(
+                key(),
+                IRNode::GatewayXor {
+                    id: "xor7".into(),
+                    name: "xor7".into(),
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let b = dag
+            .insert_node(key(), task("b"), None, Provenance::default())
+            .unwrap();
         let e = dag
             .insert_node(key(), end_node("end"), None, Provenance::default())
             .unwrap();
         dag.insert_edge(
             s,
             xor,
-            DesignerEdge { id: "e1".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             xor,
             b,
-            DesignerEdge { id: "e2".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e2".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
         dag.insert_edge(
             b,
             e,
-            DesignerEdge { id: "e3".into(), condition: None, provenance: Provenance::default() },
+            DesignerEdge {
+                id: "e3".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
         )
         .unwrap();
 
@@ -2217,8 +2519,14 @@ mod tests {
         )
         .expect_err("backward CreateBranch must be refused");
         let msg = err.to_string();
-        assert!(msg.contains(&format!("{xor:?}")), "must name gateway key: {msg}");
-        assert!(msg.contains(&format!("{s:?}")), "must name target key: {msg}");
+        assert!(
+            msg.contains(&format!("{xor:?}")),
+            "must name gateway key: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("{s:?}")),
+            "must name target key: {msg}"
+        );
         assert!(msg.contains("'xor7'"), "must name gateway's BPMN id: {msg}");
         assert!(msg.contains("'start'"), "must name target's BPMN id: {msg}");
     }

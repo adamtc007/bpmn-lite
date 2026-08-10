@@ -50,7 +50,8 @@ impl MetricsReport {
         (denom > 0).then(|| self.oracle_on_board as f64 / denom as f64)
     }
     pub(crate) fn recall_at_k(&self) -> Option<f64> {
-        (self.oracle_on_board > 0).then(|| self.oracle_in_top_k as f64 / self.oracle_on_board as f64)
+        (self.oracle_on_board > 0)
+            .then(|| self.oracle_in_top_k as f64 / self.oracle_on_board as f64)
     }
     fn ranking_given_inclusion(&self) -> Option<f64> {
         (self.oracle_in_top_k > 0).then(|| self.top1_correct as f64 / self.oracle_in_top_k as f64)
@@ -171,8 +172,14 @@ mod tests {
     /// decomposition's denominators behave.
     #[test]
     fn decomposition_over_lexical_baseline() {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let cases = vec![
             LabeledCase {
                 utterance: "Connect two existing nodes with a typed sequence flow".into(),
@@ -187,7 +194,10 @@ mod tests {
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
+            &cases,
+            5,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
         .unwrap();
         assert_eq!(report.cases, 2);
         assert_eq!(report.board_completeness(), Some(1.0));
@@ -201,8 +211,14 @@ mod tests {
     /// for the oracle-based rates instead of fake 100%s.
     #[test]
     fn zero_denominators_stay_visible() {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let cases = vec![LabeledCase {
             utterance: "xyzzy".into(),
             oracle: None,
@@ -211,7 +227,10 @@ mod tests {
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
+            &cases,
+            5,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
         .unwrap();
         assert_eq!(report.board_completeness(), None);
         assert_eq!(report.recall_at_k(), None);
@@ -224,8 +243,14 @@ mod tests {
     /// where it is NOT structural, e.g. batched tier-1 inference).
     #[test]
     fn lexical_producer_is_position_invariant() {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         assert_position_invariant(&LexicalTier0, "connect the nodes", &board).unwrap();
     }
 }
@@ -259,7 +284,10 @@ mod seed_corpus_baseline {
         let raw = include_str!("../seed/seed_corpus_v1.json");
         let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed["version"], "synthetic.seed.v1");
-        assert!(parsed["provenance"].as_str().unwrap().contains("synthetic.llm"));
+        assert!(parsed["provenance"]
+            .as_str()
+            .unwrap()
+            .contains("synthetic.llm"));
         let cases: Vec<LabeledCase> = parsed["cases"]
             .as_array()
             .unwrap()
@@ -271,13 +299,22 @@ mod seed_corpus_baseline {
             .collect();
         assert!(cases.len() >= 90, "corpus shrank unexpectedly");
 
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let report = evaluate(
             &LexicalTier0,
             &board,
             &DispositionConfig::shadow_v1(),
-            &cases, 5, &crate::context::minimal("pack.none", "g-test"))
+            &cases,
+            5,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
         .unwrap();
 
         eprintln!(
@@ -292,8 +329,18 @@ mod seed_corpus_baseline {
         );
 
         // Sanity floors only (recorded rates live in the plan receipts):
-        assert_eq!(report.board_completeness(), Some(1.0), "every oracle is on the board");
-        assert!(report.recall_at_k().unwrap() > 0.5, "lexical recall@5 collapsed");
-        assert!(report.abstention_coverage().unwrap() > 0.8, "off-board handling collapsed");
+        assert_eq!(
+            report.board_completeness(),
+            Some(1.0),
+            "every oracle is on the board"
+        );
+        assert!(
+            report.recall_at_k().unwrap() > 0.5,
+            "lexical recall@5 collapsed"
+        );
+        assert!(
+            report.abstention_coverage().unwrap() > 0.8,
+            "off-board handling collapsed"
+        );
     }
 }

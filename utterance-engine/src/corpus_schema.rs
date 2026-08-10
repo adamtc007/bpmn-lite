@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 pub const CORPUS_SCHEMA_ID: &str = "bpmn.semantic-corpus.v3";
 
 pub fn corpus_schema_hash() -> String {
-    blake3::hash(CORPUS_SCHEMA_ID.as_bytes()).to_hex().to_string()
+    blake3::hash(CORPUS_SCHEMA_ID.as_bytes())
+        .to_hex()
+        .to_string()
 }
 
 #[derive(Serialize, Deserialize)]

@@ -92,7 +92,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ] {
@@ -130,7 +133,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::AttachRearmingGuard {
@@ -151,7 +157,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: esc,
                 key: keys.next(),
-                node: IRNode::End { id: "end_esc".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end_esc".into(),
+                    terminate: false,
+                },
                 edge_id: "f4".into(),
             },
         ] {
@@ -197,7 +206,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::AttachRearmingGuard {
@@ -247,7 +259,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: h,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f3".into(),
             },
         ] {
@@ -281,7 +296,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: s,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ] {
@@ -313,7 +331,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: x,
-                node: IRNode::GatewayXor { id: "outcome".into(), name: "outcome".into() },
+                node: IRNode::GatewayXor {
+                    id: "outcome".into(),
+                    name: "outcome".into(),
+                },
                 edge_id: "f2".into(),
             },
             Operation::AppendNode {
@@ -325,7 +346,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: h1,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f4".into(),
             },
         ] {
@@ -355,7 +379,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::CreateParallelRegion {
@@ -407,7 +434,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::CreateMultiInstanceRegion {
@@ -450,7 +480,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: e,
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ] {
@@ -497,7 +530,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ] {
@@ -537,7 +573,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: w,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f3".into(),
             },
         ] {
@@ -577,7 +616,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: w,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f3".into(),
             },
         ] {
@@ -609,7 +651,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::AttachGuard {
@@ -628,7 +673,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: guard,
                 key: keys.next(),
-                node: IRNode::End { id: "end_rejected".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end_rejected".into(),
+                    terminate: false,
+                },
                 edge_id: "f_guard_out".into(),
             },
             p(),
@@ -664,7 +712,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
         ] {
@@ -697,7 +748,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::CreateParallelRegion {
@@ -749,7 +803,10 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
             Operation::AppendNode {
                 anchor: t,
                 key: keys.next(),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::CreateInclusiveRegion {

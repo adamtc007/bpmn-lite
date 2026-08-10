@@ -184,11 +184,21 @@ impl ProductionId {
         match self {
             ProductionId::RequestAndWait => "Send a request and wait for its correlated response",
             ProductionId::TimerMessageRace => "Race a message arrival against a timer deadline",
-            ProductionId::ReminderThenEscalate => "Non-interrupting bounded reminder cycle with an escalation continuation",
-            ProductionId::InterruptingTimeout => "Interrupting timeout guard around the anchored work",
-            ProductionId::NonInterruptingNotification => "Fire a notification on a schedule without interrupting the work",
-            ProductionId::HumanReviewWithRework => "Human review with bounded, attempt-counted forward rework",
-            ProductionId::CallDurableSubprocess => "Invoke a durable subprocess and await its typed outcome",
+            ProductionId::ReminderThenEscalate => {
+                "Non-interrupting bounded reminder cycle with an escalation continuation"
+            }
+            ProductionId::InterruptingTimeout => {
+                "Interrupting timeout guard around the anchored work"
+            }
+            ProductionId::NonInterruptingNotification => {
+                "Fire a notification on a schedule without interrupting the work"
+            }
+            ProductionId::HumanReviewWithRework => {
+                "Human review with bounded, attempt-counted forward rework"
+            }
+            ProductionId::CallDurableSubprocess => {
+                "Invoke a durable subprocess and await its typed outcome"
+            }
         }
     }
 }
@@ -355,7 +365,8 @@ mod tests {
         );
     }
 
-    const GOLDEN_DESCRIPTION_HASH: &str = "0a97db72ebdac007adee70c89ca1a46c70c2337cb1ad0959304e2a9ae0116bc6";
+    const GOLDEN_DESCRIPTION_HASH: &str =
+        "0a97db72ebdac007adee70c89ca1a46c70c2337cb1ad0959304e2a9ae0116bc6";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]
@@ -378,7 +389,10 @@ mod tests {
         assert_eq!(ids_a, ids_b);
         let mut sorted = ids_a.clone();
         sorted.sort();
-        assert_eq!(ids_a, sorted, "default assembly must be canonical-id sorted");
+        assert_eq!(
+            ids_a, sorted,
+            "default assembly must be canonical-id sorted"
+        );
 
         // Dedup (review F6): a repeating oracle yields no duplicate entries.
         struct Doubled;

@@ -43,7 +43,10 @@ pub struct PositionalLegality<'a> {
 }
 
 fn is_task_host(ir: &IRNode) -> bool {
-    matches!(ir, IRNode::ServiceTask { .. } | IRNode::FfiServiceTask { .. })
+    matches!(
+        ir,
+        IRNode::ServiceTask { .. } | IRNode::FfiServiceTask { .. }
+    )
 }
 
 /// Legal guard hosts = verifier §7a's set: task hosts PLUS MessageWait/
@@ -54,7 +57,10 @@ fn is_guard_host(ir: &IRNode) -> bool {
 }
 
 fn is_guard(ir: &IRNode) -> bool {
-    matches!(ir, IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. })
+    matches!(
+        ir,
+        IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }
+    )
 }
 
 fn is_corr_carrier(ir: &IRNode) -> bool {
@@ -211,7 +217,11 @@ mod tests {
     }
 
     fn task(id: &str) -> IRNode {
-        IRNode::ServiceTask { id: id.into(), name: id.into(), task_type: "noop".into() }
+        IRNode::ServiceTask {
+            id: id.into(),
+            name: id.into(),
+            task_type: "noop".into(),
+        }
     }
 
     struct Fx {
@@ -229,7 +239,9 @@ mod tests {
     fn fixture() -> Fx {
         let mut dag = DesignerDag::new("positional-fx");
         let p = Provenance::default;
-        let start = dag.insert_node(key(), IRNode::Start { id: "start".into() }, None, p()).unwrap();
+        let start = dag
+            .insert_node(key(), IRNode::Start { id: "start".into() }, None, p())
+            .unwrap();
         let t1 = dag.insert_node(key(), task("t1"), None, p()).unwrap();
         let wait = dag
             .insert_node(
@@ -244,7 +256,15 @@ mod tests {
             )
             .unwrap();
         let end = dag
-            .insert_node(key(), IRNode::End { id: "end".into(), terminate: false }, None, p())
+            .insert_node(
+                key(),
+                IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                None,
+                p(),
+            )
             .unwrap();
         let data = dag
             .insert_node(
@@ -265,7 +285,11 @@ mod tests {
             dag.insert_edge(
                 a,
                 b,
-                DesignerEdge { id: id.into(), condition: None, provenance: p() },
+                DesignerEdge {
+                    id: id.into(),
+                    condition: None,
+                    provenance: p(),
+                },
             )
             .unwrap();
         }
@@ -275,7 +299,10 @@ mod tests {
                 IRNode::BoundaryTimer {
                     id: "g1".into(),
                     attached_to: "t1".into(),
-                    spec: TimerSpec::Cycle { interval_ms: 1000, max_fires: 2 },
+                    spec: TimerSpec::Cycle {
+                        interval_ms: 1000,
+                        max_fires: 2,
+                    },
                     interrupting: false,
                     failure_budget: None,
                 },
@@ -283,7 +310,15 @@ mod tests {
                 p(),
             )
             .unwrap();
-        Fx { dag, start, t1, wait, guard, end, data }
+        Fx {
+            dag,
+            start,
+            t1,
+            wait,
+            guard,
+            end,
+            data,
+        }
     }
 
     fn ops(fx: &Fx, k: NodeKey) -> Vec<OperationKind> {
@@ -319,7 +354,10 @@ mod tests {
         let guard_ops = ops(&fx, fx.guard);
         assert!(guard_ops.contains(&OperationKind::SetGuardBudget));
         assert!(guard_ops.contains(&OperationKind::SetGuardTrigger));
-        assert!(guard_ops.contains(&OperationKind::AppendNode), "guard escape path opens here");
+        assert!(
+            guard_ops.contains(&OperationKind::AppendNode),
+            "guard escape path opens here"
+        );
         assert!(!guard_ops.contains(&OperationKind::InsertAfter));
         assert_eq!(
             ops(&fx, fx.data),
@@ -336,7 +374,10 @@ mod tests {
         // AppendNode: only where no outgoing edge exists.
         assert!(!ops(&fx, fx.t1).contains(&OperationKind::AppendNode));
         let no_out = ops(&fx, fx.end);
-        assert!(!no_out.contains(&OperationKind::AppendNode), "End never extends the chain");
+        assert!(
+            !no_out.contains(&OperationKind::AppendNode),
+            "End never extends the chain"
+        );
         assert!(!no_out.contains(&OperationKind::InsertAfter));
         assert!(no_out.contains(&OperationKind::InsertBefore));
         // Guarded host refuses delete/replace; unguarded wait allows delete.
@@ -362,7 +403,10 @@ mod tests {
                 host: fx.t1,
                 key: key(),
                 guard_id: "g_new".into(),
-                trigger: GuardTrigger::Timer(TimerSpec::Cycle { interval_ms: 5, max_fires: 1 }),
+                trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                    interval_ms: 5,
+                    max_fires: 1,
+                }),
             },
             p(),
         )
@@ -400,7 +444,10 @@ mod tests {
             }
         }
         assert!(union.windows(2).all(|w| w[0] < w[1]), "sorted, deduped");
-        assert!(oracle.legal_operations(Some(&key())).is_empty(), "unknown anchor");
+        assert!(
+            oracle.legal_operations(Some(&key())).is_empty(),
+            "unknown anchor"
+        );
         let empty = DesignerDag::new("empty");
         let empty_oracle = PositionalLegality { dag: &empty };
         assert!(empty_oracle.legal_operations(None).is_empty());
@@ -421,7 +468,10 @@ mod tests {
             OperationKind::AttachRollbackGuard,
             OperationKind::CallSubprocess,
         ] {
-            assert!(!all_ops.contains(&banned), "{banned:?} must never be boarded");
+            assert!(
+                !all_ops.contains(&banned),
+                "{banned:?} must never be boarded"
+            );
         }
         let all = oracle.legal_productions(None);
         for banned in [

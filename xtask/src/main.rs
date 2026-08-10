@@ -1330,8 +1330,7 @@ fn pack_check_command(domain: &str) -> Result<()> {
         );
     }
 
-    let closure_path =
-        manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
+    let closure_path = manifests_dir.join(format!("{}-{}.closure.yaml", domain, dag.version));
     let checked_closure_content = std::fs::read_to_string(&closure_path)
         .with_context(|| format!("read checked closure at {}", closure_path.display()))?;
     let checked_closure: bpmn_lite_compiler::dsl::PackClosureManifest =
@@ -1383,8 +1382,12 @@ const BPMN_INVOCATION_VERBS: [&str; 6] = [
 /// otherwise this arm would never be reached, since any declared set
 /// containing one of these ids already differs from the expected real-verb
 /// set and would be caught there first with a less specific message.
-const BPMN_STRUCTURAL_NODES: [&str; 4] =
-    ["message-wait", "timer-wait", "boundary-timer", "boundary-error"];
+const BPMN_STRUCTURAL_NODES: [&str; 4] = [
+    "message-wait",
+    "timer-wait",
+    "boundary-timer",
+    "boundary-error",
+];
 
 /// Pure, file-free checks over the BPMN invocation surface, factored out of
 /// `pack_check_command` so each rule has its own red-fixture test: a
@@ -1512,7 +1515,9 @@ mod pack_check_tests {
         let error = check_no_structural_verbs(&declared)
             .expect_err("a structural node in the declared surface must be refused");
         assert!(
-            error.to_string().contains("structural BPMN node 'boundary-timer'"),
+            error
+                .to_string()
+                .contains("structural BPMN node 'boundary-timer'"),
             "unexpected error message: {error}"
         );
 
@@ -1533,8 +1538,7 @@ mod pack_check_tests {
         for forbidden in BPMN_STRUCTURAL_NODES {
             let mut declared = expected_set();
             declared.insert(forbidden);
-            let error = check_no_structural_verbs(&declared)
-                .unwrap_err();
+            let error = check_no_structural_verbs(&declared).unwrap_err();
             assert!(
                 error.to_string().contains(forbidden),
                 "'{forbidden}' must be named in the diagnostic, got: {error}"

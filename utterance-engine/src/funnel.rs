@@ -872,12 +872,10 @@ pub struct FunnelReport {
 /// The gold candidate a label implies, if it implies one.
 fn gold_of(record: &DecisionRecord, outcome: &AdjudicationOutcome) -> Option<String> {
     match outcome {
-        AdjudicationOutcome::Accepted => {
-            record.ranking.first().map(|(id, _)| id.clone())
-        }
-        AdjudicationOutcome::Corrected { correct_candidate_id } => {
-            Some(correct_candidate_id.clone())
-        }
+        AdjudicationOutcome::Accepted => record.ranking.first().map(|(id, _)| id.clone()),
+        AdjudicationOutcome::Corrected {
+            correct_candidate_id,
+        } => Some(correct_candidate_id.clone()),
         AdjudicationOutcome::ExplicitlySelected { candidate_id } => Some(candidate_id.clone()),
         AdjudicationOutcome::Abandoned => None,
     }
@@ -899,7 +897,10 @@ pub fn assess_turn(
     outcome: &AdjudicationOutcome,
 ) {
     report.labelled_turns += 1;
-    *report.labels.entry(label_key(outcome).to_owned()).or_default() += 1;
+    *report
+        .labels
+        .entry(label_key(outcome).to_owned())
+        .or_default() += 1;
     report.retrieval_inclusion_not_measured += 1;
     report.binding_not_measured += 1;
     report.execution_not_measured += 1;
@@ -976,7 +977,10 @@ pub fn funnel_from_capture_dir(dir: &Path) -> anyhow::Result<FunnelReport> {
                 continue;
             }
             if labels
-                .insert(parsed.event.decision_record_hash.clone(), parsed.event.outcome)
+                .insert(
+                    parsed.event.decision_record_hash.clone(),
+                    parsed.event.outcome,
+                )
                 .is_some()
             {
                 report.label_overwrites += 1;
@@ -1101,14 +1105,37 @@ mod tests {
         let mut report = FunnelReport::default();
         let rec = record(
             &[("op.connect", 0.9), ("op.append_node", 0.1)],
-            ProposalDisposition::Candidate { candidate_id: "op.connect".into() },
+            ProposalDisposition::Candidate {
+                candidate_id: "op.connect".into(),
+            },
         );
         assess_turn(&mut report, &rec, &AdjudicationOutcome::Accepted);
-        assert_eq!(report.gold_on_board, Stage { eligible: 1, passed: 1 });
-        assert_eq!(report.top1, Stage { eligible: 1, passed: 1 });
-        assert_eq!(report.disposition_correct, Stage { eligible: 1, passed: 1 });
+        assert_eq!(
+            report.gold_on_board,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
+        assert_eq!(
+            report.top1,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
+        assert_eq!(
+            report.disposition_correct,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
         assert_eq!(report.confident_wrong, 0);
-        assert_eq!(report.retrieval_inclusion_not_measured, 1, "gap stays explicit");
+        assert_eq!(
+            report.retrieval_inclusion_not_measured, 1,
+            "gap stays explicit"
+        );
     }
 
     #[test]
@@ -1117,16 +1144,39 @@ mod tests {
         // Served the wrong candidate confidently; gold was on the board.
         let rec = record(
             &[("op.connect", 0.9), ("op.insert_after", 0.1)],
-            ProposalDisposition::Candidate { candidate_id: "op.connect".into() },
+            ProposalDisposition::Candidate {
+                candidate_id: "op.connect".into(),
+            },
         );
         assess_turn(
             &mut report,
             &rec,
-            &AdjudicationOutcome::Corrected { correct_candidate_id: "op.insert_after".into() },
+            &AdjudicationOutcome::Corrected {
+                correct_candidate_id: "op.insert_after".into(),
+            },
         );
-        assert_eq!(report.gold_on_board, Stage { eligible: 1, passed: 1 });
-        assert_eq!(report.top1, Stage { eligible: 1, passed: 0 }, "failure lands at ranking");
-        assert_eq!(report.disposition_correct, Stage { eligible: 1, passed: 0 });
+        assert_eq!(
+            report.gold_on_board,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
+        assert_eq!(
+            report.top1,
+            Stage {
+                eligible: 1,
+                passed: 0
+            },
+            "failure lands at ranking"
+        );
+        assert_eq!(
+            report.disposition_correct,
+            Stage {
+                eligible: 1,
+                passed: 0
+            }
+        );
         assert_eq!(report.confident_wrong, 1);
 
         // Gold entirely off the board: the failure attributes to board
@@ -1134,16 +1184,35 @@ mod tests {
         let mut report = FunnelReport::default();
         let rec = record(
             &[("op.connect", 0.9)],
-            ProposalDisposition::EscalateToSage { reason: "weak".into() },
+            ProposalDisposition::EscalateToSage {
+                reason: "weak".into(),
+            },
         );
         assess_turn(
             &mut report,
             &rec,
-            &AdjudicationOutcome::Corrected { correct_candidate_id: "op.never_built".into() },
+            &AdjudicationOutcome::Corrected {
+                correct_candidate_id: "op.never_built".into(),
+            },
         );
-        assert_eq!(report.gold_on_board, Stage { eligible: 1, passed: 0 });
-        assert_eq!(report.confident_wrong, 0, "escalation is not confident wrongness");
-        assert_eq!(report.disposition_correct, Stage { eligible: 1, passed: 1 });
+        assert_eq!(
+            report.gold_on_board,
+            Stage {
+                eligible: 1,
+                passed: 0
+            }
+        );
+        assert_eq!(
+            report.confident_wrong, 0,
+            "escalation is not confident wrongness"
+        );
+        assert_eq!(
+            report.disposition_correct,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
     }
 
     #[test]
@@ -1151,16 +1220,33 @@ mod tests {
         let mut report = FunnelReport::default();
         let out_of_scope = record(&[("op.connect", 0.4)], ProposalDisposition::OutOfScope);
         assess_turn(&mut report, &out_of_scope, &AdjudicationOutcome::Abandoned);
-        assert_eq!(report.disposition_correct, Stage { eligible: 1, passed: 1 });
+        assert_eq!(
+            report.disposition_correct,
+            Stage {
+                eligible: 1,
+                passed: 1
+            }
+        );
         assert_eq!(report.confident_wrong, 0);
-        assert_eq!(report.gold_on_board.eligible, 0, "no gold exists for abandonment");
+        assert_eq!(
+            report.gold_on_board.eligible, 0,
+            "no gold exists for abandonment"
+        );
 
         let confident = record(
             &[("op.connect", 0.9)],
-            ProposalDisposition::Candidate { candidate_id: "op.connect".into() },
+            ProposalDisposition::Candidate {
+                candidate_id: "op.connect".into(),
+            },
         );
         assess_turn(&mut report, &confident, &AdjudicationOutcome::Abandoned);
-        assert_eq!(report.disposition_correct, Stage { eligible: 2, passed: 1 });
+        assert_eq!(
+            report.disposition_correct,
+            Stage {
+                eligible: 2,
+                passed: 1
+            }
+        );
         assert_eq!(report.confident_wrong, 1);
     }
 
@@ -1175,7 +1261,9 @@ mod tests {
         let mut p = CapturePipeline::under_ratified_charter(RATIFIED_CHARTER_REF, &dir).unwrap();
         let rec = record(
             &[("op.connect", 0.9), ("op.insert_after", 0.1)],
-            ProposalDisposition::Candidate { candidate_id: "op.connect".into() },
+            ProposalDisposition::Candidate {
+                candidate_id: "op.connect".into(),
+            },
         );
         assert_eq!(
             p.capture(CaptureEvent {
@@ -1189,7 +1277,12 @@ mod tests {
         // one label that joins to nothing.
         for (hash, outcome) in [
             ("h", AdjudicationOutcome::Accepted),
-            ("h", AdjudicationOutcome::Corrected { correct_candidate_id: "op.insert_after".into() }),
+            (
+                "h",
+                AdjudicationOutcome::Corrected {
+                    correct_candidate_id: "op.insert_after".into(),
+                },
+            ),
             ("no-such-turn", AdjudicationOutcome::Accepted),
         ] {
             assert_eq!(
@@ -1207,7 +1300,13 @@ mod tests {
         assert_eq!(report.unmatched_labels, 1);
         assert_eq!(report.label_overwrites, 1);
         assert_eq!(report.labels["corrected"], 1, "last label wins");
-        assert_eq!(report.top1, Stage { eligible: 1, passed: 0 });
+        assert_eq!(
+            report.top1,
+            Stage {
+                eligible: 1,
+                passed: 0
+            }
+        );
         assert_eq!(report.confident_wrong, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }

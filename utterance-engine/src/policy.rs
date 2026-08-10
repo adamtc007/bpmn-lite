@@ -414,9 +414,7 @@ mod tests {
         .unwrap()
     }
 
-    fn semantic_board(
-        policy: &PolicyFilter,
-    ) -> semantic_decision_contracts::SemanticDecisionBoard {
+    fn semantic_board(policy: &PolicyFilter) -> semantic_decision_contracts::SemanticDecisionBoard {
         semantic_board_at(policy, "rev-policy-v2")
     }
 
@@ -910,8 +908,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(
-            baseline.decision_record_hash,
-            turn_serializer_record.decision_record_hash,
+            baseline.decision_record_hash, turn_serializer_record.decision_record_hash,
             "turn_serializer_hash must move the per-utterance audit hash, not only the corpus/bundle hashes it was previously sealed into"
         );
 

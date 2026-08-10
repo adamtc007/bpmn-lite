@@ -294,8 +294,9 @@ fn main() -> Result<()> {
     // "label" is NOT gold (these items are deliberately unlabelable);
     // the suite only ever reads the PAIR and measures score closeness.
     let amb_path = root.join("seed/eval_ambiguity_v1.json");
-    let amb_items: Vec<AmbiguityItem> =
-        serde_json::from_str(&std::fs::read_to_string(&amb_path).context("eval_ambiguity_v1.json")?)?;
+    let amb_items: Vec<AmbiguityItem> = serde_json::from_str(
+        &std::fs::read_to_string(&amb_path).context("eval_ambiguity_v1.json")?,
+    )?;
     let mut amb_examples: Vec<Example> = Vec::new();
     let mut amb_bad: Vec<String> = Vec::new();
     for item in &amb_items {
@@ -345,6 +346,9 @@ fn main() -> Result<()> {
         out_dir.join(format!("{CORPUS_VERSION}.ambiguity_enriched.jsonl")),
         amb_jsonl + "\n",
     )?;
-    println!("EVAL-ENRICH ambiguity set: {} pairs enriched", amb_examples.len());
+    println!(
+        "EVAL-ENRICH ambiguity set: {} pairs enriched",
+        amb_examples.len()
+    );
     Ok(())
 }

@@ -103,7 +103,9 @@ pub struct Board {
 
 impl Board {
     pub fn contains(&self, canonical_id: &str) -> bool {
-        self.candidates.iter().any(|c| c.canonical_id == canonical_id)
+        self.candidates
+            .iter()
+            .any(|c| c.canonical_id == canonical_id)
     }
 }
 
@@ -249,7 +251,10 @@ pub fn build_board<O: LegalityOracle>(
 
     // Reserved namespace (review C6): only build_board itself may emit
     // the abstention candidate.
-    if let Some(c) = candidates.iter().find(|c| c.canonical_id.starts_with("abstain.")) {
+    if let Some(c) = candidates
+        .iter()
+        .find(|c| c.canonical_id.starts_with("abstain."))
+    {
         return Err(anyhow::anyhow!(
             "candidate '{}' uses the reserved abstain.* namespace — only the board              constructor emits abstention",
             c.canonical_id
@@ -342,7 +347,14 @@ mod tests {
     }
 
     fn root_board() -> Board {
-        build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap()
+        build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap()
     }
 
     /// GREEN determinism + RED sensitivity: anchor, graph identity, and
@@ -353,15 +365,28 @@ mod tests {
         let b = root_board();
         assert_eq!(a.board_hash, b.board_hash, "determinism");
 
-        let anchored =
-            build_board(&AllLegal, Some((&(), "t1")), None, &EmptyUniverse, &PolicyFilter::default())
-                .unwrap();
+        let anchored = build_board(
+            &AllLegal,
+            Some((&(), "t1")),
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         assert_ne!(a.board_hash, anchored.board_hash, "anchor is hashed");
 
-        let with_graph =
-            build_board(&AllLegal, None, Some("rev1"), &EmptyUniverse, &PolicyFilter::default())
-                .unwrap();
-        assert_ne!(a.board_hash, with_graph.board_hash, "graph identity is hashed");
+        let with_graph = build_board(
+            &AllLegal,
+            None,
+            Some("rev1"),
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            a.board_hash, with_graph.board_hash,
+            "graph identity is hashed"
+        );
 
         let mut policy = PolicyFilter::default();
         policy.denied.insert("op.delete_subgraph".to_owned());
@@ -423,7 +448,10 @@ mod tests {
             &PolicyFilter::default(),
         )
         .unwrap();
-        assert_ne!(a.board_hash, b.board_hash, "delimiter bytes cannot forge boundaries");
+        assert_ne!(
+            a.board_hash, b.board_hash,
+            "delimiter bytes cannot forge boundaries"
+        );
     }
 
     /// C6 reds: reserved namespace and same-id/different-content are
@@ -444,8 +472,8 @@ mod tests {
                 }]
             }
         }
-        let err = build_board(&AllLegal, None, None, &Abstainer, &PolicyFilter::default())
-            .unwrap_err();
+        let err =
+            build_board(&AllLegal, None, None, &Abstainer, &PolicyFilter::default()).unwrap_err();
         assert!(err.to_string().contains("reserved"));
 
         struct Collider;
@@ -462,8 +490,8 @@ mod tests {
                 }]
             }
         }
-        let err = build_board(&AllLegal, None, None, &Collider, &PolicyFilter::default())
-            .unwrap_err();
+        let err =
+            build_board(&AllLegal, None, None, &Collider, &PolicyFilter::default()).unwrap_err();
         assert!(err.to_string().contains("collision"));
     }
 

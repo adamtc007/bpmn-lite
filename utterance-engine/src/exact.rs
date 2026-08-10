@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use semantic_decision_contracts::{CandidateSemanticSlice, SemanticDecisionBoard};
 pub use semantic_decision_contracts::EvidenceLane;
+use semantic_decision_contracts::{CandidateSemanticSlice, SemanticDecisionBoard};
 use serde::Serialize;
 use unicode_normalization::UnicodeNormalization;
 
@@ -160,9 +160,7 @@ pub fn finalize_semantic_evidence(
         .map(|candidate| candidate.candidate_id.clone())
         .collect::<BTreeSet<_>>();
     if result.ranking.len() != result_ids.len() || result_ids != board_ids {
-        anyhow::bail!(
-            "semantic serving evidence must contain every board candidate exactly once"
-        );
+        anyhow::bail!("semantic serving evidence must contain every board candidate exactly once");
     }
 
     let exact = governed_exact(board, utterance);
@@ -241,7 +239,10 @@ mod tests {
             DomainIdentity::new("bpmn.test").unwrap(),
             SnapshotIdentity::new("snapshot").unwrap(),
             GraphRevision::new("revision").unwrap(),
-            ResolvedPosition { anchor: None, context_hash: "context".into() },
+            ResolvedPosition {
+                anchor: None,
+                context_hash: "context".into(),
+            },
             candidates,
             "policy".into(),
         )

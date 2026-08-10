@@ -352,9 +352,9 @@ impl CapturePipeline {
             );
         }
         let named_candidate = match &event.outcome {
-            AdjudicationOutcome::Corrected { correct_candidate_id } => {
-                Some(correct_candidate_id)
-            }
+            AdjudicationOutcome::Corrected {
+                correct_candidate_id,
+            } => Some(correct_candidate_id),
             AdjudicationOutcome::ExplicitlySelected { candidate_id } => Some(candidate_id),
             AdjudicationOutcome::Accepted | AdjudicationOutcome::Abandoned => None,
         };
@@ -586,7 +586,10 @@ fn epoch_s() -> u64 {
 }
 
 fn append_jsonl(path: &Path, serialized: &str) -> anyhow::Result<()> {
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     file.write_all(serialized.as_bytes())?;
     file.write_all(b"\n")?;
     file.flush()?;
@@ -625,11 +628,22 @@ mod tests {
     }
 
     fn one_event() -> CaptureEvent {
-        let board =
-            build_board(&AllLegal, None, None, &EmptyUniverse, &PolicyFilter::default()).unwrap();
+        let board = build_board(
+            &AllLegal,
+            None,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )
+        .unwrap();
         let ev = LexicalTier0.retrieve("connect the nodes", &board).unwrap();
-        let (_, record) =
-            decide(&DispositionConfig::shadow_v1(), &board, &ev, &crate::context::minimal("pack.none", "g-test")).unwrap();
+        let (_, record) = decide(
+            &DispositionConfig::shadow_v1(),
+            &board,
+            &ev,
+            &crate::context::minimal("pack.none", "g-test"),
+        )
+        .unwrap();
         CaptureEvent {
             raw_utterance: "connect the nodes".into(),
             record,
@@ -712,7 +726,10 @@ mod tests {
     fn off_drops_and_charterless_on_is_refused() {
         let mut p = CapturePipeline::off();
         assert_eq!(p.capture(one_event()), CaptureOutcome::SuppressedNoCharter);
-        assert!(p.dataset(DatasetClass::Evaluation).is_empty(), "nothing may persist");
+        assert!(
+            p.dataset(DatasetClass::Evaluation).is_empty(),
+            "nothing may persist"
+        );
         assert!(CapturePipeline::on_under_charter("   ").is_err());
     }
 
@@ -746,7 +763,10 @@ mod tests {
         let dir = scratch_dir("durable");
         let mut p = CapturePipeline::under_ratified_charter(RATIFIED_CHARTER_REF, &dir).unwrap();
         let event = one_event();
-        assert_eq!(p.capture(event.clone()), CaptureOutcome::Stored(DatasetClass::Evaluation));
+        assert_eq!(
+            p.capture(event.clone()),
+            CaptureOutcome::Stored(DatasetClass::Evaluation)
+        );
 
         let eval = std::fs::read_to_string(dir.join("evaluation.jsonl")).unwrap();
         let lines: Vec<&str> = eval.lines().collect();
@@ -842,7 +862,9 @@ mod tests {
         assert!(matches!(
             p.adjudicate(AdjudicationEvent {
                 decision_record_hash: "abc123".into(),
-                outcome: AdjudicationOutcome::Corrected { correct_candidate_id: " ".into() },
+                outcome: AdjudicationOutcome::Corrected {
+                    correct_candidate_id: " ".into()
+                },
             }),
             AdjudicationRecordOutcome::Refused(_)
         ));
@@ -864,10 +886,15 @@ mod tests {
         assert_eq!(parsed.event.decision_record_hash, "abc123");
         assert_eq!(
             parsed.event.outcome,
-            AdjudicationOutcome::Corrected { correct_candidate_id: "op.insert_after".into() }
+            AdjudicationOutcome::Corrected {
+                correct_candidate_id: "op.insert_after".into()
+            }
         );
         for class_file in ["evaluation.jsonl", "training.jsonl", "audit.jsonl"] {
-            assert!(!dir.join(class_file).exists(), "{class_file} must not receive labels");
+            assert!(
+                !dir.join(class_file).exists(),
+                "{class_file} must not receive labels"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -885,7 +912,10 @@ mod tests {
             p.capture(one_event()),
             CaptureOutcome::PersistFailed(DatasetClass::Evaluation)
         );
-        assert!(p.dataset(DatasetClass::Evaluation).is_empty(), "nothing may be half-stored");
+        assert!(
+            p.dataset(DatasetClass::Evaluation).is_empty(),
+            "nothing may be half-stored"
+        );
         let _ = std::fs::remove_file(&dir);
     }
 
@@ -895,8 +925,14 @@ mod tests {
         let mut p = CapturePipeline::on_under_charter("Q9-CHARTER-TEST-REF").unwrap();
         let mut train = one_event();
         train.dataset = DatasetClass::Training;
-        assert_eq!(p.capture(one_event()), CaptureOutcome::Stored(DatasetClass::Evaluation));
-        assert_eq!(p.capture(train), CaptureOutcome::Stored(DatasetClass::Training));
+        assert_eq!(
+            p.capture(one_event()),
+            CaptureOutcome::Stored(DatasetClass::Evaluation)
+        );
+        assert_eq!(
+            p.capture(train),
+            CaptureOutcome::Stored(DatasetClass::Training)
+        );
         assert_eq!(p.dataset(DatasetClass::Evaluation).len(), 1);
         assert_eq!(p.dataset(DatasetClass::Training).len(), 1);
         assert!(p.dataset(DatasetClass::Audit).is_empty());

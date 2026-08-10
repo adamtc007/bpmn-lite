@@ -253,7 +253,10 @@ pub fn project_ir(
                         | bpmn_lite_compiler::IRNode::BoundaryError { attached_to, .. }
                             if attached_to == id)
                 })
-                .map(|n| NodeSummary { kind: ir_kind_str(n).to_owned(), id: n.id().to_owned() })
+                .map(|n| NodeSummary {
+                    kind: ir_kind_str(n).to_owned(),
+                    id: n.id().to_owned(),
+                })
                 .collect();
             attached_guards.sort_by(|a, b| a.id.cmp(&b.id));
             Some(AnchorContext {
@@ -268,7 +271,12 @@ pub fn project_ir(
         }
     };
 
-    ContextProjection::new(pack_identity, graph_identity, anchor, counts.into_iter().collect())
+    ContextProjection::new(
+        pack_identity,
+        graph_identity,
+        anchor,
+        counts.into_iter().collect(),
+    )
 }
 
 #[cfg(test)]
@@ -276,7 +284,10 @@ mod tests {
     use super::*;
 
     fn ns(kind: &str, id: &str) -> NodeSummary {
-        NodeSummary { kind: kind.into(), id: id.into() }
+        NodeSummary {
+            kind: kind.into(),
+            id: id.into(),
+        }
     }
 
     fn fixture() -> ContextProjection {
@@ -337,24 +348,18 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("control character"));
-        assert!(ContextProjection::new(
-            "p",
-            "g",
-            None,
-            vec![("b".into(), 1), ("a".into(), 1)]
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("sorted"));
-        assert!(ContextProjection::new(
-            "p",
-            "g",
-            None,
-            vec![("a".into(), 1), ("a".into(), 2)]
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("sorted"),);
+        assert!(
+            ContextProjection::new("p", "g", None, vec![("b".into(), 1), ("a".into(), 1)])
+                .unwrap_err()
+                .to_string()
+                .contains("sorted")
+        );
+        assert!(
+            ContextProjection::new("p", "g", None, vec![("a".into(), 1), ("a".into(), 2)])
+                .unwrap_err()
+                .to_string()
+                .contains("sorted"),
+        );
         let unsorted = ContextProjection::new(
             "p",
             "g",
@@ -376,9 +381,9 @@ mod tests {
     /// attached guard come from the IR itself.
     #[test]
     fn project_ir_golden_from_designer_ops() {
+        use bpmn_lite_compiler::{IRNode, TimerSpec};
         use designer_graph::ops::{apply, GuardTrigger, Operation};
         use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
-        use bpmn_lite_compiler::{IRNode, TimerSpec};
 
         let mut dag = DesignerDag::new("proj-fx");
         let start = dag
@@ -392,7 +397,11 @@ mod tests {
         assert!(dag
             .seed(
                 NodeKey(uuid::Uuid::new_v4()),
-                IRNode::ServiceTask { id: "smuggled".into(), name: "s".into(), task_type: "t".into() },
+                IRNode::ServiceTask {
+                    id: "smuggled".into(),
+                    name: "s".into(),
+                    task_type: "t".into()
+                },
                 Provenance::default(),
             )
             .unwrap_err()
@@ -416,7 +425,10 @@ mod tests {
             Operation::AppendNode {
                 anchor: t1,
                 key: NodeKey(uuid::Uuid::new_v4()),
-                node: IRNode::End { id: "end".into(), terminate: false },
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
                 edge_id: "f2".into(),
             },
             Operation::AttachRearmingGuard {

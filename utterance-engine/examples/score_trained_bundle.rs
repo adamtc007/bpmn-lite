@@ -52,9 +52,9 @@ fn main() -> Result<()> {
     let card_path = root.join("seed/corpus_v2/synthetic-v2-beta.eval_enriched.card.json");
     let card: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&card_path)?)
         .with_context(|| format!("{card_path:?} -- run eval_enrich first"))?;
-    let tier0_top1_accuracy = card["totals"]["tier0_top1_accuracy"]
-        .as_f64()
-        .context("card missing totals.tier0_top1_accuracy -- regenerate with the current eval_enrich.rs")?;
+    let tier0_top1_accuracy = card["totals"]["tier0_top1_accuracy"].as_f64().context(
+        "card missing totals.tier0_top1_accuracy -- regenerate with the current eval_enrich.rs",
+    )?;
     println!("baseline: tier0_top1_accuracy (C5, tier-0 alone) = {tier0_top1_accuracy:.4}\n");
 
     let device = Device::Cpu;
@@ -71,7 +71,11 @@ fn main() -> Result<()> {
         let base = bases[0];
         let bundle_dir = root.join("train_py/bundles").join(base.key());
         let ranker = TrainedRanker::load(base, &bundle_dir, &device)?;
-        for &(label, k) in &[("K=8+NOTA (legacy trained)", 9usize), ("K=12+NOTA (ruled 2026-08-01)", 13), ("full board", usize::MAX)] {
+        for &(label, k) in &[
+            ("K=8+NOTA (legacy trained)", 9usize),
+            ("K=12+NOTA (ruled 2026-08-01)", 13),
+            ("full board", usize::MAX),
+        ] {
             let mut times_ms: Vec<f64> = Vec::with_capacity(eval_records.len());
             for record in &eval_records {
                 // Widen from the board's candidate list in board order —
@@ -98,7 +102,12 @@ fn main() -> Result<()> {
                 .first()
                 .map(|r| {
                     let mut ids = r.tier1_list.len();
-                    ids += r.board.candidates.iter().filter(|c| !r.tier1_list.contains(&c.canonical_id)).count();
+                    ids += r
+                        .board
+                        .candidates
+                        .iter()
+                        .filter(|c| !r.tier1_list.contains(&c.canonical_id))
+                        .count();
                     ids.min(k)
                 })
                 .unwrap_or(0);
@@ -188,7 +197,10 @@ fn main() -> Result<()> {
             "ordinary_eval": {"n": eval_margins.len(), "margin_mean": eval_mean, "margin_median": eval_median},
             "ambiguity_pairs_split_more_confidently_than_eval_median": confidently_split,
         });
-        let out_path = root.join(format!("train_py/bundles/{}/ambiguity_scores.json", base.key()));
+        let out_path = root.join(format!(
+            "train_py/bundles/{}/ambiguity_scores.json",
+            base.key()
+        ));
         std::fs::write(&out_path, serde_json::to_string_pretty(&out)? + "\n")?;
         println!("written: {out_path:?}");
         return Ok(());
@@ -211,7 +223,10 @@ fn main() -> Result<()> {
             if *top1 != record.label {
                 n_wrong += 1;
                 let class = record.family_id.split("::").next().unwrap_or("unknown");
-                println!("--- MISS #{n_wrong} [{class}] gold={} predicted={}", record.label, top1);
+                println!(
+                    "--- MISS #{n_wrong} [{class}] gold={} predicted={}",
+                    record.label, top1
+                );
                 println!("    utterance: {:?}", record.utterance);
                 let ranked: Vec<String> = result
                     .ranking
@@ -222,7 +237,10 @@ fn main() -> Result<()> {
                 println!("    top4: {}", ranked.join(", "));
             }
         }
-        println!("\n{n_wrong}/{} eval items misclassified", eval_records.len());
+        println!(
+            "\n{n_wrong}/{} eval items misclassified",
+            eval_records.len()
+        );
         return Ok(());
     }
 
@@ -230,7 +248,10 @@ fn main() -> Result<()> {
     for base in bases {
         let bundle_dir = root.join("train_py/bundles").join(base.key());
         if !bundle_dir.join("model.safetensors").exists() {
-            println!("SKIP {} -- no bundle yet (train_slm.py hasn't finished this base)", base.key());
+            println!(
+                "SKIP {} -- no bundle yet (train_slm.py hasn't finished this base)",
+                base.key()
+            );
             continue;
         }
         println!("=== scoring {} ===", base.key());

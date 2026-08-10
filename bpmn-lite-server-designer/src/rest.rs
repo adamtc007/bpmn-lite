@@ -3306,8 +3306,8 @@ fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::R
             (
                 &pending.design_position,
                 pending
-        .workbook
-        .position_binding()
+                    .workbook
+                    .position_binding()
                     .map(|binding| binding.move_id().clone()),
             )
         },
@@ -3699,7 +3699,7 @@ async fn ratify_proposal_endpoint(
                     })),
                 )
                     .into_response();
-        }
+            }
         },
     };
     let consume = || {
@@ -5122,20 +5122,20 @@ async fn session_utterance_endpoint(
                     .into_response();
             }
             None => {
-        let event = utterance_engine::capture::CaptureEvent {
-            raw_utterance: body.text.clone(),
-            record: record.clone(),
-            dataset: utterance_engine::capture::DatasetClass::Evaluation,
-        };
-        let outcome = match demo.q9_capture.as_ref() {
-            Some(pipeline) => pipeline.lock().unwrap().capture(event),
-            None => CapturePipeline::off().capture(event),
-        };
-        match outcome {
-            CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
+                let event = utterance_engine::capture::CaptureEvent {
+                    raw_utterance: body.text.clone(),
+                    record: record.clone(),
+                    dataset: utterance_engine::capture::DatasetClass::Evaluation,
+                };
+                let outcome = match demo.q9_capture.as_ref() {
+                    Some(pipeline) => pipeline.lock().unwrap().capture(event),
+                    None => CapturePipeline::off().capture(event),
+                };
+                match outcome {
+                    CaptureOutcome::SuppressedNoCharter => "suppressed_no_charter",
                     CaptureOutcome::Stored(_) => "stored_legacy_turn",
-            CaptureOutcome::PersistFailed(_) => "persist_failed",
-        }
+                    CaptureOutcome::PersistFailed(_) => "persist_failed",
+                }
             }
         }
     };

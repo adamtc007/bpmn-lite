@@ -24,9 +24,7 @@ use utterance_engine::board::{InferenceBoard, PolicyFilter};
 use utterance_engine::bpmn_board::build_bpmn_semantic_board;
 use utterance_engine::context::{project_ir, ContextProjection};
 use utterance_engine::contract::NONE_OF_THE_ABOVE;
-use utterance_engine::corpus_schema::{
-    BankEntry, BoardDump, Example, SemanticCorpusClosure,
-};
+use utterance_engine::corpus_schema::{BankEntry, BoardDump, Example, SemanticCorpusClosure};
 use utterance_engine::fixtures::{enumeration_classes, ClassState};
 #[cfg(not(feature = "embed"))]
 use utterance_engine::retrieval::LexicalTier0;
@@ -37,7 +35,6 @@ use utterance_engine::retrieval::Tier0Retriever;
 // generates at the ONE standing constant. Recorded in the card.
 const OVERLAP_CAP: f64 = 0.5; // spec S4 A3.1
 const CORPUS_VERSION: &str = "bpmn-semantic-v3-shadow";
-
 
 fn tokens(s: &str) -> BTreeSet<String> {
     s.to_lowercase()
@@ -153,7 +150,10 @@ fn main() -> Result<()> {
         // Label must be ON its board — the by-construction guarantee.
         // Collected (not first-fail) so ONE run surfaces every offender.
         if e.label != NONE_OF_THE_ABOVE && !board.contains(&e.label) {
-            bad_labels.push(format!("'{}' not proposed by board '{}' ({:?})", e.label, e.class_id, e.text));
+            bad_labels.push(format!(
+                "'{}' not proposed by board '{}' ({:?})",
+                e.label, e.class_id, e.text
+            ));
             continue;
         }
 
@@ -194,7 +194,10 @@ fn main() -> Result<()> {
             .map(|candidate| candidate.canonical_id.as_str().to_string())
             .collect::<Vec<_>>();
         if !list.contains(&e.label) {
-            bail!("full-board corpus omitted legal gold candidate '{}'", e.label);
+            bail!(
+                "full-board corpus omitted legal gold candidate '{}'",
+                e.label
+            );
         }
 
         let family_id = format!("{}::{}", e.class_id, e.label);
@@ -257,7 +260,10 @@ fn main() -> Result<()> {
     let mut remove: Vec<usize> = Vec::new();
     for (g, members) in &groups {
         if members.len() > 2 {
-            bail!("HALT: pair group '{g}' has {} sides authored (max 2)", members.len());
+            bail!(
+                "HALT: pair group '{g}' has {} sides authored (max 2)",
+                members.len()
+            );
         }
         if members.len() == 2 {
             let (a, b) = (&examples[members[0]], &examples[members[1]]);
@@ -275,12 +281,20 @@ fn main() -> Result<()> {
     remove.sort_unstable();
     for i in remove.into_iter().rev() {
         let ex = examples.remove(i);
-        *regime_counts.get_mut(&ex.style_regime).expect("counted at insert") -= 1;
+        *regime_counts
+            .get_mut(&ex.style_regime)
+            .expect("counted at insert") -= 1;
         *label_counts.get_mut(&ex.label).expect("counted at insert") -= 1;
     }
 
-    let nota = examples.iter().filter(|e| e.label == NONE_OF_THE_ABOVE).count();
-    let paired = examples.iter().filter(|e| e.pair_group_id.is_some()).count();
+    let nota = examples
+        .iter()
+        .filter(|e| e.label == NONE_OF_THE_ABOVE)
+        .count();
+    let paired = examples
+        .iter()
+        .filter(|e| e.pair_group_id.is_some())
+        .count();
     let card = serde_json::json!({
         "corpus_version": CORPUS_VERSION,
         "spec": "BPMN semantic mapper corpus v3 / Phase 6",
@@ -312,7 +326,10 @@ fn main() -> Result<()> {
         .map(|e| serde_json::to_string(e).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
-    std::fs::write(out_dir.join(format!("{CORPUS_VERSION}.jsonl")), jsonl + "\n")?;
+    std::fs::write(
+        out_dir.join(format!("{CORPUS_VERSION}.jsonl")),
+        jsonl + "\n",
+    )?;
     std::fs::write(
         out_dir.join(format!("{CORPUS_VERSION}.card.json")),
         serde_json::to_string_pretty(&card)? + "\n",
@@ -343,8 +360,14 @@ fn main() -> Result<()> {
             .map(|e| serde_json::to_string(e).unwrap())
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(out_dir.join(format!("{CORPUS_VERSION}.eval.jsonl")), eval_jsonl + "\n")?;
-        println!("CORPUS-GEN eval slice: {} held-out entries (never trained)", eval_entries.len());
+        std::fs::write(
+            out_dir.join(format!("{CORPUS_VERSION}.eval.jsonl")),
+            eval_jsonl + "\n",
+        )?;
+        println!(
+            "CORPUS-GEN eval slice: {} held-out entries (never trained)",
+            eval_entries.len()
+        );
     }
     println!(
         "CORPUS-GEN {CORPUS_VERSION}: {} examples ({nota} NOTA, {paired} paired), dropped: {dropped_overlap} overlap / {dropped_retrieval_miss} retrieval-miss / {dropped_duplicate} dup",

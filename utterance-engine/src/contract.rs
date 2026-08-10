@@ -156,7 +156,9 @@ mod tests {
         );
         assert_eq!(
             ids,
-            b.iter().map(|c| c.candidate_id.as_str()).collect::<Vec<_>>(),
+            b.iter()
+                .map(|c| c.candidate_id.as_str())
+                .collect::<Vec<_>>(),
             "ordering must be input-order invariant"
         );
     }

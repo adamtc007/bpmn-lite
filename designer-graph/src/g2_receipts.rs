@@ -25,8 +25,8 @@ use crate::ops::{apply, GuardTrigger, Operation};
 use crate::productions::{apply_production, request_and_wait, RequestAndWaitBindings};
 use crate::schema::{DesignerDag, NodeKey, Provenance};
 use bpmn_lite_compiler::{IRNode, TimerSpec};
-use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
 use bpmn_lite_types::Instr;
+use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
 use uuid::Uuid;
 
 fn key() -> NodeKey {
@@ -44,7 +44,10 @@ fn task(id: &str) -> IRNode {
 fn reminder_trigger() -> GuardTrigger {
     // §6.3's bounded reminder cycle: daily, at most 3 fires
     // (GUARD-N> + GUARD-TIMER-CYCLE> once lowered).
-    GuardTrigger::Timer(TimerSpec::Cycle { interval_ms: 86_400_000, max_fires: 3 })
+    GuardTrigger::Timer(TimerSpec::Cycle {
+        interval_ms: 86_400_000,
+        max_fires: 3,
+    })
 }
 
 /// Every key the edit log references, so red-team edits can name real nodes.
@@ -64,7 +67,12 @@ fn solicit_base() -> (DesignerDag, NodeKey) {
     let mut dag = DesignerDag::new("solicit_document");
     dag.default_guard_budget = Some(3);
     let start = dag
-        .insert_node(key(), IRNode::Start { id: "start".into() }, None, Provenance::default())
+        .insert_node(
+            key(),
+            IRNode::Start { id: "start".into() },
+            None,
+            Provenance::default(),
+        )
         .unwrap();
     dag.insert_node(
         key(),
@@ -134,7 +142,10 @@ fn solicit_ops(k: &SolicitKeys) -> Vec<Operation> {
         Operation::AppendNode {
             anchor: k.review,
             key: key(),
-            node: IRNode::End { id: "end_solicit".into(), terminate: false },
+            node: IRNode::End {
+                id: "end_solicit".into(),
+                terminate: false,
+            },
             edge_id: "f_end".into(),
         },
     ]);
@@ -162,15 +173,18 @@ fn build_solicit() -> (DesignerDag, SolicitKeys, Vec<Operation>) {
 #[test]
 fn g2_solicit_document_admits_end_to_end() {
     let (base, _keys, ops) = build_solicit();
-    let staged = apply_production(&base, ops, Provenance::default())
-        .expect("the §6.3 edit log must stage");
+    let staged =
+        apply_production(&base, ops, Provenance::default()).expect("the §6.3 edit log must stage");
     let wf = staged
         .candidate
         .admit()
         .expect("solicit_document must admit through verify + lowering");
 
     assert_eq!(
-        wf.envelope().metadata().default_guard_budget().max_failures(),
+        wf.envelope()
+            .metadata()
+            .default_guard_budget()
+            .max_failures(),
         3,
         "process default_guard_budget must reach the sealed envelope"
     );
@@ -226,7 +240,10 @@ fn g2_guard_declarations_survive_on_task_host() {
             guard_id: "g_reminder".into(),
             trigger: reminder_trigger(),
         },
-        Operation::SetGuardBudget { guard: guard_key, failure_budget: Some(2) },
+        Operation::SetGuardBudget {
+            guard: guard_key,
+            failure_budget: Some(2),
+        },
         // slice-2 topology rule: the guard's escape path owns its terminal
         Operation::AppendNode {
             anchor: guard_key,
@@ -237,11 +254,16 @@ fn g2_guard_declarations_survive_on_task_host() {
         Operation::AppendNode {
             anchor: reminder_key,
             key: key(),
-            node: IRNode::End { id: "end_reminder".into(), terminate: false },
+            node: IRNode::End {
+                id: "end_reminder".into(),
+                terminate: false,
+            },
             edge_id: "f_reminder_end".into(),
         },
     ] {
-        graph = apply(&graph, op, Provenance::default()).expect("guard edits must stage").candidate;
+        graph = apply(&graph, op, Provenance::default())
+            .expect("guard edits must stage")
+            .candidate;
     }
 
     let wf = graph.admit().expect("guarded task host must admit");
@@ -251,7 +273,9 @@ fn g2_guard_declarations_survive_on_task_host() {
         "GUARD-N> must be emitted for the non-interrupting reminder guard"
     );
     assert!(
-        instrs.iter().any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
+        instrs
+            .iter()
+            .any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
         "GUARD-TIMER-CYCLE> with the declared bound must be emitted"
     );
     let ir = graph.to_ir().unwrap();
@@ -296,11 +320,16 @@ fn g2_solicit_guarded_wait_admits_and_arms() {
         Operation::AppendNode {
             anchor: reminder_key,
             key: key(),
-            node: IRNode::End { id: "end_reminder".into(), terminate: false },
+            node: IRNode::End {
+                id: "end_reminder".into(),
+                terminate: false,
+            },
             edge_id: "f_reminder_end".into(),
         },
     ] {
-        graph = apply(&graph, op, Provenance::default()).expect("stages").candidate;
+        graph = apply(&graph, op, Provenance::default())
+            .expect("stages")
+            .candidate;
     }
     let wf = graph.admit().expect("§6.3 guarded wait must now admit");
     let instrs = wf.envelope().instructions();
@@ -316,9 +345,14 @@ fn g2_solicit_guarded_wait_admits_and_arms() {
         .iter()
         .position(|i| matches!(i, Instr::V2WaitMsg { .. }))
         .expect("wait body emitted");
-    assert!(open < wait && wait < close, "V2WaitMsg must sit INSIDE the guard scope");
     assert!(
-        instrs.iter().any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
+        open < wait && wait < close,
+        "V2WaitMsg must sit INSIDE the guard scope"
+    );
+    assert!(
+        instrs
+            .iter()
+            .any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
         "GUARD-TIMER-CYCLE> bound must survive"
     );
 }
@@ -353,11 +387,16 @@ fn g2_guard_on_human_wait_admits_and_arms() {
         Operation::AppendNode {
             anchor: reminder_key,
             key: key(),
-            node: IRNode::End { id: "end_nudge".into(), terminate: false },
+            node: IRNode::End {
+                id: "end_nudge".into(),
+                terminate: false,
+            },
             edge_id: "f_nudge_end".into(),
         },
     ] {
-        graph = apply(&graph, op, Provenance::default()).expect("staging accepts the edit").candidate;
+        graph = apply(&graph, op, Provenance::default())
+            .expect("staging accepts the edit")
+            .candidate;
     }
     let wf = graph
         .admit()
@@ -405,7 +444,10 @@ fn g2_red_team_script_every_invalid_edit_refused_with_theorem_named() {
         Provenance::default(),
     )
     .expect_err("duplicate BPMN id must refuse");
-    assert!(err.to_string().contains("create_solicitation"), "must name the id: {err}");
+    assert!(
+        err.to_string().contains("create_solicitation"),
+        "must name the id: {err}"
+    );
 
     // (2) I23 backward edge: review_evidence → create_solicitation.
     let err = apply(
@@ -426,8 +468,12 @@ fn g2_red_team_script_every_invalid_edit_refused_with_theorem_named() {
     );
 
     // (3) Guarded-host protection: deleting the send task would dangle g_reminder.
-    let err = apply(&graph, Operation::DeleteNode { target: keys.send }, Provenance::default())
-        .expect_err("deleting a guarded host must refuse");
+    let err = apply(
+        &graph,
+        Operation::DeleteNode { target: keys.send },
+        Provenance::default(),
+    )
+    .expect_err("deleting a guarded host must refuse");
     let msg = err.to_string();
     assert!(
         msg.contains("send_request") && msg.contains("g_reminder"),
@@ -437,11 +483,18 @@ fn g2_red_team_script_every_invalid_edit_refused_with_theorem_named() {
     // (4) Same rule on ReplaceNode: replace-under-guard is explicit, never implicit.
     let err = apply(
         &graph,
-        Operation::ReplaceNode { target: keys.send, key: key(), node: task("send_request") },
+        Operation::ReplaceNode {
+            target: keys.send,
+            key: key(),
+            node: task("send_request"),
+        },
         Provenance::default(),
     )
     .expect_err("replacing a guarded host must refuse");
-    assert!(err.to_string().contains("send_request"), "must name the host: {err}");
+    assert!(
+        err.to_string().contains("send_request"),
+        "must name the host: {err}"
+    );
 
     // (5) Boundary rule 6: a cycle trigger on an INTERRUPTING guard is a
     // contradiction (an interrupting guard cannot re-fire).
@@ -451,12 +504,18 @@ fn g2_red_team_script_every_invalid_edit_refused_with_theorem_named() {
             host: keys.register,
             key: key(),
             guard_id: "g_bad_cycle".into(),
-            trigger: GuardTrigger::Timer(TimerSpec::Cycle { interval_ms: 1000, max_fires: 2 }),
+            trigger: GuardTrigger::Timer(TimerSpec::Cycle {
+                interval_ms: 1000,
+                max_fires: 2,
+            }),
         },
         Provenance::default(),
     )
     .expect_err("cycle trigger on interrupting guard must refuse");
-    assert!(err.to_string().contains("g_bad_cycle"), "must name the guard: {err}");
+    assert!(
+        err.to_string().contains("g_bad_cycle"),
+        "must name the guard: {err}"
+    );
 
     // (6) Admission-level theorem: correlation source naming an undeclared
     // data object must REJECT at admit(), naming the missing producer.
@@ -481,5 +540,8 @@ fn g2_red_team_script_every_invalid_edit_refused_with_theorem_named() {
     );
 
     // I18 backstop: after the whole script, the staged graph still admits.
-    staged.candidate.admit().expect("red-team script must never mutate the staged graph");
+    staged
+        .candidate
+        .admit()
+        .expect("red-team script must never mutate the staged graph");
 }

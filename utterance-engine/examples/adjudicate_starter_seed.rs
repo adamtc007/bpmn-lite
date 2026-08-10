@@ -58,7 +58,10 @@ struct Adjudication {
 }
 
 fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn main() -> Result<()> {
@@ -71,11 +74,13 @@ fn main() -> Result<()> {
     let disputed: Vec<&StarterItem> = items.iter().filter(|i| i.disputed).collect();
 
     let mut existing: Vec<Adjudication> = if adj_path.exists() {
-        serde_json::from_str(&std::fs::read_to_string(&adj_path)?).with_context(|| format!("{adj_path:?}"))?
+        serde_json::from_str(&std::fs::read_to_string(&adj_path)?)
+            .with_context(|| format!("{adj_path:?}"))?
     } else {
         Vec::new()
     };
-    let already: BTreeMap<u32, Adjudication> = existing.iter().map(|a| (a.seq, a.clone())).collect();
+    let already: BTreeMap<u32, Adjudication> =
+        existing.iter().map(|a| (a.seq, a.clone())).collect();
 
     // Real boards, same construction as starter_seed_eval.rs -- the
     // human sees ACTUAL legal candidates, not a hand-typed list that
@@ -85,10 +90,20 @@ fn main() -> Result<()> {
     for c in &classes {
         let oracle = PositionalLegality { dag: &c.dag };
         let anchor_pair = c.anchor_key.as_ref().map(|k| (k, c.anchor_id.unwrap()));
-        let board = build_board(&oracle, anchor_pair, None, &EmptyUniverse, &PolicyFilter::default())?;
+        let board = build_board(
+            &oracle,
+            anchor_pair,
+            None,
+            &EmptyUniverse,
+            &PolicyFilter::default(),
+        )?;
         boards.insert(
             c.class_id,
-            board.candidates.iter().map(|cd| (cd.canonical_id.clone(), cd.description.clone())).collect(),
+            board
+                .candidates
+                .iter()
+                .map(|cd| (cd.canonical_id.clone(), cd.description.clone()))
+                .collect(),
         );
     }
 
@@ -98,7 +113,11 @@ fn main() -> Result<()> {
         "starter-seed-v1 adjudication: {} disputed item(s), {} already adjudicated{}",
         disputed.len(),
         already.len(),
-        if list_only { " -- LIST MODE, nothing will be written" } else { "" }
+        if list_only {
+            " -- LIST MODE, nothing will be written"
+        } else {
+            ""
+        }
     );
     println!();
 
@@ -106,7 +125,17 @@ fn main() -> Result<()> {
         let legal = boards
             .get(item.class_id.as_str())
             .ok_or_else(|| anyhow!("starter item names unknown class '{}'", item.class_id))?;
-        println!("--- seq {} [{}] class={} {}", item.seq, item.category, item.class_id, if already.contains_key(&item.seq) { "(ALREADY ADJUDICATED)" } else { "" });
+        println!(
+            "--- seq {} [{}] class={} {}",
+            item.seq,
+            item.category,
+            item.class_id,
+            if already.contains_key(&item.seq) {
+                "(ALREADY ADJUDICATED)"
+            } else {
+                ""
+            }
+        );
         println!("  utterance: {:?}", item.text);
         println!("  current hypothesis: {}", item.label);
         println!("  dispute note: {}", item.dispute_note);
@@ -115,7 +144,10 @@ fn main() -> Result<()> {
             println!("    {i:2}. {id:35} {desc}");
         }
         if let Some(a) = already.get(&item.seq) {
-            println!("  already adjudicated: {} ({})", a.adjudicated_label, a.note);
+            println!(
+                "  already adjudicated: {} ({})",
+                a.adjudicated_label, a.note
+            );
             println!();
             continue;
         }
@@ -132,7 +164,9 @@ fn main() -> Result<()> {
         let line = line.trim();
         if n == 0 {
             // EOF mid-run: stop asking, write nothing further, never guess.
-            println!("  (EOF on stdin — stopping, no verdict recorded for this or remaining items)");
+            println!(
+                "  (EOF on stdin — stopping, no verdict recorded for this or remaining items)"
+            );
             break;
         }
         let chosen_label: Option<String> = match line {
@@ -165,9 +199,14 @@ fn main() -> Result<()> {
     }
 
     if list_only {
-        println!("LIST MODE: nothing written. Run interactively (a real TTY, no --list) to adjudicate.");
+        println!(
+            "LIST MODE: nothing written. Run interactively (a real TTY, no --list) to adjudicate."
+        );
     } else {
-        println!("Adjudication file: {adj_path:?} ({} total entries)", existing.len());
+        println!(
+            "Adjudication file: {adj_path:?} ({} total entries)",
+            existing.len()
+        );
     }
     Ok(())
 }
