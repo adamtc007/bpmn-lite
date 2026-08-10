@@ -188,3 +188,46 @@ jobs:
           cd utterance-engine/fuzz
           cargo fuzz run evidence_fusion "$evidence_corpus" -- \
             -runs=64 -max_len=256 -print_final_stats=1
+      # 2026-08-10 fuzz-coverage audit tranche — PR-time smoke for the five
+      # gaps closed that day (see docs/receipts/fuzz-coverage-*-2026-08-10.md),
+      # matching the same live-smoke discipline the gameboard targets above
+      # already get rather than leaving them nightly-only.
+      - name: Designer operation-apply smoke
+        run: |
+          op_corpus=$(mktemp -d)
+          cp bpmn-lite-server-designer/fuzz/seeds/designer_operation_apply/admitted-linear.json \
+            "$op_corpus/seed"
+          cd bpmn-lite-server-designer/fuzz
+          cargo fuzz run designer_operation_apply "$op_corpus" -- \
+            -runs=64 -max_len=1024 -print_final_stats=1
+      - name: dmn-lite-parser smoke
+        run: |
+          dmn_corpus=$(mktemp -d)
+          cp dmn-lite-parser/fuzz/seeds/dmn_lite_parse/*.dmn-lite "$dmn_corpus/"
+          cd dmn-lite-parser/fuzz
+          cargo fuzz run dmn_lite_parse "$dmn_corpus" -- \
+            -runs=64 -max_len=2048 -print_final_stats=1
+      - name: bpmn-lite-authoring smoke
+        run: |
+          yaml_corpus=$(mktemp -d)
+          zeebe_corpus=$(mktemp -d)
+          cp bpmn-lite-authoring/fuzz/seeds/yaml_workflow_parse/linear.yaml \
+            "$yaml_corpus/seed"
+          cp bpmn-lite-authoring/fuzz/seeds/zeebe_bpmn_import/*.xml "$zeebe_corpus/"
+          cd bpmn-lite-authoring/fuzz
+          cargo fuzz run yaml_workflow_parse "$yaml_corpus" -- \
+            -runs=64 -max_len=512 -print_final_stats=1
+          cargo fuzz run zeebe_bpmn_import "$zeebe_corpus" -- \
+            -runs=64 -max_len=2048 -print_final_stats=1
+      - name: FFI owner_metadata_decode smoke
+        run: |
+          http_corpus=$(mktemp -d)
+          grpc_corpus=$(mktemp -d)
+          cp bpmn-lite-ffi-http/fuzz/seeds/owner_metadata_decode/valid_with_path_param.json \
+            "$http_corpus/seed"
+          cp bpmn-lite-ffi-grpc/fuzz/seeds/owner_metadata_decode/valid.json \
+            "$grpc_corpus/seed"
+          (cd bpmn-lite-ffi-http/fuzz && cargo fuzz run owner_metadata_decode "$http_corpus" -- \
+            -runs=64 -max_len=256 -print_final_stats=1)
+          (cd bpmn-lite-ffi-grpc/fuzz && cargo fuzz run owner_metadata_decode "$grpc_corpus" -- \
+            -runs=64 -max_len=256 -print_final_stats=1)
