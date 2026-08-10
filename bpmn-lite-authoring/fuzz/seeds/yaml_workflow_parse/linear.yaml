@@ -1,0 +1,14 @@
+id: test-workflow
+nodes:
+  - kind: Start
+    id: start
+  - kind: ServiceTask
+    id: task_a
+    task_type: do_work
+  - kind: End
+    id: end
+edges:
+  - from: start
+    to: task_a
+  - from: task_a
+    to: end

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="process_non_sese" isExecutable="true">
+    <bpmn:startEvent id="start" />
+    <bpmn:exclusiveGateway id="split1" name="Split 1" />
+    <bpmn:exclusiveGateway id="split2" name="Split 2" />
+    <bpmn:serviceTask id="task1" name="Task 1">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task1" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="task2" name="Task 2">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="do_task2" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="join1" name="Join 1" />
+    <bpmn:exclusiveGateway id="join2" name="Join 2" />
+    <bpmn:endEvent id="end" />
+
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="split1" />
+    <bpmn:sequenceFlow id="f2" sourceRef="split1" targetRef="split2">
+      <bpmn:conditionExpression>= approved == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3" sourceRef="split1" targetRef="task1" />
+    <bpmn:sequenceFlow id="f4" sourceRef="split2" targetRef="task2">
+      <bpmn:conditionExpression>= approved == true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f5" sourceRef="split2" targetRef="join1" />
+    <bpmn:sequenceFlow id="f6" sourceRef="task1" targetRef="join1" />
+    <bpmn:sequenceFlow id="f7" sourceRef="task2" targetRef="join2" />
+    <bpmn:sequenceFlow id="f8" sourceRef="join1" targetRef="join2" />
+    <bpmn:sequenceFlow id="f9" sourceRef="join2" targetRef="end" />
+  </bpmn:process>
+</bpmn:definitions>
