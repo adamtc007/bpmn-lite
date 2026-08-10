@@ -1,11 +1,36 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.15
+**Version:** v0.16
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.16 amendment — full 15-target coverage audit closes Gate 8 bullet 6.**
+`docs/receipts/semantic-gameboard-phase8-coverage-audit-2026-08-10.md` reads all 15
+`utterance-engine/fuzz/fuzz_targets/*.rs` files plus the pinned
+`semantic-decision-contracts` crate's canonical enum/registry definitions directly, and
+cross-references by grep rather than re-trusting per-target receipt prose. Result: 20/20
+candidate move kinds, 10/10 attempt outcomes, 10/10 disposition kinds, 5/5 disclosure
+classes, and correction-lifecycle stages (self-correction refusal, forward-reference
+resolution, phantom targets, multi-hop chains) are all constructed and exercised
+somewhere across the suite — bullet 6 CLOSED. One nuance recorded, not hidden:
+`MoveAttemptOutcome::SystemFailure` and `::DisclosureSafeRefusal` have no producer
+anywhere in either the `bpmn-lite` or `dsl` workspace outside fuzz targets and the
+contract crate's own unit tests — `disposition.rs`/`history.rs`/`fusion.rs`/`funnel.rs`
+only ever consume these two variants from prior history, never assign them to a fresh
+receipt. This is a reviewed-unreachable-by-construction fact (the bullet's own escape
+clause), not a fuzzing gap. A related but out-of-scope finding surfaced along the way:
+`FocusAbsenceReason` is single-variant in practice across both repos (only `NotProvided`
+is ever constructed outside one contract-crate unit test using `LegacyProjection`);
+`ClearedByUser`/`UnknownReference`/`PolicyDecision` and `DesignFocus::Subgraph` are
+constructed nowhere — not claimed against bullet 6 (it names different categories), but
+named rather than dropped. `docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md`
+bullet 6 updated from PARTIALLY closed to CLOSED same-day. Gate 8 remains YELLOW overall
+— bullets 3 (ratified perf budget), 4 (resource-limit typed-failure testing), 5 (a
+dedicated wrong-move-traffic resource-bound test), and part of 7 (resource-abuse
+corpora) are still open.
 
 **v0.15 amendment — Phase 8 gate: YELLOW, not GREEN.**
 `docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md` disposes of every §14

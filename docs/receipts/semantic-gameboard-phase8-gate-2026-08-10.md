@@ -16,6 +16,11 @@ receipt disposes of Gate 8's own bullet list honestly, including the bullets tha
 open — writing this as green would be exactly the kind of trap door the working
 contract forbids.
 
+**Updated same day:** bullet 6 was closed later in this session by
+`docs/receipts/semantic-gameboard-phase8-coverage-audit-2026-08-10.md`; its
+disposition below reflects that closure rather than the original "out of scope this
+session" note.
+
 ## Disposition of every Gate 8 bullet
 
 1. **"Every new fuzz target is discovered, independently sharded and receipted."**
@@ -58,14 +63,19 @@ contract forbids.
 
 6. **"Every target has a completed receipt; semantic coverage includes every move
    kind, attempt outcome, disposition, disclosure class and correction lifecycle or
-   records a reviewed unreachable justification."** **PARTIALLY closed.** Every target
-   touched this session has a receipt with real coverage evidence (disposition kinds,
-   outcomes, correction schemes, hostile axes - see the fuzz-tranche receipt's table).
-   What's **not** done: a single audit proving *every* `OperationKind`/`ProductionId`
-   move kind, every `MoveAttemptOutcome`, every `DisclosureClass`, and every correction-
-   lifecycle stage is hit by *some* fuzz target across the *whole* 15-target suite (not
-   just the 5 new ones), with an explicit unreachable-justification for any gap. That
-   audit was out of scope this session.
+   records a reviewed unreachable justification."** **CLOSED**, per
+   `docs/receipts/semantic-gameboard-phase8-coverage-audit-2026-08-10.md` (same day,
+   later in this session — the audit named as missing below was in fact done). All 20
+   candidate move kinds, all 10 attempt outcomes, all 10 disposition kinds, all 5
+   disclosure classes, and correction lifecycle stages including self-correction
+   refusal, forward-reference resolution, phantom targets, and multi-hop chains are
+   constructed and exercised somewhere across the full 15-target suite, cross-checked
+   against the canonical enum/registry definitions directly (not re-trusting per-target
+   receipt prose). One nuance recorded, not hidden: `SystemFailure` and
+   `DisclosureSafeRefusal` have no producer anywhere in this codebase today (both are
+   consumer-only in `disposition.rs`/`history.rs`/`fusion.rs`/`funnel.rs`) — a reviewed
+   unreachable-by-construction fact, matching the bullet's own escape clause, not a
+   fuzzing gap.
 
 7. **"PostgreSQL fault tapes, native/Wasm differential packets and resource-abuse
    corpora pass their separately receipted lanes."** **MIXED.**
@@ -112,6 +122,14 @@ contract forbids.
 - Two scope rulings recorded rather than silently decided: Wasm/Python-Candle
   differential testing ruled N/A (v0.10); the concurrent-append race fix required
   explicit sign-off before touching production code (v0.14).
+- **Full 15-target semantic coverage audit** closing bullet 6 same-day
+  (`docs/receipts/semantic-gameboard-phase8-coverage-audit-2026-08-10.md`): all 20
+  candidate move kinds, all 10 attempt outcomes, all 10 disposition kinds, all 5
+  disclosure classes, and correction-lifecycle stages (self-correction refusal,
+  forward-reference resolution, phantom targets, multi-hop chains) verified
+  constructed across the suite against canonical enum definitions, with
+  `SystemFailure`/`DisclosureSafeRefusal` named as having no producer anywhere in this
+  codebase — a reviewed-unreachable fact, not a gap.
 
 ## Results (aggregate, this session)
 
@@ -131,8 +149,6 @@ contract forbids.
   — genuinely untouched.
 - A dedicated wrong-move-traffic / disposition-loop resource-bound test (bullet 5),
   distinct from the pre-existing storage-layer bound it currently rests on.
-- The full-suite move-kind/outcome/disclosure-class/correction-lifecycle coverage audit
-  (bullet 6) across all 15 fuzz targets, not just the 5 added this session.
 - Property-bullet "production and reference-model agree after every op, not only at
   final state" as a claim covering every subsystem, not just the two targets that
   currently demonstrate the methodology.
