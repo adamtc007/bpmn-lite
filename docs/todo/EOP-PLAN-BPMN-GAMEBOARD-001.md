@@ -43,7 +43,8 @@ deliberately does not chase `MAX_ENUMERATION_CANDIDATES` here (~5s/iteration at
 the ~316 nodes needed, an impractical fuzzing cost for this
 per-anchor-reconstruction fixture) — that cap is independently, deterministically
 covered by Gate 8 bullet 4's own unit test instead, named rather than silently
-dropped.
+dropped. Public-API baseline updated deliberately (1 new reviewed item:
+`pub const utterance_engine::MAX_ENUMERATION_CANDIDATES`).
 
 **Gate 8 status: all nine bullets from
 `docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md`'s original
