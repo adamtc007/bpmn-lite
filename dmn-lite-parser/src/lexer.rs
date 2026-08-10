@@ -290,13 +290,29 @@ impl<'s> Lexer<'s> {
                             self.pos += 1;
                         }
                         Some(&esc) => {
-                            let span =
-                                SourceSpan::new((self.pos - 1) as u32, (self.pos + 1) as u32);
+                            // `esc` is a raw byte, not necessarily a full
+                            // char: a backslash immediately followed by a
+                            // multi-byte UTF-8 character (or a byte that
+                            // `from_utf8_lossy` replaced with U+FFFD) must
+                            // decode and advance by the full character, not
+                            // by one raw byte — otherwise `self.pos` lands
+                            // mid-character and the next iteration's
+                            // `self.src[self.pos..]` slice panics on a
+                            // non-char-boundary index.
+                            let ch = if esc < 0x80 {
+                                esc as char
+                            } else {
+                                self.src[self.pos..].chars().next().unwrap_or('?')
+                            };
+                            let span = SourceSpan::new(
+                                (self.pos - 1) as u32,
+                                (self.pos + ch.len_utf8()) as u32,
+                            );
                             self.errors.push(ParseError::MalformedString {
-                                reason: format!("invalid escape sequence '\\{}'", esc as char),
+                                reason: format!("invalid escape sequence '\\{ch}'"),
                                 span,
                             });
-                            self.pos += 1;
+                            self.pos += ch.len_utf8();
                         }
                         None => {
                             let span = SourceSpan::new((self.pos - 1) as u32, self.pos as u32);

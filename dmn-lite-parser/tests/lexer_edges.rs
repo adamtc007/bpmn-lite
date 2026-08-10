@@ -155,6 +155,32 @@ fn test_symbol_with_dot_allowed() {
     assert_eq!(d.name.name, "booking.v1");
 }
 
+// 15. Invalid escape sequence immediately followed by a multi-byte UTF-8
+// character must not panic and must not corrupt subsequent lexing.
+// Regression for a fuzz-found crash (dmn_lite_parse, 2026-08-10): the
+// invalid-escape branch advanced `pos` by exactly one raw byte regardless
+// of the escaped character's actual UTF-8 width, so a multi-byte char
+// right after a stray `\` left `pos` mid-character — the next byte read
+// then panicked slicing `self.src` at a non-char-boundary index.
+#[test]
+fn test_string_invalid_escape_multibyte_char_does_not_panic() {
+    let src = mk_string_id("\"\\é ok\"");
+    assert!(has_error(&src, |e| matches!(
+        e,
+        ParseError::MalformedString { .. }
+    )));
+}
+
+// 16. The minimized fuzz crash input reproduced directly against `parse`
+// (a stray backslash immediately followed by the Unicode replacement
+// character): must return a typed error, never panic.
+#[test]
+fn test_string_invalid_escape_replacement_char_does_not_panic() {
+    let src = mk_string_id("\"\\\u{FFFD}");
+    let result = parse(&src);
+    assert!(result.is_err(), "malformed input must be rejected, not panic");
+}
+
 // 14. `..` does not get absorbed into a symbol
 #[test]
 fn test_dotdot_not_absorbed_into_symbol() {
