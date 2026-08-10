@@ -1,11 +1,26 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.14
+**Version:** v0.15
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.15 amendment — Phase 8 gate: YELLOW, not GREEN.**
+`docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md` disposes of every §14
+Gate 8 bullet honestly. Closed: fuzz-target discovery/receipting, the (vacuous)
+regression-directory requirement, PostgreSQL fault tapes, corpus/regression-manifest
+CI validation, and public-API/boundary stability. Ruled N/A with reasoning: native/Wasm
+and Python/Candle differential packets. Genuinely open, named explicitly rather than
+assumed closed: the ratified performance budget itself (measurement infrastructure
+exists, no numbers to gate against), resource-limit typed-failure testing,
+resource-abuse corpora, a dedicated wrong-move-traffic/disposition-loop resource-bound
+test, and the full 15-target move-kind/outcome/disclosure-class/correction-lifecycle
+coverage audit. Unlike Phase 7 (closed against a red receipt whose items were all
+genuinely disposed of), Phase 8 never had a red receipt scoping an exact closable list
+— this gate receipt is deliberately not written as green to avoid exactly the kind of
+trap door the working contract forbids.
 
 **v0.14 amendment — PostgreSQL fault-tape replay closes Phase 8's last untouched item:**
 `docs/receipts/semantic-gameboard-phase8-postgres-fault-tapes-2026-08-10.md` adds 3
