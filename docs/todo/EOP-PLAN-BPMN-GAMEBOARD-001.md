@@ -1,11 +1,36 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.16
+**Version:** v0.17
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.17 amendment — two production fixes from the coverage audit's dangling-outcome
+findings.** `docs/receipts/semantic-gameboard-phase8-followup-fixes-2026-08-10.md`.
+(1) Tracing `DisclosureSafeRefusal`'s missing producer surfaced a real authorization
+question, put to the user as a fork rather than decided here: is `PolicyFilter` a hard
+authorization boundary or only a discovery/UX boundary? Ruled: authorization boundary.
+`session_graph_edit_endpoint` (`rest.rs`) applied raw operation tapes via pure compiler
+admission, never consulting `PolicyFilter` — a tape recognizable as a policy-denied
+candidate would resolve to a generic `"no_matching_legal_move"` label and be admitted
+anyway as a "lower-level edit," completely bypassing the deny-list. Dormant today
+(`PolicyFilter::default()` is empty everywhere in this codebase — confirmed by grep),
+but structurally live and fail-open the moment a deny-list is ever populated. Fixed:
+`resolve_direct_edit` now takes an explicit policy and refuses (`FORBIDDEN`, before
+admission, before anything staged) when a recovered candidate is denied. Red→green
+verified by disabling the check and confirming the bypass reproduces exactly, then
+restoring it. (2) `attach_terminal_gameboard_attempt`'s exhaustive `ProposalStatus`
+match has no branch for "an internal error occurred" — four generic-error branches in
+the dry-run/preview handler returned an HTTP error with no attempt receipt recorded at
+all, leaving genuine system failures invisible to `design_history_projection` and the
+"3 recent failures → escalate" safety net. Fixed for that one handler (the one fully
+traced this session) via a new best-effort `record_and_persist_system_failure` helper,
+red→green verified the same way. Explicitly NOT closed: the same pattern recurs at
+other call sites in `rest.rs` not audited this pass (named in the receipt); the
+original `FocusAbsenceReason`/`DesignFocus::Subgraph` dead-surface question (separate
+from the two outcome-producer fixes here) remains open.
 
 **v0.16 amendment — full 15-target coverage audit closes Gate 8 bullet 6.**
 `docs/receipts/semantic-gameboard-phase8-coverage-audit-2026-08-10.md` reads all 15

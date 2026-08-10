@@ -3010,9 +3010,17 @@ pub(crate) struct SessionGraphEditResponse {
     non_equivalence_reason: Option<&'static str>,
 }
 
+#[derive(Debug)]
 enum DirectEditResolution {
     Equivalent(String),
     NonEquivalent(&'static str),
+    /// The raw tape is recognizably equivalent to a named candidate that
+    /// `PolicyFilter` denies. Policy hiding is an authorization boundary,
+    /// not merely a discovery/explanation boundary — a raw operation tape
+    /// must not reach the graph by a route that never consults it. The
+    /// caller must refuse the whole request; this is never folded into
+    /// `NonEquivalent`, which only ever means "no policy verdict applies."
+    PolicyRefused,
 }
 
 /// v0.8 (`EOP-PLAN-BPMN-GAMEBOARD-001.md` Phase 2 item 9): recover a
@@ -3022,10 +3030,17 @@ enum DirectEditResolution {
 /// materialized tape's resulting graph state — not by diffing the edit
 /// representations themselves. `op.delete_subgraph` is folded into this same
 /// general mechanism rather than kept as a separate special case.
+///
+/// Also the sole policy-authorization gate for raw operation tapes: compiler
+/// admission (`session_graph_edit_endpoint`) only proves graph-structural
+/// legality, never consults `PolicyFilter`. A tape recognizable as a
+/// policy-denied candidate must be refused here, before admission — not
+/// merely mislabeled as a lower-level edit and allowed through.
 fn resolve_direct_edit(
     record: &bpmn_lite_store::DesignSessionRecord,
     dag: &designer_graph::schema::DesignerDag,
     operations: &[designer_graph::ops::Operation],
+    policy: &utterance_engine::board::PolicyFilter,
 ) -> DirectEditResolution {
     if operations.is_empty() {
         return DirectEditResolution::NonEquivalent("empty_operation_tape");
@@ -3039,16 +3054,18 @@ fn resolve_direct_edit(
             return DirectEditResolution::NonEquivalent("no_supported_semantic_counterpart");
         }
     };
+    if policy.denied.contains(shape.candidate_id) {
+        return DirectEditResolution::PolicyRefused;
+    }
     let Ok(anchor) = crate::proposal::bpmn_id_for_key(dag, shape.anchor) else {
         return DirectEditResolution::NonEquivalent("unresolved_direct_anchor");
     };
     let revision = graph_identity_hash(record);
-    let policy = utterance_engine::board::PolicyFilter::default();
     let Some(board) = utterance_engine::bpmn_board::build_bpmn_semantic_board(
         dag,
         dag.key_for_bpmn_id(&anchor).zip(Some(anchor.as_str())),
         &revision,
-        &policy,
+        policy,
     ).ok() else { return DirectEditResolution::NonEquivalent("semantic_board_unavailable") };
     let Some((history_hash, _)) = design_history_projection(record).ok() else { return DirectEditResolution::NonEquivalent("history_unavailable") };
     let Some(focus) = gameboard_focus(Some(&anchor), true).ok() else {
@@ -3154,10 +3171,26 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
-    let resolution = resolve_direct_edit(&record, &dag, &body.operations);
+    let resolution = resolve_direct_edit(
+        &record,
+        &dag,
+        &body.operations,
+        &utterance_engine::board::PolicyFilter::default(),
+    );
     let (semantic_move_id, non_equivalence_reason) = match resolution {
         DirectEditResolution::Equivalent(move_id) => (Some(move_id), None),
         DirectEditResolution::NonEquivalent(reason) => (None, Some(reason)),
+        DirectEditResolution::PolicyRefused => {
+            // Refuse before compiler admission and before anything is staged
+            // or persisted. Disclosure-safe: the response never names the
+            // candidate or confirms a policy verdict, matching the
+            // explanation-layer convention (`explain_bpmn_candidate`).
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "operation not permitted" })),
+            )
+                .into_response();
+        }
     };
     if body.operations.is_empty() {
         return (
@@ -3350,6 +3383,53 @@ async fn terminal_proposal_receipt(
         })));
     }
     Ok(None)
+}
+
+/// Best-effort: persist a `SystemFailure` attempt receipt when the workbook
+/// pipeline fails unexpectedly — a `ProposalStatus` this handler never
+/// reaches, so `attach_terminal_gameboard_attempt`'s exhaustive status match
+/// has no branch for it. History projection and the "3 recent failures"
+/// escalation check (`disposition.rs::decide_game`) both read only
+/// PERSISTED receipts (`design_history_projection`, which walks
+/// `gameboard_attempt_receipt_json` off stored session events) — returning
+/// the error to the client without also appending one here would leave
+/// exactly the blind spot this closes: the failures most worth escalating
+/// on would be invisible to the escalation check. Never itself propagates
+/// an error: if this fails too (e.g. persistence itself is down), the
+/// caller's original error response is still returned untouched.
+async fn record_and_persist_system_failure(
+    demo: &DesignerState,
+    session_id: Uuid,
+    pending: &PendingProposal,
+    detail: &str,
+) {
+    let attempted_move = pending
+        .workbook
+        .position_binding()
+        .map(|binding| binding.move_id().clone());
+    let Ok(attempt_id) = semantic_decision_contracts::MoveAttemptId::new(format!(
+        "system-failure-{}",
+        blake3::hash(format!("{session_id}\0{detail}").as_bytes()).to_hex()
+    )) else {
+        return;
+    };
+    let Ok(receipt) = utterance_engine::bpmn_board::record_bpmn_attempt(
+        &pending.design_position,
+        attempt_id,
+        attempted_move,
+        &pending.source_utterance_text,
+        semantic_decision_contracts::MoveAttemptOutcome::SystemFailure,
+        None,
+        None,
+    ) else {
+        return;
+    };
+    let Ok(receipt_json) = serde_json::to_string(&receipt) else {
+        return;
+    };
+    let mut failed = pending.clone();
+    failed.gameboard_attempt_receipt_json = Some(receipt_json);
+    let _ = append_proposal_audit(demo, session_id, &failed, "system_failure").await;
 }
 
 fn attach_terminal_gameboard_attempt(pending: &mut PendingProposal) -> anyhow::Result<()> {
@@ -3606,6 +3686,13 @@ async fn answer_proposal_endpoint(
             if let Err(error) = workbook
                 .transition(semantic_decision_contracts::ProposalStatus::ReadyForRatification)
             {
+                record_and_persist_system_failure(
+                    demo.as_ref(),
+                    id,
+                    &pending,
+                    &format!("ready_for_ratification transition: {error}"),
+                )
+                .await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error.to_string() })),
@@ -3621,6 +3708,13 @@ async fn answer_proposal_endpoint(
             ) {
                 Ok(bound_game) => bound_game,
                 Err(error) => {
+                    record_and_persist_system_failure(
+                        demo.as_ref(),
+                        id,
+                        &pending,
+                        &format!("bound game projection: {error}"),
+                    )
+                    .await;
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({
@@ -3646,6 +3740,13 @@ async fn answer_proposal_endpoint(
             if let Err(error) =
                 workbook.transition(semantic_decision_contracts::ProposalStatus::DryRunRefused)
             {
+                record_and_persist_system_failure(
+                    demo.as_ref(),
+                    id,
+                    &pending,
+                    &format!("dry_run_refused transition: {error}"),
+                )
+                .await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": error.to_string() })),
@@ -3655,6 +3756,13 @@ async fn answer_proposal_endpoint(
             (None, None, None, diagnostics)
         }
         Err(error) => {
+            record_and_persist_system_failure(
+                demo.as_ref(),
+                id,
+                &pending,
+                &format!("preview refused unexpectedly: {error}"),
+            )
+            .await;
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
@@ -7791,6 +7899,61 @@ mod tests {
         assert!(direct["non_equivalence_reason"].is_null());
     }
 
+    /// The direct-edit endpoint stages operations via pure compiler
+    /// admission (`apply_production` + `admit()`), which never consults
+    /// `PolicyFilter` — the only place that can catch a tape recognizably
+    /// equivalent to a policy-denied candidate is `resolve_direct_edit`
+    /// itself, before admission. RED: the identical tape against the empty
+    /// (default) policy resolves and would be admitted. GREEN: denying its
+    /// recovered candidate id refuses it structurally, before the graph is
+    /// ever touched — not merely mislabeled as a lower-level edit and let
+    /// through, which is what happened before this fix.
+    #[tokio::test]
+    async fn test_direct_edit_refuses_policy_denied_candidate() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+        let sid: Uuid = session_id.parse().unwrap();
+
+        let record = state
+            .store
+            .load_design_session(&state.tenant_id, sid)
+            .await
+            .unwrap()
+            .unwrap();
+        let dag = reconstruct_designer_dag(&record).unwrap();
+        let ops = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: task_ir("appended_directly"),
+            edge_id: "arbitrary_direct_edge_id".into(),
+        }];
+
+        // RED: the unrestricted (default/empty) policy admits the tape —
+        // confirms this is a real recognized candidate, not a vacuous case.
+        let open = resolve_direct_edit(
+            &record,
+            &dag,
+            &ops,
+            &utterance_engine::board::PolicyFilter::default(),
+        );
+        assert!(
+            matches!(open, DirectEditResolution::Equivalent(_)),
+            "baseline tape must resolve under an empty policy: {open:?}"
+        );
+
+        // GREEN: denying the tape's recovered candidate (`op.insert_after`)
+        // refuses it outright.
+        let denied_policy = utterance_engine::board::PolicyFilter {
+            denied: std::collections::BTreeSet::from(["op.insert_after".to_string()]),
+        };
+        let refused = resolve_direct_edit(&record, &dag, &ops, &denied_policy);
+        assert!(
+            matches!(refused, DirectEditResolution::PolicyRefused),
+            "a tape equivalent to a policy-denied candidate must be refused: {refused:?}"
+        );
+    }
+
     /// v0.8 RED: a raw edit that recovers a plausible candidate shape but
     /// whose actual content a real workbook can never produce (a non-`noop`
     /// task type) must diverge on the resulting-graph comparison, not be
@@ -10034,6 +10197,58 @@ mod tests {
         assert!(answer["operations"][0].get("InsertAfter").is_some());
         assert!(answer["dry_run_diagnostics"].as_array().unwrap().is_empty());
         assert_eq!(before, graph_body(&app, &session_id).await);
+    }
+
+    /// GREEN: a genuinely unexpected pipeline failure (not any of the 7
+    /// well-typed `ProposalStatus` outcomes `attach_terminal_gameboard_attempt`
+    /// exhaustively maps) persists a `SystemFailure` receipt rather than
+    /// vanishing. History projection and the disposition escalation check
+    /// (`design_history_projection`, `disposition.rs::decide_game`) only
+    /// ever see PERSISTED receipts off stored session events — before this
+    /// fix, none of the generic-error branches in the dry-run pipeline
+    /// appended anything at all, so this exact failure class was invisible
+    /// to both.
+    #[tokio::test]
+    async fn test_system_failure_persists_a_receipt_history_can_see() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let sid: Uuid = session_id.parse().unwrap();
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid: Uuid = utter["proposal_id"].as_str().unwrap().parse().unwrap();
+
+        let pending = {
+            let proposals = state.proposals.lock().unwrap_or_else(|p| p.into_inner());
+            proposals.get(&pid).cloned().unwrap()
+        };
+
+        let record_before = state
+            .store
+            .load_design_session(&state.tenant_id, sid)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, before) = design_history_projection(&record_before).unwrap();
+        assert!(
+            before.iter().all(|receipt| receipt.outcome()
+                != semantic_decision_contracts::MoveAttemptOutcome::SystemFailure),
+            "no SystemFailure receipt should exist yet: {before:?}"
+        );
+
+        record_and_persist_system_failure(&state, sid, &pending, "induced-for-test").await;
+
+        let record_after = state
+            .store
+            .load_design_session(&state.tenant_id, sid)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, after) = design_history_projection(&record_after).unwrap();
+        assert!(
+            after.iter().any(|receipt| receipt.outcome()
+                == semantic_decision_contracts::MoveAttemptOutcome::SystemFailure),
+            "SystemFailure receipt must be persisted and visible to history projection: {after:?}"
+        );
     }
 
     #[tokio::test]
