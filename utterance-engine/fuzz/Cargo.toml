@@ -88,3 +88,38 @@ path = "fuzz_targets/model_boundary.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "clarification_policy"
+path = "fuzz_targets/clarification_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "move_attempt_feedback"
+path = "fuzz_targets/move_attempt_feedback.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "correction_history"
+path = "fuzz_targets/correction_history.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rule_explanation_decode"
+path = "fuzz_targets/rule_explanation_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "game_turn_replay"
+path = "fuzz_targets/game_turn_replay.rs"
+test = false
+doc = false
+bench = false

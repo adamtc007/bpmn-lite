@@ -1,11 +1,30 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.9
+**Version:** v0.10
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.10 amendment — Phase 8 scope rulings:** Phase 7 closed GREEN
+(`docs/receipts/semantic-gameboard-phase7-gate-2026-08-10.md`); Phase 8 (§14) starts
+with two ownership decisions rather than blind execution of every listed bullet.
+(1) The differential-test bullets "native versus Wasm compilation/admission where
+supported" and "Python versus Candle learned-lane parity" name infrastructure that does
+not exist anywhere in this product today — no `wasm32` build target, no `pyo3` binding
+between `utterance-engine/train_py/*.py` and the Rust runtime. Building either would be
+new product infrastructure adopted solely to satisfy a qualification-phase checklist
+bullet, not a qualification pass over something that exists. Ruled: **out of scope,
+marked N/A** in the Phase 8 gate with this reasoning recorded, not silently dropped.
+(2) Given the phase's real size (11 named fuzz targets, ~15 property invariants, perf
+budgets with zero existing benches for any gameboard crate, PostgreSQL fault-tape
+replay), this pass is scoped to the fuzz-target gap first: of 11 named targets, 2 exist
+exact-match, 4 have partial overlap, 5 are genuinely missing
+(`clarification_policy`, `move_attempt_feedback`, `correction_history`,
+`rule_explanation_decode`, `game_turn_replay`). Property-test invariant coverage,
+performance budgets and PostgreSQL fault-tape replay remain open Phase 8 work, not
+closed by this amendment.
 
 **v0.9 amendment:** closes the multi-operation tranche deferred by v0.8 — extends
 `recover_candidate_shape` from `&Operation` to `&[Operation]` and adds 5 mechanical
@@ -1183,8 +1202,10 @@ introduced the relevant state or behaviour.
 
 - evaluator versus live-serving packet equality;
 - preview versus actual apply;
-- native versus Wasm compilation/admission where supported;
-- Python versus Candle learned-lane parity.
+- native versus Wasm compilation/admission where supported — **v0.10: N/A, no `wasm32`
+  target exists in this product; see v0.10 amendment**;
+- Python versus Candle learned-lane parity — **v0.10: N/A, no `pyo3` binding exists
+  between the Python training scripts and the Rust runtime; see v0.10 amendment**.
 
 ### Fuzz governance and durable lanes
 
