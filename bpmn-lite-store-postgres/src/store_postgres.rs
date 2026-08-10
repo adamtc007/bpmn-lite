@@ -4612,28 +4612,48 @@ impl AdminProjectionStore for PostgresWorkflowStore {
         kind: &DesignSessionEventKind,
     ) -> StoreResult<u64> {
         let payload = serde_json::to_value(kind).map_err(StoreError::invalid)?;
-        let seq: Option<i64> = sqlx::query_scalar(
-            r#"INSERT INTO design_session_events (session_id, seq, payload)
-               SELECT s.id,
-                      COALESCE((SELECT max(e.seq) + 1 FROM design_session_events e
-                                 WHERE e.session_id = s.id), 0),
-                      $3
-               FROM design_sessions s
-               WHERE s.id = $1 AND s.tenant_id = $2
-               RETURNING seq"#,
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        // Lock the parent session row first. Without this, two concurrent
+        // appends to the SAME session each compute `MAX(seq) + 1` before
+        // either commits, race on it, and the loser hits a raw
+        // `design_session_events_pkey` unique-constraint violation instead
+        // of a clean, retriable outcome — a real gap found by Phase 8's
+        // concurrent-identity fault tape
+        // (test_pg_design_session_concurrent_identities_and_appends). The
+        // row lock serializes concurrent appends to the same session on
+        // this statement, so the seq computation below can never race.
+        let locked: Option<Uuid> = sqlx::query_scalar(
+            r#"SELECT id FROM design_sessions
+               WHERE id = $1 AND tenant_id = $2
+               FOR UPDATE"#,
         )
         .bind(id)
         .bind(tenant_id.as_str())
-        .bind(payload)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(StoreError::unavailable)?;
-        let seq = seq.ok_or_else(|| StoreError::NotFound(format!("design session {id}")))?;
+        if locked.is_none() {
+            return Err(StoreError::NotFound(format!("design session {id}")));
+        }
+        let seq: i64 = sqlx::query_scalar(
+            r#"INSERT INTO design_session_events (session_id, seq, payload)
+               SELECT $1,
+                      COALESCE((SELECT max(seq) + 1 FROM design_session_events
+                                 WHERE session_id = $1), 0),
+                      $2
+               RETURNING seq"#,
+        )
+        .bind(id)
+        .bind(payload)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
         sqlx::query(r#"UPDATE design_sessions SET updated_at = now() WHERE id = $1"#)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
         Ok(seq as u64)
     }
 
@@ -12800,5 +12820,247 @@ mod tests {
             .commit_transition(&claim, &transition)
             .await
             .expect("commit must succeed on the recovered pool after a killed connection");
+    }
+
+    // ── Designer-session Postgres fault tapes (EOP-PLAN-BPMN-GAMEBOARD-001
+    // Phase 8, "PostgreSQL fault tapes") ──────────────────────────────────
+    // The designer-session store (migration 059) had zero tests against a
+    // real Postgres before this: the whole gameboard fuzz/property/perf
+    // effort this phase built assumed the in-memory `MemoryStore`
+    // (`bpmn-lite-server-designer` doesn't currently wire the Postgres
+    // implementation in at all - a separate, later rollout decision, not
+    // reopened here). These three prove the Postgres implementation itself
+    // - which does fully exist, with a real append-only schema - honours
+    // the same restart/connection-loss/concurrent-identity guarantees the
+    // workflow-instance path already has above.
+
+    #[tokio::test]
+    async fn test_pg_design_session_survives_restart_with_identical_replay() {
+        let (_pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("restart-tenant").unwrap();
+        let session_id = Uuid::new_v4();
+        store
+            .create_design_session(&tenant, session_id, "restart-session", "dsl-v0")
+            .await
+            .unwrap();
+        store
+            .append_design_session_event(
+                &tenant,
+                session_id,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: "dsl-v1".to_string(),
+                    note: "edit 1".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_design_session_event(
+                &tenant,
+                session_id,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: "dsl-v2".to_string(),
+                    note: "edit 2".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        let before_restart = store
+            .load_design_session(&tenant, session_id)
+            .await
+            .unwrap()
+            .expect("session must exist before restart");
+        assert_eq!(before_restart.events.len(), 3);
+
+        // Simulate a process restart: drop this store/pool entirely and
+        // build a completely independent connection from scratch, exactly
+        // as a fresh process would on boot - not merely reusing a live
+        // handle.
+        drop(store);
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
+        let app_url = if url.contains('@') {
+            let parts: Vec<&str> = url.split('@').collect();
+            format!(
+                "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}",
+                parts[1]
+            )
+        } else {
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test"
+                .to_string()
+        };
+        let reconnected_pool = PgPool::connect(&app_url)
+            .await
+            .expect("a fresh process must be able to reconnect");
+        let reconnected_store = PostgresWorkflowStore::new(reconnected_pool);
+
+        let after_restart = reconnected_store
+            .load_design_session(&tenant, session_id)
+            .await
+            .unwrap()
+            .expect("session must survive a full process restart");
+        assert_eq!(
+            format!("{before_restart:?}"),
+            format!("{after_restart:?}"),
+            "replay after restart must be byte-identical to the pre-restart state"
+        );
+        assert_eq!(
+            after_restart
+                .events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "sequence numbers must survive restart exactly, no gaps or renumbering"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pg_design_session_append_recovers_after_connection_loss() {
+        use sqlx::Connection;
+        let (pool, store, _lock) = setup().await;
+        let tenant = TenantId::new("conn-loss-tenant").unwrap();
+        let session_id = Uuid::new_v4();
+        store
+            .create_design_session(&tenant, session_id, "conn-loss-session", "dsl-v0")
+            .await
+            .unwrap();
+
+        // Kill a connection out from under the store's own pool - the same
+        // pg_terminate_backend technique as
+        // test_pg_connection_loss_surfaces_cleanly_and_pool_recovers above,
+        // proving the designer-session path gets the identical guarantee
+        // rather than a separately (re)implemented one.
+        let mut doomed = store.pool.acquire().await.unwrap();
+        let doomed_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *doomed)
+            .await
+            .unwrap();
+        sqlx::query("SELECT pg_terminate_backend($1)")
+            .bind(doomed_pid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            doomed.ping().await.is_err(),
+            "a query on a backend-terminated connection must surface as an error"
+        );
+        drop(doomed);
+
+        // An append issued right after must succeed via a fresh pooled
+        // connection, and must land exactly once - no partial or duplicate
+        // event surviving the interrupted connection.
+        let seq = store
+            .append_design_session_event(
+                &tenant,
+                session_id,
+                &DesignSessionEventKind::Revision {
+                    dsl_source: "dsl-v1".to_string(),
+                    note: "post connection-loss edit".to_string(),
+                },
+            )
+            .await
+            .expect(
+                "append right after a killed connection must still succeed via the recovered pool",
+            );
+        assert_eq!(seq, 1);
+
+        let record = store
+            .load_design_session(&tenant, session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record.events.len(),
+            2,
+            "exactly the seed event plus one append - no duplicate, no loss"
+        );
+        assert_eq!(
+            record
+                .events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pg_design_session_concurrent_identities_and_appends() {
+        let (_pool, store, _lock) = setup().await;
+        let store = Arc::new(store);
+        let tenant_a = TenantId::new("concurrent-tenant-a").unwrap();
+        let tenant_b = TenantId::new("concurrent-tenant-b").unwrap();
+        let session_a = Uuid::new_v4();
+        let session_b = Uuid::new_v4();
+        store
+            .create_design_session(&tenant_a, session_a, "session-a", "dsl-a0")
+            .await
+            .unwrap();
+        store
+            .create_design_session(&tenant_b, session_b, "session-b", "dsl-b0")
+            .await
+            .unwrap();
+
+        // Two identities racing concurrent appends on the SAME session must
+        // still yield a gap-free, duplicate-free sequence: seq assignment
+        // happens inside a single atomic INSERT ... SELECT max(seq)+1, not
+        // a read-then-write race in application code, so one of any two
+        // truly-simultaneous writers must serialize behind the other at
+        // the database level.
+        const WRITERS: usize = 8;
+        let mut handles = Vec::with_capacity(WRITERS);
+        for index in 0..WRITERS {
+            let store = store.clone();
+            let tenant_a = tenant_a.clone();
+            handles.push(tokio::spawn(async move {
+                store
+                    .append_design_session_event(
+                        &tenant_a,
+                        session_a,
+                        &DesignSessionEventKind::Revision {
+                            dsl_source: format!("dsl-a-writer-{index}"),
+                            note: format!("writer {index}"),
+                        },
+                    )
+                    .await
+            }));
+        }
+        let mut seqs = Vec::with_capacity(WRITERS);
+        for handle in handles {
+            seqs.push(
+                handle
+                    .await
+                    .unwrap()
+                    .expect("every concurrent append on an existing session must succeed"),
+            );
+        }
+        seqs.sort_unstable();
+        assert_eq!(
+            seqs,
+            (1..=WRITERS as u64).collect::<Vec<_>>(),
+            "concurrent appends must yield a gap-free, duplicate-free sequence"
+        );
+
+        // Cross-tenant isolation: neither identity can load the other's
+        // session, even though both live in the same shared table.
+        assert!(store
+            .load_design_session(&tenant_b, session_a)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .load_design_session(&tenant_a, session_b)
+            .await
+            .unwrap()
+            .is_none());
+
+        let final_a = store
+            .load_design_session(&tenant_a, session_a)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(final_a.events.len(), 1 + WRITERS);
     }
 }

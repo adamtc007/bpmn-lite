@@ -40,6 +40,20 @@ jobs:
             cargo test -p bpmn-lite-store-postgres \
               store_postgres::tests::test_concurrent_claim_and_recovery -- --exact --test-threads=1
           done
+      - name: Designer-session restart, connection-loss, and concurrent-identity cut points
+        # EOP-PLAN-BPMN-GAMEBOARD-001 Phase 8 "PostgreSQL fault tapes" —
+        # the concurrent-identity case found a real seq-assignment race
+        # (fixed by locking the parent session row); repeated passes here
+        # keep it caught if it ever regresses.
+        run: |
+          for pass in $(seq 1 20); do
+            cargo test -p bpmn-lite-store-postgres \
+              store_postgres::tests::test_pg_design_session_survives_restart_with_identical_replay -- --exact --test-threads=1
+            cargo test -p bpmn-lite-store-postgres \
+              store_postgres::tests::test_pg_design_session_append_recovers_after_connection_loss -- --exact --test-threads=1
+            cargo test -p bpmn-lite-store-postgres \
+              store_postgres::tests::test_pg_design_session_concurrent_identities_and_appends -- --exact --test-threads=1
+          done
       - name: Q9 capture-gate guard
         run: bash scripts/check-q9-capture-gate.sh
       - name: Full recovery matrix

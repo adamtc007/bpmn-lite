@@ -1,11 +1,26 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.13
+**Version:** v0.14
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.14 amendment — PostgreSQL fault-tape replay closes Phase 8's last untouched item:**
+`docs/receipts/semantic-gameboard-phase8-postgres-fault-tapes-2026-08-10.md` adds 3
+tests against a real Postgres for the designer-session store (restart, connection-loss,
+concurrent-identity), which had zero prior test coverage despite being a complete,
+real implementation (just not yet wired into `bpmn-lite-server-designer`, which still
+uses `MemoryStore` — a separate Phase 9 rollout decision). The concurrent-identity test
+found a real seq-assignment race in `append_design_session_event` (reproduced 5/5 runs)
+— surfaced as a fork and fixed with the user's explicit sign-off (row-level locking),
+then reverified 5/5 clean. Wired into `nightly-chaos.yml` as a recurring gate, not just
+run once locally. **All Phase 8 items now have at least initial coverage**: fuzz
+targets (v0.10-v0.11), property bullets (v0.11-v0.12), performance-budget measurement
+(v0.13, infrastructure only — no ratified numbers to gate against), PostgreSQL fault
+tapes (this amendment). Phase 8 gate closure (a formal green receipt disposing of every
+red-receipt item, matching Phase 7's) has not been written yet.
 
 **v0.13 amendment — performance-budget measurement harness added:**
 `docs/receipts/semantic-gameboard-phase8-perf-budget-2026-08-10.md` adds
