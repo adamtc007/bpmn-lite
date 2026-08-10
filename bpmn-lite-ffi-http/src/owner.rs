@@ -350,13 +350,23 @@ fn url_encode_value(v: &serde_json::Value) -> String {
     }
 }
 
+const BODY_EXCERPT_MAX_BYTES: usize = 256;
+
 fn body_excerpt(bytes: &[u8]) -> String {
     let s = String::from_utf8_lossy(bytes);
-    if s.len() > 256 {
-        format!("{}...", &s[..256])
-    } else {
-        s.into_owned()
+    if s.len() <= BODY_EXCERPT_MAX_BYTES {
+        return s.into_owned();
     }
+    // `s.len()` is a byte count, not a char count — a raw `&s[..N]` slice
+    // panics if N lands inside a multi-byte character. Walk back to the
+    // nearest real char boundary at or before the byte cap instead (a
+    // malformed or upstream-attacker-controlled error body is exactly the
+    // input most likely to contain multi-byte content straddling it).
+    let mut end = BODY_EXCERPT_MAX_BYTES;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 fn trace_json(url: &str, status: u16, elapsed_ms: u64) -> Vec<u8> {
@@ -384,4 +394,45 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_excerpt_truncates_ascii_body_over_the_limit() {
+        let body = "a".repeat(300);
+        let excerpt = body_excerpt(body.as_bytes());
+        assert_eq!(excerpt.len(), BODY_EXCERPT_MAX_BYTES + 3); // + "..."
+        assert!(excerpt.ends_with("..."));
+    }
+
+    #[test]
+    fn body_excerpt_passes_through_bodies_at_or_under_the_limit() {
+        let body = "x".repeat(BODY_EXCERPT_MAX_BYTES);
+        assert_eq!(body_excerpt(body.as_bytes()), body);
+    }
+
+    // Regression: a raw `&s[..256]` slice panics whenever byte 256 lands
+    // inside a multi-byte character — exactly the shape a malformed or
+    // upstream-controlled HTTP error body can produce. Never assumed safe;
+    // proven red before the fix (see the FFI response-decode receipt).
+    #[test]
+    fn body_excerpt_never_panics_on_a_multibyte_char_straddling_the_limit() {
+        let mut bytes = vec![b'a'; BODY_EXCERPT_MAX_BYTES - 3];
+        bytes.extend_from_slice("\u{1D11E}".as_bytes()); // U+1D11E, 4 bytes, straddles byte 256
+        bytes.extend_from_slice(b"trailing content past the truncation point");
+        let excerpt = body_excerpt(&bytes);
+        assert!(excerpt.ends_with("..."));
+        assert!(excerpt.is_char_boundary(excerpt.len() - 3));
+    }
+
+    #[test]
+    fn body_excerpt_never_panics_on_invalid_utf8_near_the_limit() {
+        let mut bytes = vec![b'a'; BODY_EXCERPT_MAX_BYTES - 1];
+        bytes.push(0xC2); // lone leading byte of a 2-byte sequence, truncated
+        bytes.extend_from_slice(b"more trailing bytes to exceed the limit safely");
+        let _ = body_excerpt(&bytes); // must not panic
+    }
 }
