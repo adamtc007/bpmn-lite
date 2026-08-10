@@ -36,9 +36,26 @@ use bpmn_lite_types::TenantId;
 
 /// Explicit utterance-mapper rollout. Production defaults to `Shadow` and
 /// there is deliberately no auto-apply state.
+///
+/// Six named stages, per `EOP-PLAN-BPMN-GAMEBOARD-001.md` §15's capability-
+/// surface rollout (`observe -> shadow -> palette -> feedback -> suggest ->
+/// workbook`) — scaffolding only, added on explicit instruction ahead of any
+/// actual rollout decision (2026-08-10). `Observe`, `Palette` and `Feedback`
+/// name real future capability distinctions the plan describes (recording
+/// positions without disposition; exposing the legal move palette/previews;
+/// exposing governed explanations and recovery options for unsuccessful
+/// attempts) that this codebase has no separate gate for yet — introducing a
+/// gate that doesn't correspond to a real code path would be exactly the
+/// kind of trap door the working contract forbids, so all four
+/// pre-`Suggest` stages currently behave identically to `Shadow` under the
+/// two gates that do exist (`suggestions_enabled`, `workbooks_enabled`).
+/// `Suggest` and `Workbook` are unchanged from the prior three-stage design.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MapperRollout {
+    Observe,
     Shadow,
+    Palette,
+    Feedback,
     Suggest,
     Workbook,
 }
@@ -46,6 +63,9 @@ enum MapperRollout {
 impl MapperRollout {
     fn parse(value: Option<&str>) -> Self {
         match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("observe") => Self::Observe,
+            Some("palette") => Self::Palette,
+            Some("feedback") => Self::Feedback,
             Some("suggest") => Self::Suggest,
             Some("workbook") => Self::Workbook,
             _ => Self::Shadow,
@@ -67,7 +87,10 @@ impl MapperRollout {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Observe => "observe",
             Self::Shadow => "shadow",
+            Self::Palette => "palette",
+            Self::Feedback => "feedback",
             Self::Suggest => "suggest",
             Self::Workbook => "workbook",
         }
@@ -6513,6 +6536,32 @@ mod tests {
         assert!(!MapperRollout::Suggest.workbooks_enabled());
         assert!(MapperRollout::Workbook.suggestions_enabled());
         assert!(MapperRollout::Workbook.workbooks_enabled());
+    }
+
+    #[test]
+    fn mapper_rollout_names_all_six_plan_stages_with_no_early_gate_invented() {
+        assert_eq!(MapperRollout::parse(Some("observe")), MapperRollout::Observe);
+        assert_eq!(MapperRollout::parse(Some("palette")), MapperRollout::Palette);
+        assert_eq!(
+            MapperRollout::parse(Some("feedback")),
+            MapperRollout::Feedback
+        );
+        assert_eq!(MapperRollout::Observe.label(), "observe");
+        assert_eq!(MapperRollout::Palette.label(), "palette");
+        assert_eq!(MapperRollout::Feedback.label(), "feedback");
+        // Observe/Shadow/Palette/Feedback have no gate of their own yet, so
+        // they must behave identically to Shadow under the two real gates —
+        // asserted explicitly so a future palette/feedback gate addition
+        // has to touch this test, not silently drift the stage semantics.
+        for stage in [
+            MapperRollout::Observe,
+            MapperRollout::Shadow,
+            MapperRollout::Palette,
+            MapperRollout::Feedback,
+        ] {
+            assert!(!stage.suggestions_enabled(), "{stage:?}");
+            assert!(!stage.workbooks_enabled(), "{stage:?}");
+        }
     }
 
     #[test]

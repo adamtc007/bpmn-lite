@@ -1,11 +1,30 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.24
+**Version:** v0.25
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.25 amendment — Phase 9: MapperRollout expanded to the plan's six named
+stages, scaffolding only.**
+`docs/receipts/semantic-gameboard-phase9-rollout-stage-scaffolding-2026-08-10.md`.
+Investigated first whether any Phase 9 work was safe to do without a
+production/business decision — promotion and cleanup both require real
+adjudicated evidence or a rollback window that doesn't exist yet (already
+ruled explicitly by the Phase 7 legacy-rollback audit). Surfaced the one
+borderline candidate (widening `MapperRollout` from 3 to §15's 6 stages,
+since it touches a live env-var switch) rather than deciding it; Adam chose
+to proceed. `Observe`, `Palette` and `Feedback` are added purely as named,
+ordered vocabulary — they evaluate identically to `Shadow` under the two real
+gates this codebase has (`suggestions_enabled`, `workbooks_enabled`), since
+inventing a separate palette/feedback gate with no corresponding code path
+would be fabricating functionality, not scaffolding for it. `Suggest` and
+`Workbook` are unchanged. `BPMN_MAPPER_ROLLOUT` still defaults to `Shadow` in
+production; nothing here moves any deployment toward a later stage.
+User-population gating (`power_user_dictation`/`generic_utterance`) still has
+zero code presence — not touched.
 
 **v0.24 amendment — Gate 8 bullet 7's third and final named target closed;
 Gate 8 now GREEN.**
