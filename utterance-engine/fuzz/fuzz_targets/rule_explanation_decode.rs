@@ -6,7 +6,13 @@ use semantic_decision_contracts::{
     RuleExplanation, GAMEBOARD_SCHEMA_VERSION,
 };
 
-const MAX_INPUT_BYTES: usize = 8 * 1024;
+// 96 KiB, not 8 KiB: MAX_CONTRACT_TEXT_BYTES (64 KiB, the resource-safety
+// ceiling on every ContractText-backed field, including rule explanation
+// provenance) must fit inside a single split chunk below with headroom left
+// for the other chunks/separators, or this harness can never reach the
+// oversized-field refusal path at all — see the resource-abuse corpus seed
+// in `corpus/rule_explanation_decode/`.
+const MAX_INPUT_BYTES: usize = 96 * 1024;
 
 fn disclosure(selector: u8) -> DisclosureClass {
     match selector % 5 {
@@ -108,7 +114,9 @@ fuzz_target!(|data: &[u8]| {
         provenance_text,
         selected_disclosure,
     ) else {
-        // Only the empty/control-character provenance case can still fail here.
+        // An empty/control-character provenance, or (now reachable at this
+        // harness's input size) a provenance over MAX_CONTRACT_TEXT_BYTES,
+        // is a legitimate typed refusal — nothing further to assert.
         return;
     };
     assert_eq!(explanation.disclosure(), selected_disclosure);

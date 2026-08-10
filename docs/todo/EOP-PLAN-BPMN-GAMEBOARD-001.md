@@ -1,11 +1,32 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.20
+**Version:** v0.21
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.21 amendment — Gate 8 bullet 7 (resource-abuse corpora), one target's slice
+closed; rest named open.**
+`docs/receipts/semantic-gameboard-phase8-resource-abuse-corpora-2026-08-10.md`.
+Corrected a wrong assumption first: this crate's `.gitignore` excludes `corpus`
+entirely and zero corpus files are tracked anywhere — the only git-persisted fuzz
+mechanism is the `fuzz-regressions.json`-governed regression directory for
+*confirmed crash findings*, not proactive seed corpora. Committing corpus files
+would have fought that convention, not honored it. The real gap: every decode
+fuzz target self-caps its input size below where Gate 8 bullet 4's new resource
+limits would ever fire, so no amount of CI fuzzing can discover that path.
+Raised `rule_explanation_decode.rs`'s self-cap from 8 KiB to 96 KiB so a
+`MAX_CONTRACT_TEXT_BYTES`-violating provenance field is constructible; verified
+via a handcrafted 65,596-byte input (clean, 2ms, no crash) and an 8-second,
+26,935-run fuzzing burst (0 crashes). `legal_move_enumeration.rs` (capped at 0-4
+tasks, can't reach `MAX_ENUMERATION_CANDIDATES`/`MAX_LEGAL_MOVES`),
+`correction_history.rs` (capped at 24 steps, can't reach `MAX_HISTORY_ATTEMPTS`,
+and raising it requires teaching its independent reference-correctness model
+about the new size dimension too — judged out of scope for a rushed pass) and
+`semantic_board_decode.rs` (decodes an unrelated pre-gameboard contract type
+entirely) are named explicitly as still open, not silently folded into "done."
 
 **v0.20 amendment — Gate 8 bullet 5 (wrong-move-traffic resource bound) closed.**
 `docs/receipts/semantic-gameboard-phase8-wrong-move-traffic-2026-08-10.md`. New
