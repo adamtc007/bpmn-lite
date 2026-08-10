@@ -105,6 +105,8 @@ jobs:
           path: bpmn-mapper-performance.md
       - name: v2 frame perf suite (frame ∝ live tokens; encode latency)
         run: cargo bench -p bpmn-lite-types --bench v2_perf
+      - name: Gameboard perf budget (Gate 8 bullet 3 — ratified P95 ceilings)
+        run: cargo bench -p utterance-engine --bench gameboard_perf
       - name: Public API documentation surface
         env:
           RUSTDOCFLAGS: -Dwarnings

@@ -1,11 +1,44 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.21
+**Version:** v0.22
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.22 amendment — Gate 8 bullet 3 (performance budget) ratified and wired as a
+real CI gate.** `docs/receipts/semantic-gameboard-phase8-perf-budget-ratified-2026-08-10.md`.
+Presented the measurement harness's fresh baseline (legal move enumeration
+~428us, disposition/belief-update/rule-feedback-retrieval ~7-14us each) with
+three options; Adam ratified generous-headroom P95 ceilings (5ms enumeration,
+1ms each for the other three, ~12x-140x headroom over baseline). Wired as real
+`assert!`s in `gameboard_perf.rs` (previously measurement-only, per the
+harness's own prior doc comment) and, since an assertion nobody runs is not a
+gate, added a `cargo bench -p utterance-engine --bench gameboard_perf` step to
+`production-gates.yml` alongside its sibling `v2_perf` step. Red-green verified:
+temporarily set the enumeration budget to 1ns, confirmed the assertion fires
+with the exact expected message, restored the ratified value, reconfirmed
+green. Caveat named, not hidden: ratified against one development machine, not
+yet "representative hardware" per the bullet's own wording — accepted by Adam's
+explicit choice of generous headroom rather than a tighter, hardware-specific
+number.
+
+**Gate 8 aggregate status after this session's four bullets (3, 4, 5, 7):** of
+the nine bullets in `docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md`'s
+original disposition, five were already closed (1, 2, 6, 8, 9) and four were
+carried forward open (3, 4, 5, 7). Bullets 3, 4 and 5 are now fully closed
+by receipted work this session. Bullet 7 is **partially** closed — PostgreSQL
+fault tapes were already closed, native/Wasm differential testing remains ruled
+N/A (v0.10 amendment, no such runtime exists in this product), and one decode
+fuzz target (`rule_explanation_decode.rs`) can now reach the new resource
+limits — but `legal_move_enumeration.rs`, `correction_history.rs` and
+`semantic_board_decode.rs` remain self-capped below or unrelated to those
+limits, named explicitly as still open in
+`docs/receipts/semantic-gameboard-phase8-resource-abuse-corpora-2026-08-10.md`.
+Gate 8 is therefore substantially further along than the prior YELLOW receipt
+but is not being declared GREEN here — bullet 7's named remainder is real,
+un-closed scope, not a rounding error.
 
 **v0.21 amendment — Gate 8 bullet 7 (resource-abuse corpora), one target's slice
 closed; rest named open.**

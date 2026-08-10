@@ -1,12 +1,14 @@
 //! Phase 8 (EOP-PLAN-BPMN-GAMEBOARD-001 §14) performance-budget measurement
 //! harness for the design-game model. Matches the convention set by
 //! `bpmn-lite-types/benches/v2_perf.rs`: a plain `harness = false` binary
-//! emitting machine-readable `key=value` metrics, plus `assert!`s only on
-//! machine-independent *shape* claims (e.g. linear scaling) - never on raw
-//! nanosecond latency, since no performance budget is ratified anywhere in
-//! this repo to gate against. Running the bench is itself the shape check;
-//! the printed latencies are for a human to compare against a budget once
-//! one exists.
+//! emitting machine-readable `key=value` metrics, plus `assert!`s on
+//! machine-independent *shape* claims (e.g. linear scaling) and, since
+//! `docs/receipts/semantic-gameboard-phase8-perf-budget-2026-08-10.md`, on
+//! ratified P95 latency budgets (owner-ratified per-iteration ceilings with
+//! generous headroom over the measured dev-machine baseline, since a mean
+//! over `ITERATIONS` on one machine is not itself a P95 on representative
+//! hardware — see `BUDGET_*` below). A budget assertion failing here is a
+//! real Gate 8 regression, not advisory.
 //!
 //! Deliberately not covered here (see the receipt for why):
 //! - preview-compilation latency: needs realistic per-candidate argument
@@ -35,6 +37,17 @@ use utterance_engine::bpmn_board::{
 use uuid::Uuid;
 
 const ITERATIONS: usize = 5_000;
+
+// Owner-ratified P95 latency budgets (2026-08-10), per iteration, in
+// nanoseconds. Set with generous (~10x+) headroom over the measured
+// dev-machine baseline (legal_move_enumeration ~428us, the other three
+// ~7-14us) to absorb real-hardware and tail (P95, not mean) variance without
+// papering over a genuine regression. Ratified against this harness's fixed
+// anchored-task fixture (14 legal moves); not re-derived per graph shape.
+const BUDGET_ENUMERATION_NS: u128 = 5_000_000; // 5ms
+const BUDGET_DISPOSITION_NS: u128 = 1_000_000; // 1ms
+const BUDGET_BELIEF_UPDATE_NS: u128 = 1_000_000; // 1ms
+const BUDGET_RULE_FEEDBACK_RETRIEVAL_NS: u128 = 1_000_000; // 1ms
 
 fn anchored_task() -> (DesignerDag, NodeKey) {
     let start = NodeKey(Uuid::from_u128(1));
@@ -143,6 +156,11 @@ fn main() {
     let (enumeration_ns, (board, position)) =
         timed(ITERATIONS, || board_and_position(&dag, task));
     let move_count = position.legal_moves().len();
+    assert!(
+        enumeration_ns <= BUDGET_ENUMERATION_NS,
+        "legal move enumeration regressed: {enumeration_ns}ns/iter exceeds the \
+         ratified {BUDGET_ENUMERATION_NS}ns budget"
+    );
 
     // Full disposition latency.
     let evidence = evidence_for(&position);
@@ -159,17 +177,32 @@ fn main() {
         )
         .unwrap()
     });
+    assert!(
+        disposition_ns <= BUDGET_DISPOSITION_NS,
+        "full disposition latency regressed: {disposition_ns}ns/iter exceeds the \
+         ratified {BUDGET_DISPOSITION_NS}ns budget"
+    );
 
     // Belief update.
     let (belief_update_ns, _) = timed(ITERATIONS, || {
         update_bpmn_design_belief(&dag, &position, &evidence, &[], None).unwrap()
     });
+    assert!(
+        belief_update_ns <= BUDGET_BELIEF_UPDATE_NS,
+        "belief update latency regressed: {belief_update_ns}ns/iter exceeds the \
+         ratified {BUDGET_BELIEF_UPDATE_NS}ns budget"
+    );
 
     // Rule/feedback retrieval (governed guidance for one candidate shape).
     let (guidance_ns, guidance) = timed(ITERATIONS, || {
         explain_bpmn_candidate(&board, &position, "op.insert_after", &PolicyFilter::default())
             .unwrap()
     });
+    assert!(
+        guidance_ns <= BUDGET_RULE_FEEDBACK_RETRIEVAL_NS,
+        "rule/feedback retrieval latency regressed: {guidance_ns}ns/iter exceeds the \
+         ratified {BUDGET_RULE_FEEDBACK_RETRIEVAL_NS}ns budget"
+    );
 
     // Serialized state/evidence size - a shape claim, not just a number:
     // position size must scale with the number of legal moves it carries
