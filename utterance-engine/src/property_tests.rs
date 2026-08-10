@@ -26,14 +26,15 @@ mod gameboard {
     use designer_graph::ops::{apply, Operation};
     use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
     use semantic_decision_contracts::{
-        DesignFocus, FiniteScore as GameboardFiniteScore, GraphElementRef, MoveAttemptId,
-        MoveEvidence, ProducerIdentity, GAMEBOARD_SCHEMA_VERSION,
+        ApplicabilityState, DesignFocus, FeedbackOptionKind, FiniteScore as GameboardFiniteScore,
+        GraphElementRef, MoveAttemptId, MoveEvidence, ProducerIdentity, GAMEBOARD_SCHEMA_VERSION,
     };
     use uuid::Uuid;
 
     use crate::board::PolicyFilter;
     use crate::bpmn_board::{
         build_bpmn_design_position, build_bpmn_semantic_board, decide_bpmn_game_disposition,
+        explain_bpmn_candidate,
     };
 
     fn anchored_task() -> (DesignerDag, NodeKey) {
@@ -306,6 +307,83 @@ mod gameboard {
                 &[],
             );
             prop_assert!(result.is_err());
+        }
+
+        #[test]
+        fn feedback_recoveries_resolve_to_legal_moves_or_governed_focus_change(
+            mask in 0u16..(1 << ANCHOR_CANDIDATES.len()),
+            candidate_index in 0usize..ANCHOR_CANDIDATES.len(),
+        ) {
+            let (dag, task) = anchored_task();
+            let revision = "a".repeat(64);
+            let filter = policy_from_mask(mask);
+            let board =
+                build_bpmn_semantic_board(&dag, Some((task, "task-1")), &revision, &filter)
+                    .unwrap();
+            let position = build_bpmn_design_position(
+                &dag,
+                &board,
+                &revision,
+                &"b".repeat(64),
+                "property-compiler-v1",
+                &"c".repeat(64),
+                DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+                None,
+            )
+            .unwrap();
+            let guidance = explain_bpmn_candidate(
+                &board,
+                &position,
+                ANCHOR_CANDIDATES[candidate_index],
+                &filter,
+            )
+            .unwrap();
+            for recovery in guidance.recoveries() {
+                match recovery.move_id() {
+                    Some(move_id) => prop_assert!(position
+                        .legal_moves()
+                        .iter()
+                        .any(|legal_move| legal_move.move_id() == move_id)),
+                    None => prop_assert_eq!(recovery.kind(), FeedbackOptionKind::ChangeFocus),
+                }
+            }
+        }
+
+        #[test]
+        fn policy_hidden_explanation_never_names_the_hidden_candidate(
+            mask in 0u16..(1 << ANCHOR_CANDIDATES.len()),
+            candidate_index in 0usize..ANCHOR_CANDIDATES.len(),
+        ) {
+            let (dag, task) = anchored_task();
+            let revision = "a".repeat(64);
+            let candidate_id = ANCHOR_CANDIDATES[candidate_index];
+            // Force this candidate hidden regardless of the fuzzed mask, but
+            // still let the mask vary which *other* candidates are denied -
+            // the leak-freedom guarantee must hold no matter what else is
+            // hidden alongside it.
+            let mut filter = policy_from_mask(mask);
+            filter.denied.insert(candidate_id.to_string());
+            let board =
+                build_bpmn_semantic_board(&dag, Some((task, "task-1")), &revision, &filter)
+                    .unwrap();
+            let position = build_bpmn_design_position(
+                &dag,
+                &board,
+                &revision,
+                &"b".repeat(64),
+                "property-compiler-v1",
+                &"c".repeat(64),
+                DesignFocus::element(GraphElementRef::new("task-1").unwrap()),
+                None,
+            )
+            .unwrap();
+            let guidance =
+                explain_bpmn_candidate(&board, &position, candidate_id, &filter).unwrap();
+            prop_assert_eq!(guidance.applicability(), ApplicabilityState::PolicyHidden);
+            prop_assert!(guidance.explanation().parameters().is_empty());
+            let rendered =
+                serde_json::to_string(&(guidance.explanation(), guidance.recoveries())).unwrap();
+            prop_assert!(!rendered.contains(candidate_id));
         }
     }
 }

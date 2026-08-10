@@ -1,11 +1,23 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.11
+**Version:** v0.12
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.12 amendment — remaining Phase 8 property bullets audited and closed:**
+`docs/receipts/semantic-gameboard-phase8-property-audit-2026-08-10.md` audits the 11
+property bullets left open by v0.11 rather than writing 11 new tests unconditionally: 7
+already had real coverage (fuzz targets or Phase 7's fault-tape suite, cited not
+duplicated), 1 is type-guaranteed (needs no test), 2 genuine gaps closed with new
+`proptest!` cases (`feedback_recoveries_resolve_to_legal_moves_or_governed_focus_change`,
+`policy_hidden_explanation_never_names_the_hidden_candidate`), and 1 ("production and
+reference-model outcomes agree... not only at final state") is left explicitly open —
+the differential methodology is proven in two fuzz targets but not claimed universal.
+13 of ~15 Phase 8 property bullets are now closed. Performance budgets and PostgreSQL
+fault-tape replay remain the only untouched Phase 8 work.
 
 **v0.11 amendment — Phase 8 fuzz-target and property-test tranches closed:** both
 `docs/receipts/semantic-gameboard-phase8-fuzz-target-tranche-2026-08-10.md` (the 5
