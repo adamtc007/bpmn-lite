@@ -8511,6 +8511,251 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_sage_endpoints_exclude_general_session_surface_fields() {
+        // Closes red-receipt item 4 (docs/receipts/semantic-gameboard-phase7-red-2026-08-07.md):
+        // "General session/event read-back remains broader than the dedicated
+        // Sage view; the remaining audit/history compatibility boundary has
+        // not been receipted." This proves the superset relationship is both
+        // real (canaries below genuinely reach the general surface, so the
+        // absence assertions are not vacuous) and bounded (the same canaries
+        // never reach any of Sage's four dedicated read views).
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "sage boundary session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Development capture opt-in populates the training-grade context
+        // projection targeted below as a canary field.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/dev-capture/enable"),
+                serde_json::json!({ "consent_statement": "sage boundary test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let canary_text = "CANARY_UTTERANCE_MARKER_9f3e1c";
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": canary_text, "anchor": "review_documents" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let node_key_canary = t1.0.to_string();
+
+        // A palette selection appends a real `ProposalAudit` event so the
+        // audit endpoint's own field-dropping (`bound_plan_json`,
+        // `dry_run_diagnostics`, ...) has actual content to be tested against
+        // — an empty `entries` array would make that half of the boundary
+        // check vacuous.
+        let general_position: semantic_decision_contracts::DesignPosition = serde_json::from_value(
+            body_json(
+                app.clone()
+                    .oneshot(get_req(&format!(
+                        "/api/dsl/sessions/{session_id}/gameboard?anchor=review_documents"
+                    )))
+                    .await
+                    .unwrap(),
+            )
+            .await,
+        )
+        .unwrap();
+        let selected_move = general_position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| {
+                legal_move.candidate_id().as_str()
+                    != semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+            })
+            .unwrap()
+            .move_id()
+            .as_str()
+            .to_string();
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/palette/select"),
+                serde_json::json!({ "move_id": selected_move, "anchor": "review_documents" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // General surface: confirm both canaries are genuinely retained,
+        // so the absence assertions below are not vacuous.
+        let record = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let record_text = record.to_string();
+        assert!(
+            record_text.contains(canary_text),
+            "general session surface must retain raw utterance text: {record_text}"
+        );
+        assert!(
+            record_text.contains(&node_key_canary),
+            "general session surface must retain raw internal NodeKeys: {record_text}"
+        );
+        assert!(record_text.contains("context_projection"));
+        assert!(record_text.contains("operations_json"));
+
+        // Sage's dedicated surfaces: the same canaries, and the general-only
+        // field names that could carry equivalent leaks, must never appear.
+        let forbidden_keys = [
+            "dsl_source",
+            "context_projection",
+            "decision_record_json",
+            "operations_json",
+            "dry_run_diagnostics",
+            "bound_plan_json",
+            "gameboard_disposition_json",
+        ];
+
+        let sage_gameboard = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sage/sessions/{session_id}/gameboard?anchor=review_documents"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let sage_position: semantic_decision_contracts::DesignPosition =
+            serde_json::from_value(sage_gameboard.clone()).unwrap();
+        let guidance_candidate = sage_position
+            .legal_moves()
+            .iter()
+            .find(|legal_move| {
+                legal_move.candidate_id().as_str()
+                    != semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+            })
+            .unwrap()
+            .candidate_id()
+            .as_str()
+            .to_string();
+
+        let sage_history = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sage/sessions/{session_id}/history"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let sage_audit = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sage/sessions/{session_id}/audit"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let attempt_id = sage_history["attempts"]
+            .as_array()
+            .unwrap()
+            .first()
+            .expect("the canary utterance must have appended at least one attempt receipt")
+            ["attempt_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sage_attempt = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sage/sessions/{session_id}/attempts/{attempt_id}"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let sage_guidance = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sage/sessions/{session_id}/guidance/{guidance_candidate}?anchor=review_documents"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        for (label, sage_body) in [
+            ("gameboard", &sage_gameboard),
+            ("history", &sage_history),
+            ("audit", &sage_audit),
+            ("attempt", &sage_attempt),
+            ("guidance", &sage_guidance),
+        ] {
+            let body_text = sage_body.to_string();
+            assert!(
+                !body_text.contains(canary_text),
+                "{label}: Sage must never observe raw utterance text: {body_text}"
+            );
+            assert!(
+                !body_text.contains(&node_key_canary),
+                "{label}: Sage must never observe an internal NodeKey: {body_text}"
+            );
+            for key in forbidden_keys {
+                assert!(
+                    !body_text.contains(key),
+                    "{label}: Sage response must not carry the general-surface field `{key}`: {body_text}"
+                );
+            }
+        }
+    }
+
     /// Fail-closed DEGRADATION receipt (tier-1 serving integration,
     /// 2026-08-01): `candle-probe` compiled but SLM_BUNDLE_DIR pointing
     /// nowhere → the designer starts, serves the utterance at tier-0
