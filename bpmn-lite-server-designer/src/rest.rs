@@ -9026,6 +9026,119 @@ mod tests {
             .await.to_string().contains("authoritative_intervening_edit"));
     }
 
+    /// Phase 7 API fault tape: two independently staged workbooks, both
+    /// built against the same base graph revision, race to ratify. Exactly
+    /// one must apply and advance the revision; the loser observes graph
+    /// drift and is refused with the same typed outcome as the sequential
+    /// case (`test_ratify_refuses_on_graph_drift`), and that refusal must
+    /// itself be a durable, idempotently replayable terminal receipt across
+    /// a restart — not a transient in-memory race result.
+    #[tokio::test]
+    async fn test_api_fault_tape_concurrent_revision_drift() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter_a = utter_bindable(&app, &session_id).await;
+        let pid_a = utter_a["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        let utter_b = utter_bindable(&app, &session_id).await;
+        let pid_b = utter_b["proposal"]["proposal_id"].as_str().unwrap().to_owned();
+        assert_ne!(pid_a, pid_b, "two independent proposals from the same base revision");
+
+        let uri_a = format!("/api/dsl/sessions/{session_id}/proposals/{pid_a}/ratify");
+        let uri_b = format!("/api/dsl/sessions/{session_id}/proposals/{pid_b}/ratify");
+        let responses = futures::future::join_all([
+            app.clone().oneshot(post_json(&uri_a, serde_json::json!({}))),
+            app.clone().oneshot(post_json(&uri_b, serde_json::json!({}))),
+        ])
+        .await;
+        let mut bodies = Vec::new();
+        for response in responses {
+            let response = response.unwrap();
+            let status = response.status();
+            assert!(
+                status == StatusCode::OK || status == StatusCode::CONFLICT,
+                "unexpected status {status}"
+            );
+            bodies.push((status, body_json(response).await));
+        }
+        assert_eq!(
+            bodies.iter().filter(|(status, _)| *status == StatusCode::OK).count(),
+            1,
+            "exactly one racing proposal applies: {bodies:?}"
+        );
+        assert_eq!(
+            bodies.iter().filter(|(status, _)| *status == StatusCode::CONFLICT).count(),
+            1,
+            "exactly one racing proposal observes drift and is refused: {bodies:?}"
+        );
+        let winner_pid = if bodies[0].0 == StatusCode::OK { &pid_a } else { &pid_b };
+        let loser_pid = if bodies[0].0 == StatusCode::OK { &pid_b } else { &pid_a };
+
+        let record = body_json(
+            app.clone()
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            record["events"].as_array().unwrap().iter()
+                .filter(|event| event["kind"].get("GraphEdit").is_some()).count(),
+            2,
+            "seed has one operation tape and the winning racer contributes exactly one more"
+        );
+
+        // The loser's refusal must be a durable terminal receipt, replayable
+        // identically after restart — not merely a transient CONFLICT.
+        let restarted = designer_router(
+            DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap(),
+        );
+        let loser_retry = body_json(
+            restarted
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/proposals/{loser_pid}/ratify"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(loser_retry["idempotent"], true);
+        assert_eq!(loser_retry["terminal_receipt"]["outcome"], "expired_graph_drift");
+        assert_eq!(loser_retry["terminal_receipt"]["proposal_status"], "expired");
+
+        // The winner's own terminal receipt must also replay durably.
+        let winner_retry = body_json(
+            restarted
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/proposals/{winner_pid}/ratify"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(winner_retry["idempotent"], true);
+        assert_eq!(winner_retry["terminal_receipt"]["outcome"], "ratified");
+        assert_eq!(winner_retry["terminal_receipt"]["proposal_status"], "ratified");
+
+        // Graph revision was advanced exactly once by the race, not twice.
+        let record = body_json(
+            designer_router(DesignerState::assemble(state.store.clone(), state.template_store.clone()).unwrap())
+                .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            record["events"].as_array().unwrap().iter()
+                .filter(|event| event["kind"].get("GraphEdit").is_some()).count(),
+            2,
+            "restart and idempotent replays never append additional graph revisions"
+        );
+    }
+
     /// Reject: graph unchanged, proposal gone (subsequent ratify 404s).
     #[tokio::test]
     async fn test_reject_drops_proposal_graph_unchanged() {
