@@ -807,7 +807,7 @@ mod tests {
             "compiler-test-v1",
             "policy-test-v1",
             None,
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             HistoryHash::new("f".repeat(64)).unwrap(),
             moves,
         )

@@ -186,7 +186,7 @@ fuzz_target!(|data: &[u8]| {
     .unwrap();
     let focus = match anchor {
         Some((_, id)) => DesignFocus::element(GraphElementRef::new(id).unwrap()),
-        None => DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+        None => DesignFocus::absent(FocusAbsenceReason::NotProvided),
     };
     let first = build_bpmn_design_position(
         &dag,
@@ -257,7 +257,7 @@ fuzz_target!(|data: &[u8]| {
         .unwrap();
         let focus = match focus_anchor {
             Some((_, id)) => DesignFocus::element(GraphElementRef::new(id).unwrap()),
-            None => DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            None => DesignFocus::absent(FocusAbsenceReason::NotProvided),
         };
         let position = build_bpmn_design_position(
             &dag,

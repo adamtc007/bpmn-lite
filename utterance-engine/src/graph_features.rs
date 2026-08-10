@@ -11,7 +11,6 @@ pub(super) fn locality(position: &DesignPosition, legal_move: &LegalMove, uttera
         .contains(&anchor.as_str().to_lowercase());
     let focused = match position.focus() {
         DesignFocus::Element { element } => element == anchor,
-        DesignFocus::Subgraph { elements } => elements.contains(anchor),
         DesignFocus::Absent { .. } | DesignFocus::Unknown { .. } => false,
     };
     match (explicit, focused) {

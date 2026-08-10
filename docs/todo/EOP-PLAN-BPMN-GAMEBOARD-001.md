@@ -1,11 +1,33 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.17
+**Version:** v0.18
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.18 amendment — dead FocusAbsenceReason/DesignFocus surface removed (cross-repo).**
+`docs/receipts/semantic-gameboard-focus-absence-cleanup-2026-08-10.md`. On explicit
+instruction, removed `FocusAbsenceReason::{ClearedByUser,UnknownReference,
+PolicyDecision,LegacyProjection}` and `DesignFocus::Subgraph` — all confirmed to have
+zero producers anywhere in either `bpmn-lite` or the pinned `semantic-decision-contracts`
+crate. This is a breaking change to a separate, exact-pinned repo (`dsl`, per the
+settled cross-pack-refs-are-exact-pins rule): edited/committed/pushed/tagged `v0.3.0`
+in `dsl` (workspace version `0.2.2` → `0.3.0`), then re-pinned `bpmn-lite`'s three
+independent `Cargo.toml` pins (main workspace + two fuzz sub-workspaces, which pin the
+crate separately) from `452342e` to `9cf7cb3`, then fixed every call site the shape
+change touched. The `DesignFocus::absent()` constructor is now infallible
+(single-argument); `hash_focus`'s preimage shrank, so `DesignPosition::state_id`/
+`move_set_hash`/JSON encoding legitimately changed — one golden-byte test recomputed
+with real values, not guessed or silenced. Found one real, previously-missed consumer
+mid-cleanup: `utterance-engine/src/graph_features.rs::locality` exhaustively matched
+`DesignFocus` including a `Subgraph` arm that was reachable in the type system but
+never at runtime (nothing ever constructed one) — the original coverage-audit's
+"constructed nowhere" claim was accurate but its "checked everywhere" implication
+wasn't; caught by rustc's real diagnostics, not by the earlier grep pass. Both repos'
+full test suites green after the change (`dsl`: 350+ tests; `bpmn-lite`: 115
+utterance-engine + 76 designer, plus fuzz-target smoke runs).
 
 **v0.17 amendment — two production fixes from the coverage audit's dangling-outcome
 findings.** `docs/receipts/semantic-gameboard-phase8-followup-fixes-2026-08-10.md`.

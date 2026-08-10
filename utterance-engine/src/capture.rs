@@ -664,7 +664,7 @@ mod tests {
             &"b".repeat(64),
             "compiler-profile-v1",
             &history_hash,
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             None,
         )
         .unwrap();

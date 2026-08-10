@@ -1540,7 +1540,7 @@ mod tests {
             &"b".repeat(64),
             "compiler-profile-v1",
             &"c".repeat(64),
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             None,
         )
         .unwrap();
@@ -1599,7 +1599,7 @@ mod tests {
             &"b".repeat(64),
             "compiler-profile-v1",
             &"c".repeat(64),
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             None,
         )
         .unwrap();
@@ -1634,7 +1634,7 @@ mod tests {
             &"b".repeat(64),
             "compiler-profile-v1",
             &"c".repeat(64),
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             None,
         )
         .unwrap();
@@ -1655,7 +1655,7 @@ mod tests {
             &"e".repeat(64),
             "compiler-profile-v1",
             &"f".repeat(64),
-            DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
             None,
         )
         .unwrap();

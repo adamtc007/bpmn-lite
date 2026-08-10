@@ -2976,8 +2976,7 @@ fn gameboard_focus(
         )),
         None => Ok(semantic_decision_contracts::DesignFocus::absent(
             semantic_decision_contracts::FocusAbsenceReason::NotProvided,
-            None,
-        )?),
+        )),
     }
 }
 
@@ -3492,9 +3491,6 @@ fn validate_pending_position(
         DesignFocus::Absent { .. } => None,
         DesignFocus::Unknown { .. } => {
             anyhow::bail!("a workbook cannot remain active with unresolved focus")
-        }
-        DesignFocus::Subgraph { .. } => {
-            anyhow::bail!("this workbook facade does not admit subgraph focus")
         }
     };
     let graph_identity = graph_identity_hash(record);
@@ -6004,19 +6000,9 @@ async fn session_gameboard_endpoint(
                     .into_response();
             }
         },
-        None => match semantic_decision_contracts::DesignFocus::absent(
+        None => semantic_decision_contracts::DesignFocus::absent(
             semantic_decision_contracts::FocusAbsenceReason::NotProvided,
-            None,
-        ) {
-            Ok(focus) => focus,
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("focus: {error}") })),
-                )
-                    .into_response();
-            }
-        },
+        ),
     };
     let history_hash = match design_history_projection(&session) {
         Ok((hash, _)) => hash,
@@ -6256,19 +6242,9 @@ async fn sage_move_guidance_endpoint(
                     .into_response();
             }
         },
-        None => match semantic_decision_contracts::DesignFocus::absent(
+        None => semantic_decision_contracts::DesignFocus::absent(
             semantic_decision_contracts::FocusAbsenceReason::NotProvided,
-            None,
-        ) {
-            Ok(focus) => focus,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "Sage guidance unavailable" })),
-                )
-                    .into_response();
-            }
-        },
+        ),
     };
     let revision = graph_identity_hash(&session);
     let policy = utterance_engine::board::PolicyFilter::default();
@@ -8679,7 +8655,6 @@ mod tests {
             whole_graph_position.focus(),
             semantic_decision_contracts::DesignFocus::Absent {
                 reason: semantic_decision_contracts::FocusAbsenceReason::NotProvided,
-                policy_decision: None,
             }
         ));
         assert_ne!(

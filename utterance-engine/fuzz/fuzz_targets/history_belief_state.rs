@@ -169,7 +169,7 @@ fuzz_target!(|data: &[u8]| {
         &"b".repeat(64),
         "history-fuzz-v1",
         &empty_hash,
-        DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+        DesignFocus::absent(FocusAbsenceReason::NotProvided),
         None,
     )
     .unwrap();

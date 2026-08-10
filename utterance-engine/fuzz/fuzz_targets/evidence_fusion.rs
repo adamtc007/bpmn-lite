@@ -161,7 +161,7 @@ fuzz_target!(|data: &[u8]| {
     )
     .unwrap();
     let focus = anchor.map_or_else(
-        || DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+        || DesignFocus::absent(FocusAbsenceReason::NotProvided),
         |(_, id)| DesignFocus::element(GraphElementRef::new(id).unwrap()),
     );
     let position = build_bpmn_design_position(

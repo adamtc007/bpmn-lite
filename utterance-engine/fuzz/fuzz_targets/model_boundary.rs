@@ -49,7 +49,7 @@ fn position(move_count: usize) -> semantic_decision_contracts::DesignPosition {
         "compiler-model-boundary-v1",
         "policy-model-boundary-v1",
         None,
-        DesignFocus::absent(FocusAbsenceReason::NotProvided, None).unwrap(),
+        DesignFocus::absent(FocusAbsenceReason::NotProvided),
         HistoryHash::new("b".repeat(64)).unwrap(),
         moves,
     )
