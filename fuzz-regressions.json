@@ -28,6 +28,14 @@
       "fixed_commit": "phase6-model-boundary",
       "expected_current_outcome": "bounded offline and learned-score boundaries preserve full boards or return typed refusals without panic",
       "input_sha256": "08e38843209f12329301635236c18842909b3c6fd3f25d3a6d885ac775424ed0"
+    },
+    {
+      "finding_id": "DMN-LEXER-001",
+      "target": "dmn_lite_parse",
+      "regression_path": "dmn-lite-parser/fuzz/regressions/dmn_lite_parse/dmn-lexer-001-invalid-escape-multibyte-boundary.bin",
+      "fixed_commit": "accd563141b3b1408e84687ee262d94386db0171",
+      "expected_current_outcome": "string-literal lexing rejects the invalid escape with a typed MalformedString error; never panics on a non-char-boundary slice",
+      "input_sha256": "e02f1a19a8f81cba9813723dc3ebf5979ebae355d38440bcb9f856eb181d952c"
     }
   ]
 }

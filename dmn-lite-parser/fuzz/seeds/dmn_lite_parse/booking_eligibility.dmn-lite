@@ -1,0 +1,33 @@
+; EBNF §5.1 — booking eligibility (FIRST, multiple outputs)
+; FIRST is correct here: the catch-all r999 is a fallback, meaning earlier
+; specific rules are expected to overlap with it. UNIQUE would require strict
+; mutual exclusivity, which a catch-all structurally prevents.
+(define-decision booking-eligibility
+  :decision-id "booking_eligibility.v1"
+  :hit-policy first
+  :inputs
+    ((jurisdiction      :type enum :domain Jurisdiction)
+     (client-type       :type enum :domain CbuType)
+     (product           :type enum :domain ProductCode)
+     (booking-principal :type enum :domain BookingPrincipal)
+     (source-of-funds   :type enum :domain SourceOfFunds))
+  :outputs
+    ((eligibility :type enum :domain EligibilityOutcome)
+     (reason-code :type enum :domain BookingReasonCode))
+  :rules
+    ((rule r001
+       :when ((jurisdiction = LU)
+              (client-type = SICAV)
+              (product in (CUSTODY FUND_ACCOUNTING))
+              (booking-principal in (BNY_LUX BNY_IE))
+              (source-of-funds != UNKNOWN))
+       :then ((eligibility = ELIGIBLE)
+              (reason-code = STANDARD_LUX_SICAV)))
+     (rule r002
+       :when ((source-of-funds = UNKNOWN))
+       :then ((eligibility = NEEDS_REVIEW)
+              (reason-code = SOF_MISSING)))
+     (rule r999
+       :when (*)
+       :then ((eligibility = NOT_ELIGIBLE)
+              (reason-code = NO_MATCH)))))
