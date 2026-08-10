@@ -10081,6 +10081,71 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    /// Phase 7 red-receipt item 6: the one untested corner of the answer
+    /// endpoint's duplicate-request behavior — resubmitting the SAME valid,
+    /// workbook-completing answer as a second, independent request (a lost-
+    /// response retry, not a same-request duplicate slot name, which
+    /// `test_invalid_unknown_and_duplicate_answers_leave_workbook_intact`
+    /// already covers). The workbook is ephemeral/non-terminal
+    /// (`test_restart_drops_ephemeral_workbook`'s documented design), so
+    /// there is no durable idempotent-receipt path here — the second POST
+    /// must refuse cleanly (workbook already complete) rather than corrupt
+    /// or silently double-apply, and ratification must still succeed
+    /// afterward on the untouched, already-complete workbook.
+    #[tokio::test]
+    async fn test_duplicate_valid_answer_after_workbook_complete_refuses_cleanly() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let utter = utter_needs_insert_name(&app, &session_id).await;
+        let pid = utter["proposal_id"].as_str().unwrap().to_owned();
+
+        let first = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "collect_documents"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = body_json(first).await;
+        assert_eq!(first_body["proposal_status"], "ready_for_ratification");
+
+        let second = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/answers"),
+                identifier_answer("node", "collect_documents"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a second, independent answer request must refuse once the workbook is already complete"
+        );
+        let second_body = body_json(second).await;
+        assert_eq!(
+            second_body["workbook"]["status"], "ready_for_ratification",
+            "the refused duplicate must leave the already-complete workbook untouched: {second_body:?}"
+        );
+
+        let ratify = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{pid}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            ratify.status(),
+            StatusCode::OK,
+            "the refused duplicate must not have corrupted the workbook — ratification still succeeds"
+        );
+    }
+
     #[tokio::test]
     async fn test_direct_needs_arguments_to_ratify_is_refused_and_consumed() {
         let state = DesignerState::try_new().unwrap();
