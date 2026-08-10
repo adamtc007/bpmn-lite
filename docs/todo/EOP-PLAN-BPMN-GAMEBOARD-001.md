@@ -1,11 +1,25 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.19
+**Version:** v0.20
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.20 amendment — Gate 8 bullet 5 (wrong-move-traffic resource bound) closed.**
+`docs/receipts/semantic-gameboard-phase8-wrong-move-traffic-2026-08-10.md`. New
+test drives 400 consecutive turns of a fixture engineered to be ambiguous every
+turn through the real `update_bpmn_design_belief` -> `decide_bpmn_game_disposition`
+chain, passing only the trailing 64-attempt window each turn (mirroring
+`design_history_projection`'s production windowing). Proves per-turn cost stays
+flat across the run and history is never silently dropped. Real finding along the
+way: the disposition policy has its own loop breaker — repeated identical failure
+escalates instead of clarifying forever — and the test now asserts that
+escalation path is actually reached, not merely assumed. "No repeated compiler
+work" wasn't separately tested because it's architecturally unreachable from a
+wrong-move disposition (only a selected, fully-bound move reaches the compiler),
+recorded rather than silently assumed.
 
 **v0.19 amendment — Gate 8 bullet 4 (resource-limit typed failures) closed
 (cross-repo).** `docs/receipts/semantic-gameboard-phase8-resource-limits-2026-08-10.md`.
