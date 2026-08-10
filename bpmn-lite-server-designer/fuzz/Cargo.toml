@@ -17,12 +17,20 @@ designer-graph = { path = "../../designer-graph" }
 utterance-engine = { path = "../../utterance-engine" }
 semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "12d5280e59eacbe035959bcc9fa3008d4c4c7a47" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [[bin]]
 name = "bpmn_binding_extract"
 path = "fuzz_targets/bpmn_binding_extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "designer_operation_apply"
+path = "fuzz_targets/designer_operation_apply.rs"
 test = false
 doc = false
 bench = false

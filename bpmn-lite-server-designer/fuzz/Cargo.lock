@@ -103,6 +103,7 @@ dependencies = [
  "libfuzzer-sys",
  "semantic-decision-contracts",
  "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "utterance-engine",
  "uuid",
