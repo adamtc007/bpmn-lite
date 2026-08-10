@@ -13,8 +13,11 @@ use crate::bpmn_pack::{
     COMPILER_REFUSAL_RULE_CODE, EVIDENCE_RULE_CODE, POLICY_HIDDEN_RULE_CODE,
 };
 
-pub(super) const MAX_HISTORY_ATTEMPTS: usize = 64;
-pub(super) const MAX_HISTORY_BYTES: usize = 64 * 1024;
+/// Public so fuzz targets (a separate crate, seeing only the public API) can
+/// drive a tape past this bound deliberately instead of guessing/hardcoding
+/// it — see `utterance-engine/fuzz/fuzz_targets/correction_history.rs`.
+pub const MAX_HISTORY_ATTEMPTS: usize = 64;
+pub const MAX_HISTORY_BYTES: usize = 64 * 1024;
 
 pub(super) struct HistoryProjection {
     attempts: Vec<MoveAttemptReceipt>,

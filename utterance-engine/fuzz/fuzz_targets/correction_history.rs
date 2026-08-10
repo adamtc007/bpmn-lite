@@ -14,11 +14,19 @@ use semantic_decision_contracts::{
 use utterance_engine::board::PolicyFilter;
 use utterance_engine::bpmn_board::{
     build_bpmn_design_position, build_bpmn_semantic_board, project_bpmn_attempt_history,
-    record_bpmn_attempt,
+    record_bpmn_attempt, BpmnBoardError,
 };
+use utterance_engine::MAX_HISTORY_ATTEMPTS;
 use uuid::Uuid;
 
-const MAX_STEPS: usize = 24;
+// Comfortably above MAX_HISTORY_ATTEMPTS (64): below that, this target could
+// never construct a tape long enough to reach the resource-limit refusal
+// project_bpmn_attempt_history enforces before it even reaches correctness
+// validation — a real Gate 8 "resource-abuse corpora" gap, not just a
+// tractability choice. Small margin above 64, not huge: total per-iteration
+// work is O(steps^2) (project_bpmn_attempt_history revalidates the whole
+// slice each step), and libFuzzer mutates `data.len()` directly.
+const MAX_STEPS: usize = 96;
 static SCHEME_COUNTERS: AtomicU8 = AtomicU8::new(0);
 
 fn observe(index: u8, label: &str) {
@@ -180,9 +188,20 @@ fuzz_target!(|data: &[u8]| {
         }
         attempts.push(constructed.unwrap());
 
+        // `reference_valid` models acyclic correction-chain correctness only.
+        // Past MAX_HISTORY_ATTEMPTS a second, independent rejection reason
+        // applies — a resource-safety size bound, checked by
+        // `project_bpmn_attempt_history` before it even reaches correctness
+        // validation — so the two dimensions are asserted separately rather
+        // than folded into one boolean the reference model can't express.
         let expected_valid = reference_valid(&attempts);
+        let over_resource_limit = attempts.len() > MAX_HISTORY_ATTEMPTS;
         match project_bpmn_attempt_history(&attempts) {
             Ok((hash, projected)) => {
+                assert!(
+                    !over_resource_limit,
+                    "production accepted a tape over MAX_HISTORY_ATTEMPTS at step {index}"
+                );
                 assert!(
                     expected_valid,
                     "production accepted a tape the reference model rejects at step {index}"
@@ -191,11 +210,19 @@ fuzz_target!(|data: &[u8]| {
                 let (hash_again, _) = project_bpmn_attempt_history(&attempts).unwrap();
                 assert_eq!(hash, hash_again);
             }
-            Err(_) => {
-                assert!(
-                    !expected_valid,
-                    "production rejected a tape the reference model accepts at step {index}"
-                );
+            Err(error) => {
+                if over_resource_limit {
+                    assert!(
+                        matches!(&error, BpmnBoardError::ResourceLimit(_)),
+                        "expected a resource-limit refusal once the tape exceeds \
+                         MAX_HISTORY_ATTEMPTS at step {index}, got {error:?} instead"
+                    );
+                } else {
+                    assert!(
+                        !expected_valid,
+                        "production rejected a tape the reference model accepts at step {index}"
+                    );
+                }
                 assert!(project_bpmn_attempt_history(&attempts).is_err());
             }
         }

@@ -76,6 +76,7 @@ pub mod policy;
 #[cfg(test)]
 mod property_tests;
 pub mod retrieval;
+pub use history::{MAX_HISTORY_ATTEMPTS, MAX_HISTORY_BYTES};
 pub use resolver_comparison::{
     compare_resolvers, BoundedOfflineCandidateText, BoundedOfflineRankerRequest,
     ProportionInterval, ResolverBoardPacket, ResolverBoundaryRefusal, ResolverCandidateScore,

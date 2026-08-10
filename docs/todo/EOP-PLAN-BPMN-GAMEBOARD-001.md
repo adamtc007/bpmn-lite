@@ -1,11 +1,28 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.22
+**Version:** v0.23
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.23 amendment — Gate 8 bullet 7, second target closed:
+`correction_history.rs` can now reach `MAX_HISTORY_ATTEMPTS`.**
+`docs/receipts/semantic-gameboard-phase8-correction-history-limit-2026-08-10.md`.
+Picked back up the piece the prior receipt explicitly deferred rather than
+rush. Made `MAX_HISTORY_ATTEMPTS`/`MAX_HISTORY_BYTES` `pub` (were
+crate-internal, invisible to the separate fuzz crate) and re-exported via
+`lib.rs`; raised the fuzz target's `MAX_STEPS` from 24 to 96. The harness's
+own acyclic-correctness reference model has no notion of tape size, so a
+tape can be simultaneously "reference-valid" and legitimately refused for
+being too large — the prior binary Ok/Err assertion couldn't express that.
+Restructured into a three-way check that asserts the *specific* error variant
+(`ResourceLimit`, not just "some error") once past the bound. Verified with a
+handcrafted 96-byte input (steps 65-96 exercised cleanly) plus two real fuzzing
+bursts (7,070 and 710 runs respectively), 0 crashes. Public-API baseline
+updated deliberately (2 reviewed items). `legal_move_enumeration.rs` and
+`semantic_board_decode.rs` remain open, as previously named.
 
 **v0.22 amendment — Gate 8 bullet 3 (performance budget) ratified and wired as a
 real CI gate.** `docs/receipts/semantic-gameboard-phase8-perf-budget-ratified-2026-08-10.md`.
