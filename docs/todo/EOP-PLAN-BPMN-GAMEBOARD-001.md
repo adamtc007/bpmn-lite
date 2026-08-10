@@ -1,11 +1,40 @@
 # EOP-PLAN-BPMN-GAMEBOARD-001 — Refactor BPMN-Lite around the design-game model
 
-**Version:** v0.23
+**Version:** v0.24
 **Status:** IMPLEMENTATION PLAN — blocked only on ratification of the companion vision
 **Date:** 2026-08-10
 **Vision:** `docs/todo/EOP-VS-BPMN-GAMEBOARD-001.md`
 **Coordinating repository:** `/Users/adamtc007/dev/bpmn-lite`
 **Reviewed baseline:** `feat/dir-002-phase-c-slm-training` at `22ba055`
+
+**v0.24 amendment — Gate 8 bullet 7's third and final named target closed;
+Gate 8 now GREEN.**
+`docs/receipts/semantic-gameboard-phase8-legal-move-enumeration-limit-2026-08-10.md`.
+`legal_move_enumeration.rs` was capped at 0-4 generated tasks; widening it
+found a real, independent bug along the way (a hardcoded `end_key` colliding
+with a task-node key once the graph grew past 98 nodes — invisible while
+task_count stayed ≤4) and a genuine two-tier resource-limit interaction: this
+fixture's unfiltered `PolicyFilter` means `MAX_LEGAL_MOVES` (512, contract
+layer) binds long before `MAX_ENUMERATION_CANDIDATES` (4096, enumeration
+layer) does, and the two produce *different* typed error variants
+(`BpmnBoardError::Gameboard(GameboardContractError::ResourceLimitExceeded)` vs
+`BpmnBoardError::ResourceLimit`) that a first assertion pass conflated and
+crashed on. Widened to `% 64` task nodes (reaches `MAX_LEGAL_MOVES` fast);
+deliberately does not chase `MAX_ENUMERATION_CANDIDATES` here (~5s/iteration at
+the ~316 nodes needed, an impractical fuzzing cost for this
+per-anchor-reconstruction fixture) — that cap is independently, deterministically
+covered by Gate 8 bullet 4's own unit test instead, named rather than silently
+dropped.
+
+**Gate 8 status: all nine bullets from
+`docs/receipts/semantic-gameboard-phase8-gate-2026-08-10.md`'s original
+disposition are now closed.** Bullets 1, 2, 6, 8, 9 were already closed; 3
+(performance budget, ratified and CI-gated), 4 (resource-limit typed
+failures), 5 (wrong-move-traffic loop bound) and 7 (resource-abuse
+corpora — all three relevant fuzz targets now reach a real resource limit,
+`semantic_board_decode.rs` correctly excluded as an unrelated contract type,
+native/Wasm/Python differential testing ruled N/A per the v0.10 amendment)
+close this session. Phase 8 moves from YELLOW to **GREEN**.
 
 **v0.23 amendment — Gate 8 bullet 7, second target closed:
 `correction_history.rs` can now reach `MAX_HISTORY_ATTEMPTS`.**

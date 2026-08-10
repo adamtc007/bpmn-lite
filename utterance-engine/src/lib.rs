@@ -77,6 +77,7 @@ pub mod policy;
 mod property_tests;
 pub mod retrieval;
 pub use history::{MAX_HISTORY_ATTEMPTS, MAX_HISTORY_BYTES};
+pub use legal_moves::MAX_ENUMERATION_CANDIDATES;
 pub use resolver_comparison::{
     compare_resolvers, BoundedOfflineCandidateText, BoundedOfflineRankerRequest,
     ProportionInterval, ResolverBoardPacket, ResolverBoundaryRefusal, ResolverCandidateScore,

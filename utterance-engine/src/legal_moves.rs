@@ -24,7 +24,10 @@ const ANCHOR_PROVENANCE: &str = "bpmn.position.anchor.v1";
 /// refusing. Bounds enumeration amplification and the expensive per-candidate
 /// compiler preview work that follows each one, independent of the tighter
 /// `MAX_LEGAL_MOVES` cap the contract layer applies to the resulting set.
-const MAX_ENUMERATION_CANDIDATES: usize = 4096;
+/// Public so fuzz targets (a separate crate) can drive a graph past this
+/// bound deliberately instead of guessing/hardcoding it — see
+/// `utterance-engine/fuzz/fuzz_targets/legal_move_enumeration.rs`.
+pub const MAX_ENUMERATION_CANDIDATES: usize = 4096;
 
 pub(crate) const MATERIALIZED_CANDIDATE_IDS: &[&str] = &[
     "op.append_node",

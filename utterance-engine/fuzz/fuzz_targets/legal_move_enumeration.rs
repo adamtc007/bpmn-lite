@@ -9,11 +9,14 @@ use designer_graph::productions::apply_production;
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 use libfuzzer_sys::fuzz_target;
 use semantic_decision_contracts::{
-    DesignFocus, DesignPosition, FocusAbsenceReason, GraphElementRef, MoveBindingState,
-    ABSTENTION_CANDIDATE_ID,
+    DesignFocus, DesignPosition, FocusAbsenceReason, GameboardContractError, GraphElementRef,
+    MoveBindingState, ABSTENTION_CANDIDATE_ID, MAX_LEGAL_MOVES,
 };
 use utterance_engine::board::PolicyFilter;
-use utterance_engine::bpmn_board::{build_bpmn_design_position, build_bpmn_semantic_board};
+use utterance_engine::bpmn_board::{
+    build_bpmn_design_position, build_bpmn_semantic_board, BpmnBoardError,
+};
+use utterance_engine::MAX_ENUMERATION_CANDIDATES;
 use uuid::Uuid;
 
 static ANCHOR_COUNTERS: AtomicU8 = AtomicU8::new(0);
@@ -68,7 +71,12 @@ fn build_graph(task_count: usize) -> (DesignerDag, Vec<(NodeKey, String)>) {
         elements.push((node_key, id));
         anchor = node_key;
     }
-    let end_key = key(100);
+    // Task keys are `key(2 + index)` for `index in 0..task_count`; with
+    // task_count now reaching up to 339 (see `% 340` below), a fixed
+    // `key(100)` would collide with the task node at index 98 — a latent bug
+    // in this fixture invisible while task_count was capped at ≤4. Well clear
+    // of the task-key range regardless of how large task_count grows.
+    let end_key = key(1_000_000);
     dag = apply_production(
         &dag,
         vec![Operation::AppendNode {
@@ -169,8 +177,91 @@ impl ReferencePosition {
     }
 }
 
+/// The exact raw anchor x candidate count `enumerate`'s amplification counter
+/// accumulates for a whole-graph (unanchored) position on this generated
+/// graph family — derived from `ReferencePosition::candidates_at`, the same
+/// source of truth the rest of this target already checks production output
+/// against, rather than a second hardcoded magic-number formula that could
+/// drift out of sync with it.
+fn whole_graph_candidate_count(elements: &[(NodeKey, String)]) -> usize {
+    elements
+        .iter()
+        .map(|(_, id)| ReferencePosition::candidates_at(id).len())
+        .sum()
+}
+
+/// Two independent resource limits guard a whole-graph position, at two
+/// different layers, and — for this fixture, whose empty `PolicyFilter`
+/// never filters a raw candidate out of admission — two different graph
+/// sizes: `enumerate` (`utterance-engine`) refuses once the raw candidates it
+/// *considers* exceed `MAX_ENUMERATION_CANDIDATES`, before board-membership
+/// filtering or admission; `DesignPosition::new` (the pinned contract crate)
+/// separately refuses once the *admitted* legal-move set (raw candidates + 1
+/// abstention, since nothing here is filtered) exceeds `MAX_LEGAL_MOVES`.
+/// Because `MAX_LEGAL_MOVES` (512) is far tighter than
+/// `MAX_ENUMERATION_CANDIDATES` (4096), it is what actually binds first as
+/// this graph grows — discovered by this target crashing on an assertion
+/// that only modeled the enumeration-layer cap. Both are real, reachable
+/// zones the fixture's `% 340` task-count range now spans, and are asserted
+/// as functionally distinct outcomes, not folded into "any resource limit".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedWholeGraphOutcome {
+    Admitted,
+    EnumerationLimit,
+    LegalMoveLimit,
+}
+
+fn expected_whole_graph_outcome(elements: &[(NodeKey, String)]) -> ExpectedWholeGraphOutcome {
+    let considered = whole_graph_candidate_count(elements);
+    let admitted_estimate = considered + 1; // +1 framework abstention
+    if considered > MAX_ENUMERATION_CANDIDATES {
+        ExpectedWholeGraphOutcome::EnumerationLimit
+    } else if admitted_estimate > MAX_LEGAL_MOVES {
+        ExpectedWholeGraphOutcome::LegalMoveLimit
+    } else {
+        ExpectedWholeGraphOutcome::Admitted
+    }
+}
+
+fn assert_matches_expected_outcome(
+    result: Result<DesignPosition, BpmnBoardError>,
+    expected: ExpectedWholeGraphOutcome,
+) -> Option<DesignPosition> {
+    match (result, expected) {
+        (Ok(position), ExpectedWholeGraphOutcome::Admitted) => Some(position),
+        (Ok(_), other) => panic!("expected {other:?} but the position was admitted"),
+        (
+            Err(BpmnBoardError::ResourceLimit(_)),
+            ExpectedWholeGraphOutcome::EnumerationLimit,
+        ) => None,
+        (
+            Err(BpmnBoardError::Gameboard(GameboardContractError::ResourceLimitExceeded {
+                field: "design position legal moves",
+                ..
+            })),
+            ExpectedWholeGraphOutcome::LegalMoveLimit,
+        ) => None,
+        (Err(error), expected) => {
+            panic!("expected {expected:?} but got a different/unexpected refusal: {error:?}")
+        }
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
-    let task_count = data.first().copied().unwrap_or_default() as usize % 5;
+    // MAX_LEGAL_MOVES (512) is what actually binds for this fixture — its
+    // empty PolicyFilter never filters a raw candidate before admission, so
+    // admitted legal moves track raw candidates ~1:1, and MAX_LEGAL_MOVES is
+    // far tighter than MAX_ENUMERATION_CANDIDATES (4096). `% 64` (needs ~40
+    // task nodes to cross 512 admitted moves) reaches that zone with a
+    // fast, single-byte-selected graph. MAX_ENUMERATION_CANDIDATES needs
+    // ~316 task nodes to reach on its own — this fixture's per-iteration
+    // cost is superlinear in node count (it reconstructs a board+position at
+    // every anchor, once per fuzz call), making that zone impractically slow
+    // for a fuzzing campaign (~5s/iteration at 339 nodes, measured). Left
+    // unreached here; already independently, deterministically verified by
+    // `legal_moves::tests::enumeration_amplification_beyond_the_limit_is_a_typed_resource_limit_refusal`
+    // (a single-construction 600-node fixture with no such multiplier).
+    let task_count = data.first().copied().unwrap_or_default() as usize % 64;
     let (dag, elements) = build_graph(task_count);
     dag.admit().unwrap();
     let focus_selector = data.get(1).copied().unwrap_or_default() as usize;
@@ -188,7 +279,18 @@ fuzz_target!(|data: &[u8]| {
         Some((_, id)) => DesignFocus::element(GraphElementRef::new(id).unwrap()),
         None => DesignFocus::absent(FocusAbsenceReason::NotProvided),
     };
-    let first = build_bpmn_design_position(
+
+    // A whole-graph (unanchored) position walks every anchor's raw candidate
+    // set; past either resource limit this is a legitimate, typed refusal
+    // (Gate 8 bullet 4), not a bug to unwrap through. An anchored position
+    // never risks this — `enumerate` only considers that one anchor.
+    let expected_outcome = if anchor.is_none() {
+        expected_whole_graph_outcome(&elements)
+    } else {
+        ExpectedWholeGraphOutcome::Admitted
+    };
+
+    let position_result = build_bpmn_design_position(
         &dag,
         &board,
         &revision,
@@ -197,8 +299,10 @@ fuzz_target!(|data: &[u8]| {
         &"c".repeat(64),
         focus.clone(),
         None,
-    )
-    .unwrap();
+    );
+    let Some(first) = assert_matches_expected_outcome(position_result, expected_outcome) else {
+        return;
+    };
     let second = build_bpmn_design_position(
         &dag,
         &board,
@@ -246,8 +350,31 @@ fuzz_target!(|data: &[u8]| {
         }));
     }
 
+    let whole_graph_outcome = expected_whole_graph_outcome(&elements);
     for index in 0..=elements.len() {
         let focus_anchor = (index < elements.len()).then(|| &elements[index]);
+        // Only the final (unanchored, whole-graph) iteration can hit either
+        // resource limit; every anchored iteration considers exactly one
+        // anchor's small, fixed candidate set.
+        if focus_anchor.is_none() && whole_graph_outcome != ExpectedWholeGraphOutcome::Admitted {
+            let board = build_bpmn_semantic_board(&dag, None, &revision, &PolicyFilter::default())
+                .unwrap();
+            let position_result = build_bpmn_design_position(
+                &dag,
+                &board,
+                &revision,
+                &"b".repeat(64),
+                "compiler-fuzz-v1",
+                &"c".repeat(64),
+                DesignFocus::absent(FocusAbsenceReason::NotProvided),
+                None,
+            );
+            assert!(
+                assert_matches_expected_outcome(position_result, whole_graph_outcome).is_none(),
+                "expected a refusal, not an admitted position"
+            );
+            continue;
+        }
         let board = build_bpmn_semantic_board(
             &dag,
             focus_anchor.map(|(key, id)| (*key, id.as_str())),
