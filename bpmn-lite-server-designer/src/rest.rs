@@ -888,6 +888,8 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
             "/api/dsl/sessions/:id/save",
             post(save_design_session_endpoint),
         )
+        .route("/api/dsl/sessions/:id/undo", post(session_undo_endpoint))
+        .route("/api/dsl/sessions/:id/runbook", get(session_runbook_endpoint))
         .route(
             "/api/dsl/sessions/:id/gameboard",
             get(session_gameboard_endpoint),
@@ -2887,8 +2889,15 @@ fn seed_start_key(session_id: Uuid) -> designer_graph::schema::NodeKey {
 /// (the graph-edit endpoint validates before persisting) — surfaced as an
 /// error, never silently skipped mid-replay (a partial DAG would silently
 /// misrepresent the session).
+///
+/// G6.1: `as_of_seq` bounds the replay to a truncated view of the tape —
+/// `None` is the live/current view (any `Undo` events in the log are
+/// honored, per `DesignSessionRecord::visible_events`); `Some(n)` is an
+/// explicit historical view as of event `n`, ignoring any `Undo` event
+/// that itself sits after `n`. Every call site names which it wants.
 fn reconstruct_designer_dag(
     record: &bpmn_lite_store::DesignSessionRecord,
+    as_of_seq: Option<u64>,
 ) -> anyhow::Result<designer_graph::schema::DesignerDag> {
     use designer_graph::ops::Operation;
     use designer_graph::productions::apply_production;
@@ -2902,7 +2911,11 @@ fn reconstruct_designer_dag(
         },
         Provenance::default(),
     )?;
-    for (i, payload) in record.graph_edit_payloads().into_iter().enumerate() {
+    for (i, payload) in record
+        .graph_edit_payloads_as_of(as_of_seq)
+        .into_iter()
+        .enumerate()
+    {
         let ops: Vec<Operation> = serde_json::from_str(payload)
             .map_err(|e| anyhow::anyhow!("graph edit #{i} failed to deserialize: {e}"))?;
         dag = apply_production(&dag, ops, Provenance::default())
@@ -2910,6 +2923,58 @@ fn reconstruct_designer_dag(
             .candidate;
     }
     Ok(dag)
+}
+
+/// G6.2 — render a session's accumulated operation tape as readable
+/// Designer-DSL text, one operation per line, in visible replay order
+/// (honoring any `Undo`, same as `reconstruct_designer_dag`). The tape is
+/// the durable, authoritative surface; this is a read-only rendering job,
+/// not a re-parseable program.
+async fn session_runbook_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let mut all_ops: Vec<designer_graph::ops::Operation> = Vec::new();
+    for (i, payload) in record.graph_edit_payloads_as_of(None).into_iter().enumerate() {
+        let ops: Vec<designer_graph::ops::Operation> = match serde_json::from_str(payload) {
+            Ok(ops) => ops,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("graph edit #{i} failed to deserialize: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        all_ops.extend(ops);
+    }
+    let runbook = designer_graph::runbook::render_runbook(&all_ops);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session_id": id,
+            "operation_count": all_ops.len(),
+            "runbook": runbook,
+        })),
+    )
+        .into_response()
 }
 
 /// The session's graph-identity hash: blake3 over the accumulated
@@ -3149,13 +3214,17 @@ fn resolve_compound_chain(
 
 /// Reconstruct the bounded typed-attempt projection observed by a position.
 /// Raw dialogue and opaque proposal payloads never enter the ranker preimage.
+/// G6.1: `as_of_seq` bounds this to the same truncated-replay view
+/// `reconstruct_designer_dag` uses — the position-derivation history must
+/// not include attempts from a range an undo excised.
 fn design_history_projection(
     record: &bpmn_lite_store::DesignSessionRecord,
+    as_of_seq: Option<u64>,
 ) -> anyhow::Result<(String, Vec<semantic_decision_contracts::MoveAttemptReceipt>)> {
     const MAX_WINDOW: usize = 64;
     let mut encoded = record
-        .events
-        .iter()
+        .visible_events(as_of_seq)
+        .into_iter()
         .rev()
         .filter_map(|event| match &event.kind {
             DesignSessionEventKind::Utterance {
@@ -3179,12 +3248,16 @@ fn design_history_projection(
         .map_err(anyhow::Error::from)
 }
 
+/// G6.1: `as_of_seq` bounds this to the same truncated-replay view
+/// `reconstruct_designer_dag` uses — an undo must not leave a belief
+/// snapshot from the excised (undone) range as "latest".
 fn latest_gameboard_belief(
     record: &bpmn_lite_store::DesignSessionRecord,
+    as_of_seq: Option<u64>,
 ) -> anyhow::Result<Option<semantic_decision_contracts::DesignBelief>> {
     record
-        .events
-        .iter()
+        .visible_events(as_of_seq)
+        .into_iter()
         .rev()
         .find_map(|event| match &event.kind {
             DesignSessionEventKind::Utterance {
@@ -3300,7 +3373,7 @@ fn resolve_direct_edit(
         &revision,
         policy,
     ).ok() else { return DirectEditResolution::NonEquivalent("semantic_board_unavailable") };
-    let Some((history_hash, _)) = design_history_projection(record).ok() else { return DirectEditResolution::NonEquivalent("history_unavailable") };
+    let Some((history_hash, _)) = design_history_projection(record, None).ok() else { return DirectEditResolution::NonEquivalent("history_unavailable") };
     let Some(focus) = gameboard_focus(Some(&anchor), true).ok() else {
         return DirectEditResolution::NonEquivalent("focus_unavailable");
     };
@@ -3394,7 +3467,7 @@ async fn session_graph_edit_endpoint(
                 .into_response();
         }
     };
-    let dag = match reconstruct_designer_dag(&record) {
+    let dag = match reconstruct_designer_dag(&record, None) {
         Ok(d) => d,
         Err(e) => {
             return (
@@ -3510,6 +3583,220 @@ async fn session_graph_edit_endpoint(
     }
 }
 
+// ── G6.1: session undo as truncated replay ──────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct SessionUndoBody {
+    /// The event `seq` to undo back to: replay is bounded to
+    /// `seq <= target_seq` from this point forward, per
+    /// `DesignSessionRecord::visible_events`. Must be strictly less than
+    /// the session's current live head.
+    target_seq: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SessionUndoResponse {
+    /// The seq of the appended `Undo` marker event itself.
+    seq: u64,
+    target_seq: u64,
+    graph_content_hash: String,
+}
+
+/// Undo a session to a prior position. Fail-closed: the truncated position
+/// is reconstructed and re-admitted BEFORE the `Undo` marker is persisted —
+/// an undo target that would leave a non-admitting graph is refused, never
+/// silently accepted then discovered broken on the next read.
+///
+/// Nothing is deleted (same invariant `Revision`'s doc comment states for
+/// the legacy path): every excised event remains in the log and reappears
+/// under any explicit `as_of_seq` view at or before its own window, or once
+/// a later edit re-extends the head past it.
+///
+/// Best-effort: if the session is graph-backed and a gameboard position is
+/// derivable for it, this also records a `MoveAttemptReceipt` tagged
+/// `CorrectionKind::Undo` against the PRE-undo position — the first real
+/// constructor of that variant; `evaluate_frozen_game_funnel`'s `reversals`
+/// tally already reads it. A session with no derivable gameboard position
+/// (DSL-source-only, or a graph-backed session with no legal moves at its
+/// current position) still undoes; it just carries no gameboard receipt.
+async fn session_undo_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SessionUndoBody>,
+) -> impl IntoResponse {
+    let lock = demo.session_lock(id);
+    let _guard = lock.lock().await;
+    let record = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let current_head = record.visible_events(None).into_iter().map(|e| e.seq).max();
+    match current_head {
+        Some(head) if body.target_seq < head => {}
+        _ => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "target_seq must be strictly before the session's current head",
+                    "current_head": current_head,
+                })),
+            )
+                .into_response();
+        }
+    }
+    // Fail-closed: prove the truncated position is real before persisting
+    // the marker that makes it the new default view.
+    let truncated_dag = match reconstruct_designer_dag(&record, Some(body.target_seq)) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("undo target does not reconstruct: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    if record.is_graph_backed() {
+        if let Err(errs) = truncated_dag.admit() {
+            let messages: Vec<String> = errs.iter().map(|e| e.message.clone()).collect();
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": "undo target does not admit", "diagnostics": messages })),
+            )
+                .into_response();
+        }
+    }
+    let undo_seq = match demo
+        .store
+        .append_design_session_event(
+            &demo.tenant_id,
+            id,
+            &DesignSessionEventKind::Undo {
+                target_seq: body.target_seq,
+            },
+        )
+        .await
+    {
+        Ok(seq) => seq,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    // Best-effort gameboard receipt against the PRE-undo (live) position —
+    // failure here does not undo the undo; it only means this session's
+    // funnel telemetry for this action stays absent, same as any other
+    // "best-effort, non-fatal" attempt-receipt path in this file.
+    if record.is_graph_backed() {
+        let _ = record_undo_receipt(&demo, id, &record).await;
+    }
+    // The POST-undo content hash: computed over the truncated view
+    // (`as_of_seq = Some(target_seq)`), NOT `graph_content_hash(&record)`
+    // (which is the unbounded/live view over the PRE-undo `record` still
+    // in scope here) — the truncated view is unaffected by the `Undo`
+    // marker just appended above (it isn't a `GraphEdit`), so `record`'s
+    // own payload log already reflects the correct post-undo content.
+    let post_undo_content_hash = utterance_engine::bpmn_board::graph_content_hash_over(
+        record
+            .graph_edit_payloads_as_of(Some(body.target_seq))
+            .into_iter(),
+    );
+    (
+        StatusCode::OK,
+        Json(SessionUndoResponse {
+            seq: undo_seq,
+            target_seq: body.target_seq,
+            graph_content_hash: post_undo_content_hash,
+        }),
+    )
+        .into_response()
+}
+
+/// Best-effort helper for `session_undo_endpoint`: derive the session's
+/// PRE-undo gameboard position (same construction sequence
+/// `palette_select_endpoint` uses) and record a `CorrectionKind::Undo`
+/// attempt receipt against it.
+async fn record_undo_receipt(
+    demo: &DesignerState,
+    session_id: Uuid,
+    record: &bpmn_lite_store::DesignSessionRecord,
+) -> anyhow::Result<()> {
+    use utterance_engine::board::PolicyFilter;
+
+    let dag = reconstruct_designer_dag(record, None)?;
+    let revision = graph_identity_hash(record);
+    let board = utterance_engine::bpmn_board::build_bpmn_semantic_board(
+        &dag,
+        None,
+        &revision,
+        &PolicyFilter::default(),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (history_hash, _attempts) = design_history_projection(record, None)?;
+    let position = utterance_engine::bpmn_board::build_bpmn_design_position(
+        &dag,
+        &board,
+        &revision,
+        &graph_content_hash(record),
+        DESIGNER_COMPILER_PROFILE_IDENTITY,
+        &history_hash,
+        semantic_decision_contracts::DesignFocus::absent(
+            semantic_decision_contracts::FocusAbsenceReason::NotProvided,
+        ),
+        None,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let attempt_id = semantic_decision_contracts::MoveAttemptId::new(format!(
+        "session-undo-{}",
+        blake3::hash(format!("{session_id}\0{}", position.state_id().as_str()).as_bytes())
+            .to_hex()
+    ))?;
+    let receipt = utterance_engine::bpmn_board::record_bpmn_attempt(
+        &position,
+        attempt_id,
+        None,
+        "(session undo)",
+        semantic_decision_contracts::MoveAttemptOutcome::Corrected,
+        None,
+        Some(semantic_decision_contracts::CorrectionKind::Undo),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let receipt_json = serde_json::to_string(&receipt)?;
+    demo.store
+        .append_design_session_event(
+            &demo.tenant_id,
+            session_id,
+            &DesignSessionEventKind::Utterance {
+                text: "(session undo)".into(),
+                response: "session reverted to a prior position".into(),
+                context_projection: None,
+                decision_record_json: None,
+                gameboard_attempt_receipt_json: Some(receipt_json),
+                gameboard_belief_json: None,
+                gameboard_disposition_json: None,
+                history_projection_hash: Some(history_hash),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 // ── Utterance-proposal ratify/reject (the human gate) ───────────────────
 //
 // The ONLY door from an utterance to a persisted GraphEdit. §S7 of
@@ -3567,6 +3854,13 @@ async fn append_proposal_audit(
 /// client response. The workbook ID is the proposal's canonical request key;
 /// only terminal workbooks may satisfy a retry, so an in-flight workbook can
 /// never be mistaken for a completed mutation.
+///
+/// G6.1 note: deliberately scans the RAW event log, not `visible_events`.
+/// This is request-retry idempotency ("did this HTTP call already
+/// durably land"), not a graph-position read — a client that already
+/// ratified a proposal must see the same terminal receipt on retry even
+/// if the session's position was undone afterward. Undo does not un-ratify
+/// a past request; it only changes what future position reads observe.
 async fn terminal_proposal_receipt(
     demo: &DesignerState,
     session_id: Uuid,
@@ -3714,7 +4008,7 @@ fn validate_pending_position(
 ) -> anyhow::Result<designer_graph::schema::DesignerDag> {
     use semantic_decision_contracts::DesignFocus;
 
-    let dag = reconstruct_designer_dag(record)?;
+    let dag = reconstruct_designer_dag(record, None)?;
     let anchor_pair = match pending.design_position.focus() {
         DesignFocus::Element { element } => {
             let key = dag
@@ -4747,7 +5041,7 @@ async fn session_utterance_endpoint(
     // census-only path unchanged — purely additive, no existing session's
     // behavior shifts underneath it.
     let pipeline_result: anyhow::Result<_> = if record_session.is_graph_backed() {
-        let dag = match reconstruct_designer_dag(&record_session) {
+        let dag = match reconstruct_designer_dag(&record_session, None) {
             Ok(d) => d,
             Err(e) => {
                 return (
@@ -4791,7 +5085,7 @@ async fn session_utterance_endpoint(
                 &graph_identity,
             )?;
             let focus = gameboard_focus(body.anchor.as_deref(), anchor_key.is_some())?;
-            let (history_hash, attempts) = design_history_projection(&record_session)?;
+            let (history_hash, attempts) = design_history_projection(&record_session, None)?;
             let position = utterance_engine::bpmn_board::build_bpmn_design_position(
                 &dag,
                 &board,
@@ -4810,7 +5104,7 @@ async fn session_utterance_endpoint(
                 &attempts,
                 EvidenceLatencyBudget::UtteranceSubmit,
             )?;
-            let previous_belief = latest_gameboard_belief(&record_session)?;
+            let previous_belief = latest_gameboard_belief(&record_session, None)?;
             let belief = utterance_engine::bpmn_board::update_bpmn_design_belief(
                 &dag,
                 &position,
@@ -5033,7 +5327,7 @@ async fn session_utterance_endpoint(
         .then(|| game.selected_moves().first())
         .flatten()
     });
-    let correction_context = design_history_projection(&record_session)
+    let correction_context = design_history_projection(&record_session, None)
         .ok()
         .and_then(|(_, attempts)| attempts.last().cloned())
         .filter(|attempt| {
@@ -5387,7 +5681,7 @@ async fn session_utterance_endpoint(
     #[cfg(feature = "q9-capture")]
     let capture_state = {
         let related_attempts = if gameboard_attempt.is_some() {
-            match design_history_projection(&record_session) {
+            match design_history_projection(&record_session, None) {
                 Ok((_, attempts)) => attempts,
                 Err(error) => {
                     return (
@@ -5803,7 +6097,7 @@ async fn palette_select_endpoint(
     if !session.is_graph_backed() {
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"semantic palette requires a graph-backed session"}))).into_response();
     }
-    let dag = match reconstruct_designer_dag(&session) {
+    let dag = match reconstruct_designer_dag(&session, None) {
         Ok(dag) => dag,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
     };
@@ -5821,7 +6115,7 @@ async fn palette_select_endpoint(
         Ok(board) => board,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
     };
-    let (history_hash, attempts) = match design_history_projection(&session) {
+    let (history_hash, attempts) = match design_history_projection(&session, None) {
         Ok(history) => history,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette unavailable"}))).into_response(),
     };
@@ -5851,7 +6145,7 @@ async fn palette_select_endpoint(
     };
     let belief = match utterance_engine::bpmn_board::update_bpmn_design_belief(
         &dag, &position, &evidence.move_evidence, &attempts,
-        latest_gameboard_belief(&session).ok().flatten().as_ref(),
+        latest_gameboard_belief(&session, None).ok().flatten().as_ref(),
     ) {
         Ok(belief) => belief,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"palette evidence unavailable"}))).into_response(),
@@ -6012,7 +6306,7 @@ async fn save_design_session_endpoint(
             .into_response();
     }
 
-    let dag = match reconstruct_designer_dag(&record) {
+    let dag = match reconstruct_designer_dag(&record, None) {
         Ok(d) => d,
         Err(e) => {
             return (
@@ -6130,6 +6424,7 @@ async fn save_design_session_endpoint(
             contract_registry: None,
             generate_bpmn: true,
             verb_registry_hash: None,
+            session_id: Some(record.id),
         },
         &*demo.template_store,
         &*demo.store,
@@ -6256,7 +6551,7 @@ async fn session_gameboard_endpoint(
         )
             .into_response();
     }
-    let dag = match reconstruct_designer_dag(&session) {
+    let dag = match reconstruct_designer_dag(&session, None) {
         Ok(dag) => dag,
         Err(error) => {
             return (
@@ -6312,7 +6607,7 @@ async fn session_gameboard_endpoint(
             semantic_decision_contracts::FocusAbsenceReason::NotProvided,
         ),
     };
-    let history_hash = match design_history_projection(&session) {
+    let history_hash = match design_history_projection(&session, None) {
         Ok((hash, _)) => hash,
         Err(error) => {
             return (
@@ -6365,7 +6660,7 @@ async fn sage_session_history_endpoint(
                 .into_response();
         }
     };
-    let (history_hash, attempts) = match design_history_projection(&session) {
+    let (history_hash, attempts) = match design_history_projection(&session, None) {
         Ok(projection) => projection,
         Err(_) => {
             return (
@@ -6375,7 +6670,7 @@ async fn sage_session_history_endpoint(
                 .into_response();
         }
     };
-    let belief = match latest_gameboard_belief(&session) {
+    let belief = match latest_gameboard_belief(&session, None) {
         Ok(belief) => belief,
         Err(_) => {
             return (
@@ -6408,12 +6703,12 @@ async fn sage_session_audit_endpoint(
     };
     let mut entries = Vec::new();
     for event in session.events.iter().rev().filter_map(|event| match &event.kind {
-        DesignSessionEventKind::ProposalAudit { workbook_json, outcome, gameboard_attempt_receipt_json, .. } => {
-            Some((event.seq, workbook_json, outcome, gameboard_attempt_receipt_json))
+        DesignSessionEventKind::ProposalAudit { workbook_json, outcome, gameboard_attempt_receipt_json, related_event_seq, .. } => {
+            Some((event.seq, workbook_json, outcome, gameboard_attempt_receipt_json, *related_event_seq))
         }
         _ => None,
     }).take(64).collect::<Vec<_>>().into_iter().rev() {
-        let (seq, workbook_json, outcome, attempt_json) = event;
+        let (seq, workbook_json, outcome, attempt_json, related_event_seq) = event;
         let workbook: semantic_decision_contracts::ProposalWorkbook = match serde_json::from_str(workbook_json) {
             Ok(workbook) => workbook,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
@@ -6422,7 +6717,20 @@ async fn sage_session_audit_endpoint(
             Ok(attempt) => attempt,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
         };
-        entries.push(serde_json::json!({"seq":seq,"outcome":outcome,"workbook":workbook,"attempt":attempt}));
+        // G6.1 reconciliation: surface whether the event this audit entry
+        // points to is still part of the LIVE (undo-aware) replay, so a
+        // client can tell a stale/undone reference from a live one instead
+        // of silently trusting a pointer that may now be dangling.
+        let related_event_visible = related_event_seq
+            .map(|related_seq| session.related_event_is_visible(related_seq, None));
+        entries.push(serde_json::json!({
+            "seq": seq,
+            "outcome": outcome,
+            "workbook": workbook,
+            "attempt": attempt,
+            "related_event_seq": related_event_seq,
+            "related_event_visible": related_event_visible,
+        }));
     }
     Json(serde_json::json!({"session_id":id,"entries":entries})).into_response()
 }
@@ -6452,7 +6760,7 @@ async fn sage_attempt_endpoint(
                 .into_response();
         }
     };
-    let (_, attempts) = match design_history_projection(&session) {
+    let (_, attempts) = match design_history_projection(&session, None) {
         Ok(projection) => projection,
         Err(_) => {
             return (
@@ -6514,7 +6822,7 @@ async fn sage_move_guidance_endpoint(
         )
             .into_response();
     }
-    let dag = match reconstruct_designer_dag(&session) {
+    let dag = match reconstruct_designer_dag(&session, None) {
         Ok(dag) => dag,
         Err(_) => {
             return (
@@ -6571,7 +6879,7 @@ async fn sage_move_guidance_endpoint(
                 .into_response();
         }
     };
-    let history_hash = match design_history_projection(&session) {
+    let history_hash = match design_history_projection(&session, None) {
         Ok((hash, _)) => hash,
         Err(_) => {
             return (
@@ -6672,7 +6980,7 @@ async fn session_graph_endpoint(
             }))
             .into_response()
         };
-        let dag = match reconstruct_designer_dag(&session) {
+        let dag = match reconstruct_designer_dag(&session, None) {
             Ok(d) => d,
             Err(e) => return fail(vec![format!("reconstruction: {e}")]),
         };
@@ -8245,7 +8553,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let dag = reconstruct_designer_dag(&record).unwrap();
+        let dag = reconstruct_designer_dag(&record, None).unwrap();
         let ops = vec![designer_graph::ops::Operation::InsertAfter {
             anchor: t1,
             key: new_key(),
@@ -10551,7 +10859,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, before) = design_history_projection(&record_before).unwrap();
+        let (_, before) = design_history_projection(&record_before, None).unwrap();
         assert!(
             before.iter().all(|receipt| receipt.outcome()
                 != semantic_decision_contracts::MoveAttemptOutcome::SystemFailure),
@@ -10566,7 +10874,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, after) = design_history_projection(&record_after).unwrap();
+        let (_, after) = design_history_projection(&record_after, None).unwrap();
         assert!(
             after.iter().any(|receipt| receipt.outcome()
                 == semantic_decision_contracts::MoveAttemptOutcome::SystemFailure),
@@ -11394,6 +11702,7 @@ mod tests {
             verb_registry_hash: None,
             created_at: 0,
             published_at: None,
+            session_id: None,
         }
     }
 
@@ -13098,5 +13407,420 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    // ── G6.1/G6.2/G6.3 — session undo, runbook rendering, replay
+    // equivalence ───────────────────────────────────────────────────────
+
+    /// Build a graph-backed session with TWO independently-admitting
+    /// graph-edit events: A appends `t1` then `End` after Start
+    /// (Start->t1->End); B inserts `t2` between `t1` and `End`
+    /// (Start->t1->t2->End). Returns `(session_id, seq_after_a)` — the
+    /// seq to undo back to, to land exactly on A's position.
+    async fn build_two_step_session(app: &Router, name: &str) -> (String, u64) {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": name }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let ops_a = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end1".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops_a, "note": "edit A" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "edit A must admit");
+        let seq_after_a = body_json(response).await["seq"].as_u64().unwrap();
+
+        let ops_b = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t1,
+            key: new_key(),
+            node: task_ir("t2"),
+            edge_id: "f3".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops_b, "note": "edit B" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "edit B must admit");
+
+        (session_id, seq_after_a)
+    }
+
+    /// GREEN: undoing back to the seq right after edit A returns the
+    /// session to that exact prior position — `t2` (added by edit B) is
+    /// gone from the live graph, `t1` (added by edit A) remains. Confirms
+    /// Gate G6's "undo returns a session to a prior position" clause.
+    #[tokio::test]
+    async fn test_undo_returns_the_session_to_the_prior_position() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, seq_after_a) = build_two_step_session(&app, "undo session").await;
+
+        let graph_before = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}/graph"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(graph_before["compiles"], true);
+        let before_ids: Vec<String> = graph_before["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(before_ids.iter().any(|id| id == "t2"), "t2 must be present before undo: {before_ids:?}");
+
+        let sid: Uuid = session_id.parse().unwrap();
+        let pre_undo_hash = graph_content_hash(
+            &state
+                .store
+                .load_design_session(&state.tenant_id, sid)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/undo"),
+                serde_json::json!({ "target_seq": seq_after_a }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let undo_body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "undo to a prior admitting position must succeed: {undo_body:?}");
+        assert_eq!(undo_body["target_seq"].as_u64().unwrap(), seq_after_a);
+        // Regression (blind review, G6.1): the response's content hash must
+        // reflect the POST-undo (truncated) tape, not the stale pre-undo
+        // live hash — edit B genuinely changed the content, so the two
+        // must differ. It must also equal a fresh post-undo reload's own
+        // (now undo-aware) live hash.
+        let undo_hash = undo_body["graph_content_hash"].as_str().unwrap();
+        assert_ne!(
+            undo_hash, pre_undo_hash,
+            "undo response's graph_content_hash must not equal the pre-undo live hash"
+        );
+        let post_undo_reload_hash = graph_content_hash(
+            &state
+                .store
+                .load_design_session(&state.tenant_id, sid)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(
+            undo_hash, post_undo_reload_hash,
+            "undo response's graph_content_hash must match a fresh post-undo reload"
+        );
+
+        let graph_after = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}/graph"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(graph_after["compiles"], true, "the undone-to position must still admit: {graph_after:?}");
+        let after_ids: Vec<String> = graph_after["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(!after_ids.iter().any(|id| id == "t2"), "t2 must be gone after undo: {after_ids:?}");
+        assert!(after_ids.iter().any(|id| id == "t1"), "t1 (from edit A) must remain: {after_ids:?}");
+    }
+
+    /// Regression (blind review, G6.1): after an undo, a SECOND undo call
+    /// targeting a MORE RECENT position than the first undo's target must
+    /// still succeed — the session's live head must always be the true
+    /// latest event's seq, never the earlier undo's `target_seq`. Builds
+    /// three sequential edits (A: t1+End, B: insert t2, C: insert t3),
+    /// undoes back to A, then re-targets forward to B — a `target_seq`
+    /// strictly between A and C, which a self-excising `Undo` marker would
+    /// wrongly refuse (the first undo's collapsed "head" would sit at A,
+    /// making B's seq look >= head).
+    #[tokio::test]
+    async fn test_a_later_undo_target_stays_reachable_after_an_earlier_undo() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, seq_after_a) = build_two_step_session(&app, "chained undo session").await;
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        // edit B (from build_two_step_session) inserted t2 between t1 and
+        // End; capture its seq before adding a third edit.
+        let session_after_b = state
+            .store
+            .load_design_session(&state.tenant_id, sid)
+            .await
+            .unwrap()
+            .unwrap();
+        let seq_after_b = session_after_b
+            .visible_events(None)
+            .last()
+            .map(|e| e.seq)
+            .unwrap();
+
+        // edit C: insert t3 after the existing t2 (found via the current graph).
+        let dag = reconstruct_designer_dag(&session_after_b, None).unwrap();
+        let t2_key = dag.key_for_bpmn_id("t2").unwrap();
+        let ops_c = vec![designer_graph::ops::Operation::InsertAfter {
+            anchor: t2_key,
+            key: new_key(),
+            node: task_ir("t3"),
+            edge_id: "f4".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops_c, "note": "edit C" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "edit C must admit");
+
+        // First undo: back to A.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/undo"),
+                serde_json::json!({ "target_seq": seq_after_a }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "first undo (to A) must succeed");
+
+        // Second undo: re-target FORWARD to B (a more recent position than
+        // A, but still strictly before the true live head, which is now
+        // the first Undo marker's own seq — past seq_after_b).
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/undo"),
+                serde_json::json!({ "target_seq": seq_after_b }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a later undo target must remain reachable after an earlier undo: {body:?}"
+        );
+
+        // Confirm the graph now reflects B's position: t2 present, t3 gone.
+        let graph = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!("/api/dsl/sessions/{session_id}/graph"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(graph["compiles"], true);
+        let ids: Vec<String> = graph["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(ids.iter().any(|id| id == "t2"), "t2 (edit B) must be present: {ids:?}");
+        assert!(!ids.iter().any(|id| id == "t3"), "t3 (edit C) must be gone: {ids:?}");
+        let _ = start_key;
+    }
+
+    /// RED cement: an undo `target_seq` at or past the current head is
+    /// refused, never silently accepted (fail-closed — an undo that does
+    /// nothing must say so, not report success).
+    #[tokio::test]
+    async fn test_undo_past_current_head_is_refused() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, seq_after_a) = build_two_step_session(&app, "undo refusal session").await;
+        let too_far = seq_after_a + 100;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/undo"),
+                serde_json::json!({ "target_seq": too_far }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// GREEN: the runbook endpoint renders the accumulated operation tape
+    /// as readable text, one line per operation, naming every operation
+    /// actually applied.
+    #[tokio::test]
+    async fn test_runbook_renders_the_operation_tape() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _seq_after_a) = build_two_step_session(&app, "runbook session").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/dsl/sessions/{session_id}/runbook"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["operation_count"].as_u64().unwrap(), 3);
+        let runbook = body["runbook"].as_str().unwrap();
+        assert_eq!(runbook.lines().count(), 3);
+        assert!(runbook.contains("(append-node"));
+        assert!(runbook.contains("(insert-after"));
+        assert!(runbook.contains("\"t1\""));
+        assert!(runbook.contains("\"t2\""));
+    }
+
+    /// G6.4 — a published template resolves to its authoring tape: after
+    /// `save_design_session_endpoint` publishes a graph-authored session,
+    /// the resulting `WorkflowTemplate::session_id` names the session it
+    /// came from, and that session is loadable and carries the same
+    /// operation tape the template was compiled from.
+    #[tokio::test]
+    async fn test_published_template_resolves_to_its_authoring_session() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _seq_after_a) = build_two_step_session(&app, "linkage session").await;
+        let sid: Uuid = session_id.parse().unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "linkage-template" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let template = state
+            .template_store
+            .load("linkage-template", 1)
+            .await
+            .unwrap()
+            .expect("published template must be loadable");
+        assert_eq!(
+            template.session_id,
+            Some(sid),
+            "template must carry a back-reference to its authoring session"
+        );
+
+        let resolved_session = state
+            .store
+            .load_design_session(&state.tenant_id, template.session_id.unwrap())
+            .await
+            .unwrap()
+            .expect("the session a template resolves to must still be loadable");
+        assert_eq!(resolved_session.id, sid);
+        assert!(
+            resolved_session.is_graph_backed(),
+            "the resolved session must be the same graph-backed tape that authored the template"
+        );
+    }
+
+    /// G6.3 — replay-equivalence: two INDEPENDENT replays of the identical
+    /// event log (two fresh `reconstruct_designer_dag` calls, no shared
+    /// state between them) must produce structurally identical output —
+    /// the same content hash and the same `IRGraph` under
+    /// `DesignerDag::ir_graphs_equivalent`. This is the contract every
+    /// request already leans on implicitly; here it is asserted directly.
+    #[tokio::test]
+    async fn test_replay_of_the_same_log_is_equivalent_across_independent_folds() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let (session_id, _seq_after_a) = build_two_step_session(&app, "replay session").await;
+        let sid: Uuid = session_id.parse().unwrap();
+
+        let record = state
+            .store
+            .load_design_session(&state.tenant_id, sid)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let dag_1 = reconstruct_designer_dag(&record, None).unwrap();
+        let dag_2 = reconstruct_designer_dag(&record, None).unwrap();
+
+        assert_eq!(
+            graph_content_hash(&record),
+            graph_content_hash(&record),
+            "content hash must be stable across repeated computation"
+        );
+        let ir_1 = dag_1.to_ir().unwrap();
+        let ir_2 = dag_2.to_ir().unwrap();
+        assert!(
+            designer_graph::schema::DesignerDag::ir_graphs_equivalent(&ir_1, &ir_2),
+            "two independent replays of the identical tape must produce equivalent IR graphs"
+        );
     }
 }

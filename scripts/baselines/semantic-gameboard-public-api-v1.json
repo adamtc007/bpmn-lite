@@ -75,6 +75,7 @@
       "ops",
       "positional",
       "productions",
+      "runbook",
       "schema"
     ],
     "bpmn-lite-server-designer/src/lib.rs": [

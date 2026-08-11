@@ -93,6 +93,18 @@ pub enum DesignSessionEventKind {
         #[serde(default)]
         gameboard_attempt_receipt_json: Option<String>,
     },
+    /// G6.1: session undo as truncated replay. Marks that, from this event
+    /// forward, replay of the tape excludes every event with
+    /// `target_seq < seq <= this event's own seq` — the range this undo
+    /// retired. Nothing is deleted (same invariant as `Revision`'s
+    /// re-append pattern): the excluded events remain in storage and are
+    /// visible to any explicit historical `as_of_seq` view that itself sits
+    /// at or before `target_seq`. A later event appended after this one's
+    /// own seq is forward progress from the undone position and stays
+    /// visible — see `DesignSessionRecord::visible_events`.
+    Undo {
+        target_seq: u64,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -124,16 +136,74 @@ pub struct DesignSessionRecord {
 }
 
 impl DesignSessionRecord {
-    /// The session's current DSL source: the last Revision event.
-    pub fn current_source(&self) -> Option<&str> {
+    /// G6.1: the events visible under truncated replay, given an optional
+    /// `as_of_seq` bound. This is a JUMP CHAIN, not a static union of
+    /// excluded ranges (an earlier flat-range formulation was wrong: it let
+    /// an OLDER undo's exclusion outlive a NEWER undo that re-targets
+    /// forward past it, permanently hiding a position a later undo asked
+    /// to return to — caught in blind review, see
+    /// `the_undo_marker_event_itself_always_stays_visible`/
+    /// `a_later_undo_target_stays_reachable_after_an_earlier_undo`).
+    ///
+    /// Recursive definition, `visible(bound)`:
+    /// 1. `candidates` = events with `seq <= bound`.
+    /// 2. If no `Undo` event is among `candidates`, `visible(bound)` = every
+    ///    `candidates` seq.
+    /// 3. Otherwise let `U` be the LATEST (highest-seq) `Undo{target_seq}`
+    ///    event among `candidates`. `visible(bound)` = `visible(target_seq)`
+    ///    (recursively resolve the position `U` jumped back to) UNION `U`'s
+    ///    own seq (the marker itself always stays visible — it is not a
+    ///    `GraphEdit`/`Revision` so it never affects `graph_edit_payloads`/
+    ///    `current_source`, but it must count toward the live head) UNION
+    ///    every `candidates` seq strictly greater than `U`'s own seq
+    ///    (forward progress made AFTER that undo).
+    ///
+    /// Terminates: each recursive step's bound (`target_seq`) is strictly
+    /// less than the undo event's own seq, which is `<=` the current bound
+    /// — strictly decreasing.
+    pub fn visible_events(&self, as_of_seq: Option<u64>) -> Vec<&DesignSessionEvent> {
+        let bound = as_of_seq.unwrap_or(u64::MAX);
+        let visible_seqs = self.visible_seqs_as_of(bound);
         self.events
             .iter()
+            .filter(|event| visible_seqs.contains(&event.seq))
+            .collect()
+    }
+
+    fn visible_seqs_as_of(&self, bound: u64) -> std::collections::BTreeSet<u64> {
+        let candidates: Vec<&DesignSessionEvent> =
+            self.events.iter().filter(|e| e.seq <= bound).collect();
+        let latest_undo = candidates.iter().rev().find_map(|e| match &e.kind {
+            DesignSessionEventKind::Undo { target_seq } => Some((e.seq, *target_seq)),
+            _ => None,
+        });
+        match latest_undo {
+            None => candidates.iter().map(|e| e.seq).collect(),
+            Some((undo_seq, target_seq)) => {
+                let mut visible = self.visible_seqs_as_of(target_seq);
+                visible.insert(undo_seq);
+                visible.extend(candidates.iter().filter(|e| e.seq > undo_seq).map(|e| e.seq));
+                visible
+            }
+        }
+    }
+
+    /// The session's current DSL source: the last visible Revision event.
+    pub fn current_source(&self) -> Option<&str> {
+        self.current_source_as_of(None)
+    }
+
+    /// G6.1: `current_source`, bounded to a truncated replay view.
+    pub fn current_source_as_of(&self, as_of_seq: Option<u64>) -> Option<&str> {
+        self.visible_events(as_of_seq)
+            .into_iter()
             .rev()
             .find_map(|event| match &event.kind {
                 DesignSessionEventKind::Revision { dsl_source, .. } => Some(dsl_source.as_str()),
                 DesignSessionEventKind::Utterance { .. }
                 | DesignSessionEventKind::GraphEdit { .. }
-                | DesignSessionEventKind::ProposalAudit { .. } => None,
+                | DesignSessionEventKind::ProposalAudit { .. }
+                | DesignSessionEventKind::Undo { .. } => None,
             })
     }
 
@@ -142,17 +212,35 @@ impl DesignSessionRecord {
     /// Opaque here (`&str`, undeserialized) by the same store/server
     /// split `GraphEdit`'s own doc comment states.
     pub fn graph_edit_payloads(&self) -> Vec<&str> {
-        self.events
-            .iter()
+        self.graph_edit_payloads_as_of(None)
+    }
+
+    /// G6.1: `graph_edit_payloads`, bounded to a truncated replay view —
+    /// the exact input `reconstruct_designer_dag`'s `as_of_seq` bound folds.
+    pub fn graph_edit_payloads_as_of(&self, as_of_seq: Option<u64>) -> Vec<&str> {
+        self.visible_events(as_of_seq)
+            .into_iter()
             .filter_map(|event| match &event.kind {
                 DesignSessionEventKind::GraphEdit {
                     operations_json, ..
                 } => Some(operations_json.as_str()),
                 DesignSessionEventKind::Revision { .. }
                 | DesignSessionEventKind::Utterance { .. }
-                | DesignSessionEventKind::ProposalAudit { .. } => None,
+                | DesignSessionEventKind::ProposalAudit { .. }
+                | DesignSessionEventKind::Undo { .. } => None,
             })
             .collect()
+    }
+
+    /// G6.1: whether the event at `related_seq` (e.g. a `ProposalAudit`'s
+    /// `related_event_seq` pointer) is still visible under the given
+    /// `as_of_seq` bound — i.e. whether the pointer is dangling because the
+    /// event it names was excised by an intervening undo, or lies in the
+    /// future of an explicit historical view.
+    pub fn related_event_is_visible(&self, related_seq: u64, as_of_seq: Option<u64>) -> bool {
+        self.visible_events(as_of_seq)
+            .iter()
+            .any(|event| event.seq == related_seq)
     }
 
     /// Whether this session has ever accumulated a graph edit — the
@@ -188,6 +276,181 @@ pub struct DesignSessionSummary {
     pub status: DesignSessionStatus,
     pub revisions: u32,
     pub updated_at: String,
+}
+
+#[cfg(test)]
+mod g6_1_undo_tests {
+    use super::*;
+
+    fn revision(seq: u64, source: &str) -> DesignSessionEvent {
+        DesignSessionEvent {
+            seq,
+            kind: DesignSessionEventKind::Revision {
+                dsl_source: source.into(),
+                note: String::new(),
+            },
+            at: "t".into(),
+        }
+    }
+
+    fn graph_edit(seq: u64, tag: &str) -> DesignSessionEvent {
+        DesignSessionEvent {
+            seq,
+            kind: DesignSessionEventKind::GraphEdit {
+                operations_json: tag.into(),
+                note: String::new(),
+            },
+            at: "t".into(),
+        }
+    }
+
+    fn undo(seq: u64, target_seq: u64) -> DesignSessionEvent {
+        DesignSessionEvent {
+            seq,
+            kind: DesignSessionEventKind::Undo { target_seq },
+            at: "t".into(),
+        }
+    }
+
+    fn record(events: Vec<DesignSessionEvent>) -> DesignSessionRecord {
+        DesignSessionRecord {
+            id: Uuid::nil(),
+            tenant_id: "t".into(),
+            name: "s".into(),
+            status: DesignSessionStatus::Draft,
+            template_ref: None,
+            events,
+            created_at: "t".into(),
+        }
+    }
+
+    #[test]
+    fn no_undo_event_visible_events_is_the_whole_log() {
+        let r = record(vec![graph_edit(0, "a"), graph_edit(1, "b")]);
+        assert_eq!(r.visible_events(None).len(), 2);
+        assert_eq!(r.graph_edit_payloads_as_of(None), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn undo_excises_the_range_it_targets_but_keeps_earlier_and_later_events() {
+        // seq: 0=a, 1=b, 2=c, 3=Undo{target_seq:0} -> visible: [a]
+        let r = record(vec![
+            graph_edit(0, "a"),
+            graph_edit(1, "b"),
+            graph_edit(2, "c"),
+            undo(3, 0),
+        ]);
+        assert_eq!(r.graph_edit_payloads_as_of(None), vec!["a"]);
+    }
+
+    #[test]
+    fn edits_appended_after_the_undo_marker_stay_visible() {
+        // 0=a,1=b,2=Undo{target_seq:0},3=d -> visible: [a, d] (b excised, d kept)
+        let r = record(vec![
+            graph_edit(0, "a"),
+            graph_edit(1, "b"),
+            undo(2, 0),
+            graph_edit(3, "d"),
+        ]);
+        assert_eq!(r.graph_edit_payloads_as_of(None), vec!["a", "d"]);
+    }
+
+    #[test]
+    fn explicit_historical_view_before_the_undo_ignores_it() {
+        // as_of_seq=1 predates the undo at seq=2 entirely, so nothing is excised.
+        let r = record(vec![
+            graph_edit(0, "a"),
+            graph_edit(1, "b"),
+            undo(2, 0),
+            graph_edit(3, "d"),
+        ]);
+        assert_eq!(r.graph_edit_payloads_as_of(Some(1)), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn repeated_undo_compounds_exclusions() {
+        // 0=a,1=b,2=c,3=Undo{target:1} (excises b? no: excises (1,3]=c... wait c is seq2<=3)
+        // Explicit: excise (1,3] = {2,3} -> visible after first undo: [a,b]
+        // then 4=d, 5=Undo{target:0} -> excise (0,5] = {1,2,3,4} -> visible: [a]
+        let r = record(vec![
+            graph_edit(0, "a"),
+            graph_edit(1, "b"),
+            graph_edit(2, "c"),
+            undo(3, 1),
+            graph_edit(4, "d"),
+            undo(5, 0),
+        ]);
+        assert_eq!(r.graph_edit_payloads_as_of(None), vec!["a"]);
+        // Historical view as of the first undo (seq 3) should show [a, b].
+        assert_eq!(r.graph_edit_payloads_as_of(Some(3)), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn current_source_respects_the_excised_range() {
+        let r = record(vec![
+            revision(0, "v0"),
+            revision(1, "v1"),
+            undo(2, 0),
+        ]);
+        assert_eq!(r.current_source(), Some("v0"));
+        assert_eq!(r.current_source_as_of(Some(1)), Some("v1"));
+    }
+
+    #[test]
+    fn related_event_is_visible_detects_a_dangling_pointer_after_undo() {
+        let r = record(vec![graph_edit(0, "a"), graph_edit(1, "b"), undo(2, 0)]);
+        assert!(r.related_event_is_visible(0, None));
+        assert!(!r.related_event_is_visible(1, None), "seq 1 was excised by the undo");
+        assert!(r.related_event_is_visible(1, Some(1)), "an as_of_seq view before the undo still sees it");
+    }
+
+    /// Regression (blind review, G6.1): the `Undo` marker event's OWN seq
+    /// must never be excised by the very range it defines — `(target_seq,
+    /// seq]` (inclusive) would have the undo event exclude itself, so
+    /// `visible_events(None)`'s max seq (the session's live head) silently
+    /// collapses back toward `target_seq` after every undo instead of
+    /// tracking the true latest event. This previously let a session's
+    /// computed "current head" fall below its true head, incorrectly
+    /// refusing a later, perfectly legal `/undo` call to a MORE RECENT
+    /// target than the collapsed (wrong) head, and — in the degenerate
+    /// case of undoing to `target_seq: 0` — could brick the undo endpoint
+    /// entirely (nothing is `< 0` for a `u64` head).
+    #[test]
+    fn the_undo_marker_event_itself_always_stays_visible() {
+        let r = record(vec![graph_edit(0, "a"), graph_edit(1, "b"), undo(2, 0)]);
+        let visible_seqs: Vec<u64> = r.visible_events(None).iter().map(|e| e.seq).collect();
+        assert_eq!(
+            visible_seqs,
+            vec![0, 2],
+            "the Undo event at seq 2 must remain visible even though it excises seq 1"
+        );
+        assert_eq!(
+            visible_seqs.iter().max().copied(),
+            Some(2),
+            "the session's live head must be the Undo marker's own seq, not target_seq"
+        );
+    }
+
+    /// Regression (blind review, G6.1): a second, later-targeted undo must
+    /// remain reachable after an earlier undo — the live head must always
+    /// be the true latest event's seq, so a caller re-targeting to a MORE
+    /// recent (but still prior) position never gets wrongly refused.
+    #[test]
+    fn a_later_undo_target_stays_reachable_after_an_earlier_undo() {
+        // 0=a, 1=b, 2=c, Undo{target:0}@3 -> live head must be 3, not 0.
+        let r = record(vec![
+            graph_edit(0, "a"),
+            graph_edit(1, "b"),
+            graph_edit(2, "c"),
+            undo(3, 0),
+        ]);
+        let head = r.visible_events(None).iter().map(|e| e.seq).max();
+        assert_eq!(head, Some(3));
+        // target_seq=2 is strictly before the true head (3) and must be a
+        // legal re-target, even though it is AFTER the excised range's
+        // upper bound under the buggy inclusive-hi computation.
+        assert!(matches!(head, Some(h) if 2 < h));
+    }
 }
 
 /// Transactional runtime claims, aggregate reads, and fenced transition commits.

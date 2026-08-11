@@ -53,6 +53,15 @@ pub struct WorkflowTemplate {
     pub verb_registry_hash: Option<String>,
     pub created_at: i64,
     pub published_at: Option<i64>,
+    /// G6.4 — the graph-authored Designer session this template was
+    /// published from, when one exists (`SourceFormat::Graph` publishes
+    /// only; YAML-authored templates carry no session and stay `None`).
+    /// Makes the session→template stamp (`design_sessions.template_ref`)
+    /// navigable in the other direction: given a published template, its
+    /// authoring tape is one lookup away. `#[serde(default)]` so pre-G6.4
+    /// persisted rows deserialize as `None` rather than failing to load.
+    #[serde(default)]
+    pub session_id: Option<uuid::Uuid>,
 }
 
 /// Persistence trait for workflow templates.
@@ -260,6 +269,7 @@ mod tests {
             verb_registry_hash: None,
             created_at: 1000,
             published_at: None,
+            session_id: None,
         }
     }
 

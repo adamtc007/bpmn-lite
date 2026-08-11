@@ -100,8 +100,9 @@ impl TemplateStore for PostgresTemplateStore {
             INSERT INTO workflow_templates
                 (template_key, template_version, process_key, bytecode_version,
                  state, source_format, dto_snapshot, task_manifest, parameter_manifest,
-                 bpmn_xml, summary_md, verb_registry_hash, created_at, published_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 bpmn_xml, summary_md, verb_registry_hash, created_at, published_at,
+                 session_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (template_key, template_version) DO UPDATE SET
                 process_key = EXCLUDED.process_key,
                 bytecode_version = EXCLUDED.bytecode_version,
@@ -130,6 +131,7 @@ impl TemplateStore for PostgresTemplateStore {
         .bind(&tpl.verb_registry_hash)
         .bind(created)
         .bind(published)
+        .bind(tpl.session_id)
         .execute(&self.pool)
         .await
         .map_err(|e| map_immutability_error(e, &tpl.template_key, tpl.template_version))?;
@@ -142,7 +144,8 @@ impl TemplateStore for PostgresTemplateStore {
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
                    state, source_format, dto_snapshot, task_manifest, parameter_manifest,
-                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at,
+                   session_id
             FROM workflow_templates
             WHERE template_key = $1 AND template_version = $2
             "#,
@@ -166,7 +169,8 @@ impl TemplateStore for PostgresTemplateStore {
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
                    state, source_format, dto_snapshot, task_manifest, parameter_manifest,
-                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at,
+                   session_id
             FROM workflow_templates
             WHERE ($1::text IS NULL OR template_key = $1)
               AND ($2::text IS NULL OR state = $2)
@@ -216,7 +220,8 @@ impl TemplateStore for PostgresTemplateStore {
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
                    state, source_format, dto_snapshot, task_manifest, parameter_manifest,
-                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at,
+                   session_id
             FROM workflow_templates
             WHERE template_key = $1 AND state = 'published'
             ORDER BY template_version DESC
@@ -248,6 +253,8 @@ struct TemplateRow {
     verb_registry_hash: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     published_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// G6.4 — the authoring Designer session, if any (065).
+    session_id: Option<uuid::Uuid>,
 }
 
 impl TemplateRow {
@@ -270,6 +277,7 @@ impl TemplateRow {
             verb_registry_hash: self.verb_registry_hash,
             created_at: datetime_to_epoch_ms(self.created_at),
             published_at: self.published_at.map(datetime_to_epoch_ms),
+            session_id: self.session_id,
         })
     }
 }
@@ -328,6 +336,7 @@ mod tests {
             verb_registry_hash: None,
             created_at: 1000,
             published_at: None,
+            session_id: None,
         }
     }
 
@@ -376,6 +385,7 @@ mod tests {
             verb_registry_hash: None,
             created_at: 1000,
             published_at: None,
+            session_id: None,
         };
 
         // Save

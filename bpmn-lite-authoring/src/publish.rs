@@ -120,6 +120,10 @@ pub struct PublishOptions {
     pub contract_registry: Option<ContractRegistry>,
     pub generate_bpmn: bool,
     pub verb_registry_hash: Option<String>,
+    /// G6.4 — the Designer session this publish was invoked from, when
+    /// one exists. Threaded straight onto the resulting
+    /// `WorkflowTemplate::session_id`; `None` for YAML-fronted publishes.
+    pub session_id: Option<uuid::Uuid>,
 }
 
 /// Result of a successful publish pipeline run.
@@ -275,6 +279,7 @@ pub(crate) fn publish_workflow_from_dto(
         verb_registry_hash: options.verb_registry_hash,
         created_at: now,
         published_at: Some(now),
+        session_id: options.session_id,
     };
 
     Ok(PublishResult {
@@ -323,6 +328,7 @@ edges:
             contract_registry: None,
             generate_bpmn: false,
             verb_registry_hash: None,
+            session_id: None,
         }
     }
 
