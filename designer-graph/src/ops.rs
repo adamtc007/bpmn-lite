@@ -2101,6 +2101,7 @@ mod tests {
             task_type: "noop".into(),
             collection_flag_name: "items".into(),
             declared_max: 5,
+            inputs: Vec::new(),
         }
     }
 

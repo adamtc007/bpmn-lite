@@ -39,6 +39,7 @@ mod importer;
 // the IR->DTO bridge is now a live production path, not a test fixture.
 mod ir_to_dto;
 mod lints;
+mod manifest;
 #[cfg(test)]
 mod oracle_boundary_tests;
 mod publish;
@@ -56,6 +57,7 @@ pub use dto::{
 pub use dto_to_ir::dto_to_ir;
 pub use importer::import_zeebe_bpmn;
 pub use ir_to_dto::ir_to_dto;
+pub use manifest::{ParameterManifest, ParameterSlot, SlotKind};
 pub use publish::{
     compile_and_publish, compile_and_publish_from_dto, compile_program_from_dto, PublishOptions,
     PublishResult,

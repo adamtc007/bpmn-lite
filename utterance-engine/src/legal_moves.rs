@@ -660,6 +660,7 @@ pub(crate) fn materialize_workbook(
                         task_type: "noop".to_string(),
                         collection_flag_name: collection.clone(),
                         declared_max: maximum,
+                        inputs: Vec::new(),
                     },
                     edge_id: format!("flow_{name}"),
                 }],

@@ -677,6 +677,7 @@ fn handle_close_tag(
                         task_type,
                         collection_flag_name,
                         declared_max,
+                        inputs: Vec::new(),
                     });
                     node_map.insert(id, idx);
                 } else if let Some(tid) = ffi_template_id.take() {

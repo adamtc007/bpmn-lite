@@ -6178,6 +6178,15 @@ async fn save_design_session_endpoint(
         )
             .into_response();
     }
+    // G4.3 — surface the manifest-derived (and any contract-lint)
+    // diagnostics computed during publish; previously discarded here even
+    // though `compile_and_publish_from_dto` already produced them.
+    let diagnostics: Vec<String> = publish_result
+        .lint_diagnostics
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
+
     Json(serde_json::json!({
         "template_name": body.template_name,
         "version": catalog_version,
@@ -6185,6 +6194,7 @@ async fn save_design_session_endpoint(
         "template_version": template_version,
         "bytecode_version": publish_result.template.bytecode_version,
         "state": "published",
+        "diagnostics": diagnostics,
     }))
     .into_response()
 }
@@ -10906,6 +10916,77 @@ mod tests {
         assert_eq!(v1_after.bytecode_version, template.bytecode_version);
     }
 
+    /// G4.3 — Gate G4: the save response surfaces `PublishResult.lint_diagnostics`
+    /// (which now includes manifest-derived diagnostics — see
+    /// `bpmn_lite_authoring::manifest::manifest_diagnostics`) as a
+    /// `"diagnostics"` array, previously computed by
+    /// `compile_and_publish_from_dto` and silently discarded at this call
+    /// site. This graph has no unresolved references, so the array is
+    /// present but empty — proving the field is wired without depending
+    /// on `WorkflowExecutionPlan` projection support for MI/DataObject
+    /// nodes (a separate, pre-existing gap outside G4's scope: MI has no
+    /// projection at all — `bpmn-lite-compiler/src/dsl/ir_plan.rs`'s
+    /// `UnsupportedNode` — so a graph-backed session carrying one can't
+    /// reach the save endpoint's success path today regardless of G4).
+    /// The scalar/collection/element-scoped classification itself is
+    /// proven end-to-end, including reload, by
+    /// `bpmn_lite_authoring::publish::tests::t_pub_13_g4_gate_scenario_manifest_survives_reload`.
+    #[tokio::test]
+    async fn test_save_design_session_surfaces_diagnostics_field() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "diagnostics-field-session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+        let ops = vec![designer_graph::ops::Operation::AppendNode {
+            anchor: start_key,
+            key: new_key(),
+            node: bpmn_lite_compiler::IRNode::End {
+                id: "end".into(),
+                terminate: false,
+            },
+            edge_id: "f1".into(),
+        }];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "diagnostics-field-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert!(
+            body["diagnostics"].as_array().is_some(),
+            "expected a diagnostics array on the save response, got {body:?}"
+        );
+    }
+
     /// RED: a save on a graph-backed session that doesn't admit (unmatched
     /// fork) must be refused, not silently save a broken plan.
     #[tokio::test]
@@ -11281,6 +11362,7 @@ mod tests {
             source_format: bpmn_lite_authoring::SourceFormat::Graph,
             dto_snapshot: minimal_dto(key),
             task_manifest: vec![],
+            parameter_manifest: bpmn_lite_authoring::ParameterManifest::default(),
             bpmn_xml: None,
             summary_md: None,
             verb_registry_hash: None,

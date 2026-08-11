@@ -218,6 +218,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             task_type,
             collection_flag_name,
             declared_max,
+            inputs,
         } => {
             let bpmn_id = if name != id { Some(name.clone()) } else { None };
             NodeDto::MultiInstance {
@@ -226,6 +227,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
                 bpmn_id,
                 collection_flag: collection_flag_name.clone(),
                 declared_max: *declared_max,
+                inputs: inputs.clone(),
             }
         }
 

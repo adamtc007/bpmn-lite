@@ -4201,6 +4201,7 @@ mod tests {
             name: "Verify Doc".to_string(),
             task_type: "verify_doc".to_string(),
             collection_flag_name: "doc_count".to_string(),
+            inputs: Vec::new(),
             declared_max,
         });
         let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });

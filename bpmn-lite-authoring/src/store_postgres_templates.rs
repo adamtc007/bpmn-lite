@@ -1,3 +1,4 @@
+use crate::manifest::ParameterManifest;
 use crate::registry::{SourceFormat, TemplateState, TemplateStore, WorkflowTemplate};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -89,7 +90,8 @@ fn datetime_to_epoch_ms(dt: chrono::DateTime<chrono::Utc>) -> i64 {
 impl TemplateStore for PostgresTemplateStore {
     async fn save(&self, tpl: &WorkflowTemplate) -> Result<()> {
         let dto_json = serde_json::to_value(&tpl.dto_snapshot)?;
-        let manifest_json = serde_json::to_value(&tpl.task_manifest)?;
+        let task_manifest_json = serde_json::to_value(&tpl.task_manifest)?;
+        let parameter_manifest_json = serde_json::to_value(&tpl.parameter_manifest)?;
         let created = epoch_ms_to_datetime(tpl.created_at);
         let published = tpl.published_at.map(epoch_ms_to_datetime);
 
@@ -97,9 +99,9 @@ impl TemplateStore for PostgresTemplateStore {
             r#"
             INSERT INTO workflow_templates
                 (template_key, template_version, process_key, bytecode_version,
-                 state, source_format, dto_snapshot, task_manifest, bpmn_xml,
-                 summary_md, verb_registry_hash, created_at, published_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 state, source_format, dto_snapshot, task_manifest, parameter_manifest,
+                 bpmn_xml, summary_md, verb_registry_hash, created_at, published_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (template_key, template_version) DO UPDATE SET
                 process_key = EXCLUDED.process_key,
                 bytecode_version = EXCLUDED.bytecode_version,
@@ -107,6 +109,7 @@ impl TemplateStore for PostgresTemplateStore {
                 source_format = EXCLUDED.source_format,
                 dto_snapshot = EXCLUDED.dto_snapshot,
                 task_manifest = EXCLUDED.task_manifest,
+                parameter_manifest = EXCLUDED.parameter_manifest,
                 bpmn_xml = EXCLUDED.bpmn_xml,
                 summary_md = EXCLUDED.summary_md,
                 verb_registry_hash = EXCLUDED.verb_registry_hash,
@@ -120,7 +123,8 @@ impl TemplateStore for PostgresTemplateStore {
         .bind(state_to_str(&tpl.state))
         .bind(format_to_str(&tpl.source_format))
         .bind(&dto_json)
-        .bind(&manifest_json)
+        .bind(&task_manifest_json)
+        .bind(&parameter_manifest_json)
         .bind(&tpl.bpmn_xml)
         .bind(&tpl.summary_md)
         .bind(&tpl.verb_registry_hash)
@@ -137,8 +141,8 @@ impl TemplateStore for PostgresTemplateStore {
         let row = sqlx::query_as::<_, TemplateRow>(
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
-                   state, source_format, dto_snapshot, task_manifest, bpmn_xml,
-                   summary_md, verb_registry_hash, created_at, published_at
+                   state, source_format, dto_snapshot, task_manifest, parameter_manifest,
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
             FROM workflow_templates
             WHERE template_key = $1 AND template_version = $2
             "#,
@@ -161,8 +165,8 @@ impl TemplateStore for PostgresTemplateStore {
         let rows = sqlx::query_as::<_, TemplateRow>(
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
-                   state, source_format, dto_snapshot, task_manifest, bpmn_xml,
-                   summary_md, verb_registry_hash, created_at, published_at
+                   state, source_format, dto_snapshot, task_manifest, parameter_manifest,
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
             FROM workflow_templates
             WHERE ($1::text IS NULL OR template_key = $1)
               AND ($2::text IS NULL OR state = $2)
@@ -211,8 +215,8 @@ impl TemplateStore for PostgresTemplateStore {
         let row = sqlx::query_as::<_, TemplateRow>(
             r#"
             SELECT template_key, template_version, process_key, bytecode_version,
-                   state, source_format, dto_snapshot, task_manifest, bpmn_xml,
-                   summary_md, verb_registry_hash, created_at, published_at
+                   state, source_format, dto_snapshot, task_manifest, parameter_manifest,
+                   bpmn_xml, summary_md, verb_registry_hash, created_at, published_at
             FROM workflow_templates
             WHERE template_key = $1 AND state = 'published'
             ORDER BY template_version DESC
@@ -238,6 +242,7 @@ struct TemplateRow {
     source_format: String,
     dto_snapshot: serde_json::Value,
     task_manifest: serde_json::Value,
+    parameter_manifest: Option<serde_json::Value>,
     bpmn_xml: Option<String>,
     summary_md: Option<String>,
     verb_registry_hash: Option<String>,
@@ -256,6 +261,10 @@ impl TemplateRow {
             source_format: str_to_format(&self.source_format)?,
             dto_snapshot: serde_json::from_value(self.dto_snapshot)?,
             task_manifest: serde_json::from_value(self.task_manifest)?,
+            parameter_manifest: match self.parameter_manifest {
+                Some(v) => serde_json::from_value(v)?,
+                None => ParameterManifest::default(),
+            },
             bpmn_xml: self.bpmn_xml,
             summary_md: self.summary_md,
             verb_registry_hash: self.verb_registry_hash,
@@ -311,6 +320,7 @@ mod tests {
             source_format: format,
             dto_snapshot: sample_dto(),
             task_manifest: vec!["do_work".to_string()],
+            parameter_manifest: ParameterManifest::default(),
             bpmn_xml: None,
             summary_md: None,
             verb_registry_hash: None,
@@ -356,6 +366,7 @@ mod tests {
             source_format: SourceFormat::Yaml,
             dto_snapshot: dto,
             task_manifest: vec!["do_work".to_string()],
+            parameter_manifest: ParameterManifest::default(),
             bpmn_xml: None,
             summary_md: None,
             verb_registry_hash: None,

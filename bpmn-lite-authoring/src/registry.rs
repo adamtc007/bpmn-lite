@@ -1,4 +1,5 @@
 use crate::dto::WorkflowGraphDto;
+use crate::manifest::ParameterManifest;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,13 @@ pub struct WorkflowTemplate {
     pub source_format: SourceFormat,
     pub dto_snapshot: WorkflowGraphDto,
     pub task_manifest: Vec<String>,
+    /// G4.2 — the typed parameter manifest (G4.1), sealed alongside
+    /// `dto_snapshot` at publish time so a template carries what it needs
+    /// supplied without a caller re-deriving it from the DTO. `#[serde(default)]`
+    /// so pre-G4 persisted rows (Postgres and any serialized fixtures)
+    /// deserialize as an empty manifest rather than failing to load.
+    #[serde(default)]
+    pub parameter_manifest: ParameterManifest,
     pub bpmn_xml: Option<String>,
     pub summary_md: Option<String>,
     pub verb_registry_hash: Option<String>,
@@ -244,6 +252,7 @@ mod tests {
             source_format: SourceFormat::Yaml,
             dto_snapshot: sample_dto(),
             task_manifest: vec!["do_work".to_string()],
+            parameter_manifest: ParameterManifest::default(),
             bpmn_xml: None,
             summary_md: None,
             verb_registry_hash: None,

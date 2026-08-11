@@ -1,4 +1,4 @@
-use bpmn_lite_compiler::GatewayDirection;
+use bpmn_lite_compiler::{FfiInputBinding, GatewayDirection};
 use serde::{Deserialize, Serialize};
 
 // ── Helper defaults for serde ──
@@ -176,6 +176,12 @@ pub enum NodeDto {
         /// from it, not tracked as a separate `I64` flag).
         collection_flag: String,
         declared_max: u32,
+        /// G4.0 — per-element input bindings; see
+        /// `bpmn_lite_compiler::IRNode::MultiInstance::inputs`'s doc
+        /// comment. A `VarRef` here is what the G4.1 parameter manifest
+        /// classifies as element-scoped.
+        #[serde(default)]
+        inputs: Vec<FfiInputBinding>,
     },
     /// A BPMN data-object declaration (save-as-template wiring,
     /// 2026-07-30): structural, no sequence-flow edges — see

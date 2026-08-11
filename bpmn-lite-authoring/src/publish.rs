@@ -2,6 +2,7 @@ use crate::contracts::ContractRegistry;
 use crate::dto::WorkflowGraphDto;
 use crate::export_bpmn::dto_to_bpmn_xml;
 use crate::lints::{lint_contracts, LintDiagnostic, LintLevel};
+use crate::manifest::derive_parameter_manifest;
 use crate::registry::{SourceFormat, TemplateState, TemplateStore, WorkflowTemplate};
 use crate::{dto_to_ir, validate, yaml};
 use anyhow::{anyhow, Result};
@@ -175,7 +176,7 @@ pub(crate) fn publish_workflow_from_dto(
     }
 
     // 3. Lint contracts (if registry provided)
-    let lint_diagnostics = if let Some(ref registry) = options.contract_registry {
+    let mut lint_diagnostics = if let Some(ref registry) = options.contract_registry {
         let diags = lint_contracts(&dto, registry);
         // Reject if any Error-level diagnostics
         let errors: Vec<_> = diags
@@ -230,6 +231,20 @@ pub(crate) fn publish_workflow_from_dto(
     // 9. Extract task_manifest
     let task_manifest = program.task_manifest().clone();
 
+    // G4.2 — derive the parameter manifest against the same contract
+    // registry lint_contracts used (or an empty one, if publish ran with
+    // no registry — every reference then looks externally-unresolved,
+    // which is the conservative/fail-closed direction).
+    let empty_registry = ContractRegistry::new();
+    let parameter_manifest = derive_parameter_manifest(
+        &dto,
+        options.contract_registry.as_ref().unwrap_or(&empty_registry),
+    );
+
+    // G4.3 — surface manifest state on the same diagnostics surface L1-L5
+    // already ride, rather than inventing a second one.
+    lint_diagnostics.extend(crate::manifest::manifest_diagnostics(&parameter_manifest));
+
     // 10. Optional BPMN XML export
     let bpmn_xml = if options.generate_bpmn {
         Some(dto_to_bpmn_xml(&dto)?)
@@ -248,6 +263,7 @@ pub(crate) fn publish_workflow_from_dto(
         source_format: options.source_format,
         dto_snapshot: dto,
         task_manifest,
+        parameter_manifest,
         bpmn_xml,
         summary_md: None,
         verb_registry_hash: options.verb_registry_hash,
@@ -456,6 +472,166 @@ edges:
         assert!(
             program.is_some(),
             "compiled program must be persisted under the template's bytecode_version"
+        );
+    }
+
+    /// T-PUB-13 — Gate G4: a template with a scalar slot (`DataObject`
+    /// role=Input), a collection slot (`MultiInstance.collection_flag`),
+    /// and an element-scoped reference inside the MI body (an `inputs`
+    /// `VarRef` binding) produces a manifest typing all three correctly.
+    /// Two separate claims, both proven here: (1) it survives a save/load
+    /// round trip through `MemoryTemplateStore` — the manifest is not
+    /// recomputed on load, it is the sealed value (an in-memory clone,
+    /// NOT a serde round trip — that's claim 2); (2) the whole template,
+    /// including the `Expression::VarRef`/`IrLiteral` payloads the G4.0
+    /// serde fix (`ir.rs`'s `tag`+`content` adjacent tagging) made
+    /// serializable at all, actually round-trips through real
+    /// `serde_json` bytes — asserted directly below rather than resting
+    /// on `store_postgres_templates.rs`'s DB-gated tests, whose fixture
+    /// DTOs don't contain an MI node and so never exercise this shape.
+    #[tokio::test]
+    async fn t_pub_13_g4_gate_scenario_manifest_survives_reload() {
+        use crate::dto::{EdgeDto, NodeDto};
+        use crate::registry::MemoryTemplateStore;
+        use bpmn_lite_compiler::{Expression, FfiInputBinding};
+        use bpmn_lite_store::store_memory::MemoryStore;
+        use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
+
+        let dto = WorkflowGraphDto {
+            id: "g4_gate_scenario".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::DataObject {
+                    id: "client_ref_decl".to_string(),
+                    name: "client_reference".to_string(),
+                    type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                    role: DataObjectRole::Input,
+                },
+                NodeDto::MultiInstance {
+                    id: "verify_each_director".to_string(),
+                    task_type: "verify_director".to_string(),
+                    bpmn_id: None,
+                    collection_flag: "directors".to_string(),
+                    declared_max: 5,
+                    inputs: vec![FfiInputBinding {
+                        target_field: "full_name".to_string(),
+                        expression: Expression::VarRef(vec![
+                            "director".to_string(),
+                            "name".to_string(),
+                        ]),
+                    }],
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+            ],
+            edges: vec![
+                EdgeDto {
+                    from: "start".to_string(),
+                    to: "verify_each_director".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+                EdgeDto {
+                    from: "verify_each_director".to_string(),
+                    to: "end".to_string(),
+                    condition: None,
+                    is_default: false,
+                    on_error: None,
+                },
+            ],
+        };
+
+        let template_store = MemoryTemplateStore::new();
+        let process_store = MemoryStore::new();
+
+        let published = compile_and_publish_from_dto(
+            dto,
+            PublishOptions {
+                template_key: "g4_gate".to_string(),
+                source_format: SourceFormat::Graph,
+                ..default_options()
+            },
+            &template_store,
+            &process_store,
+        )
+        .await
+        .expect("gate-scenario workflow must publish");
+
+        // Fresh manifest, straight off the publish pipeline.
+        assert_manifest_has_all_three_kinds(&published.template.parameter_manifest);
+
+        // Reload from the store — the manifest must be the SAME sealed
+        // value, not recomputed (and it must survive serialization).
+        let reloaded = template_store
+            .load("g4_gate", 1)
+            .await
+            .unwrap()
+            .expect("template must be persisted");
+        assert_eq!(
+            reloaded.parameter_manifest, published.template.parameter_manifest,
+            "manifest must survive save/load unchanged"
+        );
+        assert_manifest_has_all_three_kinds(&reloaded.parameter_manifest);
+
+        // Claim 2: a REAL serde_json round trip of the whole template —
+        // this is the thing that would have panicked before the G4.0
+        // serde fix (`Expression::VarRef`/`IrLiteral` were internally
+        // tagged and could not serialize at all). `MemoryTemplateStore`
+        // above never touches serde_json, so this is the only assertion
+        // in this test (or its DB-free siblings) that actually proves the
+        // fix holds for a template carrying an MI `inputs` binding.
+        let json = serde_json::to_string(&reloaded).expect("template must serialize to JSON");
+        let via_json: WorkflowTemplate =
+            serde_json::from_str(&json).expect("template must deserialize from JSON");
+        assert_eq!(
+            via_json.parameter_manifest, reloaded.parameter_manifest,
+            "manifest must survive a real serde_json round trip"
+        );
+        assert_manifest_has_all_three_kinds(&via_json.parameter_manifest);
+    }
+
+    fn assert_manifest_has_all_three_kinds(manifest: &crate::manifest::ParameterManifest) {
+        use crate::manifest::SlotKind;
+
+        let scalar = manifest
+            .slots
+            .iter()
+            .find(|s| s.name == "client_reference")
+            .expect("scalar slot present");
+        assert_eq!(scalar.kind, SlotKind::Scalar);
+
+        let collection = manifest
+            .slots
+            .iter()
+            .find(|s| s.name == "directors")
+            .expect("collection slot present");
+        assert_eq!(
+            collection.kind,
+            SlotKind::Collection {
+                element_shape: vec!["full_name".to_string()]
+            }
+        );
+
+        let element_scoped = manifest
+            .slots
+            .iter()
+            .find(|s| s.name == "director.name")
+            .expect("element-scoped slot present");
+        assert!(matches!(
+            element_scoped.kind,
+            SlotKind::ElementScoped { .. }
+        ));
+
+        let suppliable: Vec<&str> = manifest.suppliable().map(|s| s.name.as_str()).collect();
+        assert!(
+            !suppliable.contains(&"director.name"),
+            "element-scoped slot must never be presented as suppliable"
         );
     }
 

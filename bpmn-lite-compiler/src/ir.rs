@@ -184,6 +184,22 @@ pub enum IRNode {
         /// deviation, not an oversight). `V2Fork`'s static `targets.len()`
         /// equals this value exactly.
         declared_max: u32,
+        /// G4.0 — per-element input bindings, resolved against the current
+        /// MI iteration's element rather than a workflow-global data
+        /// object. Reuses `FfiInputBinding`'s shape verbatim (a
+        /// `target_field`/`Expression` pair) rather than inventing a
+        /// second one; a `VarRef` here is scoped to this node's own
+        /// iteration, never globally resolvable, which is exactly the
+        /// distinction the parameter manifest (G4.1) uses to classify a
+        /// reference as element-scoped instead of scalar/collection.
+        /// Authoring-time/manifest-derivation data only — `lower()` does
+        /// not read this field; MI element delivery at runtime is
+        /// unchanged (still the synthesized `{node_id}_mi_element_{index}`
+        /// flag in `lower_multi_instance_v2`). Defaults to empty for every
+        /// existing construction path (XML import parses no per-element
+        /// inputs today).
+        #[serde(default)]
+        inputs: Vec<FfiInputBinding>,
     },
 }
 
@@ -192,8 +208,18 @@ pub enum IRNode {
 /// Literal value types at the IR (pre-lowering) level.
 ///
 /// Maps 1:1 to `bpmn_lite_types::Literal` after lowering.
+///
+/// Adjacently tagged (`tag`+`content`), not internally tagged — a bug
+/// found while wiring G4.0 (`IRNode::MultiInstance::inputs`) through JSON:
+/// internal tagging cannot represent a newtype variant whose payload
+/// isn't itself a map, so `IrLiteral::Bool(true)` (and every other
+/// variant here) has never actually been `serde_json`-serializable. Went
+/// unnoticed because this type's only prior use (`FfiServiceTask.inputs`)
+/// is explicitly excluded from the JSON/DTO pipeline (`ir_to_dto.rs`) —
+/// nothing could have depended on the old, always-panicking wire shape,
+/// so this is a pure fix, not a breaking wire-format change.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum IrLiteral {
     Bool(bool),
     I64(i64),
@@ -205,8 +231,12 @@ pub enum IrLiteral {
 ///
 /// Per A2 §5. At lowering time, `VarRef` is resolved against `data_objects`
 /// to produce a `BindingSource`. `Literal` is copied as-is.
+///
+/// Adjacently tagged, not internally tagged — same fix and same reason as
+/// `IrLiteral` above (`VarRef`'s `Vec<String>` payload is exactly the
+/// sequence-content case internal tagging can't represent).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "expr", rename_all = "snake_case")]
+#[serde(tag = "expr", content = "data", rename_all = "snake_case")]
 pub enum Expression {
     Literal(IrLiteral),
     /// Dotted variable path, e.g. `${customer.jurisdiction}` → `["customer", "jurisdiction"]`.

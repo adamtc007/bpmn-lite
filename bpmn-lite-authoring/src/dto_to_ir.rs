@@ -148,12 +148,14 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 bpmn_id,
                 collection_flag,
                 declared_max,
+                inputs,
             } => IRNode::MultiInstance {
                 id: id.clone(),
                 name: bpmn_id.as_ref().cloned().unwrap_or_else(|| id.clone()),
                 task_type: task_type.clone(),
                 collection_flag_name: collection_flag.clone(),
                 declared_max: *declared_max,
+                inputs: inputs.clone(),
             },
 
             NodeDto::DataObject {

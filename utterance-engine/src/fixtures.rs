@@ -449,6 +449,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                     task_type: "noop".into(),
                     collection_flag_name: "documents".into(),
                     declared_max: 10,
+                    inputs: Vec::new(),
                 },
                 edge_id: "f_mi".into(),
             },
