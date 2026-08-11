@@ -8,7 +8,7 @@ use semantic_decision_contracts::{
     ApplicabilityFact, ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError,
     DesignBelief, DesignFocus, DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane,
     FeedbackOption, GameDisposition, GameDomainId, GameboardContractError, GraphContentHash,
-    GraphDeltaPreview, GraphRevision, HistoryHash, LegalMove, LegalMoveId, MoveArgument,
+    GraphDeltaPreview, GraphRevision, GraphStateHash, HistoryHash, LegalMove, LegalMoveId, MoveArgument,
     MoveAttemptId, MoveAttemptOutcome, MoveAttemptReceipt, MoveEvidence, MoveProbability,
     ProposalStatus, ProposalWorkbook, ResolvedPosition, RuleExplanation, SemanticDecisionBoard,
     SlotRequirement, SlotValueState, GAMEBOARD_SCHEMA_VERSION,
@@ -299,6 +299,7 @@ pub fn build_bpmn_semantic_board(
 pub fn project_design_position(
     board: &SemanticDecisionBoard,
     graph_hash: &str,
+    graph_state_hash: &str,
     compiler_profile: &str,
     history_hash: &str,
     focus: DesignFocus,
@@ -308,6 +309,7 @@ pub fn project_design_position(
         board,
         BoardPath::new(vec![board.domain.as_str().to_string()])?,
         GraphContentHash::new(graph_hash)?,
+        GraphStateHash::new(graph_state_hash)?,
         compiler_profile,
         board.policy_fingerprint.clone(),
         HistoryHash::new(history_hash)?,
@@ -340,6 +342,13 @@ pub fn build_bpmn_design_position(
         });
     }
     let graph_hash = GraphContentHash::new(graph_hash)?;
+    // D23/I34: derived from `dag` itself, not threaded as a caller-supplied
+    // string like `graph_hash` — this function always holds the real
+    // `DesignerDag`, so the content-derived identity is computed directly
+    // rather than trusting a route-derived value the caller already has.
+    let graph_state_hash = GraphStateHash::new(DesignerDag::graph_state_hash(
+        &dag.to_ir().map_err(|e| BpmnBoardError::GraphProjection(e.to_string()))?,
+    ))?;
     let state = BpmnGameState::new(dag, board)?;
     let moves = enumerate(&state, &graph_hash)?;
     for refusal in &moves.compiler_refused {
@@ -357,6 +366,7 @@ pub fn build_bpmn_design_position(
         board.semantic_snapshot.clone(),
         board.graph_revision.clone(),
         graph_hash,
+        graph_state_hash,
         compiler_profile,
         board.policy_fingerprint.clone(),
         current_proposal_hash
@@ -798,6 +808,7 @@ pub fn project_bpmn_bound_game_turn(
         position.semantic_snapshot().clone(),
         position.graph_revision().clone(),
         position.graph_hash().clone(),
+        position.graph_state_hash().clone(),
         position.compiler_profile(),
         position.policy_identity(),
         Some(proposal_hash),
@@ -1361,6 +1372,7 @@ mod tests {
         let position = project_design_position(
             &board,
             &"b".repeat(64),
+            &"d".repeat(64),
             "compiler-profile-v1",
             &"c".repeat(64),
             focus,
@@ -1722,7 +1734,7 @@ mod tests {
         // policy-denied) must return `Ok(None)`, not an error -- these are
         // the one ratified deviation from invariant 13, not a defect.
         let excluded = map_legal_candidate(
-            CandidateId::Operation(OperationKind::CreateRace),
+            CandidateId::Operation(OperationKind::CloseParallelRegion),
             &PolicyFilter::default(),
         )
         .expect("a NotRepresentable candidate must not error");

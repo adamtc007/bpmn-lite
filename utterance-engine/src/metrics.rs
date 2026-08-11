@@ -329,10 +329,17 @@ mod seed_corpus_baseline {
         );
 
         // Sanity floors only (recorded rates live in the plan receipts):
-        assert_eq!(
-            report.board_completeness(),
-            Some(1.0),
-            "every oracle is on the board"
+        // G1.3 (2026-08-11) removed `op.create_race`/`op.attach_rollback_guard`/
+        // `op.call_subprocess` and their production siblings from the live
+        // catalogue -- capabilities with no construction path (RESEARCH-002
+        // §S6, EXCLUDED BY DESIGN in `ops.rs`). This corpus's provenance
+        // predates that ruling, so a known slice of its oracle labels now
+        // name removed candidates; completeness floor lowered from the prior
+        // 1.0 to reflect that, not silently preserved. Corpus regeneration
+        // against the current catalogue is parked with training (plan §3).
+        assert!(
+            report.board_completeness().unwrap() > 0.8,
+            "every oracle is on the board (floor lowered by G1.3's catalogue trim)"
         );
         assert!(
             report.recall_at_k().unwrap() > 0.5,

@@ -100,15 +100,19 @@ pub struct DevSessionCaptureInput {
     pub evidence_trace: Option<crate::contract::EvidenceTrace>,
 }
 
-/// One open dev-testing session. The only constructor requires a
-/// non-empty session id and a non-empty consent statement (stated at
-/// session start) — mirrors `CapturePipeline::on_under_charter`'s
-/// empty-ref refusal, applied here to Adam's own consent rather than a
-/// charter reference.
+/// One open dev-testing session's validated identity. The only
+/// constructor requires a non-empty session id and a non-empty consent
+/// statement (stated at session start) — mirrors `CapturePipeline::
+/// on_under_charter`'s empty-ref refusal, applied here to Adam's own
+/// consent rather than a charter reference.
+///
+/// G1.2: this type is deliberately stateless (no `records: Vec<...>`) —
+/// persistence is the caller's durable store, never an in-memory field
+/// that silently loses every captured interaction on restart. `open`
+/// validates and stamps identity; `capture` is a pure builder.
 pub struct DevSessionStore {
     session_id: String,
     consent_statement_timestamp: String,
-    records: Vec<DevSessionRecord>,
 }
 
 impl DevSessionStore {
@@ -128,7 +132,6 @@ impl DevSessionStore {
         Ok(DevSessionStore {
             session_id: session_id.to_string(),
             consent_statement_timestamp: consent.to_string(),
-            records: Vec::new(),
         })
     }
 
@@ -136,12 +139,14 @@ impl DevSessionStore {
         &self.session_id
     }
 
-    /// Capture one interaction's full closure. Always stores — this
-    /// module has no suppressed/off state, unlike `capture::
-    /// CapturePipeline`: a `DevSessionStore` only exists once `open` has
-    /// already required consent, so there is nothing left to gate.
-    pub fn capture(&mut self, input: DevSessionCaptureInput) -> &DevSessionRecord {
-        let record = DevSessionRecord {
+    pub fn consent_statement_timestamp(&self) -> &str {
+        &self.consent_statement_timestamp
+    }
+
+    /// Build one captured interaction's full closure. Pure — never
+    /// mutates or stores; the caller's durable store owns persistence.
+    pub fn capture(&self, input: DevSessionCaptureInput) -> DevSessionRecord {
+        DevSessionRecord {
             session_id: self.session_id.clone(),
             subject: DevSessionSubject::Adam,
             consent_statement_timestamp: self.consent_statement_timestamp.clone(),
@@ -159,13 +164,7 @@ impl DevSessionStore {
             ranking: input.ranking,
             disposition: input.disposition,
             evidence_trace: input.evidence_trace,
-        };
-        self.records.push(record);
-        self.records.last().expect("just pushed")
-    }
-
-    pub fn records(&self) -> &[DevSessionRecord] {
-        &self.records
+        }
     }
 }
 
@@ -233,8 +232,8 @@ mod tests {
     /// dump + context TEXT present, not just their hashes).
     #[test]
     fn capture_stamps_type_carried_provenance_and_is_train_on_able() {
-        let mut store = DevSessionStore::open("sess-1", "2026-07-29T09:00:00Z").unwrap();
-        let record = store.capture(one_input()).clone();
+        let store = DevSessionStore::open("sess-1", "2026-07-29T09:00:00Z").unwrap();
+        let record = store.capture(one_input());
         assert_eq!(record.session_id, "sess-1");
         assert_eq!(record.consent_statement_timestamp, "2026-07-29T09:00:00Z");
         assert_eq!(record.subject, DevSessionSubject::Adam);
@@ -248,7 +247,6 @@ mod tests {
             !record.context_projection.is_empty(),
             "context text must be present, not hash-only"
         );
-        assert_eq!(store.records().len(), 1);
         assert_eq!(store.session_id(), "sess-1");
     }
 
@@ -256,11 +254,9 @@ mod tests {
     /// consent/subject — per-event data cannot override store state.
     #[test]
     fn multiple_captures_share_one_sessions_consent() {
-        let mut store = DevSessionStore::open("sess-2", "2026-07-29T10:00:00Z").unwrap();
-        store.capture(one_input());
-        store.capture(one_input());
-        assert_eq!(store.records().len(), 2);
-        for r in store.records() {
+        let store = DevSessionStore::open("sess-2", "2026-07-29T10:00:00Z").unwrap();
+        let records = [store.capture(one_input()), store.capture(one_input())];
+        for r in &records {
             assert_eq!(r.session_id, "sess-2");
             assert_eq!(r.consent_statement_timestamp, "2026-07-29T10:00:00Z");
         }

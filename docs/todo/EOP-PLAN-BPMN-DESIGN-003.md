@@ -1,191 +1,216 @@
-# EOP-PLAN-BPMN-DESIGN-003 — Implementation Plan: BPMN Designer, Sage/Repl UI, and the SLM Prototype
+# EOP-PLAN-BPMN-DESIGN-003 — Implementation Plan
 
-**Version:** v0.2
-**Status:** **RATIFIED (Adam, 2026-07-27)** — executes EOP-VS-BPMN-DESIGN-003 **v0.6 (RATIFIED)**; restructured per **EOP-DIR-BPMN-DESIGN-003-001** (SLM capability built IN-PHASE, concurrent with the Designer refactor). Changes from here are versioned amendments; receipts append in place (§F).
-**Document class:** Implementation plan (workstreams, gates, receipts)
-**Baseline:** EOP-VS-BPMN-ISA-002 v0.19 IMPLEMENTED; EOP-VS-BPMN-DESIGN-003 v0.6 ratified 2026-07-25
-**Working discipline (inherited, binding):** GRIND vs CAREFUL tiers; authorship-blind review at every CAREFUL close; Rule 7 — substrate/plan mismatch = executor HALTS and reports, never adapts; red→green for every remediation; receipts appended to this document per workstream; build proof over assertion; zero suppressions; every code claim marked and traced before anything rests on it; per-site rules converted to build failures when a class recurs.
+**Version:** v0.3
+**Status:** DRAFT — for review
+**Executes:** EOP-VS-BPMN-DESIGN-003 **v0.7** (v0.6 ratified 2026-07-25; §20 amendment ratified 2026-08-11)
+**Baseline:** EOP-VS-BPMN-ISA-002 v0.19 IMPLEMENTED; `codex/bpmn-gameboard-refactor`
+**Grounded in:** EOP-DIR-BPMN-GAMEBOARD-RESEARCH-001 and -002 (both measured, findings-only), EOP-DIR-BPMN-DESIGN-003-005 (DIR-004 verification)
 
-## Changelog
-
-**v0.1 → v0.2 (EOP-DIR-BPMN-DESIGN-003-001).** Sequencing restructure ONLY — no ratified constraint weakened, no gate criterion dropped (see the delta table, §D). The serial T1 → T2 → T3 layout becomes three concurrent workstreams (WS-A `designer-graph`, WS-B `designer-ui`, WS-C `utterance-engine`) plus the governance track. Tier-1 is present from the start — in **shadow** — rather than inserted later. G2's "SLM-insertion readiness" item is obsolete as a *readiness check*: the seams it verified (board object, single disposition function, I28 decision record) are WS-C's interfaces, implemented in WS-A/WS-B from the first commit because WS-C consumes them immediately; G2 now verifies the running pipeline instead (strictly stronger). C5 trace promoted to an immediate task. Tier-0 corpus-baseline evaluation explicitly flagged to Adam for a charter-timing call rather than assumed charter-exempt.
+> **Merge note:** v0.2's receipts sections carry forward **unchanged**. This document replaces the tranche structure, not the record. Do not drop receipts on merge.
 
 ---
 
-## A. Ratified constraints — restated, binding, unweakened
+## 0. What changed from v0.2, and why
 
-These do not change under the in-phase restructure. Each is stated as ratified; the restructure sequences *within* them.
+Two things reshaped the plan, both from evidence rather than preference.
 
-1. **D17** — the Q9 governance charter gates all live-session capture AND any training use of the existing 30k corpus (retrospective application first). Building in-phase moves the charter onto the critical path *immediately*; it does not bypass it.
-2. **D18 + the scope ruling** — Designer design sessions only; promotion ceiling shadow → suggest-only → staged-patch; G3's absolute criteria are the only promotion path. "In this phase" changes when the code exists, never how promotion is earned. **Prototype cap (binding on every workstream):** the SLM's promotion ceiling in this plan is Designer suggest-only → Designer staged-patch. No workstream, task, or "quick win" touches runbook suggestion or any execution-adjacent surface. Equivalently by domain: this programme targets BPMN Designer design sessions (utterance → DSL/graph template construction) only — not the wider ob-poc onboarding/KYC pack surfaces. Rollout to those packs, if the SLM proves its worth, is a separate promotion with its own corpus (seeded by this programme's charter-governed capture), threat model, and gate — proposed as a new V&S when the G3 evidence exists.
-3. **D19 (with rider) and D20** — denial semantics (helpful about the path forward, generic about the request; never confirms existence, never enumerates; `Forbidden` reachable only from explicit references) and Sage's board-transition protocol (explain absence → governed context change → new content-addressed board → rerun; never silent expansion) as ratified.
-4. **The stable contract set** — `SlmResult`/`FiniteScore`/canonical tie-break/`NONE_OF_THE_ABOVE`/board content-hashing/I28 closure (`disposition_policy_hash`, `context_projection_hash`, `retrieved_subset_hash`, board + bundle hashes; recorded values are the historical truth, re-inference forensic) — and the T3.4a bake-off criteria: Apache/MIT license; ~100–300M params; **architecture loadable in Candle, verified not assumed**; CPU-friendly; train in Python, serve in Candle.
-5. **Gate G1** (verdict parity with direct compilation) and **G3** (absolute criteria, thresholds set by Adam at gate time) unchanged.
-6. Rule 7, marking discipline, GRIND/CAREFUL tiers, blind reviews at CAREFUL closes, receipts.
+**The persona ruling reordered the work.** The baseline user is an SME super-user who expects to dictate a workflow graph, using the session almost as an IDE. For that persona, multi-move look-ahead beats ranking accuracy: "wait a week, chase twice, then escalate" is three-to-five moves in one utterance, and single-ply forces manual decomposition at every compound thought. The SLM serves persona 2. Chain preview therefore leads.
+
+**Training is parked, deliberately and with a carve-out.** Adam's ruling: the code changes ahead *add board candidates* — coverage-matrix gaps, the loop production, the vocabulary strip. Retraining now would fit a corpus to a board about to move. Training resumes when the code lands, against the board as it then exists. **The carve-out:** capture is fixed and switched on early, because the code phase itself generates real dictation sessions in exactly the register the model is weakest at, and today they evaporate on restart.
+
+Research also closed four things that were open in v0.2: chain preview needs no new contract types (only a function and a content hash); undo is truncated replay, not a snapshot system; the runbook already *is* a re-executable program; and the `AstMutator` question resolved to a migration, not a design fork.
+
+**Out of scope, stated:** sequential MI (substrate ask); instance creation / the factory (Designer ends at a manifest-bearing template); the Q9 charter and everything behind it (parked with training); Phase D4 in-browser oracle (still gated on C1 + Q23).
 
 ---
 
-## B. Shape of the programme — concurrent workstreams
+## 1. Standing rules
 
-**The Q9 charter kickoff is this plan's first line and its critical path. Under in-phase build, every week of charter delay is a week the finished shadow pipeline runs without data it is allowed to keep.**
+Inherited from ISA-002 and binding on every tranche: GRIND vs CAREFUL tiers; authorship-blind review at every CAREFUL close; **Rule 7** — substrate/plan mismatch means the executor HALTS and reports, never adapts; red→green for every remediation; build proof over assertion; zero suppressions; every code claim marked and traced before anything rests on it; per-site rules converted to build failures when a class recurs.
+
+Three additions, ratified for this plan:
+
+**R-A — Pub hygiene is a gate, not a habit.** Every tranche close diffs `cargo public-api` against the committed baseline. Every new `pub` is justified in the tranche receipt or reverted. Crate capability boundaries are respected: expose the *function*, never the module. Known pressure points — `compute_post_dominators` (expose a function or thin wrapper), `resolve_hypothetical_position` (pub; clone/fold helpers private), manifest types (pub only for what will cross to a factory later, not speculatively).
+
+**R-B — Compaction at every tranche boundary.** Each tranche closes with: receipt written → blind review (CAREFUL) → `public-api` diff → **compact** → next tranche. Rationale worth stating: compaction makes the receipts load-bearing. If a fresh context cannot resume from the plan doc plus the tranche receipt, the receipt was not good enough — the workflow enforces the discipline rather than relying on it.
+
+**R-C — Capture stays on.** From G1 onward, dev-session capture is enabled for every development and test session. These are real dictation utterances in the hardest register; losing them is unrecoverable.
+
+---
+
+## 2. Tranche map
 
 ```text
-GOV   Q9 charter kickoff                 starts IMMEDIATELY — critical path
-WS-A  designer-graph      (was T1)       gate G1: verdict parity
-WS-B  designer-ui         (was T2)       gate G2: end-to-end authoring + pipeline-in-loop
-WS-C  utterance-engine    (was T3)       C-now (ungated) ∥ C-gated (Q9) ∥ C-bakeoff — gate G3
-T4    In-browser oracle   (unchanged)    CONDITIONAL — entry gated on C1 + Q23
+G1  Foundations            content hash · capture persistence · vocabulary strip · SLM lane control-flow
+G2  Chain preview          the persona-1 headline capability
+G3  Loop unrolling         + AstMutator retirement + back-edge whitelist deletion
+G4  Parameter manifest     linter walk · three slot kinds · sealed with template
+G5  Authoring coverage     the S6 matrix gaps
+G6  Session artifact       undo · runbook rendering · replay-equivalence · template↔tape
 ```
 
-WS-A, WS-B, and WS-C's C-now run **concurrently** with explicit cross-stream interface points (§C ordering constraints). Every open code claim in the V&S §0 C-table is an **entry task of the workstream that depends on it** — never a background assumption. A failed trace is a Rule-7 HALT producing a substrate ask, not an improvisation.
-
-### GOV — Governance track (starts immediately, finishes last)
-
-**GOV.1 — Q9 data-governance charter (bank-side, longest lead time).** Owner: Adam + whoever governs data use. Deliverables per V&S D17: permitted/prohibited fields; redaction before persistence; retention and deletion; separation of evaluation, training, and audit datasets; access controls; consent/lawful-use basis; correction-into-training policy; model and dataset lineage; contamination protection. **This gates WS-C's C-gated items; starting it first is the schedule-critical decision of this plan.** The existing 30k corpus falls under the charter retrospectively before any training use.
-
-**GOV.2 — Crate and repo placement.** Decide where the Designer crates live. v0.1 presumed the ob-poc workspace; **Adam's 2026-07-27 standalone ruling (EOP-SAGE-REPL-BPMN-001 T0: BPMN-Lite deploys independent of ob-poc) is a direct input** — the presumption is now the bpmn-lite workspace/standalone deploy unit, decision recorded here when made. Names: `designer-graph` (WS-A), `designer-ui` (WS-B), `utterance-engine` (WS-C). L1 layering and the public-API surface gate apply from the first commit.
-
-**GOV.3 — Fixture-corpus skeleton.** Seed the corpus directory from ISA-002 §30's normative table: one fixture per deviation row (D3 SESE/cyclicity, D4 guard-failure, D5 MI ceiling, D6 empty-MI, D7 zero-match) plus V-10 refusal, dangling-fork refusal, and a nested-fork/pairing topology. Grows through WS-A.4.
-
-Tier: GRIND except GOV.1 (not code).
-
-### WS-A — Substrate-contact crate (`designer-graph`) — Phase D1 content, unchanged
-
-#### WS-A.0 — ENTRY TRACES (CAREFUL, findings-only, blind-format receipts)
-
-| Trace | Claim | HALT condition |
-|---|---|---|
-| C2-residual | `compute_post_dominators` (and the region/pairing derivations over it) is consumable at a crate boundary the Designer may depend on under L1 | Not exposed → HALT; substrate ask = export or thin wrapper in the compiler crate, no logic duplication. *Note: R8 (2026-07-25, task receipts in EOP-FUZZ programme) exposed the pairing oracle at the compiler crate boundary — the trace verifies that receipt against L1, expected green.* |
-| C3 | The dsl macro runtime's named placeholder bindings: representation, typing, whether anything is creation-order-dependent | Order-dependence found → Q15 resolves toward a versioned durable representation |
-| C4-residual | Write the deliberate design note: mapping of nested tagged-union envelopes onto instance flags vs `domain_payload`, within `MAX_VALUE_ARRAY_LEN/DEPTH` | Contradiction with §28's data model → HALT and redesign the note, not the substrate |
-
-#### WS-A.1 — Canonical DAG schema + declaration model (CAREFUL — design-bearing, not grind)
-
-Closes V&S Q2 and Q27 in one pass: node identity, region nesting, connector keys, adapter bindings, provenance fields; and **where declarations canonically live** — the schema and edit log carry MI maxima, guard budgets, cycle bounds, and correlation sources as first-class fields, compiled into the real envelope tables, with the DTO surface explicitly bypassed (C7). Blind review before WS-A.2 starts.
-
-**Cross-stream interface (sequenced FIRST within WS-A.1): the board-candidate schema.** WS-C's board constructor consumes candidate identity and legality derivation from this schema — node identity, region descriptors, and the enumeration of legal operations/productions at a position (`DesignerBoard.legal_operations`/`legal_productions` per V&S §11.7). This slice of WS-A.1 lands and freezes early so WS-C's C-now board service is never blocked on the rest of the schema.
-
-#### WS-A.2 — Graph operations + productions as deterministic builders (GRIND against WS-A.1's schema)
-
-The §12.1 operation set and §12.2 production set as `fn apply(dag, anchor, bindings) -> Result<GraphPatch>`; the staged-candidate transaction (copy/validate/diff/ratify); the gateway incident edge inserted by default connector rules. Structural derivation consumed from the compiler per C2's trace — reimplementation is a review-rejectable defect.
-
-#### WS-A.3 — Declaration authoring into the envelope (GRIND)
-
-`v2_guard_budgets` + `default_guard_budget`, `v2_corr_sources`, MI maxima, cycle `max_fires` — authored values flowing into the sealed artifact through the production compiler, round-tripped through the edit log.
-
-#### WS-A.4 — Fixture corpus completion + G1 harness
-
-**GATE G1 (CAREFUL close, blind review):** for every corpus fixture, the production-built candidate's admission verdict — including *which theorem* rejects the invalid cases — is identical to direct compilation of the equivalent source. Layering and public-API gates clean. Receipts: per-fixture verdict table.
-
-### WS-B — Sage/Repl UI shell (`designer-ui`) — Phase D2 content, minus the readiness item, plus day-one policy wiring
-
-**WS-B.1** Repl strip: staged diff, verifier diagnostics naming the failing theorem, ratify/reject. (GRIND)
-**WS-B.2** DAG surface: nodes/connectors, guard extents with triggers and *effective* budgets (declared or inherited default), correlation sources on wait nodes, Terminate/Incident/limit visual distinction, incident-path highlighting, lowered-fragment inspection. (GRIND)
-**WS-B.3** Sage pane wired as enrichment/escalation only (D7): renders clarifications produced by deterministic policy; hosts escalation dialogue; never gates the routine path. Board-transition flow per D20 wired against WS-C's board service (no longer a stub — WS-C builds it concurrently). (CAREFUL — the boundary is easy to get wrong here)
-**WS-B.4** Edit-log persistence retaining every declaration (C7 honoured by construction); undo/redo; provenance records per V&S §11.8's closure list.
-
-**Day-one rule (from the directive):** WS-B's disposition path calls **WS-C's deterministic disposition policy function from the first commit**, with tier-0 + Sage as the initial evidence producers. There is never a WS-B-local disposition mechanism to migrate off later.
-
-**GATE G2 (CAREFUL close, blind review) — re-scoped:** the solicit-document workflow (V&S §6.3) authored end to end — including a reminder cycle with `max_fires`, a per-guard budget differing from the workflow default, and a correlation source — published, re-opened, every declaration intact; and a red-team script of deliberately invalid edits (backward edge, GUARD-R> inside a fork, missing MI max, budget on a non-guard, unroutable business rejection left unrouted) each refused at staging with the correct theorem or check named; **plus the full pipeline — board → tier-0 → disposition policy → I28 record — demonstrably in the loop with records written (capture-switch state per the charter)**. The v0.1 "SLM-insertion readiness" structural checks are subsumed: the board object, the single typed policy function, and the I28-shaped record are no longer promises reviewed as interface facts — they are running code exercised by this gate. Tier-1 insertion remains "register one producer + add record fields" — now demonstrated by the shadow producer registration itself rather than asserted.
-
-### WS-C — Utterance Engine + SLM shadow (`utterance-engine`) — Phase D3 content, split by what gates it
-
-#### C-now (ungated — build immediately, concurrent with WS-A/WS-B)
-
-1. **C5 trace — IMMEDIATE first task: locate the matcher.** Verdict on score accessibility, scale, determinism. *Known state going in (Code-Facts Register C5 + R10): `/dev/rust/crates/ob-semantic-matcher`, Candle, CPU, cosine via pgvector, exact-match pinned 1.0 / phonetic capped 0.95; now git-versioned (`eb0b3b6`), no remote yet. The trace confirms and pins; the recall@K measurement against the corpus moves to C-gated pending GOV.1's timing call (see below).*
-2. **Board construction service per §11.7:** universe → reachability filter → pre-inference policy filter (D19) → canonical ordering → content hash over the exact board (ids, schema versions, descriptions-as-supplied, ordering, reachability context, pack, policy-filter state). `NONE_OF_THE_ABOVE` on every board. Denial rendering per the ratified D19 rider — reason ("not part of your current working context"), nearest legal alternatives from the board, the governed route — never existence confirmation, never catalogue enumeration. Q29's interim rule: uncertain subject → clarify-first, boards built only against a resolved subject. Consumes WS-A.1's board-candidate schema. (CAREFUL)
-3. **Stable contract + disposition policy:** `RankedCandidate{id, FiniteScore}`, `SlmResult{ranking, retrieved_subset_hash, board_hash, model_bundle_hash}`; canonical tie-break; the deterministic disposition policy (separation thresholds, missing-slot rules via the option-(a) resolvers, abstention, compound-suspected → Sage) and the I28 decision record (`disposition_policy_hash`, `context_projection_hash`). Sage escalation implements D20 against WS-B.3's flow. This function is the ONE disposition path — WS-B calls it from day one. (CAREFUL)
-4. **Tier-0 matcher wiring** behind the retrieval interface, scores logged *to the record pipeline* (I28-shaped records from the first interaction).
-5. **Metrics harness:** the §10.7 decomposition (board completeness; tier-0 recall@K; ranking-given-inclusion; end-to-end; abstention on oracle-absent; latency vs K), boundary FP tracking (shown/accepted/published — executed is structurally zero at this surface), hard-case suites (cross-pack collisions, rare verbs, short utterances, paraphrase families, near-identical descriptions), and the **position-invariance test**.
-6. **Capture pipeline built with the switch OFF.** The full I28 closure per interaction is writable; eval/train/audit dataset separation physically enforced per the charter's shape; nothing persists beyond the session until GOV.1 ratifies.
-
-#### C-seed (UNGATED — added by Adam's ruling 2026-07-27: LLM-as-trainer seed corpus)
-
-The plan as drafted left tier-1 untrainable until the charter (all
-training rode the 30k corpus) — meaning shadow mode had nothing
-meaningful to test. Ruling: follow the Candle-phrase-population model —
-**the LLM's domain knowledge is the trainer**. Synthetic seed data is
-charter-independent BY CONSTRUCTION: no live capture, no 30k-corpus
-use, no user/bank data — utterance→candidate pairs authored by the LLM
-over the board vocabulary's own descriptions. Recorded posture (flagged
-for Adam's confirm, not assumed): the charter's lineage/contamination
-items apply to the seed corpus when the charter lands (it is versioned,
-hashed, and provenance-marked `synthetic.llm` from day one so
-retrospective application is mechanical).
-
-- **C-seed.1**: seed corpus v1 in-repo (versioned fixture, content-
-  hashed): per-candidate paraphrase families across all 28 board
-  candidates + hard cases (cross-candidate collisions, short
-  utterances) + off-board/NOTA examples. Format = the metrics
-  harness's `LabeledCase`.
-- **C-seed.2**: tier-0 baseline numbers over the seed corpus recorded
-  in receipts (the recall@K baseline every gate references, seed
-  edition). **RECORDED 2026-07-27** (tier0.lexical.v1 over
-  synthetic.seed.v1, 92 cases): board completeness 1.0 · recall@5
-  0.6125 · ranking-given-inclusion 0.14285714285714285 · end-to-end
-  0.075 · abstention coverage 1.0 (exact harness output). The decomposition says precisely what §10.2 predicts:
-  retrieval and abstention are serviceable, RANKING is the missing
-  capability — the seed-trained cross-encoder's job, with 0.14/0.075
-  as the floor it must beat.
-- **C-seed.3**: seed fine-tune of the T3.4a shortlist on the synthetic
-  corpus (Python train → safetensors → Candle serve behind
-  `Tier0Retriever`/tier-1 contract); sealed bundle carries
-  `corpus: synthetic.seed.v1` in its identity. Bake-off methodology
-  unchanged — only the training data source is the seed.
-- **BOUNDARY (restated, binding):** seed-trained tier-1 runs in SHADOW
-  and supports engineering/testing only. G3's absolute criteria are
-  measured on charter-governed REAL data — promotion evidence never
-  rests on synthetic-only metrics. D17/D18 untouched.
-
-#### C-gated (blocked on the Q9 charter — GOV.1)
-
-- Switching live capture ON.
-- Any fine-tune.
-- **Tier-0 baseline *evaluation* against the existing 30k corpus:** engineering use of already-held data — scheduled here, but **explicitly flagged to Adam for a charter-timing call rather than assumed exempt** (D17 gates *training* use by its letter; evaluation-use timing is Adam's call, not this plan's assumption).
-
-#### C-bakeoff (T3.4a as written — sequenced after the charter unblocks training)
-
-**Base-model selection (the Q7 residual, closed by bake-off, not prior assertion).** Shortlist of 2–3 open-weight cross-encoder bases meeting all of: permissive license (Apache/MIT — non-commercial families excluded); ~100–300M parameters; **architecture loadable in Candle (BERT-family/XLM-RoBERTa known-supported; anything newer verified against Candle at selection time, not assumed)**; CPU INT-friendly. Each candidate fine-tuned identically on the corpus and measured on the C-now harness; selection = best against the absolute-criteria shape, recorded with receipts. The winner's identity becomes part of the sealed model bundle (V&S §10.8). Then: offline fine-tune (Python) with `NONE_OF_THE_ABOVE` in the training set and the charter's contamination protections; safetensors → Candle CPU inference behind the stable contract; sealed model bundle; per-pack calibration. Training is Python; serving is Candle — required at tier-0, tier-1 inference, and for the pinned-runtime reproducibility of the bundle; it is not the training stack. (GRIND with CAREFUL review of selection and training/eval methodology.)
-
-**GATE G3 (CAREFUL close, blind review) — unchanged and unmoved:** promotion shadow → Designer suggest-only against the absolute criteria, however early the code exists. The plan defines the metrics; **the threshold values are Adam's to set at gate time** against observed baselines:
-
-| Criterion | Threshold |
-|---|---|
-| Minimum evaluation sample per pack, with confidence bounds | _set at gate_ |
-| Per-risk-class non-regression vs tier-0 | required |
-| Max accepted false-positive rate / max published false-positive rate | _set at gate_ |
-| Abstention coverage on oracle-absent boards | _set at gate_ |
-| Minimum tier-0 recall@K (else fix tier-0 before promoting tier-1) | _set at gate_ |
-| Maximum p95 latency (board construction → disposition) | _set at gate_ |
-
-Suggest-only → staged-patch promotion repeats G3 on live suggest-only data. **The ladder ends there (D18).**
-
-### T4 — In-browser oracle — Phase D4 (CONDITIONAL, unchanged)
-
-**Entry:** C1 traced TRUE (wasm32-wasip2 build + replay-hash parity gate exist as claimed) **and** the Q23 verifier-verdict parity gate designed. Either failing parks T4 without affecting the workstreams — server-side validation from WS-A is the working mechanism regardless.
-
-**T4.1** Ship kernel/verifier/decoder module to `designer-ui`; local validate → lower → verify → dry-run with deterministic host stubs.
-**GATE G4:** parity corpus — identical verdicts and identical replay hashes, browser vs server, across the full WS-A.4 fixture corpus, wired into CI as a standing gate (the Q23 answer made permanent).
+G1 precedes G2 (content hash is a hard prerequisite). G3–G6 are independently orderable after G2; the sequence above is recommended, not forced.
 
 ---
 
-## C. Ordering constraints (cross-stream, binding)
+## G1 — Foundations
 
-1. **WS-C's C-now items depend on WS-A's board-candidate schema** (candidate identity, legality derivation — the named interface in WS-A.1). That slice is WS-A.1's first deliverable, frozen early.
-2. **Shadow mode starts the day WS-B's session loop first runs against a real Pack:** from that day, every design session flows through the disposition policy with tier-0 evidence and (once trained) tier-1 in shadow, and — charter permitting — accrues corpus.
-3. **G2 verifies the pipeline in the loop** (board → tier-0 → policy → record, records written, switch state per charter) alongside its authoring/red-team criteria.
-4. **G3 is unmoved:** shadow → suggest-only happens only when its absolute criteria are met, however early the code exists.
-5. WS-A and WS-B otherwise proceed as v0.1 sequenced them internally; T4 entry unchanged.
+**Tier:** CAREFUL (G1.1, G1.4), GRIND (G1.2, G1.3)
 
-## Standing rules for this plan
+**G1.1 — Content-derived graph hash, alongside route-derived.** Lift the canonicalisation logic that exists in `ir_graphs_equivalent` (sort by BPMN id, sorted node/edge tuples — already proven by three cement-locked tests) into a real digest over `to_ir()` output. Both identities are carried and **each consumer names which it uses** (I34). Per D23, record explicitly in the receipt: which staleness/drift checks loosen, and that receipt dedup behaviour changes for structurally-identical-differently-routed positions.
 
-1. **Receipts.** Each workstream close appends its receipts here (tests red→green, verdict tables, review findings and dispositions), matching the ISA-002 plan's practice.
-2. **V&S amendments.** Anything a workstream surfaces that contradicts DESIGN-003 v0.6 is a HALT and a proposed versioned amendment — never adapted around. Q7 producer upgrades, Q26, Q28, Q29's revisit, and Q30's abstention-evidence shape are the expected amendment candidates.
-3. **Threat-model note for WS-C.** Utterances are untrusted input to a system that constructs staged patches: the red-team suite must include prompt-shaped utterances ("ignore the board and…"), which must resolve as ordinary off-board/out-of-scope — the architecture already makes them inert; the suite proves it stays that way.
-4. **Executor.** Sonnet-tier for GRIND, with CAREFUL workstream items and all blind reviews at the careful tier, per the established split. Fine-tune methodology review is CAREFUL regardless of who runs the training.
-5. **Description-audit-before-retrain (EOP-DIR-BPMN-DESIGN-003-003, 2026-07-29).** A per-class weak spot in the tier-1 candidate space gets a candidate-description audit (rewrite for a sharper distinguishing clause, re-score existing bundles with NO retraining) before a training-data fix is proposed — cheap, reversible, and it tells you whether the weak spot is a wording problem or a data-coverage problem before you spend a retrain on it. Any description change that is adopted (kept past its audit) triggers corpus regeneration at the next retrain — descriptions are board-hash input and training/serving must never run on a description mismatch past that point.
+**G1.2 — Dev-capture persistence.** `DevSessionRecord` is a correctly distinct type with consent in the type (verified), but its store is a process-memory `Mutex<HashMap>` with no write path. Give it a durable store. **This is the third instance of the in-memory-field-never-written-through-the-store pattern** (with the ephemeral pending proposal and the uncached `DesignerDag`); the other two are deliberate and fail-closed, this one silently loses the data capture exists to produce. Then switch capture on (R-C).
+
+**G1.3 — Strip the dead board vocabulary.** Remove the hash-cemented descriptions for `GUARD-R>`, RACE, and `CallSubprocess` — capabilities marked EXCLUDED BY DESIGN in `ops.rs`'s own module docs with no construction path. Board hashes change once; a deliberate act, receipted. *(Note: RESEARCH-002/V3 confirmed corpus generation draws from oracle-admitted enumeration, not this catalogue — these entries appear zero times in every corpus artifact. Nothing was contaminated; the vocabulary is simply lying about the surface.)*
+
+**G1.4 — SLM off the completion path.** The producer cascade currently selects the heaviest *loaded* lane unconditionally and falls back only on load failure — never on request-time match quality. Restructure so lane selection is per-request: governed exact-match resolving cleanly must short-circuit **by construction**. Add per-request deadline plumbing (none exists anywhere in the evidence path). Budgets by interaction, not component: completion **<100ms** (tier-0 only, never tier-1 — measured tier-1 p95 is 2.6–2.9s, a wrong-lane problem not a tuning problem); utterance submit **<500ms**; ratify seconds acceptable.
+
+**Gate G1:** content hash and route hash both derived, each consumer naming which it uses, and the loosened-semantics list receipted. A dev session survives a process restart. `public-api` diff clean. A completion-shaped request provably cannot reach tier-1 — demonstrated by a test, not by configuration.
 
 ---
+
+## G2 — Chain preview
+
+**Tier:** CAREFUL
+
+Research established this needs **no new contract types**: `DesignPosition` is already constructible from arbitrary supplied graph identity ("without consulting time, randomness, storage or a server"); `DesignerDag` clones in ~3µs with no interior mutability or global counters; `apply_production` and `admit()` are pure over the graph save one exception (`TimerSpec::Date` reads wall-clock during lowering — a hypothetical-position cache keyed on graph content must account for it).
+
+**G2.1 — `resolve_hypothetical_position`.** Run the existing board/position pipeline against a staged, unratified `DesignerDag` clone rather than the live session's reconstructed one. Depends on G1.1 (a hypothetical mid-chain state has no edit-log entry to hash).
+
+**G2.2 — Chain the fold.** Clone → apply move *n* → derive hypothetical position → enumerate and preview move *n+1* against **that** position. Per Adam's ruling A, hypothetical steps **carry the original `history_hash` unchanged** — history is provably non-authoritative (I30), and synthesising history for moves that have not happened would be inventing evidence.
+
+**G2.3 — Chain the disposition.** `compound_plan`/`decide_game` currently take no `DesignerDag` and resolve both spans against one unchanged position. Add the parameter, materialise and admit span 1, rebuild the board, resolve span 2 against the result. Widen the trigger past the literal `"<a>; <b>"` split to natural sequential phrasing ("wait a week then chase" is one utterance, not two).
+
+**Gate G2:** a three-move line dictated as one utterance resolves, each step verified against the position its predecessor produced, with the whole line previewable before ratification. Depth-3 within budget at realistic sizes (measured: 433µs at 10 nodes, 1.48ms at 339 — the persona budget is the HTTP figure, single-digit ms, not the in-process one). A line whose second move is illegal *given the first* is refused with the correct theorem named.
+
+---
+
+## G3 — Loop unrolling and `AstMutator` retirement
+
+**Tier:** CAREFUL
+
+**G3.1 — Unrolling pass.** Expand `LoopAst{ceiling}` to N forward copies before verification. Per-copy node keys derived deterministically from loop id + index (I33 — this is the identity class fought three times already). Confirm, don't assume, whether the body reads the iteration index; if so each copy binds a literal.
+
+**G3.2 — Total-size cap.** Artifact-resident, verifier-checked, on the same footing as the MI maximum. **On total unrolled size, not per-loop count** (I32) — nesting multiplies, loop-inside-MI multiplies again. Since unrolling happens before verification, `VerifiedLimits` sees the true program and the existing machinery catches oversize with no new check.
+
+**G3.3 — Delete the divergence.** With both front-ends emitting acyclic output, remove the `IncCounter`/`BrCounterLt` back-edge whitelist. Retire `AstMutator` behind a `RepeatNTimes` production preserving the SME abstraction. Reconcile the third, simulation-only loop path in `bpmn-lite-server-runner`.
+
+**G3.4 — State the audit position** (D22) in the tranche receipt and any operator-facing documentation: N unrolled copies produce N distinct journalled instances, which is the better audit record.
+
+**Gate G3:** a `RepeatNTimes` production authored in a session compiles, verifies, and executes with N distinct journal entries. Oversize is refused with a typed error naming the cap. The back-edge whitelist is gone and no path emits a cyclic graph. Existing loop tests (T-LOOP-1..5) pass or are deliberately retired with reasons.
+
+---
+
+## G4 — Parameter manifest
+
+**Tier:** CAREFUL
+
+**G4.1 — Derive.** Extend the linter's unresolved-reference walk to emit a typed manifest, classifying each slot as **scalar**, **collection** (with element shape), or **element-scoped** (I35). The walk knows whether a reference sits inside an MI region, so classification is derivable, not heuristic.
+
+**G4.2 — Seal.** The manifest travels with the template alongside the compiled DTO snapshot (I36). *(Today the template retains only the DTO and has no back-reference to its session.)*
+
+**G4.3 — Surface.** Render manifest state as IDE-grade diagnostics: "this template needs a client reference and a directors collection before it can run." This converts a governance constraint into the feature that makes the tool feel helpful rather than obstructive.
+
+**Gate G4:** a template with a scalar slot, a collection slot, and an element-scoped reference inside an MI body produces a manifest that types all three correctly, survives publish/reload, and drives an inline diagnostic. An element-scoped reference is **never** presented as suppliable.
+
+---
+
+## G5 — Authoring coverage
+
+**Tier:** GRIND, blind-reviewed at close
+
+Close the S6 matrix gaps, in descending severity: **workflow-default failure budget** (zero authoring surface — not even a raw-JSON path, worse than any other row); **retry budget** (absent above the artifact/Rust-API layer, no XML or DSL declaration attribute anywhere); **`END-TERMINATE`** (reachable only by hand-crafting raw JSON against the generic graph-edit endpoint, bypassing the palette entirely — untested and undocumented); **REST-integration tests** for parallel MI and inclusive dynamic fork (crate-level only today).
+
+**Gate G5:** every row of the matrix is either fully covered, or carries a written and reviewed reason for exclusion. No row is silently partial. Where the reason is "excluded by design," `board_candidate.rs` must not claim otherwise (G1.3 already removed the false claims; this gate keeps them out).
+
+---
+
+## G6 — Session artifact
+
+**Tier:** GRIND except G6.1 (CAREFUL)
+
+**G6.1 — Undo as truncated replay.** Add a bound (`as_of_seq`) to `reconstruct_designer_dag`. The mechanism already exists — the edit log is the only durable surface, ordering is schema-enforced by a composite `(session_id, seq)` primary key, and every request already folds from a fresh seed. Reconcile the four named points where a backward-moving head matters, chiefly the reverse-scan-for-latest projections and `ProposalAudit.related_event_seq`'s stored pointer. `CorrectionKind::Undo` gains its first constructor — note it already has one real reader in the eval funnel.
+
+**G6.2 — Runbook rendering.** Render the operation tape as readable Designer-DSL. The tape is already canonical and already the authoritative state; this is a rendering job.
+
+**G6.3 — Replay-equivalence test.** Assert that two independent replays of the same log produce identical structural output. The mechanism is exercised on effectively every request but has never been asserted as its own contract.
+
+**G6.4 — Template↔tape linkage.** The link is one-way today (session stamped with template identity, not vice versa). Make it navigable so a published template can be traced to the session that authored it.
+
+**Gate G6:** undo returns a session to a prior position with proposals and projections correctly reconciled; a session renders as reviewable DSL; replay-equivalence is asserted; a published template resolves to its authoring tape.
+
+---
+
+## 3. Parked track — training
+
+Resumes when G1–G6 land, against the board as it then exists. Carried forward unchanged: corpus regeneration (the v2-as-specced vs the separately-ratified v3-shadow line is reconciled *then*, against the final surface, not now against one about to change); retraining both ModernBERT bases; three-slice re-baseline; the eight disputed `starter-seed-v1` adjudications; the Q9 charter and everything gated behind it.
+
+What the code phase contributes to it: **real dictation sessions**, captured from G1.2 onward under R-C — the register the model is weakest at and the reason 44.1% is persona-2's number rather than a verdict on the system.
+
+---
+
+## 4. Receipts
+
+Appended per tranche close, matching the ISA-002 plan's practice: tests red→green, gate evidence, `public-api` diff result, blind-review findings and dispositions, and compaction confirmation.
+
+### G1.1 — content-derived graph hash, in progress (2026-08-11)
+
+**Done, green, not yet gate-closed** (G1.1 only; G1.2–G1.4 and the G1 gate itself — `public-api` diff, blind review, compaction — remain).
+
+- **`DesignerDag::graph_state_hash(&IRGraph) -> String`** added in `designer-graph/src/schema.rs`, lifting `ir_graphs_equivalent`'s proven canonicalisation (sort nodes by BPMN id, sort edges by `(from_id, to_id, condition_debug)`, `NodeKey`/edge-id excluded) into a blake3 digest with length-prefixed framing. `blake3` moved dev→real dependency (`designer-graph/Cargo.toml`). Four new tests, including an empirical route-independence proof (two DAGs built with reversed node/edge insertion order hash identically) — not merely asserted. Doc comment records the naming trap: `bpmn-lite-server-designer`'s existing `graph_content_hash`, despite its name, is route-derived (RESEARCH-002/S2), same as `graph_identity_hash`.
+- **Fork surfaced and ruled (Adam, 2026-08-11: "B - it needs to be done").** I34 requires the actual consumer — `DesignPosition`, sealed in the pinned external crate `semantic-decision-contracts` — to carry the identity, not a local workaround. Implemented at the sealed-contract level:
+  - `semantic-decision-contracts` (`/Users/adamtc007/dev/dsl`, branch `refactor/sem-os-pack-policy`): added `GraphStateHash` (hash-identity newtype, mirrors `GraphContentHash`'s validation), a required `graph_state_hash: GraphStateHash` parameter on `DesignPosition::new` and `::from_semantic_board`, folded into `state_id`'s hash preimage. Explicit doc note distinguishing it from the route-derived `GraphContentHash`/`GraphRevision`. Golden round-trip bytes and `state_id` in `position_round_trip_is_canonical_and_has_golden_bytes` re-cemented against the new preimage (only that one test's golden values changed; `move_set_hash` untouched since its fields didn't change). Full workspace test suite green (349+43+... across every crate, 0 failures). Committed (`1d039d9`, `feat(contracts)!: add content-derived GraphStateHash alongside route-derived GraphContentHash`) and pushed to `origin/refactor/sem-os-pack-policy`.
+  - bpmn-lite's pin bumped from `12d5280e...` to `1d039d958a91620ab15374f05176bdfac4c872d1` in every location it appears: root `Cargo.toml` (5 crates from the same source repo, all bumped together — a partial bump would duplicate-version the dependency graph), `utterance-engine/fuzz/Cargo.toml`, `bpmn-lite-server-designer/fuzz/Cargo.toml`. `Cargo.lock` updated via `cargo update -p semantic-decision-contracts` (`CARGO_NET_GIT_FETCH_WITH_CLI=true` was required — the default libgit2 fetcher errored `class=Net; code=Eof` in this sandbox).
+  - `utterance-engine::bpmn_board::build_bpmn_design_position` (the one real production path — `dag: &DesignerDag` already in scope) computes `graph_state_hash` **internally** from `dag.to_ir()`, not as a new caller-supplied parameter — avoids threading a new argument through ~20 call sites (rest.rs ×6, proposal.rs, benches, property tests, capture.rs, and a dozen fuzz targets) while guaranteeing the value is never stale relative to the graph actually used. `project_design_position` (confirmed zero real callers — only a compile-time symbol check and one internal test, per RESEARCH-002/S5) gained an explicit `graph_state_hash: &str` parameter instead, consistent with `from_semantic_board`'s "never fabricates" contract.
+  - Every broken call site fixed: `bpmn_board.rs`'s proposal-rebinding path threads `position.graph_state_hash().clone()` through unchanged; `resolver_comparison.rs` and one fuzz target (`model_boundary.rs`) got explicit test placeholder values.
+- **Verification:** `cargo check --workspace --all-targets` clean (exit 0, only one pre-existing unrelated warning); both fuzz sub-workspaces (`utterance-engine/fuzz`, `bpmn-lite-server-designer/fuzz`) check clean independently. Full test rerun: `designer-graph` 65/65, `utterance-engine` 99/99 (lib) + 78/78 (integration), `bpmn-lite-server-designer` clean — all 0 failures.
+- **Not yet done:** the naming-trap note is documentation-only — `graph_content_hash`/`graph_identity_hash` themselves are unchanged (correctly: v0.3 scopes G1.1 as "alongside," not a rename/replace). G1's gate criteria (`public-api` diff, blind review at CAREFUL close, compaction) have not run yet — this is a sub-item receipt, not a gate close.
+
+### G1.2 — dev-capture persistence, done (2026-08-11)
+
+Replaces `DesignerState.dev_capture: Mutex<HashMap<Uuid, DevSessionStore>>` — process-memory only, confirmed by DIR-004 verification (V1.1) to have no write path and to lose every captured interaction on restart — with a real durable store, keeping DIR-004 Phase 1.3's "train-on-able, not hash-only" guarantee (`BoardDump` + `ContextProjection` text, not just hashes) intact all the way to disk.
+
+- **Store trait**: `AdminProjectionStore` (`bpmn-lite-store/src/store.rs`) gains `open_dev_capture_session` / `append_dev_capture_record` / `load_dev_capture_session`, session-id-scoped (not tenant-scoped — dev capture is Adam-only). New `DevCaptureSessionRecord` type, opaque `records_json: Vec<String>` mirroring `GraphEdit`'s opaque-payload discipline (this crate has no `utterance-engine` dependency; only the server layer deserializes). `open` refuses re-opening an existing session — a later call cannot silently swap the recorded consent statement for one already capturing interactions.
+- **In-memory impl** (`store_memory.rs`): new `dev_capture_sessions: HashMap<String, DevCaptureSessionRecord>` field, three methods implemented, matching `design_sessions`' existing style.
+- **Postgres impl** (`store_postgres.rs` + new migration `063_dev_capture_sessions.sql`): `dev_capture_sessions`/`dev_capture_records` tables, composite `(session_id, seq)` PK, same row-lock-then-append discipline as `append_design_session_event` (avoids the exact concurrent-append race that pattern's own comment documents was found and fixed for design sessions). Two test-double `AdminProjectionStore` impls (`ViolatingTestStore`, the always-`Unavailable` stub) also updated to keep compiling.
+- **`utterance_engine::dev_capture::DevSessionStore` refactored to be stateless**: removed its internal `records: Vec<DevSessionRecord>` and `records()` getter — `capture()` is now a pure builder (`&self -> DevSessionRecord`, no mutation), since persistence is the caller's durable store, not an in-memory field. Module's own tests updated to match; still exercise the same non-empty session-id/consent validation.
+- **`rest.rs` wiring**: the `dev_capture` field removed from `DesignerState` entirely. `dev_capture_enable_endpoint` validates the consent statement *before* calling the store (so a rejected statement never reaches the store as a false "already open" conflict on retry), then calls `open_dev_capture_session`. `session_utterance_endpoint`'s capture call site loads the session from the store, builds the record via the now-stateless `DevSessionStore::capture`, and appends the serialized record through the store. `dev_capture_status_endpoint` reads back through `load_dev_capture_session`, parsing each `records_json` entry for the response body.
+- **Verification — the actual durability claim, not just wiring:** wrote `test_pg_dev_capture_session_survives_restart` in `store_postgres.rs`, modeled directly on the existing `test_pg_design_session_survives_restart_with_identical_replay` pattern — opens a session, appends two records, **drops the store and pool entirely**, builds a completely independent connection against the same live local Postgres, and confirms the session and both records survive byte-identical, plus that re-opening the same session id is still refused post-restart. Ran against a real local Postgres (`pg_isready` confirmed before starting) — not mocked. Green.
+- Full verification: `cargo check --workspace --all-targets --all-features` clean; `bpmn-lite-store-postgres` full suite 103/103 (including the new restart test); `bpmn-lite-server-designer` 78/78 (including the pre-existing `test_dev_capture_requires_consent_then_captures_full_closure`, unchanged behaviourally, now running against the store); `utterance-engine` 99/99; `designer-graph` 65/65 — 0 failures anywhere.
+- **Not yet done:** same as G1.1 — gate criteria (`public-api` diff, blind review, compaction) not run; this is a sub-item receipt.
+
+### G1.3 — strip dead board vocabulary, done (2026-08-11)
+
+Removed 5 catalogue entries with no construction path — `OperationKind::CreateRace`, `AttachRollbackGuard`, `CallSubprocess`; `ProductionId::TimerMessageRace`, `CallDurableSubprocess` — confirmed EXCLUDED BY DESIGN in `ops.rs`'s own module docs (no `IRNode` representation exists) and confirmed never boarded by any position (`positional.rs`).
+
+- **`designer-graph/src/board_candidate.rs`**: both enums shrunk (`OperationKind` 19→16, `ProductionId` 7→5; total catalogue 26→21). `CANDIDATE_SCHEMA_VERSION` bumped 3→4 per the file's own FREEZE RULE, with a version-note explaining why. Golden tests re-cemented against real computed values (not guessed): `canonical_ids_are_unique_and_golden`'s golden set and counts, `descriptions_are_content_cemented`'s `GOLDEN_DESCRIPTION_HASH`, and the `legal_candidates_assembly_is_deterministic_and_sorted`/`Doubled` count assertions.
+- **`positional.rs`**: exclusion-comment updated (these are no longer "excluded pending trace," they're gone); `excluded_candidates_never_appear` test narrowed to the two entries that legitimately stay excluded-but-present (`CloseParallelRegion` — subsumed by construction, `HumanReviewWithRework` — representable but unimplemented, out of G1.3's scope).
+- **`utterance-engine/config/bpmn-semantic-pack.yaml`/`.lock`**: found by tracing `map_legal_candidate` → `candidate_spec` → `compiled_semantic_pack()` — a THIRD place (beyond the two Rust enums) carrying these 5 as `not_representable` capability entries with full phrase/argument/negative-contrast blocks. `validate_registry_coverage` checks catalogue↔pack coverage in both directions (missing AND extra), so leaving the pack entries in place after shrinking the Rust enums would have failed startup validation, not passed silently. Removed all 5 capability blocks from the YAML; regenerated the `.lock`'s `source.sha256`/`pack.artifact_sha256`/`adapter_bindings` list against the real recompiled values (same discipline as the golden hashes above — computed via the checked-in drift-detector test, not guessed).
+- **Consumer fixes**: `bpmn_board.rs`'s `not_representable_and_policy_denied_are_silently_excluded_not_errors` test used `CreateRace` as its NotRepresentable example — swapped to `CloseParallelRegion` (one of the two legitimately-remaining `not_representable` entries). `bpmn_pack.rs`'s hardcoded `designer-candidate-schema-v3` `GraphRevision` literal bumped to `v4` to track `CANDIDATE_SCHEMA_VERSION`; its `semantic_snapshot_identity()` golden tuple re-cemented against the real recomputed pack identity (`bpmn-semantic-profile-v1:e325e3c7...`, `e9d3f3e4...`) — this moves the live pack identity further from any existing trained SLM bundle, expected and correct per the plan's own framing (§0: "Retraining now would fit a corpus to a board about to move").
+- **Real finding, not just mechanical churn:** `utterance-engine/seed/seed_corpus_v1.json` (a real "synthetic.llm"-provenance eval fixture, separate from and older than the corpus_v2/v3 artifacts RESEARCH-002/V3 checked) has ~12.5% of its oracle labels naming now-removed candidates — `board_completeness()` dropped from a cemented `1.0` to an observed `0.875`. This is a real, deliberate, receipted consequence of the catalogue change, not a regression: the test's own comment already anticipated corpus drift ("only sanity floors are cemented so corpus growth doesn't churn this test"). Floor changed from `assert_eq!(..., Some(1.0))` to `assert!(... > 0.8)` with an inline note explaining G1.3 caused it; corpus regeneration against the current catalogue stays parked with training (plan §3), not done now.
+- Full verification: `cargo check --workspace --all-targets --all-features` clean; `designer-graph` 65/65; `utterance-engine` 99/99 (including the three tests this change broke and fixed: `board::tests::policy_filter_removes_and_abstention_is_always_present`, `bpmn_pack::tests::semantic_registry_exhaustively_covers_designer_catalogue`, `metrics::seed_corpus_baseline::seed_corpus_v1_lexical_baseline`); `bpmn-lite-server-designer` 78/78; both fuzz sub-workspaces check clean independently.
+- **Not yet done:** same as G1.1/G1.2 — gate criteria not run; this is a sub-item receipt. `docs/receipts/*` and `docs/todo/bpmn-pack-plane-ledger.md` reference the now-removed ids in historical context — deliberately left untouched (historical record, not live code).
+
+### G1.4 — SLM off the completion path, done (2026-08-11)
+
+Traced "the producer cascade" to `DesignerState::retrieve_utterance_evidence` (`bpmn-lite-server-designer/src/rest.rs`) — the real selection logic, distinct from `fusion.rs`'s `MoveEvidenceProducer`s (which fuse evidence signals for an *already-chosen* lane, not choose the lane). Confirmed the plan's diagnosis exactly: priority was tier-1 (if loaded) → embed tier-0 (if loaded) → lexical, gated ONLY on which lanes were loaded (a build/config property), never on request-time match quality.
+
+- **Governed exact-match short-circuit (the real behavioral fix).** `governed_exact(board, text)` — cheap, pure, already existed in `exact.rs` for a different purpose (boosting an existing ranking) — is now checked FIRST, before tier-1/embed are even attempted. A clean `ExactMatch::Unique` routes straight to the lexical lane.
+- **`EvidenceLatencyBudget` (per-request deadline plumbing — none existed before).** New `pub(crate)` 2-variant enum (`CompletionOnly` / `UtteranceSubmit`) at module scope in `rest.rs`. `permits_tier1()` is a pure function of the budget alone — `CompletionOnly` forbids tier-1 by construction regardless of whether a bundle is loaded. Both existing call sites pass `UtteranceSubmit` (today's behavior, unchanged) — no completion-shaped endpoint exists yet to pass `CompletionOnly`, stated honestly in the doc comment rather than implied otherwise; the mechanism is the seam a future completion endpoint plugs into, not speculative dead code (`cargo check` correctly flags the unconstructed variant as a warning, left as an honest signal rather than suppressed).
+- **Gate proof, without needing a real loaded model:** `completion_budget_never_permits_tier1` — exhaustive over the full 2-variant space (not a single lucky config) — proves `CompletionOnly.permits_tier1() == false` and `UtteranceSubmit.permits_tier1() == true`. `Tier1Ranker` requires loading a real Candle bundle from disk (no trait abstraction to mock); rather than skip the proof or force a heavy/fragile model-loading test, the tier-1-permission *decision* was extracted to a pure function precisely so it can be proven exhaustively and cheaply — the literal thing the gate asks for ("demonstrated by a test, not by configuration"), not a weaker substitute.
+
+**Blind review (CAREFUL, dispatched independent reviewer) caught a real blocking defect in the first cut of the short-circuit, not a false positive.** The first cut's rationale claimed the short-circuit was "lossless" because `finalize_bpmn_move_evidence`/`finalize_semantic_evidence` boost a clean exact match to 1.0 regardless of which lane supplied the base ranking. That claim is true only for who *wins*. It does not hold for the runner-up's score: `finalize_*` only caps every other candidate at `min(score, 0.99)` — it never resets a loser's score to zero. Concrete failure scenario the reviewer gave, and I independently re-verified by reading `retrieval.rs` and `policy.rs` directly rather than trusting the write-up: an utterance exactly matches a governed phrase for candidate A (`governed_exact` fires, `ExactMatch::Unique`). Candidate B is unrelated but its `description` string happens to share most tokens with the utterance — `LexicalTier0::retrieve` has its own independent exact-pin against `description` (a *different* field than `governed_exact`'s `phrases`) plus raw token-overlap scoring, and can hand B a raw score in the 0.90–1.00 range. After the boost: A → 1.0, B → `min(B_raw, 0.99)`, e.g. 0.99. Margin = 1.0 − 0.99 = 0.01, below `policy::decide`'s default `separation_margin` of 0.15 — a clean, unambiguous exact match flips from `Candidate` (auto-apply) to `Ambiguous`/`EscalateToSage`. The short-circuit's entire value proposition (skip tier-1's cost when the answer is already certain) breaks exactly when it matters most.
+
+**Fix:** in the lexical-fallback block of `retrieve_utterance_evidence`, when `clean_exact_match` is true, every candidate's score is zeroed to 0.0 *before* calling `finalize_semantic_evidence`, not left to the cap. Verified safe: neither `retrieved_subset_hash` (candidate ids only) nor `board_hash` depend on score values — confirmed by reading `LexicalTier0::retrieve`'s hash-construction code. The doc comment that claimed unconditional losslessness was corrected in place to state the actual invariant (holds for the winner, not the loser, hence the explicit zeroing).
+
+**Regression proof:** new test `exact_match_boost_does_not_reset_a_high_losing_score` (`utterance-engine/src/exact.rs`) proves both halves directly against `finalize_semantic_evidence` — the shared machinery both the legacy and semantic paths in `rest.rs` route through — using the existing `candidate()`/`board()`/`evidence()` test helpers: (1) an unfixed rival fed a raw 0.95 score survives the cap at 0.95, margin 0.05 < 0.15 (documents the bug); (2) the same rival pre-zeroed survives at 0.0, margin 1.0 ≥ 0.15 (proves the fix). `cargo test -p utterance-engine --lib exact::` green.
+
+Verification: `cargo check --workspace --all-targets --all-features` clean (exit 0), plus explicit `--features candle-probe`, `embed,candle-probe`, `q9-capture` checks (the cfg-gated tier-1 branch type-checks under the real features, not just default) — only the two pre-existing, documented, unsuppressed warnings remain (`served_gameboard_evidence` unused, `EvidenceLatencyBudget::CompletionOnly` never-constructed). Full regression after the fix, all green: `designer-graph` 79/79, `bpmn-lite-store-postgres` 37/37, `bpmn-lite-server-designer` 103/103, `bpmn-lite-store` 65/65, `utterance-engine` 100/100 (99 + the new regression test). `python3 scripts/check-semantic-gameboard-boundaries.py` confirms `status: pass` against the unchanged baseline — the fix is internal-only, no public signature moved.
+- **Not yet done:** No completion-shaped endpoint was built (out of scope — G1.4 was the lane-selection mechanism, not a new endpoint); a future completion endpoint is what will pass `EvidenceLatencyBudget::CompletionOnly` for the first time in production.
+
+**Fix re-verified by a second, independent blind reviewer** (fresh dispatch, no context from the finding or the fix's authorship): confirmed the zeroing runs strictly before `finalize` and cannot interfere with `finalize`'s id-based (not score-based) boost lookup; confirmed `retrieved_subset_hash`/`board_hash` are hash-over-ids/board-content only, computed before the zeroing, so the fix cannot corrupt them; confirmed the new test exercises the real `finalize_semantic_evidence` function with a realistic naive-vs-fixed comparison, not a weaker proxy; grepped for other call sites of `finalize_semantic_evidence`/`finalize_bpmn_move_evidence` and found the only other production caller (`fuse_move_evidence_with_producers` in `fusion.rs`, used at the palette-selection endpoint) uses a structurally different, already-immune suppression mechanism (multiplicative `*= 0.45` on non-matches, not a near-1.0 cap) — not an unpatched instance of the same bug. Verdict: fix closes the hole, test is meaningful, no other vulnerable sites left unpatched.
+
+**All four G1 sub-items now complete, including the blind-review remediation on G1.4 and its independent re-verification.** `public-api` diff against the pre-G1 baseline already reconfirmed clean above. Remaining before Gate G1 closes: compaction (R-B) before G2 begins.
 
 ## E. Plan-level rulings (2026-07-27 — delegated by Adam "ok do it"; implementation-scope, no V&S clause touched)
 
@@ -1250,3 +1275,7 @@ keeps deleting.
 
 ---
 *v0.2 restructured 2026-07-27 per EOP-DIR-BPMN-DESIGN-003-001. Receipts append here per workstream as each closes. Amend in place.*
+
+---
+
+*(v0.2's receipts carry forward above this line — see merge note.)*

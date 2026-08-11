@@ -135,14 +135,14 @@ pub struct DesignerState {
     /// shape it was never validated against, permanently bricking the
     /// session's reconstruction. Different sessions never contend.
     session_locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
-    /// DIR-004 Phase 1/2 wiring: dev-session capture, keyed by design
-    /// session id. A session only appears here after an explicit
-    /// `POST .../dev-capture/enable` call carrying Adam's consent
-    /// statement (D17's spirit, applied to his own self-testing use) --
-    /// `session_utterance_endpoint` checks for an entry and, if present,
-    /// captures the full closure via `utterance_engine::dev_capture`
-    /// (always compiled, structurally distinct from the Q9-gated path).
-    dev_capture: Mutex<HashMap<Uuid, utterance_engine::dev_capture::DevSessionStore>>,
+    // DIR-004 Phase 1/2 + G1.2 wiring: dev-session capture is durable,
+    // store-backed (`demo.store.{open,append,load}_dev_capture_session`)
+    // -- no in-memory field here. A session only captures after an
+    // explicit `POST .../dev-capture/enable` call carrying Adam's
+    // consent statement (D17's spirit, applied to his own self-testing
+    // use); `session_utterance_endpoint` checks the store and, if open,
+    // captures the full closure via `utterance_engine::dev_capture`
+    // (always compiled, structurally distinct from the Q9-gated path).
     /// Q9 charter-governed live capture (EOP-GOV-Q9-CHARTER-001,
     /// ratified 2026-08-06). `Some` ONLY when the designated deployment
     /// (`scripts/run-designer-q9-capture.sh`) supplies BOTH
@@ -202,6 +202,32 @@ pub(crate) struct PendingProposal {
     correction_kind: Option<semantic_decision_contracts::CorrectionKind>,
 }
 
+/// Per-request latency ceiling (G1.4). Callers state the interaction
+/// shape explicitly, rather than lane selection depending only on
+/// which lanes happen to be loaded — mirrors I34's "each consumer names
+/// which it uses" discipline. `CompletionOnly` forbids tier-1 BY
+/// CONSTRUCTION regardless of whether a tier-1 bundle is loaded;
+/// `completion_budget_never_permits_tier1` proves this exhaustively
+/// without needing a real loaded model. No caller currently passes
+/// `CompletionOnly` — no completion-shaped endpoint exists yet — but the
+/// mechanism is real and load-bearing, not speculative: it is the seam
+/// a future completion endpoint plugs into, and it is what the
+/// exhaustive test exercises.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EvidenceLatencyBudget {
+    /// <100ms target: tier-0 only, never tier-1 (measured tier-1 p95 is
+    /// 2.6-2.9s — a wrong-lane problem, not a tuning problem).
+    CompletionOnly,
+    /// <500ms target: the full cascade may run.
+    UtteranceSubmit,
+}
+
+impl EvidenceLatencyBudget {
+    fn permits_tier1(self) -> bool {
+        matches!(self, EvidenceLatencyBudget::UtteranceSubmit)
+    }
+}
+
 impl DesignerState {
     pub fn try_new() -> Result<Arc<Self>, anyhow::Error> {
         Self::assemble(
@@ -235,7 +261,6 @@ impl DesignerState {
             tenant_id,
             mapper_rollout,
             session_locks: Mutex::new(HashMap::new()),
-            dev_capture: Mutex::new(HashMap::new()),
             #[cfg(feature = "q9-capture")]
             q9_capture: Self::load_q9_capture_from_env()?,
             proposals: Mutex::new(HashMap::new()),
@@ -344,10 +369,11 @@ impl DesignerState {
 
     /// THE evidence producer selection for `session_utterance_endpoint`
     /// (I27: evidence only — `policy::decide` downstream is untouched).
-    /// Priority: tier-1 trained ranker (bundle loaded) → embed tier-0
-    /// (compiled + loaded) → lexical tier-0 (default build's behavior,
-    /// unchanged). The active producer signs the evidence via
-    /// `model_bundle_hash`, so the record is honest on every path.
+    /// Priority: governed exact-match short-circuit → tier-1 trained
+    /// ranker (bundle loaded, budget permits) → embed tier-0 (compiled +
+    /// loaded) → lexical tier-0 (default build's behavior, unchanged).
+    /// The active producer signs the evidence via `model_bundle_hash`,
+    /// so the record is honest on every path.
     fn retrieve_utterance_evidence(
         &self,
         text: &str,
@@ -355,6 +381,7 @@ impl DesignerState {
         context: &utterance_engine::context::ContextProjection,
         position: Option<&semantic_decision_contracts::DesignPosition>,
         attempts: &[semantic_decision_contracts::MoveAttemptReceipt],
+        budget: EvidenceLatencyBudget,
     ) -> anyhow::Result<utterance_engine::contract::SlmResult> {
         let finalize = |result,
                         lane: semantic_decision_contracts::EvidenceLane,
@@ -384,45 +411,101 @@ impl DesignerState {
         };
         #[cfg(not(feature = "candle-probe"))]
         let _ = context; // context text is a tier-1 encoding input only
-        #[cfg(feature = "candle-probe")]
-        if let Some(t1) = &self.tier1 {
-            if let Some(semantic_board) = board.semantic_board() {
-                let result = t1.rank_full_board(text, context, semantic_board)?;
+
+        // G1.4: a governed exact-match that resolves CLEANLY (exactly one
+        // candidate) short-circuits to the cheap lexical lane BY
+        // CONSTRUCTION -- never even attempting tier-1/embed -- rather
+        // than by which lanes happen to be loaded. `finalize_*` below
+        // boosts the matched candidate to 1.0 regardless of which lane
+        // supplied the base ranking, so WHO WINS is lane-independent --
+        // but a blind review correctly caught that `finalize_*` only
+        // caps every OTHER candidate at 0.99, it does not reset them, so
+        // lexical's raw (and comparatively crude) token-overlap score
+        // for a runner-up could survive close enough to 1.0 to collapse
+        // `policy::decide`'s separation_margin and flip a clean exact
+        // match into `Ambiguous`/`EscalateToSage`. The runner-up scores
+        // are explicitly zeroed below (see comment there) so the margin
+        // is always maximal on this path -- true losslessness, not just
+        // for the winner. Before any of this, lane selection depended
+        // ONLY on which lanes were loaded, never on request-time match
+        // quality (RESEARCH-002/S4.1: measured tier-1 p95 is 2.6-2.9s)
+        // -- a request tier-0 could answer in <1ms paid the full tier-1
+        // cost whenever a bundle happened to be loaded.
+        let clean_exact_match = board
+            .semantic_board()
+            .map(|semantic_board| {
+                matches!(
+                    utterance_engine::exact::governed_exact(semantic_board, text),
+                    utterance_engine::exact::ExactMatch::Unique(_)
+                )
+            })
+            .unwrap_or(false);
+
+        if !clean_exact_match && budget.permits_tier1() {
+            #[cfg(feature = "candle-probe")]
+            if let Some(t1) = &self.tier1 {
+                if let Some(semantic_board) = board.semantic_board() {
+                    let result = t1.rank_full_board(text, context, semantic_board)?;
+                    let bundle = result.model_bundle_hash.clone();
+                    return finalize(
+                        result,
+                        utterance_engine::exact::EvidenceLane::CandleCrossEncoder,
+                        bundle,
+                    );
+                }
+                // Deliberately do NOT call `t1.rank(...)` here. Every loadable
+                // tier-1 bundle's card is required (`validate_bundle_card`) to
+                // declare `pair_serializer_id`/`pair_serializer_hash` matching
+                // `pair::serialize_candidate_pair` — i.e. every live bundle was
+                // trained on that sentinel-laden pair text. `Tier1Ranker::rank`
+                // routes through `score_serving`, which builds an entirely
+                // different `"{utterance}\n\n{context}"` + plain description
+                // textualisation the bundle was never trained on. A legacy/thin
+                // board has no `CandidateSemanticSlice`s to serialize a real
+                // pair from in the first place, so there is no correct way to
+                // route it through tier-1 at all — degrade to tier-0 with an
+                // honest producer identity instead of silently scoring on
+                // untrained text.
+            }
+        }
+        if !clean_exact_match {
+            #[cfg(feature = "embed")]
+            if let Some(e0) = &self.embed_tier0 {
+                use utterance_engine::retrieval::Tier0Retriever as _;
+                let result = e0.retrieve(text, board)?;
                 let bundle = result.model_bundle_hash.clone();
                 return finalize(
                     result,
-                    utterance_engine::exact::EvidenceLane::CandleCrossEncoder,
+                    utterance_engine::exact::EvidenceLane::Embedding,
                     bundle,
                 );
             }
-            // Deliberately do NOT call `t1.rank(...)` here. Every loadable
-            // tier-1 bundle's card is required (`validate_bundle_card`) to
-            // declare `pair_serializer_id`/`pair_serializer_hash` matching
-            // `pair::serialize_candidate_pair` — i.e. every live bundle was
-            // trained on that sentinel-laden pair text. `Tier1Ranker::rank`
-            // routes through `score_serving`, which builds an entirely
-            // different `"{utterance}\n\n{context}"` + plain description
-            // textualisation the bundle was never trained on. A legacy/thin
-            // board has no `CandidateSemanticSlice`s to serialize a real
-            // pair from in the first place, so there is no correct way to
-            // route it through tier-1 at all — degrade to tier-0 with an
-            // honest producer identity instead of silently scoring on
-            // untrained text.
-        }
-        #[cfg(feature = "embed")]
-        if let Some(e0) = &self.embed_tier0 {
-            use utterance_engine::retrieval::Tier0Retriever as _;
-            let result = e0.retrieve(text, board)?;
-            let bundle = result.model_bundle_hash.clone();
-            return finalize(
-                result,
-                utterance_engine::exact::EvidenceLane::Embedding,
-                bundle,
-            );
         }
         {
             use utterance_engine::retrieval::Tier0Retriever as _;
-            let result = utterance_engine::retrieval::LexicalTier0.retrieve(text, board)?;
+            let mut result = utterance_engine::retrieval::LexicalTier0.retrieve(text, board)?;
+            if clean_exact_match {
+                // The short-circuit's lossless claim holds only for who
+                // WINS (finalize's exact-match boost forces the matched
+                // candidate to 1.0 regardless of lane) -- it does NOT
+                // hold for the runner-up's score, which `finalize` merely
+                // caps at 0.99 rather than resetting. `LexicalTier0`'s
+                // raw token-overlap scoring (plus its own independent
+                // exact-pin against `description`, a different field
+                // than `governed_exact`'s `phrases`) can hand an
+                // unrelated candidate a near-1.0 score on coincidental
+                // wording overlap, shrinking `policy::decide`'s
+                // separation_margin below its threshold and flipping a
+                // clean exact match into `Ambiguous`/`EscalateToSage` --
+                // a real defect a blind review caught (G1.4). Zeroing
+                // every candidate's score here is safe: neither
+                // `retrieved_subset_hash` (candidate ids only) nor
+                // `board_hash` depend on scores, and finalize's boost
+                // still forces the true match to 1.0 immediately after.
+                for candidate in &mut result.ranking {
+                    candidate.score = utterance_engine::contract::FiniteScore::new(0.0)?;
+                }
+            }
             let bundle = result.model_bundle_hash.clone();
             finalize(
                 result,
@@ -4604,6 +4687,7 @@ async fn session_utterance_endpoint(
                 &context,
                 Some(&position),
                 &attempts,
+                EvidenceLatencyBudget::UtteranceSubmit,
             )?;
             let previous_belief = latest_gameboard_belief(&record_session)?;
             let belief = utterance_engine::bpmn_board::update_bpmn_design_belief(
@@ -4706,8 +4790,14 @@ async fn session_utterance_endpoint(
                 None,
                 node_kind_counts,
             )?;
-            let evidence =
-                demo.retrieve_utterance_evidence(&body.text, &board, &context, None, &[])?;
+            let evidence = demo.retrieve_utterance_evidence(
+                &body.text,
+                &board,
+                &context,
+                None,
+                &[],
+                EvidenceLatencyBudget::UtteranceSubmit,
+            )?;
             let (disposition, record) = decide_with_action_spans(
                 &DispositionConfig::shadow_v2(),
                 &board,
@@ -5348,31 +5438,50 @@ async fn session_utterance_endpoint(
     // consent statement (that call is the "consent stated at session
     // start" moment); captures the FULL closure -- board dump and
     // context TEXT, not hash-only -- per Phase 1.3.
-    let dev_capture_state = {
-        let mut stores = demo.dev_capture.lock().unwrap();
-        match stores.get_mut(&id) {
-            Some(store) => {
-                store.capture(utterance_engine::dev_capture::DevSessionCaptureInput {
-                    raw_utterance: body.text.clone(),
-                    board_hash: record.board_hash.clone(),
-                    board: utterance_engine::corpus_schema::BoardDump::from_inference_board(
-                        board.as_ref(),
-                    ),
-                    context_projection: context.serialize_canonical(),
-                    context_projection_hash: record.context_projection_hash.clone(),
-                    retrieved_subset_hash: record.retrieved_subset_hash.clone(),
-                    model_bundle_hash: record.model_bundle_hash.clone(),
-                    disposition_policy_hash: record.disposition_policy_hash.clone(),
-                    action_span_producer_hash: record.action_span_producer_hash.clone(),
-                    decision_record_hash: record.decision_record_hash.clone(),
-                    ranking: record.ranking.clone(),
-                    disposition: disposition.clone(),
-                    evidence_trace: record.evidence_trace.clone(),
-                });
-                "captured"
+    let dev_capture_state = match demo.store.load_dev_capture_session(&id.to_string()).await {
+        Ok(Some(session)) => {
+            match utterance_engine::dev_capture::DevSessionStore::open(
+                &session.session_id,
+                &session.consent_statement_timestamp,
+            ) {
+                Ok(dev_store) => {
+                    let dev_record =
+                        dev_store.capture(utterance_engine::dev_capture::DevSessionCaptureInput {
+                            raw_utterance: body.text.clone(),
+                            board_hash: record.board_hash.clone(),
+                            board: utterance_engine::corpus_schema::BoardDump::from_inference_board(
+                                board.as_ref(),
+                            ),
+                            context_projection: context.serialize_canonical(),
+                            context_projection_hash: record.context_projection_hash.clone(),
+                            retrieved_subset_hash: record.retrieved_subset_hash.clone(),
+                            model_bundle_hash: record.model_bundle_hash.clone(),
+                            disposition_policy_hash: record.disposition_policy_hash.clone(),
+                            action_span_producer_hash: record.action_span_producer_hash.clone(),
+                            decision_record_hash: record.decision_record_hash.clone(),
+                            ranking: record.ranking.clone(),
+                            disposition: disposition.clone(),
+                            evidence_trace: record.evidence_trace.clone(),
+                        });
+                    match serde_json::to_string(&dev_record) {
+                        Ok(record_json) => {
+                            match demo
+                                .store
+                                .append_dev_capture_record(&id.to_string(), record_json)
+                                .await
+                            {
+                                Ok(_) => "captured",
+                                Err(_) => "capture_failed",
+                            }
+                        }
+                        Err(_) => "capture_failed",
+                    }
+                }
+                Err(_) => "capture_failed",
             }
-            None => "not_enabled",
         }
+        Ok(None) => "not_enabled",
+        Err(_) => "not_enabled",
     };
 
     match demo
@@ -5660,28 +5769,31 @@ async fn dev_capture_enable_endpoint(
     Path(id): Path<Uuid>,
     Json(body): Json<DevCaptureEnableBody>,
 ) -> impl IntoResponse {
-    let mut stores = demo.dev_capture.lock().unwrap();
-    if let Some(existing) = stores.get(&id) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "dev-capture already enabled for this session",
-                "session_id": existing.session_id(),
-            })),
-        )
-            .into_response();
-    }
-    match utterance_engine::dev_capture::DevSessionStore::open(
+    // Validate BEFORE opening -- a rejected consent statement (empty,
+    // whitespace-only) must never reach the store as an "already open"
+    // conflict on retry.
+    if let Err(e) = utterance_engine::dev_capture::DevSessionStore::open(
         &id.to_string(),
         &body.consent_statement,
     ) {
-        Ok(store) => {
-            stores.insert(id, store);
-            Json(serde_json::json!({ "enabled": true, "session_id": id })).into_response()
-        }
-        Err(e) => (
+        return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({ "error": format!("{e}") })),
+        )
+            .into_response();
+    }
+    match demo
+        .store
+        .open_dev_capture_session(&id.to_string(), &body.consent_statement)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "enabled": true, "session_id": id })).into_response(),
+        Err(_) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "dev-capture already enabled for this session",
+                "session_id": id,
+            })),
         )
             .into_response(),
     }
@@ -5694,17 +5806,25 @@ async fn dev_capture_status_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let stores = demo.dev_capture.lock().unwrap();
-    match stores.get(&id) {
-        Some(store) => Json(serde_json::json!({
-            "enabled": true,
-            "session_id": store.session_id(),
-            "record_count": store.records().len(),
-            "records": store.records(),
-        }))
-        .into_response(),
-        None => Json(serde_json::json!({ "enabled": false, "record_count": 0, "records": [] }))
-            .into_response(),
+    match demo.store.load_dev_capture_session(&id.to_string()).await {
+        Ok(Some(session)) => {
+            let records: Vec<serde_json::Value> = session
+                .records_json
+                .iter()
+                .filter_map(|record_json| serde_json::from_str(record_json).ok())
+                .collect();
+            Json(serde_json::json!({
+                "enabled": true,
+                "session_id": session.session_id,
+                "record_count": records.len(),
+                "records": records,
+            }))
+            .into_response()
+        }
+        Ok(None) | Err(_) => {
+            Json(serde_json::json!({ "enabled": false, "record_count": 0, "records": [] }))
+                .into_response()
+        }
     }
 }
 
@@ -6519,6 +6639,19 @@ mod tests {
     use axum::http::Request;
     use serde_json::Value;
     use tower::ServiceExt; // for `oneshot`
+
+    /// G1.4 gate: "a completion-shaped request provably cannot reach
+    /// tier-1 — demonstrated by a test, not by configuration." Exhaustive
+    /// over `EvidenceLatencyBudget`'s full 2-variant space (not just the
+    /// one caller happens to exercise today) — a real loaded `Tier1Ranker`
+    /// is not required to prove this: the decision of whether tier-1 may
+    /// even be ATTEMPTED is a pure function of the budget, checked in
+    /// `retrieve_utterance_evidence` before `self.tier1` is ever consulted.
+    #[test]
+    fn completion_budget_never_permits_tier1() {
+        assert!(!EvidenceLatencyBudget::CompletionOnly.permits_tier1());
+        assert!(EvidenceLatencyBudget::UtteranceSubmit.permits_tier1());
+    }
 
     #[test]
     fn mapper_rollout_defaults_conservatively_and_has_no_auto_apply_stage() {

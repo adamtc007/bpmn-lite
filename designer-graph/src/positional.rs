@@ -19,13 +19,14 @@
 //!   only (verifier §7a, F-DSGN-3); correlation sources live on
 //!   wait/send nodes. Mirrored here, cemented by the G2 receipts.
 //!
-//! Exclusions (never on any board): `CreateRace`/`TimerMessageRace` and
-//! `CallSubprocess`/`CallDurableSubprocess` (2026-07-27 traces: no
-//! frontend path — kernel-complete, IR-absent), `AttachRollbackGuard`
-//! (same), `CloseParallelRegion` (regions constructed closed),
-//! `HumanReviewWithRework` (representable since the XOR trace, but the
-//! production is not yet implemented — a board never proposes what the
-//! builder cannot construct).
+//! Exclusions (never on any board): `CloseParallelRegion` (regions
+//! constructed closed), `HumanReviewWithRework` (representable since
+//! the XOR trace, but the production is not yet implemented — a board
+//! never proposes what the builder cannot construct). `CreateRace`/
+//! `TimerMessageRace`, `CallSubprocess`/`CallDurableSubprocess`, and
+//! `AttachRollbackGuard` (2026-07-27 traces: no frontend path —
+//! kernel-complete, IR-absent) are no longer catalogue entries at all
+//! (G1.3, 2026-08-11) — removed rather than perpetually excluded.
 //!
 //! `anchor = None` (whole-graph position) is the union over all nodes —
 //! deterministic, sorted, deduped. An empty graph legitimately yields an
@@ -161,9 +162,8 @@ impl<'a> PositionalLegality<'a> {
             out.push(ProductionId::InterruptingTimeout);
             out.push(ProductionId::NonInterruptingNotification);
         }
-        // TimerMessageRace / CallDurableSubprocess: unrepresentable
-        // (2026-07-27 traces). HumanReviewWithRework: representable but
-        // unimplemented. Never proposed.
+        // HumanReviewWithRework: representable but unimplemented. Never
+        // proposed.
         out
     }
 
@@ -462,23 +462,14 @@ mod tests {
         let fx = fixture();
         let oracle = PositionalLegality { dag: &fx.dag };
         let all_ops = oracle.legal_operations(None);
-        for banned in [
-            OperationKind::CreateRace,
-            OperationKind::CloseParallelRegion,
-            OperationKind::AttachRollbackGuard,
-            OperationKind::CallSubprocess,
-        ] {
+        for banned in [OperationKind::CloseParallelRegion] {
             assert!(
                 !all_ops.contains(&banned),
                 "{banned:?} must never be boarded"
             );
         }
         let all = oracle.legal_productions(None);
-        for banned in [
-            ProductionId::TimerMessageRace,
-            ProductionId::CallDurableSubprocess,
-            ProductionId::HumanReviewWithRework,
-        ] {
+        for banned in [ProductionId::HumanReviewWithRework] {
             assert!(!all.contains(&banned), "{banned:?} must never be boarded");
         }
         assert!(oracle

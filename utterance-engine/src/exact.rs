@@ -303,6 +303,95 @@ mod tests {
         );
     }
 
+    /// G1.4 blind-review regression (bpmn-lite-server-designer's
+    /// `retrieve_utterance_evidence` exact-match short-circuit): this
+    /// function only forces the MATCHED candidate to 1.0 — every other
+    /// candidate is capped at `min(score, 0.99)`, never reset. If the
+    /// base ranking handed a losing candidate a high raw score (e.g.
+    /// `LexicalTier0`'s coincidental token-overlap or its own separate
+    /// exact-pin against `description`), that score survives the cap
+    /// and can collapse `policy::decide`'s separation_margin (default
+    /// 0.15), flipping what should be an unambiguous auto-apply into
+    /// `Ambiguous`/`EscalateToSage`. This proves BOTH halves: the raw
+    /// vulnerability (a naively-fed 0.95 loser survives with a margin
+    /// too small to clear a real separation_margin), and that the
+    /// fix — zeroing every candidate's score before calling this
+    /// function, as `retrieve_utterance_evidence` now does on its
+    /// short-circuit path — restores the maximal margin the short-
+    /// circuit's losslessness claim actually requires.
+    #[test]
+    fn exact_match_boost_does_not_reset_a_high_losing_score() {
+        let board = board(vec![
+            candidate("op.matched", "add the task"),
+            candidate("op.rival", "totally different phrase"),
+        ]);
+        assert_eq!(
+            governed_exact(&board, "add the task"),
+            ExactMatch::Unique("op.matched".into())
+        );
+
+        // Unfixed: a losing candidate arrives with a high raw score
+        // (as LexicalTier0's token-overlap/exact-pin can produce).
+        let mut naive = evidence(&board);
+        for rc in &mut naive.ranking {
+            rc.score = FiniteScore::new(if rc.candidate_id == "op.rival" {
+                0.95
+            } else {
+                0.1
+            })
+            .unwrap();
+        }
+        let naive_result = finalize_semantic_evidence(
+            &board,
+            "add the task",
+            naive,
+            vec![EvidenceLane::Lexical],
+            vec!["test.lexical".into()],
+        )
+        .unwrap();
+        let top = naive_result.ranking[0].score.get();
+        let rival = naive_result
+            .ranking
+            .iter()
+            .find(|rc| rc.candidate_id == "op.rival")
+            .unwrap()
+            .score
+            .get();
+        assert_eq!(top, 1.0, "the matched candidate is always boosted to 1.0");
+        assert_eq!(rival, 0.95, "the rival's high raw score survives the 0.99 cap unreset");
+        assert!(
+            top - rival < 0.15,
+            "vulnerability check: an unfixed 0.95 rival collapses a realistic 0.15 separation_margin"
+        );
+
+        // Fixed: every candidate's score zeroed before this call (what
+        // `retrieve_utterance_evidence` now does on its short-circuit
+        // path) restores the maximal margin.
+        let mut zeroed = evidence(&board);
+        for rc in &mut zeroed.ranking {
+            rc.score = FiniteScore::new(0.0).unwrap();
+        }
+        let fixed_result = finalize_semantic_evidence(
+            &board,
+            "add the task",
+            zeroed,
+            vec![EvidenceLane::Lexical],
+            vec!["test.lexical".into()],
+        )
+        .unwrap();
+        let top = fixed_result.ranking[0].score.get();
+        let rival = fixed_result
+            .ranking
+            .iter()
+            .find(|rc| rc.candidate_id == "op.rival")
+            .unwrap()
+            .score
+            .get();
+        assert_eq!(top, 1.0);
+        assert_eq!(rival, 0.0, "zeroing beforehand leaves the rival at the floor, not just capped");
+        assert!(top - rival >= 0.15, "fix check: margin is maximal, clears any realistic separation_margin");
+    }
+
     #[test]
     fn unique_exact_is_recorded_and_incomplete_full_board_is_refused() {
         let board = board(vec![candidate("op.one", "add task")]);

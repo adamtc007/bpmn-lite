@@ -312,6 +312,77 @@ impl DesignerDag {
         edges_a == edges_b
     }
 
+    /// Content-derived graph identity (D23/I34, RESEARCH-002 §S2). A digest
+    /// over the SAME canonicalisation `ir_graphs_equivalent` already proves
+    /// correct — nodes sorted by BPMN id, edges sorted by
+    /// `(from_id, to_id, condition_debug)`, `NodeKey`/edge-id synthesized
+    /// identity excluded — collapsed into a hash instead of a comparator.
+    ///
+    /// This is a function of the graph *reached*, never the edit route
+    /// taken to reach it: two structurally-identical-but-differently-edited
+    /// graphs (`ir_graphs_equivalent(a, b) == true`) always produce the
+    /// SAME `graph_state_hash`.
+    ///
+    /// **Naming trap, stated so it is not rediscovered the hard way:**
+    /// `bpmn-lite-server-designer`'s `graph_identity_hash`/`graph_content_hash`
+    /// (which become `GraphRevision`/`GraphContentHash`) are BOTH
+    /// route-derived — they hash the edit-log payload strings in
+    /// storage/event order, never `to_ir()` output, despite
+    /// `graph_content_hash`'s name suggesting otherwise (confirmed
+    /// empirically: two edit orders reaching an `ir_graphs_equivalent`
+    /// graph produced different values for both). This function is the
+    /// first genuinely content-derived identity in the stack; callers must
+    /// name which identity they need (I34) rather than assume the
+    /// existing "content" name already meant this.
+    pub fn graph_state_hash(ir: &IRGraph) -> String {
+        let mut nodes: Vec<(&str, &IRNode)> = ir.node_weights().map(|n| (n.id(), n)).collect();
+        nodes.sort_by_key(|(id, _)| *id);
+
+        let edge_key = |graph: &IRGraph,
+                         from: NodeIndex,
+                         to: NodeIndex,
+                         edge: &IREdge|
+         -> (String, String, String) {
+            (
+                graph[from].id().to_owned(),
+                graph[to].id().to_owned(),
+                format!("{:?}", edge.condition),
+            )
+        };
+        let mut edges: Vec<(String, String, String)> = ir
+            .edge_indices()
+            .map(|idx| {
+                let (from, to) = ir.edge_endpoints(idx).expect("edge endpoints");
+                edge_key(ir, from, to, &ir[idx])
+            })
+            .collect();
+        edges.sort();
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"bpmn-lite-designer-graph-state-v1\0");
+        hasher.update(b"nodes\0");
+        hasher.update(&(nodes.len() as u64).to_be_bytes());
+        for (id, node) in &nodes {
+            let node_json =
+                serde_json::to_vec(node).expect("IRNode serializes (Serialize, no skip fields)");
+            hasher.update(&(id.len() as u64).to_be_bytes());
+            hasher.update(id.as_bytes());
+            hasher.update(&(node_json.len() as u64).to_be_bytes());
+            hasher.update(&node_json);
+        }
+        hasher.update(b"edges\0");
+        hasher.update(&(edges.len() as u64).to_be_bytes());
+        for (from, to, cond) in &edges {
+            hasher.update(&(from.len() as u64).to_be_bytes());
+            hasher.update(from.as_bytes());
+            hasher.update(&(to.len() as u64).to_be_bytes());
+            hasher.update(to.as_bytes());
+            hasher.update(&(cond.len() as u64).to_be_bytes());
+            hasher.update(cond.as_bytes());
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
     /// Production-oracle admission — the FULL direct-compilation chain
     /// (review F5): `verify` (structured diagnostics verbatim) →
     /// `Compiler::lower_with_default` (= lowering + `verify_bytecode` +
@@ -598,6 +669,127 @@ mod tests {
             &dag_a.to_ir().unwrap(),
             &dag_b.to_ir().unwrap()
         ));
+    }
+
+    /// G1.1/D23: `graph_state_hash` is content-derived — two independently
+    /// authored DAGs with different `NodeKey`s and edge ids but identical
+    /// BPMN-visible content/topology hash IDENTICAL, mirroring the
+    /// equivalence comparator's own claim above but for the digest form.
+    #[test]
+    fn graph_state_hash_ignores_synthesized_key_and_edge_identity() {
+        let (dag_a, ..) = linear("state-hash-eq-a");
+        let mut dag_b = DesignerDag::new("state-hash-eq-b");
+        let s = dag_b
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t = dag_b
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        let e = dag_b
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
+        dag_b.insert_edge(s, t, edge("totally-different-edge-id-1")).unwrap();
+        dag_b.insert_edge(t, e, edge("totally-different-edge-id-2")).unwrap();
+
+        assert_eq!(
+            DesignerDag::graph_state_hash(&dag_a.to_ir().unwrap()),
+            DesignerDag::graph_state_hash(&dag_b.to_ir().unwrap())
+        );
+    }
+
+    /// G1.1: two edit ROUTES that reach the same structural graph produce
+    /// the same content hash — the empirical claim RESEARCH-002/S2.2 proved
+    /// false for the route-derived server-side hashes. Here, insertion
+    /// order of the two branch edges differs between `dag_a`/`dag_b`; the
+    /// resulting `IRGraph` is the same either way.
+    #[test]
+    fn graph_state_hash_is_route_independent() {
+        let mut dag_a = DesignerDag::new("state-hash-route-a");
+        let gw_a = dag_a
+            .insert_node(
+                key(),
+                IRNode::GatewayXor { id: "gw".into(), name: "gw".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let x_a = dag_a
+            .insert_node(key(), task("x"), None, Provenance::default())
+            .unwrap();
+        let y_a = dag_a
+            .insert_node(key(), task("y"), None, Provenance::default())
+            .unwrap();
+        // route A: edge to x inserted before edge to y
+        dag_a.insert_edge(gw_a, x_a, edge("e-x")).unwrap();
+        dag_a.insert_edge(gw_a, y_a, edge("e-y")).unwrap();
+
+        let mut dag_b = DesignerDag::new("state-hash-route-b");
+        let gw_b = dag_b
+            .insert_node(
+                key(),
+                IRNode::GatewayXor { id: "gw".into(), name: "gw".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let y_b = dag_b
+            .insert_node(key(), task("y"), None, Provenance::default())
+            .unwrap();
+        let x_b = dag_b
+            .insert_node(key(), task("x"), None, Provenance::default())
+            .unwrap();
+        // route B: y and x nodes AND edges inserted in the opposite order
+        dag_b.insert_edge(gw_b, y_b, edge("e-y")).unwrap();
+        dag_b.insert_edge(gw_b, x_b, edge("e-x")).unwrap();
+
+        assert_eq!(
+            DesignerDag::graph_state_hash(&dag_a.to_ir().unwrap()),
+            DesignerDag::graph_state_hash(&dag_b.to_ir().unwrap())
+        );
+    }
+
+    /// G1.1 RED: divergent task content (different declared name) changes
+    /// the hash, mirroring the equivalence comparator's content-divergence
+    /// claim.
+    #[test]
+    fn graph_state_hash_catches_node_content_divergence() {
+        let (dag_a, ..) = linear("state-hash-content-a");
+        let mut dag_b = DesignerDag::new("state-hash-content-b");
+        let s = dag_b
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t = dag_b
+            .insert_node(
+                key(),
+                IRNode::ServiceTask {
+                    id: "t1".into(),
+                    name: "a different declared name".into(),
+                    task_type: "noop".into(),
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let e = dag_b
+            .insert_node(key(), end(), None, Provenance::default())
+            .unwrap();
+        dag_b.insert_edge(s, t, edge("e1")).unwrap();
+        dag_b.insert_edge(t, e, edge("e2")).unwrap();
+
+        assert_ne!(
+            DesignerDag::graph_state_hash(&dag_a.to_ir().unwrap()),
+            DesignerDag::graph_state_hash(&dag_b.to_ir().unwrap())
+        );
     }
 
     /// v0.8 RED: same node set, but an edge condition diverges — caught by

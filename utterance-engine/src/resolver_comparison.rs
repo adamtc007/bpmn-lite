@@ -773,7 +773,7 @@ mod tests {
         BoardPath, CanonicalCandidateId, DesignBelief, DesignFocus, DesignTurnId, EvidenceLane,
         FocusAbsenceReason, GameDisposition, GameDomainId, GameSessionId, GameTurnAdjudication,
         GameTurnAnswer, GameTurnAnswerAbsenceReason, GameTurnAttempt, GameTurnCompilerResult,
-        GameTurnJudgement, GameTurnRecord, GraphContentHash, GraphRevision, HistoryHash,
+        GameTurnJudgement, GameTurnRecord, GraphContentHash, GraphRevision, GraphStateHash, HistoryHash,
         IntendedMove, LaneScore, LegalMove, MoveEvidence, ProducerIdentity, SemanticFamilyId,
         SnapshotIdentity, GAMEBOARD_SCHEMA_VERSION,
     };
@@ -804,6 +804,7 @@ mod tests {
             SnapshotIdentity::new("pack@sha256:test").unwrap(),
             GraphRevision::new("revision-1").unwrap(),
             GraphContentHash::new("d".repeat(64)).unwrap(),
+            GraphStateHash::new("e".repeat(64)).unwrap(),
             "compiler-test-v1",
             "policy-test-v1",
             None,

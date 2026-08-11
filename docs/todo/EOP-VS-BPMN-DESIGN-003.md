@@ -1,7 +1,7 @@
 # EOP-VS-BPMN-DESIGN-003 — Sage, Repl and the BPMN-Lite Runtime
 
-**Version:** v0.6
-**Status:** **RATIFIED** (Adam, 2026-07-25) — rulings 1–4 confirmed (Q7 provisional option (a); D19 with the helpful-denial rider below; D20; the R1-7 board sub-decisions). This document is the framework for implementation; EOP-PLAN-BPMN-DESIGN-003 decomposes it. Changes from here are versioned amendments.
+**Version:** v0.7
+**Status:** **RATIFIED** (v0.6 Adam 2026-07-25; amendment v0.7 Adam 2026-08-11) — v0.7 adds §20 (gameboard turn model, loop unrolling, content identity, parameter manifest). v0.6 rulings 1–4 confirmed (Q7 provisional option (a); D19 with the helpful-denial rider below; D20; the R1-7 board sub-decisions). This document is the framework for implementation; EOP-PLAN-BPMN-DESIGN-003 decomposes it. Changes from here are versioned amendments.
 **Document class:** Version & Strategy
 **Scope:** BPMN-Lite runtime philosophy, Business DSL boundary, BPMN Designer, Sage/Repl interaction, and constrained language-model insertion
 **Baseline:** EOP-VS-BPMN-ISA-002 **v0.19 — IMPLEMENTED** (all plan gates V1–V8 closed; destructive cutover landed 2026-07-24). Every substrate claim in this document is aligned to that text; where this document paraphrases it, ISA-002 governs.
@@ -10,6 +10,8 @@
 ---
 
 ## Changelog
+
+**v0.6 → v0.7 — AMENDMENT (§20).** Four items ratified 2026-08-11, all appended as §20 rather than rewritten in place, per the ISA-002 amendment pattern. (1) **Gameboard turn model** supersedes the v0.6 proposal vocabulary — `DesignPosition`/`LegalMove`/`GameDisposition`/`MoveAttemptOutcome` with receipts; three implementation properties ratified as invariants I29–I31 (legal moves are compiler-proved, history cannot affect legality, one authority shot per staged proposal). (2) **Loop unrolling** ratified as the lowering strategy (D21) with a capped total unrolled size (I32), deterministic per-copy identity (I33), and the audit position stated (D22); `AstMutator` retirement becomes a migration, sequential MI stays out of scope. (3) **Content-derived graph identity** added alongside route-derived (D23, I34) with the loosened staleness semantics stated rather than discovered. (4) **Parameter manifest** derived by the linter's unresolved-reference walk, sealed with the template, typed by three slot kinds — scalar / collection / element-scoped (I35, I36). New open question Q31 (LSP protocol surface). §20.6 records two untraced figures the author supplied to a research directive, corrected.
 
 **v0.5 → v0.6 — RATIFICATION.** Rulings 1–4 confirmed by Adam. One rider on ruling 2 (D19), applied in place: the denial should be *helpful about the path forward while generic about the request* — "this cannot be executed because it is not part of your current working context", optionally offering the nearest legal alternatives from the board and the governed route (context change per D20, or an access request through governance). It still never confirms the requested operation exists and never enumerates what the user cannot do.
 
@@ -1077,3 +1079,106 @@ The graph is the map of the runtime journey — acyclic by admission gate and by
 Sage remains imaginative without imagination becoming executable. The SLM improves routine matching without probabilistic inference pretending to be deterministic. Repl remains pragmatic because the final answer to "can this be done?" comes from types, reachability, graph validation, compilation, policy, and the kernel.
 
 > **DSL owns business semantics. BPMN-Lite owns durable temporal execution. The Designer owns a validated graph and its sealed declarations. The models propose; deterministic machinery constructs, proves, and executes.**
+
+---
+
+## 20. Amendment v0.7 — Gameboard Turn Model, Loop Unrolling, Content Identity, Parameter Manifest
+
+**Status:** proposed amendment to the RATIFIED v0.6 text. Ratified items below are Adam's rulings of 2026-08-11 unless marked *proposed*.
+**What surfaced it:** the `codex/bpmn-gameboard-refactor` branch (103 commits) implemented a turn-based designer the v0.6 vocabulary does not describe; and two research passes (EOP-DIR-BPMN-GAMEBOARD-RESEARCH-001 and -002, both findings-only, measured) established the code facts this amendment rests on. v0.6 was found stale in the same week CLAUDE.md and `docs/sage-designer-glossary.md` were found stale — this amendment exists so the ratified layer is not the third instance of that failure.
+
+### 20.1 The gameboard turn model supersedes the proposal vocabulary
+
+v0.6 §9.2 and §11 describe `ProposalDisposition`, `IntentProposal`, and `GraphPatch`. The implemented model is a **turn**: a content-hashed board position, a legal-move set derived from it, a typed disposition, and a receipted attempt outcome. Where the two disagree, the turn model governs; the v0.6 types remain valid as the *shape* of the Sage↔Repl boundary but are not the implemented names.
+
+| Concept | v0.6 name | Implemented |
+|---|---|---|
+| Board position | (implicit in "board") | `DesignPosition` — `state_id`, `graph_revision`, `graph_hash`, `compiler_profile`, `policy_identity`, `focus`, `history_hash`, `legal_moves`, `move_set_hash` |
+| A candidate action | `IntentProposal` / `GraphPatch` | `LegalMove` — pack candidate id, anchor, arguments, binding state, `GraphDeltaPreview` |
+| Disposition | `ProposalDisposition` (5) | `GameDispositionKind` (10), each with a contract-enforced shape invariant |
+| Outcome | (not modelled) | `MoveAttemptOutcome` (10) + a receipt per attempt, successful or not |
+
+Three properties of the implementation are hereby ratified as invariants, because they are stronger than what v0.6 required:
+
+**I29 — Legal moves are compiler-proved, not heuristic.** `legal_moves::enumerate` admits a move only if it passes structural legality *and* semantic-pack admission *and* dry-runs through the production `apply_production` + `admit()` chain. A move that would fail to compile never appears; it surfaces as a typed `CompilerRefused` diagnostic. This is the one-oracle principle (P8/I17) realised at the candidate level: **the DSL cannot offer what the compiler will reject, so unsupported capabilities need no separate guard.**
+
+**I30 — History cannot affect legality.** `move_set_hash`'s preimage provably excludes `history_hash`. Belief and motif state re-weight evidence fusion and correction branches only; the legal-move set at a position is a function of the position, never of what happened before it.
+
+**I31 — A staged proposal gets one authority shot.** Ratification re-checks graph identity (409 on drift), re-runs the same validation path, and removes the pending proposal on success or refusal alike.
+
+*Proposed, not ratified:* the LSP correspondence (enumerate ≡ completion, `CompilerRefused` ≡ diagnostics, `GraphDeltaPreview` ≡ item detail, productions ≡ code actions, `RequestMoveArguments` ≡ signature help) is recorded as design intent for the SME-dictation persona. No protocol surface exists today; whether to ship a real language server or a bespoke client remains open (**Q31**).
+
+### 20.2 Loop unrolling is the ratified lowering strategy
+
+**Finding.** The legacy `NodeAst::Loop` is `LoopAst{id, ceiling: u32, body, next, span}` — no loop condition, no collection, and `body.next` pointing back to the loop's own id: a counter-bounded sequence-flow cycle. It lowers to real bytecode (`IncCounter` + `BrCounterLt`, an unconditional backward jump), is live via `POST /api/dsl/macro/apply`, and is the sole distinctive construct of `AstMutator`. Two front-ends therefore share one kernel target under **different** cyclicity rules: `designer-graph`→`IRGraph` rejects back-edges; the S-expression DSL whitelists this one.
+
+**Ruling.** `ceiling` is a compile-time constant and there is no loop condition, so "repeat N times unconditionally" and "N sequential copies" are the *same program*. Unrolling is therefore **exact, not approximate**, and is ratified as the lowering strategy.
+
+**Decisive reason (D21).** The alternative — a bounded-repeat opcode with a runtime counter — would reintroduce a backward jump into a system whose entire proof structure rests on acyclicity: V-8, V-11's forward-reachability walk, the dominance-derived region map, and `VerifiedLimits` all hold *because* the admitted graph is acyclic. **A proven invariant is never spent to save a lowering pass.**
+
+Consequences, all favourable:
+- **No concurrency impact** — unrolling is sequential expansion; `max_fibers` and every barrier invariant are untouched.
+- **The size check already exists** — unroll before verification and `VerifiedLimits` sees the true program; the existing limit machinery becomes *more* accurate, and no new check is required.
+- **A divergence is removed, not added** — once both front-ends emit acyclic output, the `IncCounter`/`BrCounterLt` back-edge whitelist is deleted rather than maintained.
+
+**I32 — Total unrolled size is capped, and the cap is declared.** The bound is on **total unrolled program size**, not per-loop iteration count: nested loops multiply, and a loop inside a multi-instance region multiplies again. The cap is artifact-resident and verifier-checked, on the same footing as the mandatory MI maximum (D5).
+
+**I33 — Unrolled copies have deterministically derived identity.** Per-copy node keys are derived by a deterministic function of the loop id and iteration index. This is the identity class this codebase has already fought three times (BFS order as a proxy for nesting, for layout, and in-degree as a proxy for merge identity); it is not to be fought a fourth.
+
+**D22 — Audit semantics, stated rather than discovered.** BPMN's standard loop is one activity executing N times; unrolled, it is N activities each executing once. The system's position is that **N distinct journalled instances is the better audit record** for a governed banking workflow — "reminder 2 of 3, sent on this date" is more auditable than one node with an opaque execution count. This is stated here so that compliance review meets it in a document rather than discovering it in a journal.
+
+**Consequential:** `AstMutator` retirement becomes a migration rather than a design fork. Its retry macro's meaning survives as a `RepeatNTimes` production over unrolled lowering; the SME abstraction ("do this three times") is preserved while the topology stays acyclic.
+
+**Out of scope, explicitly:** sequential multi-instance. RESEARCH-002 found it *explicitly rejected* with a named parse error, not merely absent. Parallel MI covers the motivating per-director case. Adding sequential MI is a substrate ask with its own justification, not a Designer-plan inclusion.
+
+### 20.3 Content-derived graph identity alongside route-derived
+
+**Finding (empirical, not inferred).** `graph_revision` and `graph_hash` both hash the session's `graph_edit_payloads()` in event order. Two edit sequences reaching a structurally identical graph (`ir_graphs_equivalent == true`) produce **different** hashes. `state_id` is therefore transitively route-derived. No canonical `IRGraph` digest exists; the canonicalisation logic to build one exists only as a pairwise comparator.
+
+**Ruling (D23).** A content-derived graph hash is added **alongside** the route-derived one, not replacing it. Chain preview requires it: a hypothetical mid-chain state has no edit-log entry to hash.
+
+**The semantic consequence is stated, not discovered.** Every traced consumer (ratify drift, board/workbook staleness, preview-apply drift) is a plain equality check and is mechanically indifferent. But content-derivation **loosens** those checks: edit-log churn that nets to a structural no-op currently always trips staleness and would cease to. And receipt matching changes — receipts against structurally-identical-but-differently-routed positions cannot dedup today and would begin to. Both are acceptable; both are recorded here so neither is a surprise.
+
+**I34 — Route identity and content identity are distinct and both explicit.** Neither silently substitutes for the other. Drift and staleness checks name which they use.
+
+### 20.4 The parameter manifest and its slot kinds
+
+A template is not runnable until its unresolved references are supplied. The AST linter's unresolved-reference walk does not merely diagnose — **it derives the template's parameter contract**. Derived, so it cannot drift from the template it describes.
+
+**I35 — The manifest is derived, sealed, and typed by slot kind.** Three kinds, and the distinction is load-bearing:
+
+| Slot kind | Meaning | Supplied at dispatch? |
+|---|---|---|
+| **Scalar** | one value — client ref, endpoint URL, document type | Yes, one value |
+| **Collection** | an input collection plus its element shape | Yes, an array (bounded; MI maximum applies) |
+| **Element-scoped** | a reference *inside* an MI body, e.g. `@director.email` | **No** — declared for typing, resolved per branch from the element |
+
+Flattening these is the failure mode to avoid: an element-scoped reference has one value *per branch*, not one per instance, and a factory that asks for it directly has asked an unanswerable question. The walk can classify correctly because it knows whether a reference sits inside an MI region.
+
+**I36 — The manifest travels with the template.** It is sealed alongside the compiled DTO snapshot. A factory validates an invocation envelope against the manifest **before** an instance exists; a missing required slot fails at dispatch, not mid-flight.
+
+**This does not weaken D4 or the data-not-code rule.** Resolution remains once, at dispatch, into data. There is no per-instance artifact, no AST fix-up, no overlay. The manifest describes what must be supplied; the envelope supplies it; the artifact is untouched. Per-element variation is already data — `V2MiLoadElement` loads each branch's element by value through the same pipeline every service task uses.
+
+*Instance creation itself remains out of scope for this document* — the Designer programme ends at a published, manifest-bearing template. The manifest exists now so the factory, when built, validates against a typed contract rather than a reconstructed one.
+
+### 20.5 Amendment register
+
+| ID | Item | Status |
+|---|---|---|
+| I29 | Legal moves are compiler-proved | Ratified |
+| I30 | History cannot affect legality | Ratified |
+| I31 | One authority shot per staged proposal | Ratified |
+| I32 | Total unrolled size capped, declared, verifier-checked | Ratified |
+| I33 | Deterministic per-copy identity derivation | Ratified |
+| I34 | Route and content identity distinct and explicit | Ratified |
+| I35 | Manifest derived, sealed, typed by three slot kinds | Ratified |
+| I36 | Manifest travels with the template; validated pre-instance | Ratified |
+| D21 | Loop unrolling as lowering strategy; no backward-jump opcode | Ratified |
+| D22 | Unrolled copies produce N distinct journalled instances | Ratified |
+| D23 | Content hash added alongside route hash, semantics stated | Ratified |
+| Q31 | LSP protocol surface: real language server, bespoke client, or both | Open |
+
+### 20.6 Corrections to the record
+
+Two figures this document's author supplied to RESEARCH-002's directive do not trace to the codebase: a "~2.5s embed cold-cache cliff" and a "30-node" realistic graph size. Neither exists in the repo. The measured reality is better on both counts — nothing invalidates the embed description cache (it is a process-lifetime map, cold once per description), and the HTTP round-trip is single-digit milliseconds. Recorded here as a sixth instance of the untraced-claim pattern, author-side, per the standing marking rule.
+

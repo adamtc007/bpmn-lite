@@ -19,10 +19,21 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever any canonical id or model-facing description changes.
 /// Rides every `BoardCandidate` so recorded board hashes stay
 /// interpretable across schema evolution (I28).
-const CANDIDATE_SCHEMA_VERSION: u32 = 3;
+///
+/// v3 -> v4 (G1.3, EOP-PLAN-BPMN-DESIGN-003 v0.3): `CreateRace`,
+/// `AttachRollbackGuard`, `CallSubprocess` (and their production
+/// siblings `TimerMessageRace`/`CallDurableSubprocess` below) removed —
+/// `ops.rs`'s own module doc marked these EXCLUDED BY DESIGN (no
+/// `IRNode` representation exists), `positional.rs` confirmed they were
+/// never boarded by any position, and RESEARCH-002/V3 confirmed they
+/// appear zero times in every corpus artifact. The catalogue no longer
+/// claims capabilities with no construction path.
+const CANDIDATE_SCHEMA_VERSION: u32 = 4;
 
 /// The §12.1 atomic graph-operation set. Variant set mirrors the V&S
-/// verbatim; the three guard operations mirror the opcode trichotomy.
+/// verbatim; the two guard operations mirror the opcode trichotomy
+/// (v4: the rollback opcode has no `IRNode` yet — see the version note
+/// on `CANDIDATE_SCHEMA_VERSION`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum OperationKind {
     AppendNode,
@@ -31,18 +42,15 @@ pub enum OperationKind {
     ReplaceNode,
     Connect,
     CreateBranch,
-    CreateRace,
     CreateParallelRegion,
     CloseParallelRegion,
     CreateInclusiveRegion,
     CreateMultiInstanceRegion,
     AttachGuard,
     AttachRearmingGuard,
-    AttachRollbackGuard,
     SetGuardTrigger,
     SetGuardBudget,
     SetCorrelationSource,
-    CallSubprocess,
     DeleteSubgraph,
 }
 
@@ -63,12 +71,10 @@ pub enum OperationKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ProductionId {
     RequestAndWait,
-    TimerMessageRace,
     ReminderThenEscalate,
     InterruptingTimeout,
     NonInterruptingNotification,
     HumanReviewWithRework,
-    CallDurableSubprocess,
 }
 
 /// Stable, content-hashable candidate identity.
@@ -84,25 +90,22 @@ pub enum CandidateId {
 }
 
 impl OperationKind {
-    pub const ALL: [OperationKind; 19] = [
+    pub const ALL: [OperationKind; 16] = [
         OperationKind::AppendNode,
         OperationKind::InsertBefore,
         OperationKind::InsertAfter,
         OperationKind::ReplaceNode,
         OperationKind::Connect,
         OperationKind::CreateBranch,
-        OperationKind::CreateRace,
         OperationKind::CreateParallelRegion,
         OperationKind::CloseParallelRegion,
         OperationKind::CreateInclusiveRegion,
         OperationKind::CreateMultiInstanceRegion,
         OperationKind::AttachGuard,
         OperationKind::AttachRearmingGuard,
-        OperationKind::AttachRollbackGuard,
         OperationKind::SetGuardTrigger,
         OperationKind::SetGuardBudget,
         OperationKind::SetCorrelationSource,
-        OperationKind::CallSubprocess,
         OperationKind::DeleteSubgraph,
     ];
 
@@ -114,18 +117,15 @@ impl OperationKind {
             OperationKind::ReplaceNode => "op.replace_node",
             OperationKind::Connect => "op.connect",
             OperationKind::CreateBranch => "op.create_branch",
-            OperationKind::CreateRace => "op.create_race",
             OperationKind::CreateParallelRegion => "op.create_parallel_region",
             OperationKind::CloseParallelRegion => "op.close_parallel_region",
             OperationKind::CreateInclusiveRegion => "op.create_inclusive_region",
             OperationKind::CreateMultiInstanceRegion => "op.create_multi_instance_region",
             OperationKind::AttachGuard => "op.attach_guard",
             OperationKind::AttachRearmingGuard => "op.attach_rearming_guard",
-            OperationKind::AttachRollbackGuard => "op.attach_rollback_guard",
             OperationKind::SetGuardTrigger => "op.set_guard_trigger",
             OperationKind::SetGuardBudget => "op.set_guard_budget",
             OperationKind::SetCorrelationSource => "op.set_correlation_source",
-            OperationKind::CallSubprocess => "op.call_subprocess",
             OperationKind::DeleteSubgraph => "op.delete_subgraph",
         }
     }
@@ -139,43 +139,36 @@ impl OperationKind {
             OperationKind::ReplaceNode => "Replace the anchor node, preserving its connections",
             OperationKind::Connect => "Joins two existing nodes with a typed connector",
             OperationKind::CreateBranch => "Adds a new outgoing route with its own outcome key",
-            OperationKind::CreateRace => "Create a first-wins race over declared arms",
             OperationKind::CreateParallelRegion => "Open a parallel fork/join region",
             OperationKind::CloseParallelRegion => "Close an open parallel region at its join",
             OperationKind::CreateInclusiveRegion => "Open an inclusive (conditional multi-branch) region",
             OperationKind::CreateMultiInstanceRegion => "Create a per-element multi-instance region over a bounded collection with a declared maximum",
             OperationKind::AttachGuard => "Attach an interrupting boundary guard to the anchor",
             OperationKind::AttachRearmingGuard => "Attach a non-interrupting (re-arming) boundary guard to the anchor",
-            OperationKind::AttachRollbackGuard => "Attach an interrupting rollback guard (data restored to scope open) to the anchor",
             OperationKind::SetGuardTrigger => "Set a guard's arming trigger (timer duration or bounded cycle)",
             OperationKind::SetGuardBudget => "Set a guard's failure budget (overrides the workflow default)",
             OperationKind::SetCorrelationSource => "Set a wait node's message correlation source expression",
-            OperationKind::CallSubprocess => "Call a published durable subprocess by pinned reference",
             OperationKind::DeleteSubgraph => "Delete the anchor node or a complete enclosed region",
         }
     }
 }
 
 impl ProductionId {
-    pub const ALL: [ProductionId; 7] = [
+    pub const ALL: [ProductionId; 5] = [
         ProductionId::RequestAndWait,
-        ProductionId::TimerMessageRace,
         ProductionId::ReminderThenEscalate,
         ProductionId::InterruptingTimeout,
         ProductionId::NonInterruptingNotification,
         ProductionId::HumanReviewWithRework,
-        ProductionId::CallDurableSubprocess,
     ];
 
     pub fn canonical_id(self) -> &'static str {
         match self {
             ProductionId::RequestAndWait => "prod.request_and_wait",
-            ProductionId::TimerMessageRace => "prod.timer_message_race",
             ProductionId::ReminderThenEscalate => "prod.reminder_then_escalate",
             ProductionId::InterruptingTimeout => "prod.interrupting_timeout",
             ProductionId::NonInterruptingNotification => "prod.non_interrupting_notification",
             ProductionId::HumanReviewWithRework => "prod.human_review_with_rework",
-            ProductionId::CallDurableSubprocess => "prod.call_durable_subprocess",
         }
     }
 
@@ -183,7 +176,6 @@ impl ProductionId {
     pub fn description(self) -> &'static str {
         match self {
             ProductionId::RequestAndWait => "Send a request and wait for its correlated response",
-            ProductionId::TimerMessageRace => "Race a message arrival against a timer deadline",
             ProductionId::ReminderThenEscalate => {
                 "Non-interrupting bounded reminder cycle with an escalation continuation"
             }
@@ -195,9 +187,6 @@ impl ProductionId {
             }
             ProductionId::HumanReviewWithRework => {
                 "Human review with bounded, attempt-counted forward rework"
-            }
-            ProductionId::CallDurableSubprocess => {
-                "Invoke a durable subprocess and await its typed outcome"
             }
         }
     }
@@ -296,7 +285,7 @@ mod tests {
             .collect();
         let unique: BTreeSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "duplicate canonical id");
-        assert_eq!(ids.len(), 26);
+        assert_eq!(ids.len(), 21);
 
         let golden: BTreeSet<&str> = [
             "op.append_node",
@@ -305,31 +294,26 @@ mod tests {
             "op.replace_node",
             "op.connect",
             "op.create_branch",
-            "op.create_race",
             "op.create_parallel_region",
             "op.close_parallel_region",
             "op.create_inclusive_region",
             "op.create_multi_instance_region",
             "op.attach_guard",
             "op.attach_rearming_guard",
-            "op.attach_rollback_guard",
             "op.set_guard_trigger",
             "op.set_guard_budget",
             "op.set_correlation_source",
-            "op.call_subprocess",
             "op.delete_subgraph",
             "prod.request_and_wait",
-            "prod.timer_message_race",
             "prod.reminder_then_escalate",
             "prod.interrupting_timeout",
             "prod.non_interrupting_notification",
             "prod.human_review_with_rework",
-            "prod.call_durable_subprocess",
         ]
         .into_iter()
         .collect();
         assert_eq!(unique, golden, "canonical id set drifted from golden");
-        assert_eq!(CANDIDATE_SCHEMA_VERSION, 3);
+        assert_eq!(CANDIDATE_SCHEMA_VERSION, 4);
     }
 
     /// CEMENT (review F6): descriptions are board-hash inputs — a
@@ -366,7 +350,7 @@ mod tests {
     }
 
     const GOLDEN_DESCRIPTION_HASH: &str =
-        "0a97db72ebdac007adee70c89ca1a46c70c2337cb1ad0959304e2a9ae0116bc6";
+        "fad1424ba62c6c3be926086466c9b80fb7fef5fffa4611b386a865984e0ba8e7";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]
@@ -383,7 +367,7 @@ mod tests {
         }
         let a = Everything.legal_candidates(None);
         let b = Everything.legal_candidates(None);
-        assert_eq!(a.len(), 26);
+        assert_eq!(a.len(), 21);
         let ids_a: Vec<&str> = a.iter().map(|c| c.canonical_id.as_str()).collect();
         let ids_b: Vec<&str> = b.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(ids_a, ids_b);
@@ -407,6 +391,6 @@ mod tests {
                 vec![]
             }
         }
-        assert_eq!(Doubled.legal_candidates(None).len(), 19);
+        assert_eq!(Doubled.legal_candidates(None).len(), 16);
     }
 }

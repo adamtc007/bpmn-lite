@@ -464,6 +464,7 @@ name = "designer-graph"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "bpmn-lite-compiler",
  "bpmn-lite-types",
  "petgraph",
@@ -526,7 +527,7 @@ dependencies = [
 [[package]]
 name = "dsl_types"
 version = "0.4.0"
-source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
+source = "git+https://github.com/adamtc007/dsl?rev=1d039d958a91620ab15374f05176bdfac4c872d1#1d039d958a91620ab15374f05176bdfac4c872d1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1903,7 +1904,7 @@ dependencies = [
 [[package]]
 name = "sem_os_ontology"
 version = "0.4.0"
-source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
+source = "git+https://github.com/adamtc007/dsl?rev=1d039d958a91620ab15374f05176bdfac4c872d1#1d039d958a91620ab15374f05176bdfac4c872d1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1922,7 +1923,7 @@ dependencies = [
 [[package]]
 name = "sem_os_types"
 version = "0.4.0"
-source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
+source = "git+https://github.com/adamtc007/dsl?rev=1d039d958a91620ab15374f05176bdfac4c872d1#1d039d958a91620ab15374f05176bdfac4c872d1"
 dependencies = [
  "chrono",
  "serde",
@@ -1934,7 +1935,7 @@ dependencies = [
 [[package]]
 name = "semantic-decision-contracts"
 version = "0.4.0"
-source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
+source = "git+https://github.com/adamtc007/dsl?rev=1d039d958a91620ab15374f05176bdfac4c872d1#1d039d958a91620ab15374f05176bdfac4c872d1"
 dependencies = [
  "hex",
  "serde",
@@ -1946,7 +1947,7 @@ dependencies = [
 [[package]]
 name = "semantic-pack"
 version = "0.4.0"
-source = "git+https://github.com/adamtc007/dsl?rev=12d5280e59eacbe035959bcc9fa3008d4c4c7a47#12d5280e59eacbe035959bcc9fa3008d4c4c7a47"
+source = "git+https://github.com/adamtc007/dsl?rev=1d039d958a91620ab15374f05176bdfac4c872d1#1d039d958a91620ab15374f05176bdfac4c872d1"
 dependencies = [
  "dsl_types",
  "hex",

@@ -3,7 +3,8 @@ use crate::pending::PendingInvocationStore;
 use crate::store::{transition_from_tick_ops, TickOperation};
 use crate::store::{
     AdminProjectionStore, ArtifactRepository, DesignSessionEvent, DesignSessionEventKind,
-    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, JournalReader, RuntimeStore,
+    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, DevCaptureSessionRecord,
+    JournalReader, RuntimeStore,
 };
 use crate::{ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult};
 #[cfg(test)]
@@ -33,6 +34,7 @@ struct Inner {
     plans: HashMap<[u8; 32], String>,
     templates: HashMap<(String, u32), (String, [u8; 32], String)>, // (name, version) -> (dsl, plan_hash, created_at)
     design_sessions: HashMap<(String, Uuid), DesignSessionRecord>, // (tenant, id) -> aggregate
+    dev_capture_sessions: HashMap<String, DevCaptureSessionRecord>, // session_id -> aggregate
     dead_letter: HashMap<(u32, String), (Vec<u8>, u64)>,
     events: HashMap<Uuid, Vec<(u64, RuntimeEvent)>>,
     event_seq: HashMap<Uuid, u64>,
@@ -147,6 +149,7 @@ impl MemoryStore {
                 plans: HashMap::new(),
                 templates: HashMap::new(),
                 design_sessions: HashMap::new(),
+                dev_capture_sessions: HashMap::new(),
                 dead_letter: HashMap::new(),
                 events: HashMap::new(),
                 event_seq: HashMap::new(),
@@ -2284,6 +2287,52 @@ impl AdminProjectionStore for MemoryStore {
         record.status = DesignSessionStatus::Saved;
         record.template_ref = Some((template_name.to_owned(), template_version, plan_hash));
         Ok(())
+    }
+
+    async fn open_dev_capture_session(
+        &self,
+        session_id: &str,
+        consent_statement_timestamp: &str,
+    ) -> StoreResult<()> {
+        let mut w = self.inner.write().await;
+        if w.dev_capture_sessions.contains_key(session_id) {
+            return Err(StoreError::Invalid(format!(
+                "dev-capture session {session_id} is already open"
+            )));
+        }
+        w.dev_capture_sessions.insert(
+            session_id.to_owned(),
+            DevCaptureSessionRecord {
+                session_id: session_id.to_owned(),
+                consent_statement_timestamp: consent_statement_timestamp.to_owned(),
+                records_json: Vec::new(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn append_dev_capture_record(
+        &self,
+        session_id: &str,
+        record_json: String,
+    ) -> StoreResult<u64> {
+        let mut w = self.inner.write().await;
+        let record = w
+            .dev_capture_sessions
+            .get_mut(session_id)
+            .ok_or_else(|| StoreError::NotFound(format!("dev-capture session {session_id}")))?;
+        let seq = record.records_json.len() as u64;
+        record.records_json.push(record_json);
+        Ok(seq)
+    }
+
+    async fn load_dev_capture_session(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Option<DevCaptureSessionRecord>> {
+        let r = self.inner.read().await;
+        Ok(r.dev_capture_sessions.get(session_id).cloned())
     }
 }
 

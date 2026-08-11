@@ -76,6 +76,7 @@ dependencies = [
  "bpmn-lite-compiler",
  "bpmn-lite-types",
  "libfuzzer-sys",
+ "serde_json",
 ]
 
 [[package]]

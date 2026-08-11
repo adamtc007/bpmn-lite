@@ -165,6 +165,22 @@ impl DesignSessionRecord {
     }
 }
 
+/// Durable record of one dev-capture session (G1.2). Replaces an
+/// in-memory-only `Mutex<HashMap>` that silently lost every captured
+/// interaction on restart — DIR-004 Phase 1's "train-on-able, not
+/// hash-only" guarantee is worthless if the records evaporate before
+/// they can ever be exported for training. Opaque JSON records,
+/// mirroring `GraphEdit`'s opaque-payload discipline: this crate has no
+/// `utterance-engine` dependency, so `utterance_engine::dev_capture::
+/// DevSessionRecord` is only ever deserialized at the server layer.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DevCaptureSessionRecord {
+    pub session_id: String,
+    pub consent_statement_timestamp: String,
+    pub records_json: Vec<String>,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DesignSessionSummary {
     pub id: Uuid,
@@ -653,6 +669,36 @@ pub trait AdminProjectionStore: Send + Sync {
         template_version: u32,
         plan_hash: [u8; 32],
     ) -> StoreResult<()>;
+
+    // ── Dev-capture sessions (G1.2, DIR-004 Phase 1/2) ──
+    // Adam-only, always-compiled (see `utterance_engine::dev_capture`'s
+    // module doc). Session-id-scoped, not tenant-scoped — dev capture is
+    // not a tenant-facing feature.
+
+    /// Open a dev-capture session with its consent statement, stated once
+    /// at session start. Refuses if a session with this id is already
+    /// open — a later call must not be able to silently swap the
+    /// recorded consent statement for one already capturing interactions.
+    async fn open_dev_capture_session(
+        &self,
+        session_id: &str,
+        consent_statement_timestamp: &str,
+    ) -> StoreResult<()>;
+
+    /// Append one captured interaction's full closure (opaque JSON —
+    /// `utterance_engine::dev_capture::DevSessionRecord`, serialized by
+    /// the caller). Returns the assigned sequence number.
+    async fn append_dev_capture_record(
+        &self,
+        session_id: &str,
+        record_json: String,
+    ) -> StoreResult<u64>;
+
+    /// Load a dev-capture session and every record captured so far.
+    async fn load_dev_capture_session(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Option<DevCaptureSessionRecord>>;
 }
 
 /// Composite capability object used where an engine needs all four store surfaces.

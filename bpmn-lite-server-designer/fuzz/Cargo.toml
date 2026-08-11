@@ -15,7 +15,7 @@ bpmn-lite-compiler = { path = "../../bpmn-lite-compiler" }
 bpmn-lite-types = { path = "../../bpmn-lite-types" }
 designer-graph = { path = "../../designer-graph" }
 utterance-engine = { path = "../../utterance-engine" }
-semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "12d5280e59eacbe035959bcc9fa3008d4c4c7a47" }
+semantic-decision-contracts = { git = "https://github.com/adamtc007/dsl", rev = "1d039d958a91620ab15374f05176bdfac4c872d1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

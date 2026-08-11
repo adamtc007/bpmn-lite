@@ -313,7 +313,7 @@ pub(crate) fn semantic_snapshot_identity() -> SnapshotIdentity {
             .expect("profile domain is a valid identity"),
         SnapshotIdentity::new("bpmn-semantic-profile-preimage-v1")
             .expect("profile preimage identity is valid"),
-        GraphRevision::new("designer-candidate-schema-v3")
+        GraphRevision::new("designer-candidate-schema-v4")
             .expect("candidate schema identity is valid"),
         ResolvedPosition {
             anchor: None,
@@ -368,7 +368,7 @@ mod tests {
             "the real coverage rule must admit the full registry"
         );
 
-        assert_eq!(specs.len(), 26);
+        assert_eq!(specs.len(), 21);
         assert!(specs.iter().all(|spec| {
             !spec.semantic.title.is_empty()
                 && !spec.semantic.intent_summary.is_empty()
@@ -442,8 +442,8 @@ mod tests {
                     .to_owned(),
             ),
             (
-                "bpmn-semantic-profile-v1:0ff6747b192aa4df8181b17d0d922d779994a161cadc39c4d3ca36fd7568edc8".to_owned(),
-                "c3dd92720bb671729970c6ef3530b79572c6b8bdd8be2b4d548f8717e5fa0d2a".to_owned(),
+                "bpmn-semantic-profile-v1:e325e3c723708f4a66a6700861efaccb8b3e7d471cf37dac4fec0cb944a8369e".to_owned(),
+                "e9d3f3e462f56e992bbe7f6b1746a963e91292bbcf64b4169face95ee4bdba18".to_owned(),
             )
         );
     }
@@ -454,11 +454,11 @@ mod tests {
         let lock = include_str!("../config/bpmn-semantic-pack.lock");
         assert_eq!(
             receipt.source_hash.as_str(),
-            "4764ffb9a402d910abd635d5c4c1a21512107c600dbf60c12aee95b362dd0d68"
+            "7aab1a6455410180f786d8e72db106758562bf9dc3fd76db61382163d459567d"
         );
         assert!(lock.contains(receipt.source_hash.as_str()));
         assert!(lock.contains(receipt.artifact_hash.as_str()));
-        assert_eq!(receipt.adapter_bindings.len(), 26);
+        assert_eq!(receipt.adapter_bindings.len(), 21);
         for binding in &receipt.adapter_bindings {
             assert!(lock.contains(&format!("  - {binding}\n")));
         }

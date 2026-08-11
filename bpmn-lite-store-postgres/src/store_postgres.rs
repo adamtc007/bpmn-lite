@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use bpmn_lite_store::store::{transition_from_tick_ops, TickOperation};
 use bpmn_lite_store::store::{
     AdminProjectionStore, ArtifactRepository, DesignSessionEvent, DesignSessionEventKind,
-    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, JournalReader, RuntimeStore,
+    DesignSessionRecord, DesignSessionStatus, DesignSessionSummary, DevCaptureSessionRecord,
+    JournalReader, RuntimeStore,
 };
 #[cfg(test)]
 use bpmn_lite_store::TemplateSummary;
@@ -4683,6 +4684,107 @@ impl AdminProjectionStore for PostgresWorkflowStore {
             return Err(StoreError::NotFound(format!("design session {id}")));
         }
         Ok(())
+    }
+
+    async fn open_dev_capture_session(
+        &self,
+        session_id: &str,
+        consent_statement_timestamp: &str,
+    ) -> StoreResult<()> {
+        let result = sqlx::query(
+            r#"INSERT INTO dev_capture_sessions (session_id, consent_statement_timestamp)
+               VALUES ($1, $2)
+               ON CONFLICT (session_id) DO NOTHING"#,
+        )
+        .bind(session_id)
+        .bind(consent_statement_timestamp)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::Invalid(format!(
+                "dev-capture session {session_id} is already open"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn append_dev_capture_record(
+        &self,
+        session_id: &str,
+        record_json: String,
+    ) -> StoreResult<u64> {
+        let payload: serde_json::Value =
+            serde_json::from_str(&record_json).map_err(StoreError::invalid)?;
+        let mut tx = self.pool.begin().await.map_err(StoreError::unavailable)?;
+        // Same row-lock-then-append discipline as `append_design_session_event`:
+        // without it, two concurrent appends to the same session race on
+        // `MAX(seq) + 1` and the loser hits a raw unique-constraint violation
+        // instead of a clean, retriable outcome.
+        let locked: Option<String> = sqlx::query_scalar(
+            r#"SELECT session_id FROM dev_capture_sessions
+               WHERE session_id = $1
+               FOR UPDATE"#,
+        )
+        .bind(session_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        if locked.is_none() {
+            return Err(StoreError::NotFound(format!(
+                "dev-capture session {session_id}"
+            )));
+        }
+        let seq: i64 = sqlx::query_scalar(
+            r#"INSERT INTO dev_capture_records (session_id, seq, record)
+               SELECT $1,
+                      COALESCE((SELECT max(seq) + 1 FROM dev_capture_records
+                                 WHERE session_id = $1), 0),
+                      $2
+               RETURNING seq"#,
+        )
+        .bind(session_id)
+        .bind(payload)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(StoreError::unavailable)?;
+        tx.commit().await.map_err(StoreError::unavailable)?;
+        Ok(seq as u64)
+    }
+
+    async fn load_dev_capture_session(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Option<DevCaptureSessionRecord>> {
+        let session: Option<(String, String)> = sqlx::query_as(
+            r#"SELECT consent_statement_timestamp, created_at::text
+               FROM dev_capture_sessions WHERE session_id = $1"#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        let Some((consent_statement_timestamp, created_at)) = session else {
+            return Ok(None);
+        };
+        let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+            r#"SELECT record FROM dev_capture_records
+               WHERE session_id = $1 ORDER BY seq"#,
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::unavailable)?;
+        let records_json = rows
+            .into_iter()
+            .map(|(value,)| serde_json::to_string(&value).map_err(StoreError::invalid))
+            .collect::<StoreResult<Vec<String>>>()?;
+        Ok(Some(DevCaptureSessionRecord {
+            session_id: session_id.to_owned(),
+            consent_statement_timestamp,
+            records_json,
+            created_at,
+        }))
     }
 }
 
@@ -9828,6 +9930,26 @@ mod tests {
         ) -> StoreResult<()> {
             Err(StoreError::Unavailable("test double".into()))
         }
+        async fn open_dev_capture_session(
+            &self,
+            _session_id: &str,
+            _consent_statement_timestamp: &str,
+        ) -> StoreResult<()> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn append_dev_capture_record(
+            &self,
+            _session_id: &str,
+            _record_json: String,
+        ) -> StoreResult<u64> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
+        async fn load_dev_capture_session(
+            &self,
+            _session_id: &str,
+        ) -> StoreResult<Option<DevCaptureSessionRecord>> {
+            Err(StoreError::Unavailable("test double".into()))
+        }
     }
 
     /// E-invariant #1 & #2: Violation -> quarantine, not crash, not churn. Quarantine survives rollback.
@@ -12914,6 +13036,79 @@ mod tests {
             vec![0, 1, 2],
             "sequence numbers must survive restart exactly, no gaps or renumbering"
         );
+    }
+
+    /// G1.2: the claim the in-memory `Mutex<HashMap>` this replaces could
+    /// never make -- a dev-capture session and its records survive a full
+    /// process restart (a fresh pool/store built from scratch, exactly as
+    /// RESEARCH-002/S5.2 exercised the same claim for pending proposals).
+    #[tokio::test]
+    async fn test_pg_dev_capture_session_survives_restart() {
+        let (_pool, store, _lock) = setup().await;
+        let session_id = format!("dev-capture-restart-{}", Uuid::new_v4());
+        store
+            .open_dev_capture_session(&session_id, "2026-08-11T00:00:00Z")
+            .await
+            .unwrap();
+        let seq0 = store
+            .append_dev_capture_record(&session_id, r#"{"utterance":"one"}"#.to_string())
+            .await
+            .unwrap();
+        let seq1 = store
+            .append_dev_capture_record(&session_id, r#"{"utterance":"two"}"#.to_string())
+            .await
+            .unwrap();
+        assert_eq!((seq0, seq1), (0, 1));
+
+        let before_restart = store
+            .load_dev_capture_session(&session_id)
+            .await
+            .unwrap()
+            .expect("session must exist before restart");
+        assert_eq!(before_restart.records_json.len(), 2);
+
+        // Simulate a process restart: drop this store/pool entirely and
+        // build a completely independent connection from scratch.
+        drop(store);
+        let url = std::env::var("BPMN_LITE_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
+        let app_url = if url.contains('@') {
+            let parts: Vec<&str> = url.split('@').collect();
+            format!(
+                "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@{}",
+                parts[1]
+            )
+        } else {
+            "postgresql://bpmn_lite_app:bpmn_lite_app_dev_password@localhost/bpmn_lite_test"
+                .to_string()
+        };
+        let reconnected_pool = PgPool::connect(&app_url)
+            .await
+            .expect("a fresh process must be able to reconnect");
+        let reconnected_store = PostgresWorkflowStore::new(reconnected_pool);
+
+        let after_restart = reconnected_store
+            .load_dev_capture_session(&session_id)
+            .await
+            .unwrap()
+            .expect("dev-capture session must survive a full process restart");
+        assert_eq!(
+            after_restart.consent_statement_timestamp,
+            "2026-08-11T00:00:00Z"
+        );
+        assert_eq!(
+            after_restart.records_json, before_restart.records_json,
+            "captured records must survive restart byte-identical, no loss"
+        );
+
+        // Second open on the SAME id is refused (idempotent-refusing,
+        // matches design-session/proposal discipline elsewhere): a later
+        // call must not be able to silently swap the recorded consent.
+        let reopen = reconnected_store
+            .open_dev_capture_session(&session_id, "2026-08-11T01:00:00Z")
+            .await;
+        assert!(reopen.is_err(), "re-opening an existing session must be refused");
     }
 
     #[tokio::test]

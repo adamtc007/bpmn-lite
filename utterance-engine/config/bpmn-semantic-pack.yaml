@@ -206,39 +206,6 @@ capabilities:
   risk: reversible
   title: Create an outcome branch
 - action_class: create
-  adapter_binding: bpmn.designer.op.create_race
-  applicability: Reserved until the Designer IR has a complete race representation
-  arguments:
-  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
-    kind: node_reference
-    name: anchor
-    required: true
-  - clarification_prompt: How many event arms should participate?
-    kind: count
-    name: arms
-    required: true
-  effect: Would create an event race and matched continuation
-  extensions:
-    bpmn.binder_support: not_representable
-  id: op.create_race
-  intent_summary: Create a race whose first declared event arm wins
-  negative_contrasts:
-  - candidate_id: prod.timer_message_race
-    distinction: The production is the specialised timer/message pattern; this operation is the generic race primitive
-  phrases:
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: canonical
-    text: race these events
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: shorthand
-    text: first one wins
-  positive_examples:
-  - Continue on whichever of the timer or message happens first
-  risk: reversible
-  title: Create a first-wins race
-- action_class: create
   adapter_binding: bpmn.designer.op.create_parallel_region
   applicability: The anchor is a non-terminal normal-flow node and the region can remain SESE
   arguments:
@@ -454,39 +421,6 @@ capabilities:
   - Notify the owner daily up to three times without stopping review
   risk: reversible
   title: Attach a rearming guard
-- action_class: create
-  adapter_binding: bpmn.designer.op.attach_rollback_guard
-  applicability: Reserved until rollback scope is representable in the Designer IR
-  arguments:
-  - clarification_prompt: Which existing BPMN node should host this boundary guard?
-    kind: node_reference
-    name: host
-    required: true
-  - clarification_prompt: Which error should trigger rollback?
-    kind: identifier
-    name: error
-    required: true
-  effect: Would add an interrupting error guard with rollback semantics
-  extensions:
-    bpmn.binder_support: not_representable
-  id: op.attach_rollback_guard
-  intent_summary: Interrupt work and restore data to the enclosing scope opening state
-  negative_contrasts:
-  - candidate_id: op.attach_guard
-    distinction: A normal interrupting guard redirects control but does not restore scope data
-  phrases:
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: canonical
-    text: rollback on error
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: paraphrase
-    text: undo this scope if it fails
-  positive_examples:
-  - Restore the scope if settlement validation fails
-  risk: reversible
-  title: Attach a rollback guard
 - action_class: update
   adapter_binding: bpmn.designer.op.set_guard_trigger
   applicability: The anchor is an existing boundary guard
@@ -586,39 +520,6 @@ capabilities:
   - Correlate the response using the application reference
   risk: reversible
   title: Set message correlation source
-- action_class: create
-  adapter_binding: bpmn.designer.op.call_subprocess
-  applicability: Reserved until call activities are represented in the Designer IR
-  arguments:
-  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
-    kind: node_reference
-    name: anchor
-    required: true
-  - clarification_prompt: Which pinned subprocess should be called?
-    kind: subprocess_reference
-    name: subprocess
-    required: true
-  effect: Would add a call activity that waits for a typed subprocess outcome
-  extensions:
-    bpmn.binder_support: not_representable
-  id: op.call_subprocess
-  intent_summary: Invoke a published subprocess through a pinned durable reference
-  negative_contrasts:
-  - candidate_id: prod.call_durable_subprocess
-    distinction: The production supplies the complete durable-call pattern; this is its atomic call primitive
-  phrases:
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: canonical
-    text: call a subprocess
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: paraphrase
-    text: invoke this workflow
-  positive_examples:
-  - Call the published enhanced-review subprocess
-  risk: reversible
-  title: Call a subprocess
 - action_class: delete
   adapter_binding: bpmn.designer.op.delete_subgraph
   applicability: The anchor is removable without dangling a guard or breaking region closure
@@ -685,39 +586,6 @@ capabilities:
   - Send the onboarding request and wait for its correlated response
   risk: reversible
   title: Request and wait
-- action_class: create
-  adapter_binding: bpmn.designer.prod.timer_message_race
-  applicability: Reserved until event-race topology is represented in the Designer IR
-  arguments:
-  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
-    kind: node_reference
-    name: anchor
-    required: true
-  - clarification_prompt: What deadline competes with the message?
-    kind: duration
-    name: deadline
-    required: true
-  effect: Would create matched message and timer arms with first-wins semantics
-  extensions:
-    bpmn.binder_support: not_representable
-  id: prod.timer_message_race
-  intent_summary: 'Continue on whichever occurs first: a correlated message or a deadline'
-  negative_contrasts:
-  - candidate_id: op.create_race
-    distinction: This production is the timer/message specialisation of the generic first-wins race
-  phrases:
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: canonical
-    text: race a message against a timer
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: shorthand
-    text: reply or timeout
-  positive_examples:
-  - Wait for approval until Friday, otherwise escalate
-  risk: reversible
-  title: Timer/message race
 - action_class: create
   adapter_binding: bpmn.designer.prod.reminder_then_escalate
   applicability: The anchor supports guards and a finite reminder count is declared
@@ -876,39 +744,6 @@ capabilities:
   - Review the application and allow up to two correction attempts
   risk: reversible
   title: Human review with rework
-- action_class: create
-  adapter_binding: bpmn.designer.prod.call_durable_subprocess
-  applicability: Reserved until durable call activities are represented in the Designer IR
-  arguments:
-  - clarification_prompt: Which existing BPMN node should this change follow or apply to?
-    kind: node_reference
-    name: anchor
-    required: true
-  - clarification_prompt: Which published subprocess revision should be called?
-    kind: subprocess_reference
-    name: subprocess
-    required: true
-  effect: Would create a pinned call activity with typed completion
-  extensions:
-    bpmn.binder_support: not_representable
-  id: prod.call_durable_subprocess
-  intent_summary: Invoke a pinned published subprocess and await its governed outcome
-  negative_contrasts:
-  - candidate_id: op.call_subprocess
-    distinction: This production supplies the full durable-call pattern; the operation is its atomic call primitive
-  phrases:
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: canonical
-    text: call durable subprocess
-  - locale: en-GB
-    provenance: bpmn.semantic-profile.v1
-    role: paraphrase
-    text: run this published workflow
-  positive_examples:
-  - Invoke the pinned source-of-funds review process
-  risk: reversible
-  title: Call durable subprocess
 declarations:
   domain_types:
   - bpmn.process

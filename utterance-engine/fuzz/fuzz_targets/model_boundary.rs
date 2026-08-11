@@ -46,6 +46,7 @@ fn position(move_count: usize) -> semantic_decision_contracts::DesignPosition {
         SnapshotIdentity::new("snapshot-model-boundary-v1").unwrap(),
         revision,
         GraphContentHash::new("a".repeat(64)).unwrap(),
+        semantic_decision_contracts::GraphStateHash::new("c".repeat(64)).unwrap(),
         "compiler-model-boundary-v1",
         "policy-model-boundary-v1",
         None,
