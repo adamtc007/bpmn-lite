@@ -379,27 +379,6 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     });
                 }
             },
-            ExecutionNode::Loop(node) => {
-                let counter_id = u32::from_le_bytes(
-                    blake3::hash(node.id.as_bytes()).as_bytes()[..4]
-                        .try_into()
-                        .map_err(|_| FrontendError::UnsupportedLoop(node.id.clone()))?,
-                );
-                instructions.push(Instr::IncCounter { counter_id });
-                instructions.push(Instr::BrCounterLt {
-                    counter_id,
-                    limit: node.ceiling.saturating_add(1),
-                    target: node
-                        .body
-                        .first()
-                        .map(|body| target(&addresses, body))
-                        .transpose()?
-                        .unwrap_or(target(&addresses, &node.next)?),
-                });
-                instructions.push(Instr::Jump {
-                    target: target(&addresses, &node.next)?,
-                });
-            }
             ExecutionNode::End(node) => {
                 // WS-D D2: an End reached by a non-interrupting guard's
                 // linear escape chain closes the inherited scope first —
@@ -549,7 +528,6 @@ fn instruction_count(
         {
             Ok(2)
         }
-        ExecutionNode::Loop(_) => Ok(3),
         _ => Ok(1),
     }
 }
@@ -731,12 +709,6 @@ fn outgoing(node: &ExecutionNode) -> Vec<&str> {
             .collect(),
         ExecutionNode::Split(node) => node.flows.iter().map(|flow| flow.next.as_str()).collect(),
         ExecutionNode::Join(node) => vec![&node.next],
-        ExecutionNode::Loop(node) => node
-            .body
-            .iter()
-            .map(String::as_str)
-            .chain(std::iter::once(node.next.as_str()))
-            .collect(),
         ExecutionNode::Wait(node) => vec![&node.next],
         ExecutionNode::MessageWait(node) => vec![&node.next],
         ExecutionNode::End(_) => Vec::new(),
@@ -766,33 +738,20 @@ fn intern_message_name(
     Ok(id)
 }
 
+/// G3.3: with `ExecutionNode::Loop` retired (every loop unrolls to forward
+/// copies before the linter ever runs — see `unroll::unroll_loops`), there
+/// is no cyclic/loop-body special case left to reconcile: a plain
+/// Kahn's-algorithm topological sort over `outgoing()` succeeds on any
+/// admissible plan, and fails with `CyclicOrUnreachable` on anything that
+/// isn't (a real cycle, or a node genuinely unreachable from start).
 fn topological_order(plan: &WorkflowExecutionPlan) -> Result<Vec<String>, FrontendError> {
     if !plan.nodes.contains_key(&plan.start_node) {
         return Err(FrontendError::MissingNode(plan.start_node.clone()));
     }
-    let loop_bodies: BTreeSet<String> = plan
-        .nodes
-        .values()
-        .filter_map(|node| match node {
-            ExecutionNode::Loop(node) => Some(node.body.iter().cloned()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    let mut incoming: BTreeMap<String, usize> = plan
-        .nodes
-        .keys()
-        .filter(|node| !loop_bodies.contains(*node))
-        .map(|node| (node.clone(), 0))
-        .collect();
+    let mut incoming: BTreeMap<String, usize> =
+        plan.nodes.keys().map(|node| (node.clone(), 0)).collect();
     for node in plan.nodes.values() {
-        if loop_bodies.contains(node.id()) {
-            continue;
-        }
-        for successor in outgoing_for_order(node) {
-            if loop_bodies.contains(successor) {
-                continue;
-            }
+        for successor in outgoing(node) {
             let count = incoming
                 .get_mut(successor)
                 .ok_or_else(|| FrontendError::MissingNode(successor.to_string()))?;
@@ -820,10 +779,7 @@ fn topological_order(plan: &WorkflowExecutionPlan) -> Result<Vec<String>, Fronte
         };
         ready.remove(&node_id);
         order.push(node_id.clone());
-        for successor in outgoing_for_order(&plan.nodes[&node_id]) {
-            if loop_bodies.contains(successor) {
-                continue;
-            }
+        for successor in outgoing(&plan.nodes[&node_id]) {
             let count = incoming
                 .get_mut(successor)
                 .ok_or_else(|| FrontendError::MissingNode(successor.to_string()))?;
@@ -833,7 +789,7 @@ fn topological_order(plan: &WorkflowExecutionPlan) -> Result<Vec<String>, Fronte
             }
         }
     }
-    if order.len() + loop_bodies.len() != plan.nodes.len() {
+    if order.len() != plan.nodes.len() {
         let seen: HashSet<_> = order.iter().cloned().collect();
         let missing = plan
             .nodes
@@ -843,39 +799,17 @@ fn topological_order(plan: &WorkflowExecutionPlan) -> Result<Vec<String>, Fronte
             .collect();
         return Err(FrontendError::CyclicOrUnreachable(missing));
     }
-    for node in plan.nodes.values() {
-        let ExecutionNode::Loop(loop_node) = node else {
-            continue;
-        };
-        let position = order
-            .iter()
-            .position(|node_id| node_id == &loop_node.id)
-            .ok_or_else(|| FrontendError::MissingNode(loop_node.id.clone()))?;
-        for (offset, body_node) in loop_node.body.iter().enumerate() {
-            if !plan.nodes.contains_key(body_node) {
-                return Err(FrontendError::MissingNode(body_node.clone()));
-            }
-            order.insert(position + offset, body_node.clone());
-        }
-    }
     Ok(order)
-}
-
-fn outgoing_for_order(node: &ExecutionNode) -> Vec<&str> {
-    match node {
-        ExecutionNode::Loop(node) => vec![node.next.as_str()],
-        _ => outgoing(node),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dsl::plan::{
-        EndExecNode, JoinExecNode, LoopExecNode, PlaceholderSchema, SplitExecFlow, SplitExecNode,
+        EndExecNode, JoinExecNode, PlaceholderSchema, SplitExecFlow, SplitExecNode,
         StartExecNode, TaskExecNode,
     };
-    use crate::dsl::DeliveryMode;
+    use crate::dsl::{DeliveryMode, StubPlaceholderRegistry};
     use std::collections::HashMap;
 
     fn routing_plan() -> WorkflowExecutionPlan {
@@ -902,6 +836,7 @@ mod tests {
                         consumes_placeholders: Vec::new(),
                         guards: Vec::new(),
                         span: None,
+                        loop_origin: None,
                     }),
                 ),
                 (
@@ -939,6 +874,7 @@ mod tests {
                         consumes_placeholders: Vec::new(),
                         guards: Vec::new(),
                         span: None,
+                        loop_origin: None,
                     }),
                 ),
                 (
@@ -953,6 +889,7 @@ mod tests {
                         consumes_placeholders: Vec::new(),
                         guards: Vec::new(),
                         span: None,
+                        loop_origin: None,
                     }),
                 ),
                 (
@@ -1008,59 +945,44 @@ mod tests {
         )));
     }
 
+    // G3.1/G3.3 (2026-08-11): `bounded_loop_lowers_to_verifier_admitted_
+    // counter_control_flow` retired. It hand-built a plan directly
+    // containing `ExecutionNode::Loop` to exercise this file's old
+    // `IncCounter`/`BrCounterLt` loop-lowering arm — both the type and the
+    // arm are deleted (`unroll::unroll_loops` now expands every loop to
+    // forward copies before the linter ever runs, so `ExecutionNode::Loop`
+    // can no longer be constructed by any real pipeline). Replaced below
+    // with the actual current guarantee: a `(loop ...)` DSL source lowers
+    // to N forward-chained task instructions and never emits
+    // `IncCounter`/`BrCounterLt` at all.
     #[test]
-    fn bounded_loop_lowers_to_verifier_admitted_counter_control_flow() {
-        let mut plan = routing_plan();
-        plan.nodes = BTreeMap::from([
-            (
-                "start".to_string(),
-                ExecutionNode::Start(StartExecNode {
-                    id: "start".to_string(),
-                    next: "retry".to_string(),
-                    span: None,
-                }),
-            ),
-            (
-                "retry".to_string(),
-                ExecutionNode::Loop(LoopExecNode {
-                    id: "retry".to_string(),
-                    ceiling: 3,
-                    body: vec!["body".to_string()],
-                    next: "end".to_string(),
-                    span: None,
-                }),
-            ),
-            (
-                "body".to_string(),
-                ExecutionNode::Task(TaskExecNode {
-                    id: "body".to_string(),
-                    plug: "fixture:retry".to_string(),
-                    delivery_mode: DeliveryMode::GuaranteedAsync,
-                    static_args: HashMap::new(),
-                    next: "retry".to_string(),
-                    produces_placeholder: None,
-                    consumes_placeholders: Vec::new(),
-                    guards: Vec::new(),
-                    span: None,
-                }),
-            ),
-            (
-                "end".to_string(),
-                ExecutionNode::End(EndExecNode {
-                    id: "end".to_string(),
-                    status: "done".to_string(),
-                    span: None,
-                }),
-            ),
-        ]);
-        plan.start_node = "start".to_string();
-        let workflow = DslFrontend::lower(&plan).unwrap();
-        assert!(workflow.envelope().instructions().iter().enumerate().any(
-            |(address, instruction)| matches!(
-                instruction,
-                Instr::BrCounterLt { limit: 4, target, .. } if *target < Addr::from(address as u32)
-            )
-        ));
+    fn bounded_loop_lowers_to_n_forward_tasks_with_no_counter_instructions() {
+        let src = r#"(workflow test-loop
+          (start-event :id start :next retry)
+          (loop :id retry :ceiling 3 :body (
+             (service-task :id body :verb cbu.create :next retry)
+          ) :next end)
+          (end-event :id end :status "done"))"#;
+        let registry = StubPlaceholderRegistry::new().with_demo_bindings();
+        let plan = crate::dsl::compile(src, &registry).expect("compile");
+        let workflow = DslFrontend::lower(&plan).expect("lower");
+        let instructions = workflow.envelope().instructions();
+
+        assert!(
+            !instructions
+                .iter()
+                .any(|i| matches!(i, Instr::IncCounter { .. } | Instr::BrCounterLt { .. })),
+            "no counter-based back-edge instruction should ever be emitted post-G3"
+        );
+        let exec_dsl_task_count = instructions
+            .iter()
+            .filter(|i| matches!(i, Instr::ExecDslTask { .. }))
+            .count();
+        assert_eq!(
+            exec_dsl_task_count, 3,
+            "ceiling 3 -> 3 distinct forward task instructions (G3.4 audit position: N unrolled \
+             copies, not one counter-guarded repeat)"
+        );
     }
 
     fn parallel_plan() -> WorkflowExecutionPlan {
@@ -1109,6 +1031,7 @@ mod tests {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             ),
             (
@@ -1123,6 +1046,7 @@ mod tests {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             ),
             (
@@ -1228,6 +1152,7 @@ mod tests {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             );
         }

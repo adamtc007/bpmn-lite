@@ -275,6 +275,7 @@ impl Parser {
             next,
             delivery_mode: None,
             span,
+            loop_origin: None,
         })
     }
 
@@ -307,6 +308,7 @@ impl Parser {
             next,
             delivery_mode: None,
             span,
+            loop_origin: None,
         })
     }
 
@@ -336,6 +338,7 @@ impl Parser {
             next,
             delivery_mode,
             span,
+            loop_origin: None,
         })
     }
 

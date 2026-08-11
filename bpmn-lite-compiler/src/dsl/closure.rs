@@ -141,49 +141,21 @@ pub fn validate_path_family(
     }
 
     // ── L6: Bounded loops validation ──
-    let mut enclosing_loops: HashMap<String, Vec<String>> = HashMap::new();
-    for (id, node) in &plan.nodes {
-        if let ExecutionNode::Loop(lp) = node {
-            if lp.ceiling == 0 {
-                diagnostics.push(Diagnostic {
-                    node_id: id.clone(),
-                    message: format!("Loop '{}' lacks a finite ceiling", id),
-                    missing_placeholder: None,
-                });
-            }
-            for child_id in &lp.body {
-                enclosing_loops
-                    .entry(child_id.clone())
-                    .or_default()
-                    .push(id.clone());
-            }
-        }
-    }
-
-    // Back-edge check: if node's successor points back to a Loop head,
-    // verify that the Loop head is an enclosing loop of this node.
-    for id in plan.nodes.keys() {
-        let successors = adj.get(id).cloned().unwrap_or_default();
-        for succ in successors {
-            if let Some(ExecutionNode::Loop(_)) = plan.nodes.get(succ) {
-                let enclosers = enclosing_loops.get(id);
-                let is_enclosed = enclosers
-                    .map(|v| v.contains(&succ.to_string()))
-                    .unwrap_or(false);
-                if !is_enclosed {
-                    diagnostics.push(Diagnostic {
-                        node_id: id.clone(),
-                        message: format!(
-                            "Back-edge from '{}' targets Loop '{}' which does not enclose it",
-                            id, succ
-                        ),
-                        missing_placeholder: None,
-                    });
-                }
-            }
-        }
-    }
-
+    //
+    // G3.1/G3.3: `LoopAst`/`NodeAst::Loop` no longer survives compilation —
+    // `unroll::unroll_loops` (bpmn-lite-compiler/src/dsl/unroll.rs) expands
+    // every loop to forward-chained copies, rejecting `ceiling == 0` and an
+    // empty body as hard compile errors *before* the linter ever runs
+    // (strictly stronger than this pass's former soft diagnostics: those
+    // could be ignored by a caller that never inspected
+    // `validate_path_family`'s output; a compile error cannot be). Likewise
+    // the former back-edge-encloser check policed a raw cyclic edge that
+    // unrolling now makes structurally impossible to construct — there is
+    // no `ExecutionNode::Loop` left in `plan.nodes` for a back-edge to
+    // target. Both checks are retired here, not merely dead: `ast.rs`'s
+    // `TaskAst::loop_origin` carries the one piece of loop-provenance this
+    // pass still needs (see the idempotency check below), so nothing about
+    // "was this task inside a loop" was lost.
     // ── L4: Data closure (monotone dataflow analysis over SESE join modes) ──
     let mut entrance_avail: HashMap<String, HashSet<String>> = HashMap::new();
     let mut exit_avail: HashMap<String, HashSet<String>> = HashMap::new();
@@ -560,7 +532,11 @@ pub fn validate_path_family(
                 });
             }
 
-            let is_inside_loop = enclosing_loops.contains_key(id);
+            // G3.1/G3.3: `ExecutionNode::Loop` no longer exists post-unroll,
+            // so loop membership is read off `TaskAst::loop_origin`'s
+            // carried-through twin on `TaskExecNode` rather than an
+            // enclosing-loop graph walk.
+            let is_inside_loop = t.loop_origin.is_some();
             if is_inside_loop {
                 let is_idempotent = matches!(
                     decl.effect_class.as_deref(),
@@ -639,7 +615,7 @@ fn is_reachable_without_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::{compile, linter::StubPlaceholderRegistry, BindingDecl};
+    use crate::dsl::{compile, linter::StubPlaceholderRegistry, BindingDecl, CompileError};
 
     fn registry_with_enums() -> StubPlaceholderRegistry {
         StubPlaceholderRegistry::new().with_demo_bindings()
@@ -737,61 +713,119 @@ mod tests {
             && d.missing_placeholder.as_deref() == Some("@special-token")));
     }
 
-    #[test]
-    fn test_l6_safety() {
-        let reg = registry_with_enums();
+    // G3.1/G3.3 (2026-08-11): `test_l6_safety` retired. Its three
+    // assertions all depended on `ExecutionNode::Loop` surviving
+    // compilation (a raw back-edge that `validate_path_family` then
+    // policed as a soft diagnostic) — `unroll::unroll_loops` now expands
+    // every loop to forward-chained copies *inside* `compile()`, so no
+    // back-edge, and no `ExecutionNode::Loop`, ever reaches this pass:
+    //   1. "ceiling 0" is now a hard `CompileError::Unroll` (see
+    //      `unroll::tests::zero_ceiling_is_a_typed_reject_not_a_silent_no_op`
+    //      and `test_l6_ceiling_zero_is_now_a_compile_error` below) —
+    //      strictly stronger than the retired soft diagnostic, which a
+    //      caller could ignore by never inspecting `validate_path_family`'s
+    //      output.
+    //   2. "valid ceiling produces no diagnostic" has no successor test —
+    //      it asserted the ABSENCE of a check that no longer exists.
+    //   3. "back-edge escaping loop scope" policed a raw cyclic edge that
+    //      unrolling makes structurally impossible to construct; there is
+    //      no such edge left to mis-target another loop.
+    // What survives: the orthogonal idempotency-inside-a-retried-task
+    // check (`closure.rs`'s `is_inside_loop` branch), now keyed off
+    // `TaskAst::loop_origin`/`TaskExecNode::loop_origin` provenance instead
+    // of an `ExecutionNode::Loop` graph walk — proven below.
 
-        // 1. Loop with ceiling 0 (invalid)
+    #[test]
+    fn test_l6_ceiling_zero_is_now_a_compile_error() {
+        let reg = registry_with_enums();
         let src_ceiling_0 = r#"(workflow test-loop
           (start-event :id start :next my-loop)
           (loop :id my-loop :ceiling 0 :body (
              (service-task :id inside-task :verb cbu.create :next my-loop)
           ) :next end)
           (end-event :id end :status "Operational"))"#;
-        let plan = compile(src_ceiling_0, &reg).expect("compile");
-        let diags = validate_path_family(&plan, &reg);
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.node_id == "my-loop" && d.message.contains("lacks a finite ceiling")),
-            "expected ceiling error, got: {:?}",
-            diags
+        match compile(src_ceiling_0, &reg) {
+            Err(CompileError::Unroll(err)) => {
+                assert!(err.to_string().contains("ceiling 0"), "got: {err}");
+            }
+            other => panic!("expected CompileError::Unroll, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_l6_idempotency_check_survives_unrolling_via_loop_origin() {
+        let mut reg = registry_with_enums();
+        // A non-idempotent verb (no `idempotent_ensure`/`read` effect
+        // class, no `idempotency_key` arg) — the exact shape the L6
+        // idempotency check exists to catch when repeated by a loop.
+        reg.register_verb(
+            "billing.charge",
+            BindingDecl {
+                produces: None,
+                consumes: vec![],
+                effect_class: Some("write_obligation".into()),
+            },
         );
 
-        // 2. Loop with correct ceiling (valid)
-        let src_valid = r#"(workflow test-loop
+        let src = r#"(workflow test-loop
           (start-event :id start :next my-loop)
-          (loop :id my-loop :ceiling 5 :body (
-             (service-task :id inside-task :verb cbu.create :next my-loop)
+          (loop :id my-loop :ceiling 3 :body (
+             (service-task :id charge :verb billing.charge :next my-loop)
           ) :next end)
           (end-event :id end :status "Operational"))"#;
-        let plan = compile(src_valid, &reg).expect("compile");
+        let plan = compile(src, &reg).expect("compile");
+
+        // The loop unrolled to 3 forward copies — no "my-loop"/"charge" node
+        // survives under its original id.
+        assert!(plan.nodes.get("charge").is_none());
+        assert!(plan.nodes.get("my-loop").is_none());
+        assert_eq!(
+            plan.nodes
+                .keys()
+                .filter(|id| id.starts_with("charge__my-loop_"))
+                .count(),
+            3
+        );
+
+        let diags = validate_path_family(&plan, &reg);
+        let flagged: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.message.contains("is non-idempotent and lacks an idempotency guard"))
+            .map(|d| d.node_id.as_str())
+            .collect();
+        assert_eq!(
+            flagged.len(),
+            3,
+            "expected all 3 unrolled copies flagged, got: {:?}",
+            diags
+        );
+        for id in ["charge__my-loop_0", "charge__my-loop_1", "charge__my-loop_2"] {
+            assert!(flagged.contains(&id), "expected {id} flagged, got {flagged:?}");
+        }
+    }
+
+    #[test]
+    fn test_l6_idempotency_check_stays_silent_outside_any_loop() {
+        let mut reg = registry_with_enums();
+        reg.register_verb(
+            "billing.charge",
+            BindingDecl {
+                produces: None,
+                consumes: vec![],
+                effect_class: Some("write_obligation".into()),
+            },
+        );
+        let src = r#"(workflow test-no-loop
+          (start-event :id start :next charge)
+          (service-task :id charge :verb billing.charge :next end)
+          (end-event :id end :status "Operational"))"#;
+        let plan = compile(src, &reg).expect("compile");
         let diags = validate_path_family(&plan, &reg);
         assert!(
             !diags
                 .iter()
-                .any(|d| d.message.contains("lacks a finite ceiling")),
-            "unexpected ceiling error: {:?}",
-            diags
-        );
-
-        // 3. Back-edge escaping loop scope (invalid)
-        let src_escaping = r#"(workflow test-loop
-          (start-event :id start :next my-loop)
-          (loop :id my-loop :ceiling 5 :body (
-             (service-task :id inside-task :verb cbu.create :next other-loop)
-          ) :next end)
-          (loop :id other-loop :ceiling 5 :body (
-             (service-task :id other-task :verb cbu.create :next other-loop)
-          ) :next end)
-          (end-event :id end :status "Operational"))"#;
-        let plan = compile(src_escaping, &reg).expect("compile");
-        let diags = validate_path_family(&plan, &reg);
-        assert!(
-            diags.iter().any(|d| d.node_id == "inside-task"
-                && d.message
-                    .contains("targets Loop 'other-loop' which does not enclose it")),
-            "expected back-edge error, got: {:?}",
+                .any(|d| d.message.contains("is non-idempotent")),
+            "unexpected idempotency diagnostic outside any loop: {:?}",
             diags
         );
     }

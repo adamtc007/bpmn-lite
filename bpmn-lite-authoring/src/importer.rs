@@ -102,6 +102,7 @@ pub fn import_zeebe_bpmn(
                     consumes_placeholders: vec![],
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 })
             }
             IRNode::HumanWait { id, task_kind, .. } => {
@@ -123,6 +124,7 @@ pub fn import_zeebe_bpmn(
                     consumes_placeholders: vec![],
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 })
             }
             IRNode::TimerWait { id, spec } => {

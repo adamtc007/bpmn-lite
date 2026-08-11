@@ -3547,9 +3547,22 @@ async fn t_loop_4_verifier_rejects_backward_jump() {
     );
 }
 
-/// T-LOOP-5: Bytecode verifier allows BrCounterLt backward jump.
+// T-LOOP-5 (retired, G3.3, 2026-08-11): "Bytecode verifier allows
+// BrCounterLt backward jump" asserted the whitelist carve-out
+// `bpmn-lite-compiler/src/verifier.rs::verify_bytecode` used to grant
+// `BrCounterLt`. That carve-out is deleted — both front-ends now emit
+// acyclic output unconditionally (`bpmn-lite-compiler/src/dsl/unroll.rs`
+// expands every bounded loop to forward-only copies before verification
+// ever runs), so there is no legitimate producer of a backward
+// `BrCounterLt` left, and the assertion this test made ("should be
+// allowed") is now the wrong theorem. Replaced below with the proof that
+// supersedes it: a backward `BrCounterLt` is rejected exactly like any
+// other backward branch, same diagnostic as T-LOOP-4.
+/// T-LOOP-5 (replacement): bytecode verifier rejects a backward
+/// `BrCounterLt` the same as any other backward branch — the whitelist
+/// this used to require is gone (G3.3).
 #[tokio::test]
-async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
+async fn t_loop_5_verifier_rejects_br_counter_lt_backward_post_g3() {
     let program = bpmn_lite_types::legacy_program! {
         bytecode_version: [64u8; 32],
         program: vec![
@@ -3563,7 +3576,7 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
                 counter_id: 0,
                 limit: 3,
                 target: 0.into(),
-            }, // 2: backward, but bounded
+            }, // 2: backward — no longer whitelisted
             Instr::End,                          // 3
         ],
         debug_map: BTreeMap::new(),
@@ -3578,10 +3591,11 @@ async fn t_loop_5_verifier_allows_br_counter_lt_backward() {
     };
 
     let errors = bpmn_lite_compiler::verify_bytecode(&program);
+    assert!(!errors.is_empty(), "backward BrCounterLt should now be rejected");
     assert!(
-        errors.is_empty(),
-        "BrCounterLt backward should be allowed, got errors: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        errors[0].message.contains("Backward jump"),
+        "Error should mention backward jump: {}",
+        errors[0].message
     );
 }
 

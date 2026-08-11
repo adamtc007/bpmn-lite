@@ -17,7 +17,9 @@ mod manifest_registry;
 mod pack_build;
 mod plan;
 mod refactor;
+mod repeat;
 mod rpst;
+mod unroll;
 
 pub use ast::{
     ConditionAst, EndAst, JoinAst, JoinModeAst, LoopAst, NodeAst, SplitAst, SplitFlowAst,
@@ -40,13 +42,15 @@ pub use pack_build::{
     WorkflowPackDAG,
 };
 pub use parser::{parse_node_str, parse_workflow_str};
+pub use unroll::{unroll_loops, UnrollError, MAX_UNROLLED_NODES};
 pub use plan::{
-    DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode, LoopExecNode,
+    DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode,
     MessageWaitExecNode, PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode,
     SplitMode, StartExecNode, TaskExecNode, WaitExecNode, WorkflowExecutionPlan,
     derive_delivery_mode,
 };
 pub use refactor::{AstMutator, ToSexpr};
+pub use repeat::{repeat_n_times, RepeatNTimesError};
 pub use rpst::verify_sese_nesting;
 
 use lexer::lex;
@@ -59,6 +63,8 @@ mod parser;
 pub enum CompileError {
     /// Parse-phase errors: each string is `"[offset] message"`.
     Parse(Vec<String>),
+    /// G3.1/G3.2: loop-unrolling phase, between parse and lint.
+    Unroll(UnrollError),
     Lint(Vec<LintError>),
     Dag(Vec<DagError>),
 }
@@ -72,6 +78,7 @@ impl std::fmt::Display for CompileError {
                 }
                 Ok(())
             }
+            Self::Unroll(err) => writeln!(f, "unroll: {err}"),
             Self::Lint(errs) => {
                 for e in errs {
                     writeln!(f, "lint: {e}")?;
@@ -111,7 +118,12 @@ pub fn compile(
             .collect();
         return Err(CompileError::Parse(msgs));
     }
-    let ast = ast.ok_or_else(|| CompileError::Parse(vec!["empty workflow".into()]))?;
+    let mut ast = ast.ok_or_else(|| CompileError::Parse(vec!["empty workflow".into()]))?;
+
+    // Phase 1.5: unroll (G3.1/G3.2) — every `NodeAst::Loop` becomes N
+    // forward-chained copies before the linter ever sees it, so no cyclic
+    // shape survives into `ExecutionNode`/the DAG/back-edge machinery.
+    ast.nodes = unroll_loops(ast.nodes).map_err(CompileError::Unroll)?;
 
     // Phase 2: lint
     let plan = lint(&ast, registry).map_err(CompileError::Lint)?;

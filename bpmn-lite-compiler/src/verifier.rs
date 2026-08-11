@@ -846,29 +846,31 @@ fn check_gateway_nesting_pop(
 
 /// Verify bytecode for bounded-loop safety.
 ///
-/// Rejects backward `Jump`/`BrIf`/`BrIfNot` (infinite loop risk).
-/// Allows backward `BrCounterLt` (bounded by counter limit).
+/// Rejects every backward `Jump`/`BrIf`/`BrIfNot`/`BrCounterLt` (infinite
+/// loop risk). G3.3: `BrCounterLt`'s backward-jump carve-out is retired —
+/// both DSL and BPMN-XML front-ends now emit acyclic output unconditionally
+/// (loop unrolling, `bpmn-lite-compiler/src/dsl/unroll.rs`, expands every
+/// bounded loop to forward-only copies before this pass ever runs), so
+/// there is no legitimate producer of a backward `BrCounterLt` left to
+/// whitelist. A backward `BrCounterLt` is now exactly as illegal as any
+/// other backward branch.
 pub fn verify_bytecode(program: &CompiledProgram) -> Vec<VerifyError> {
     let mut errors = Vec::new();
     let program_len = Addr::new(program.program().len() as u32);
     for (addr, instr) in program.program().iter().enumerate() {
         let addr = Addr::new(addr as u32);
         match instr {
-            Instr::Jump { target } | Instr::BrIf { target } | Instr::BrIfNot { target } => {
+            Instr::Jump { target }
+            | Instr::BrIf { target }
+            | Instr::BrIfNot { target }
+            | Instr::BrCounterLt { target, .. } => {
                 check_target(&mut errors, program, addr, *target, program_len);
                 if *target < addr {
                     errors.push(VerifyError {
-                        message: format!(
-                            "Backward jump at addr {} to {} — only BrCounterLt may jump backward",
-                            addr, target
-                        ),
+                        message: format!("Backward jump at addr {} to {}", addr, target),
                         element_id: program.debug_map().get(&addr).cloned(),
                     });
                 }
-            }
-            Instr::BrCounterLt { target, .. } => {
-                check_target(&mut errors, program, addr, *target, program_len);
-                // BrCounterLt is allowed to jump backward (it's bounded by limit)
             }
             Instr::V2Fork { targets, .. } => {
                 for target in targets.iter().copied() {

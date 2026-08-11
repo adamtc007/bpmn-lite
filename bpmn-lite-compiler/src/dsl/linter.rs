@@ -316,6 +316,22 @@ impl<'a> Linter<'a> {
 
         for node in &flat_ast_nodes {
             let id = node.id();
+            // G3.1/G3.3: `compile()` always runs `unroll::unroll_loops`
+            // before `lint()`, so no `NodeAst::Loop` should ever reach
+            // here. `lint()` is `pub` and reachable directly, though — fail
+            // closed with a diagnostic naming the node, not a panic or a
+            // silently-dropped node, if some other caller skips unrolling.
+            if let NodeAst::Loop(loop_ast) = node {
+                self.err(
+                    id,
+                    format!(
+                        "internal error: un-unrolled loop '{}' reached the linter — \
+                         compile() must run unroll_loops before lint()",
+                        loop_ast.id
+                    ),
+                );
+                continue;
+            }
             let exec_node = match node {
                 NodeAst::Start(n) => {
                     if start_node.is_empty() {
@@ -421,6 +437,7 @@ impl<'a> Linter<'a> {
                         consumes_placeholders: decl.consumes,
                         guards: Vec::new(),
                         span: Some(n.span),
+                        loop_origin: n.loop_origin.clone(),
                     })
                 }
 
@@ -501,17 +518,7 @@ impl<'a> Linter<'a> {
                     })
                 }
 
-                NodeAst::Loop(n) => {
-                    self.check_next_ref(id, &n.next, &node_ids);
-
-                    ExecutionNode::Loop(LoopExecNode {
-                        id: n.id.clone(),
-                        ceiling: n.ceiling,
-                        body: n.body.iter().map(|child| child.id().to_owned()).collect(),
-                        next: n.next.clone(),
-                        span: Some(n.span),
-                    })
-                }
+                NodeAst::Loop(_) => unreachable!("filtered out above"),
 
                 NodeAst::End(n) => ExecutionNode::End(EndExecNode {
                     id: n.id.clone(),
@@ -533,7 +540,6 @@ impl<'a> Linter<'a> {
                             let next_of_target = match target_node {
                                 ExecutionNode::Task(t) => Some(t.next.clone()),
                                 ExecutionNode::Split(s) => Some(s.join.clone()),
-                                ExecutionNode::Loop(lp) => Some(lp.next.clone()),
                                 ExecutionNode::Join(j) => Some(j.next.clone()),
                                 ExecutionNode::Start(st) => Some(st.next.clone()),
                                 ExecutionNode::Wait(w) => Some(w.next.clone()),
@@ -589,11 +595,6 @@ impl<'a> Linter<'a> {
                         ExecutionNode::Split(s) => {
                             if s.join == meet_id {
                                 s.join = join_id.clone();
-                            }
-                        }
-                        ExecutionNode::Loop(lp) => {
-                            if lp.next == meet_id {
-                                lp.next = join_id.clone();
                             }
                         }
                         ExecutionNode::Join(j) => {

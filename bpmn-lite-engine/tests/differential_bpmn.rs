@@ -168,6 +168,7 @@ fn dsl_parallel_plan() -> WorkflowExecutionPlan {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             ),
             (
@@ -182,6 +183,7 @@ fn dsl_parallel_plan() -> WorkflowExecutionPlan {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             ),
             (
@@ -206,6 +208,7 @@ fn dsl_parallel_plan() -> WorkflowExecutionPlan {
                     consumes_placeholders: Vec::new(),
                     guards: Vec::new(),
                     span: None,
+                    loop_origin: None,
                 }),
             ),
             (

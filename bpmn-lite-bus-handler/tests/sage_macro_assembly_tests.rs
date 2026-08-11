@@ -181,6 +181,7 @@ async fn test_sage_transitive_validation_propagation() {
                 consumes_placeholders: vec![],
                 guards: Vec::new(),
                 span: None,
+                loop_origin: None,
             },
         ),
     );

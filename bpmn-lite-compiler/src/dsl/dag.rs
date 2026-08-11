@@ -116,10 +116,17 @@ fn find_cycle<'a>(
     }
 }
 
+/// G3.3: the loop back-edge whitelist is retired — `unroll::unroll_loops`
+/// (bpmn-lite-compiler/src/dsl/unroll.rs) expands every loop to
+/// forward-chained copies before `lint()`/`validate_dag` ever run, so no
+/// `ExecutionNode::Loop`, and no legitimate back-edge, can reach this pass.
+/// Every cycle this DFS finds is now unconditionally illegal — `plan` is
+/// kept as a parameter only for the recursive-call signature shared with
+/// `find_cycle`, not because any node kind still needs a carve-out.
 fn dfs_cycle<'a>(
     node: &'a str,
     adj: &'a HashMap<&'a str, Vec<&'a str>>,
-    plan: &'a WorkflowExecutionPlan,
+    _plan: &'a WorkflowExecutionPlan,
     visited: &mut HashSet<&'a str>,
     stack: &mut HashSet<&'a str>,
     path: &mut Vec<String>,
@@ -130,24 +137,13 @@ fn dfs_cycle<'a>(
 
     if let Some(nexts) = adj.get(node) {
         for &next in nexts {
-            // In a structured loop, a back-edge pointing to the loop head is expected.
-            // Do not treat it as an illegal cycle if next is a Loop node and node is part of its body.
-            let is_expected_back_edge = if let Some(ExecutionNode::Loop(lp)) = plan.nodes.get(next)
-            {
-                lp.body.contains(&node.to_string())
-            } else {
-                false
-            };
-
-            if !is_expected_back_edge {
-                if !visited.contains(next) {
-                    if dfs_cycle(next, adj, plan, visited, stack, path) {
-                        return true;
-                    }
-                } else if stack.contains(next) {
-                    path.push(next.to_owned());
+            if !visited.contains(next) {
+                if dfs_cycle(next, adj, _plan, visited, stack, path) {
                     return true;
                 }
+            } else if stack.contains(next) {
+                path.push(next.to_owned());
+                return true;
             }
         }
     }

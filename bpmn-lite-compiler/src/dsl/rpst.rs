@@ -110,13 +110,6 @@ fn dfs_walk(
             }
             dfs_walk(&jn.next, plan, visited, split_stack, errors);
         }
-        ExecutionNode::Loop(lp) => {
-            for child_id in &lp.body {
-                let mut child_stack = split_stack.clone();
-                dfs_walk(child_id, plan, visited, &mut child_stack, errors);
-            }
-            dfs_walk(&lp.next, plan, visited, split_stack, errors);
-        }
         ExecutionNode::Start(st) => {
             dfs_walk(&st.next, plan, visited, split_stack, errors);
         }

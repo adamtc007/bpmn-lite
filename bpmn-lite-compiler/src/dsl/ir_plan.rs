@@ -251,6 +251,7 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                         consumes_placeholders: Vec::new(),
                         guards: guards_by_host.remove(id).unwrap_or_default(),
                         span: None,
+                        loop_origin: None,
                     }),
                 );
             }

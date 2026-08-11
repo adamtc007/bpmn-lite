@@ -281,7 +281,6 @@ pub enum ExecutionNode {
     Task(TaskExecNode),
     Split(SplitExecNode),
     Join(JoinExecNode),
-    Loop(LoopExecNode),
     Wait(WaitExecNode),
     MessageWait(MessageWaitExecNode),
     End(EndExecNode),
@@ -294,7 +293,6 @@ impl ExecutionNode {
             Self::Task(n) => &n.id,
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
-            Self::Loop(n) => &n.id,
             Self::Wait(n) => &n.id,
             Self::MessageWait(n) => &n.id,
             Self::End(n) => &n.id,
@@ -315,13 +313,6 @@ impl ExecutionNode {
             Self::Task(n) => vec![n.next.as_str()],
             Self::Split(n) => n.flows.iter().map(|f| f.next.as_str()).collect(),
             Self::Join(n) => vec![n.next.as_str()],
-            Self::Loop(n) => {
-                let mut v = vec![n.next.as_str()];
-                if let Some(first) = n.body.first() {
-                    v.push(first.as_str());
-                }
-                v
-            }
             Self::Wait(n) => vec![n.next.as_str()],
             Self::MessageWait(n) => vec![n.next.as_str()],
             Self::End(_) => vec![],
@@ -382,6 +373,12 @@ pub struct TaskExecNode {
     pub guards: Vec<GuardExecSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<bpmn_lite_types::SourceSpan>,
+    /// G3.1 provenance: the original (unqualified) loop id this task was
+    /// unrolled from, mirroring `ast::TaskAst::loop_origin`. `None` for a
+    /// plan compiled before G3 or for a task authored outside any loop.
+    /// `serde(default)` for the same reason as `guards` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_origin: Option<String>,
 }
 
 /// One boundary guard attached to a [`TaskExecNode`] (WS-D D1).
@@ -492,15 +489,6 @@ pub struct JoinExecNode {
     pub span: Option<bpmn_lite_types::SourceSpan>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LoopExecNode {
-    pub id: String,
-    pub ceiling: u32,
-    pub body: Vec<String>,
-    pub next: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub span: Option<bpmn_lite_types::SourceSpan>,
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EndExecNode {
@@ -567,6 +555,7 @@ mod tests {
                     escape_entry: escape_entry.into(),
                 }],
                 span: None,
+                loop_origin: None,
             }),
         );
         nodes.insert(
@@ -617,6 +606,7 @@ mod tests {
             consumes_placeholders: Vec::new(),
             guards: Vec::new(),
             span: None,
+            loop_origin: None,
         });
         let plan = guarded_plan("esc", vec![("esc".to_string(), stranded)]);
         assert!(!plan.mathematically_proved());
@@ -639,6 +629,7 @@ mod tests {
             consumes_placeholders: Vec::new(),
             guards: Vec::new(),
             span: None,
+            loop_origin: None,
         });
         let esc_end = ExecutionNode::End(EndExecNode {
             id: "end_esc".into(),

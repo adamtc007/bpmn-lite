@@ -354,6 +354,7 @@ mod tests {
             next: "".to_string(),
             delivery_mode: None,
             span: SourceSpan::new(0, 0),
+            loop_origin: None,
         });
 
         mutator.insert_after("start", new_task).unwrap();

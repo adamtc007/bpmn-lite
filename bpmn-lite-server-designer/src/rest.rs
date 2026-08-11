@@ -671,12 +671,6 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 };
                 ("join".to_owned(), mode_str.to_owned(), None, j.span)
             }
-            ExecutionNode::Loop(l) => (
-                "loop".to_owned(),
-                format!("Loop (Max {})", l.ceiling),
-                None,
-                l.span,
-            ),
             ExecutionNode::Wait(w) => (
                 "wait".to_owned(),
                 format!("Wait ({})", timer_spec_label(&w.spec)),
@@ -748,20 +742,6 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     from: id.clone(),
                     to: j.next.clone(),
                     condition: None,
-                });
-            }
-            ExecutionNode::Loop(l) => {
-                if let Some(first_body) = l.body.first() {
-                    edges.push(VisualEdgeDto {
-                        from: id.clone(),
-                        to: first_body.clone(),
-                        condition: Some("Loop Body".into()),
-                    });
-                }
-                edges.push(VisualEdgeDto {
-                    from: id.clone(),
-                    to: l.next.clone(),
-                    condition: Some("Loop Exit".into()),
                 });
             }
             ExecutionNode::Wait(w) => {
@@ -1069,6 +1049,9 @@ async fn compile_bpmn_preview(Json(body): Json<CompilePreviewBody>) -> impl Into
             let (error_msg, diagnostics) = match err {
                 bpmn_lite_compiler::dsl::CompileError::Parse(errs) => {
                     ("Parsing failed".to_owned(), errs)
+                }
+                bpmn_lite_compiler::dsl::CompileError::Unroll(err) => {
+                    ("Loop unrolling failed".to_owned(), vec![err.to_string()])
                 }
                 bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
                     let mut formatted = Vec::new();
@@ -1460,8 +1443,8 @@ fn get_macros_config() -> Option<bpmn_lite_compiler::dsl::MacroConfigList> {
 
 async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoResponse {
     use bpmn_lite_compiler::dsl::{
-        create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
-        parse_workflow_str, AstMutator, NodeAst, ToSexpr, XorBranchConfig,
+        create_parallel_split_join, create_xor_split_join, parse_workflow_str, repeat_n_times,
+        AstMutator, NodeAst, ToSexpr, XorBranchConfig,
     };
 
     let mut workflow = match parse_workflow_str(&body.source_code) {
@@ -1496,53 +1479,13 @@ async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoRespon
                 .get("ceiling")
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(3);
-            let loop_id = body
-                .parameters
-                .get("custom_id")
-                .cloned()
-                .unwrap_or_else(|| format!("{}-retry-loop", target_node_id));
+            let loop_id = body.parameters.get("custom_id").cloned();
 
-            // Extract target task to wrap
-            let target_task = {
-                let mut mutator = AstMutator::new(&mut workflow);
-                match mutator.remove_node(target_node_id) {
-                    Some(NodeAst::Task(t)) => t,
-                    _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Task '{}' not found or is not a task node", target_node_id)}))).into_response(),
-                }
-            };
-
-            let exit_next = target_task.next.clone();
-
-            let pred_ids = find_all_predecessors_id_in_workflow(&workflow, target_node_id);
-            {
-                let mut mutator = AstMutator::new(&mut workflow);
-                for pred in &pred_ids {
-                    let _ = mutator.rewire_next(pred, &exit_next);
-                }
-            }
-
-            let loop_node = NodeAst::Loop(create_bounded_retry_macro(
-                target_task,
-                ceiling,
-                &loop_id,
-                &exit_next,
-            ));
-
-            let pred_ids_exit = find_all_predecessors_id_in_workflow(&workflow, &exit_next);
-            let first_id = if workflow.nodes.is_empty() {
-                None
-            } else {
-                Some(workflow.nodes[0].id().to_string())
-            };
-
-            let mut mutator = AstMutator::new(&mut workflow);
-            if !pred_ids_exit.is_empty() {
-                mutator.insert_after(&pred_ids_exit[0], loop_node)
-            } else if let Some(first) = first_id {
-                mutator.insert_after(&first, loop_node)
-            } else {
-                Err("Empty workflow scope".to_string())
-            }
+            // G3.3: the whole multi-step edit (extract task, rewire
+            // predecessors, build the loop, splice it back in) is owned by
+            // one entry point instead of being orchestrated here directly.
+            repeat_n_times(&mut workflow, target_node_id, ceiling, loop_id.as_deref())
+                .map_err(|e| e.to_string())
         }
         "XorSplit" => {
             let split_id = body
@@ -1716,6 +1659,7 @@ async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoRespon
         Err(err) => {
             let diagnostics = match err {
                 bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                bpmn_lite_compiler::dsl::CompileError::Unroll(err) => vec![err.to_string()],
                 bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
                     errs.iter().map(|e| format!("{}", e)).collect()
                 }
@@ -1732,60 +1676,6 @@ async fn apply_dsl_macro(Json(body): Json<MacroApplyRequest>) -> impl IntoRespon
                 diagnostics,
             };
             (StatusCode::OK, Json(resp)).into_response()
-        }
-    }
-}
-
-fn find_all_predecessors_id_in_workflow(
-    workflow: &bpmn_lite_compiler::dsl::WorkflowSource,
-    target_id: &str,
-) -> Vec<String> {
-    let mut preds = Vec::new();
-    find_all_predecessors_id_rec(&workflow.nodes, target_id, &mut preds);
-    preds
-}
-
-fn find_all_predecessors_id_rec(
-    nodes: &[bpmn_lite_compiler::dsl::NodeAst],
-    target_id: &str,
-    acc: &mut Vec<String>,
-) {
-    for node in nodes {
-        match node {
-            bpmn_lite_compiler::dsl::NodeAst::Start(s) => {
-                if s.next == target_id {
-                    acc.push(s.id.clone());
-                }
-            }
-            bpmn_lite_compiler::dsl::NodeAst::Task(t) => {
-                if t.next == target_id {
-                    acc.push(t.id.clone());
-                }
-            }
-            bpmn_lite_compiler::dsl::NodeAst::MessageWait(wait) => {
-                if wait.next == target_id {
-                    acc.push(wait.id.clone());
-                }
-            }
-            bpmn_lite_compiler::dsl::NodeAst::Join(j) => {
-                if j.next == target_id {
-                    acc.push(j.id.clone());
-                }
-            }
-            bpmn_lite_compiler::dsl::NodeAst::Loop(l) => {
-                if l.next == target_id {
-                    acc.push(l.id.clone());
-                }
-                find_all_predecessors_id_rec(&l.body, target_id, acc);
-            }
-            bpmn_lite_compiler::dsl::NodeAst::Split(s) => {
-                for flow in &s.flows {
-                    if flow.next == target_id {
-                        acc.push(s.id.clone());
-                    }
-                }
-            }
-            bpmn_lite_compiler::dsl::NodeAst::End(_) => {}
         }
     }
 }
@@ -1834,6 +1724,7 @@ async fn resolve_dsl_diagnostics(Json(body): Json<DiagnosticsResolveRequest>) ->
                 Err(err) => {
                     let diagnostics = match err {
                         bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                        bpmn_lite_compiler::dsl::CompileError::Unroll(err) => vec![err.to_string()],
                         bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
                             errs.iter().map(|e| format!("{}", e)).collect()
                         }
@@ -2047,6 +1938,9 @@ async fn define_template_endpoint(
             let (error_msg, diagnostics) = match e {
                 bpmn_lite_compiler::dsl::CompileError::Parse(errs) => {
                     ("Parsing failed".to_owned(), errs)
+                }
+                bpmn_lite_compiler::dsl::CompileError::Unroll(err) => {
+                    ("Loop unrolling failed".to_owned(), vec![err.to_string()])
                 }
                 bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
                     let formatted = errs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>();
@@ -2908,6 +2802,9 @@ async fn session_revision_endpoint(
         match bpmn_lite_compiler::dsl::compile(&body.dsl_source, &registry) {
             Ok(_) => (true, Vec::new()),
             Err(bpmn_lite_compiler::dsl::CompileError::Parse(errs)) => (false, errs),
+            Err(bpmn_lite_compiler::dsl::CompileError::Unroll(err)) => {
+                (false, vec![err.to_string()])
+            }
             Err(bpmn_lite_compiler::dsl::CompileError::Lint(errs)) => {
                 (false, errs.iter().map(|e| format!("{e}")).collect())
             }
@@ -6786,6 +6683,7 @@ async fn session_graph_endpoint(
         Err(e) => {
             let diagnostics: Vec<String> = match e {
                 bpmn_lite_compiler::dsl::CompileError::Parse(errs) => errs,
+                bpmn_lite_compiler::dsl::CompileError::Unroll(err) => vec![err.to_string()],
                 bpmn_lite_compiler::dsl::CompileError::Lint(errs) => {
                     errs.iter().map(|x| format!("{x}")).collect()
                 }

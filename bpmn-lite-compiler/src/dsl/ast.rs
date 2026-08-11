@@ -70,6 +70,12 @@ pub struct TaskAst {
     pub next: String,
     pub delivery_mode: Option<String>,
     pub span: bpmn_lite_types::SourceSpan,
+    /// G3.1 provenance: the original (unqualified) loop id this task was
+    /// unrolled from, or `None` if authored outside any loop. Never set by
+    /// the parser — stamped only by `unroll::unroll_loops`. Lets
+    /// `closure.rs`'s L6 idempotency-inside-a-retried-task check survive
+    /// unrolling without needing `ExecutionNode::Loop` to still exist.
+    pub loop_origin: Option<String>,
 }
 
 #[derive(Debug, Clone)]

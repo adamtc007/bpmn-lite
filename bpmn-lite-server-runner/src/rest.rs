@@ -645,34 +645,6 @@ async fn drive_forward(
                     let _ = commit_demo_instance(store, &inst).await;
                 }
             }
-            Some(ExecutionNode::Loop(l)) => {
-                let counter_key = format!("__loop_count_{}", l.id);
-                let current_count =
-                    pv.get(&counter_key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-                if current_count < l.ceiling {
-                    let next_node = if let Some(first_body) = l.body.first() {
-                        first_body.clone()
-                    } else {
-                        l.next.clone()
-                    };
-
-                    let mut updated_pv = pv.clone();
-                    updated_pv.insert(
-                        counter_key,
-                        serde_json::Value::Number((current_count + 1).into()),
-                    );
-                    inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
-                    inst.current_node_id = Some(next_node);
-                    let _ = commit_demo_instance(store, &inst).await;
-                } else {
-                    let mut updated_pv = pv.clone();
-                    updated_pv.remove(&counter_key);
-                    inst.placeholder_values = Some(serde_json::Value::Object(updated_pv.into_iter().collect()));
-                    inst.current_node_id = Some(l.next.clone());
-                    let _ = commit_demo_instance(store, &inst).await;
-                }
-            }
             Some(ExecutionNode::End(end)) => {
                 inst.state = ProcessState::Completed {
                     at: chrono::Utc::now().timestamp_millis(),
@@ -740,12 +712,6 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                 }
                 ExecutionNode::Join(j) => {
                     queue.push_back(j.next.clone());
-                }
-                ExecutionNode::Loop(l) => {
-                    for body_node in &l.body {
-                        queue.push_back(body_node.clone());
-                    }
-                    queue.push_back(l.next.clone());
                 }
                 ExecutionNode::Wait(w) => {
                     queue.push_back(w.next.clone());
@@ -831,13 +797,6 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                         kind: "join".into(),
                     }
                 }
-                ExecutionNode::Loop(l) => NodeInfo {
-                    id: id.clone(),
-                    label: format!("Loop (Max {})", l.ceiling),
-                    fqn: None,
-                    target_domain: None,
-                    kind: "loop".into(),
-                },
                 ExecutionNode::Wait(w) => NodeInfo {
                     id: id.clone(),
                     label: format!("⏲ Wait ({})", timer_spec_label(&w.spec)),
@@ -948,7 +907,6 @@ async fn get_instance_stack(
                     ExecutionNode::End(e) => span = e.span,
                     ExecutionNode::Split(sp) => span = sp.span,
                     ExecutionNode::Join(j) => span = j.span,
-                    ExecutionNode::Loop(l) => span = l.span,
                     ExecutionNode::Wait(w) => span = w.span,
                     ExecutionNode::MessageWait(wait) => span = wait.span,
                 }
@@ -1028,12 +986,6 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 };
                 ("join".to_owned(), mode_str.to_owned(), None, j.span)
             }
-            ExecutionNode::Loop(l) => (
-                "loop".to_owned(),
-                format!("Loop (Max {})", l.ceiling),
-                None,
-                l.span,
-            ),
             ExecutionNode::Wait(w) => (
                 "wait".to_owned(),
                 format!("Wait ({})", timer_spec_label(&w.spec)),
@@ -1105,20 +1057,6 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                     from: id.clone(),
                     to: j.next.clone(),
                     condition: None,
-                });
-            }
-            ExecutionNode::Loop(l) => {
-                if let Some(first_body) = l.body.first() {
-                    edges.push(VisualEdgeDto {
-                        from: id.clone(),
-                        to: first_body.clone(),
-                        condition: Some("Loop Body".into()),
-                    });
-                }
-                edges.push(VisualEdgeDto {
-                    from: id.clone(),
-                    to: l.next.clone(),
-                    condition: Some("Loop Exit".into()),
                 });
             }
             ExecutionNode::Wait(w) => {
