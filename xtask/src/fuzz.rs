@@ -94,9 +94,12 @@ fn seed(root: &Path) -> Result<()> {
     for (name, xml) in FIXTURES {
         let (ir, meta) = bpmn_lite_compiler::parse_bpmn_with_meta(xml)
             .map_err(|e| anyhow!("parse fixture '{name}': {e}"))?;
-        let workflow =
-            bpmn_lite_compiler::Compiler::lower_with_default(&ir, meta.default_failure_budget)
-                .map_err(|e| anyhow!("lower fixture '{name}': {e}"))?;
+        let workflow = bpmn_lite_compiler::Compiler::lower_with_default(
+            &ir,
+            meta.default_failure_budget,
+            None,
+        )
+        .map_err(|e| anyhow!("lower fixture '{name}': {e}"))?;
         let bytes = workflow
             .canonical_bytes()
             .map_err(|e| anyhow!("encode fixture '{name}': {e}"))?;

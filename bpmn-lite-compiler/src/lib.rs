@@ -20,7 +20,10 @@ mod verifier;
 // parser / lowerer / verifier entry points, e.g.
 // `use bpmn_lite_compiler::IRGraph`.
 pub use ir::*;
-pub use lowering::{compute_post_dominators, compute_region_map, gateway_pairs, lower, lower_v2};
+pub use lowering::{
+    compute_post_dominators, compute_region_map, gateway_pairs, lower, lower_v2,
+    lower_with_default,
+};
 pub use parser::{parse_bpmn, parse_bpmn_with_meta, ProcessMeta};
 pub use verifier::{verify, verify_bytecode, verify_or_err, VerifyError};
 
@@ -36,18 +39,20 @@ pub struct Compiler;
 
 impl Compiler {
     pub fn lower(graph: &IRGraph) -> Result<VerifiedWorkflow> {
-        Self::lower_with_default(graph, None)
+        Self::lower_with_default(graph, None, None)
     }
 
-    /// R2: `lower` carrying `ProcessMeta`'s process-level
-    /// `defaultFailureBudget` through to the artifact's workflow-level
-    /// guard-budget default.
+    /// R2 / G5.2: `lower` carrying `ProcessMeta`'s process-level
+    /// `defaultFailureBudget` and a workflow-level default retry policy
+    /// through to the artifact.
     pub fn lower_with_default(
         graph: &IRGraph,
         default_failure_budget: Option<u32>,
+        default_retry_policy: Option<RetryPolicyDecl>,
     ) -> Result<VerifiedWorkflow> {
         verify_or_err(graph)?;
-        let legacy = lowering::lower_with_default(graph, default_failure_budget)?;
+        let legacy =
+            lowering::lower_with_default(graph, default_failure_budget, default_retry_policy)?;
         let bytecode_errors = verify_bytecode(&legacy);
         if !bytecode_errors.is_empty() {
             let messages = bytecode_errors

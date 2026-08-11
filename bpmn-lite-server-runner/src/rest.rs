@@ -720,6 +720,9 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     queue.push_back(wait.next.clone());
                 }
                 ExecutionNode::End(_) => {}
+                ExecutionNode::MultiInstance(mi) => {
+                    queue.push_back(mi.next.clone());
+                }
             }
             // WS-D D1: guard escape subgraphs are reachable via their
             // host — walk them so escape nodes list in flow order rather
@@ -821,6 +824,16 @@ fn build_node_infos(plan: &WorkflowExecutionPlan) -> Vec<NodeInfo> {
                     target_domain: None,
                     kind: "end".into(),
                 },
+                ExecutionNode::MultiInstance(mi) => NodeInfo {
+                    id: id.clone(),
+                    label: format!(
+                        "⇶ For each of {} (max {}): {}",
+                        mi.collection_flag_name, mi.declared_max, mi.task_type
+                    ),
+                    fqn: Some(mi.task_type.clone()),
+                    target_domain: None,
+                    kind: "multi_instance".into(),
+                },
             })
         })
         .collect()
@@ -909,6 +922,10 @@ async fn get_instance_stack(
                     ExecutionNode::Join(j) => span = j.span,
                     ExecutionNode::Wait(w) => span = w.span,
                     ExecutionNode::MessageWait(wait) => span = wait.span,
+                    ExecutionNode::MultiInstance(mi) => {
+                        span = mi.span;
+                        plug = Some(mi.task_type.clone());
+                    }
                 }
             }
         }
@@ -1001,6 +1018,15 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 wait.span,
             ),
+            ExecutionNode::MultiInstance(mi) => (
+                "multi_instance".to_owned(),
+                format!(
+                    "For each of {} (max {}): {}",
+                    mi.collection_flag_name, mi.declared_max, mi.task_type
+                ),
+                Some(mi.task_type.clone()),
+                mi.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -1077,6 +1103,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 });
             }
             ExecutionNode::End(_) => {}
+            ExecutionNode::MultiInstance(mi) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: mi.next.clone(),
+                    condition: None,
+                });
+            }
         }
     }
 

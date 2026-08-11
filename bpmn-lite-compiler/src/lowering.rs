@@ -33,23 +33,37 @@ fn boundary_failure_budget(graph: &IRGraph, idx: NodeIndex) -> Option<u32> {
 /// V5.3's "delete v1 instruction emission from both compilers" mandate —
 /// not gated on a value nothing ever sets differently any more.
 pub fn lower(graph: &IRGraph) -> Result<CompiledProgram> {
-    lower_with_default(graph, None)
+    lower_with_default(graph, None, None)
 }
 
-/// R2 (§31 follow-up): `lower` with the process-level `defaultFailureBudget`
-/// from `parse_bpmn_with_meta`'s `ProcessMeta`. `None` = not declared →
-/// compiled-in conservative default; `Some(0)` is rejected (a zero ceiling
-/// would quarantine on the first rollback of every guard — declare that
-/// per-guard if it is really meant).
-pub(crate) fn lower_with_default(
+/// R2 (§31 follow-up) / G5.2: `lower` with the process-level
+/// `defaultFailureBudget` (from `parse_bpmn_with_meta`'s `ProcessMeta`) and
+/// the workflow-level default retry policy. `None` = not declared →
+/// compiled-in conservative default; `Some(0)` failure budget is rejected (a
+/// zero ceiling would quarantine on the first rollback of every guard —
+/// declare that per-guard if it is really meant); an invalid
+/// `RetryPolicyDecl` (see its doc comment) is likewise rejected here, not
+/// silently clamped.
+pub fn lower_with_default(
     graph: &IRGraph,
     default_failure_budget: Option<u32>,
+    default_retry_policy: Option<RetryPolicyDecl>,
 ) -> Result<CompiledProgram> {
     let default_guard_budget = match default_failure_budget {
         Some(max_failures) => ScopeFailureBudget::new(1, max_failures).map_err(|error| {
             anyhow!("process defaultFailureBudget {max_failures} is invalid: {error}")
         })?,
         None => ScopeFailureBudget::conservative_default(),
+    };
+    let retry_policy = match default_retry_policy {
+        Some(decl) => bpmn_lite_types::RetryPolicy::new(
+            decl.version,
+            decl.max_attempts,
+            decl.base_delay_ms,
+            decl.max_delay_ms,
+        )
+        .map_err(|error| anyhow!("process default retry policy is invalid: {error}"))?,
+        None => bpmn_lite_types::RetryPolicy::conservative_default(),
     };
     let start_idx = find_start(graph).ok_or_else(|| anyhow!("No Start node in IR graph"))?;
 
@@ -957,7 +971,8 @@ pub(crate) fn lower_with_default(
         ffi_task_decls: ffi_task_decls,
     }
     .with_v2_corr_sources(v2_corr_sources)
-    .with_v2_guard_budgets(v2_guard_budgets, default_guard_budget))
+    .with_v2_guard_budgets(v2_guard_budgets, default_guard_budget)
+    .with_default_retry_policy(retry_policy))
 }
 
 /// V5.3 (§18, landed 2026-07-23): thin alias, retained for the existing
@@ -3052,8 +3067,9 @@ mod tests {
         let (graph, meta) =
             crate::parse_bpmn_with_meta(&xml(r#" defaultFailureBudget="2""#)).unwrap();
         assert_eq!(meta.default_failure_budget, Some(2));
-        let workflow = crate::Compiler::lower_with_default(&graph, meta.default_failure_budget)
-            .expect("declared default must compile");
+        let workflow =
+            crate::Compiler::lower_with_default(&graph, meta.default_failure_budget, None)
+                .expect("declared default must compile");
         assert_eq!(
             workflow.envelope().metadata().default_guard_budget().max_failures(),
             2,
@@ -3062,7 +3078,7 @@ mod tests {
 
         let (graph, meta) = crate::parse_bpmn_with_meta(&xml("")).unwrap();
         assert_eq!(meta.default_failure_budget, None);
-        let workflow = crate::Compiler::lower_with_default(&graph, None).unwrap();
+        let workflow = crate::Compiler::lower_with_default(&graph, None, None).unwrap();
         assert_eq!(
             workflow.envelope().metadata().default_guard_budget().max_failures(),
             5,
@@ -3072,7 +3088,8 @@ mod tests {
         let (graph, meta) =
             crate::parse_bpmn_with_meta(&xml(r#" defaultFailureBudget="0""#)).unwrap();
         assert_eq!(meta.default_failure_budget, Some(0));
-        let result = crate::Compiler::lower_with_default(&graph, meta.default_failure_budget);
+        let result =
+            crate::Compiler::lower_with_default(&graph, meta.default_failure_budget, None);
         assert!(
             result.is_err(),
             "defaultFailureBudget=0 must be rejected at lowering, got {result:?}"

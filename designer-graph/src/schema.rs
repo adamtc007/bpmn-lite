@@ -88,11 +88,37 @@ pub struct DesignerDag {
     /// R2 process-level guard-budget default; per-guard budgets live on
     /// the `Boundary*` nodes themselves. Carried into admission by
     /// `admit()` (review F1 — `to_ir()` alone cannot carry it).
-    pub default_guard_budget: Option<u32>,
+    ///
+    /// G5.1: tightened from `pub` to `pub(crate)` — until now this field
+    /// had no `Operation` and was the one documented exception to "the
+    /// mutators are pub(crate)" above (direct field assignment, test-only).
+    /// `Operation::SetDefaultGuardBudget` is now the real mutation surface;
+    /// cross-crate reads go through the `default_guard_budget()` accessor.
+    pub(crate) default_guard_budget: Option<u32>,
+    /// G5.2 — workflow-level default retry policy, same carve-out and same
+    /// "no `IRNode` home, rides the DAG root" reasoning as
+    /// `default_guard_budget` above. Raw/unvalidated (see
+    /// `RetryPolicyDecl`'s doc comment); validated by `Compiler::lower_with_default`
+    /// at admission time.
+    pub(crate) default_retry_policy: Option<bpmn_lite_compiler::RetryPolicyDecl>,
     graph: DiGraph<DesignerNode, DesignerEdge>,
     key_index: HashMap<NodeKey, NodeIndex>,
     bpmn_ids: HashSet<String>,
     edge_ids: HashSet<String>,
+}
+
+impl DesignerDag {
+    /// Cross-crate read access to the process-level guard-budget default
+    /// (the field itself is `pub(crate)` — see its doc comment).
+    pub fn default_guard_budget(&self) -> Option<u32> {
+        self.default_guard_budget
+    }
+
+    /// Cross-crate read access to the process-level default retry policy
+    /// (the field itself is `pub(crate)` — see its doc comment).
+    pub fn default_retry_policy(&self) -> Option<bpmn_lite_compiler::RetryPolicyDecl> {
+        self.default_retry_policy
+    }
 }
 
 impl DesignerDag {
@@ -402,12 +428,13 @@ impl DesignerDag {
         if !errors.is_empty() {
             return Err(errors);
         }
-        Compiler::lower_with_default(&ir, self.default_guard_budget).map_err(|e| {
-            vec![VerifyError {
-                message: format!("{e}"),
-                element_id: None,
-            }]
-        })
+        Compiler::lower_with_default(&ir, self.default_guard_budget, self.default_retry_policy)
+            .map_err(|e| {
+                vec![VerifyError {
+                    message: format!("{e}"),
+                    element_id: None,
+                }]
+            })
     }
 
     // ── ops.rs support (WS-A.2) — NOT a public mutation surface ──────────

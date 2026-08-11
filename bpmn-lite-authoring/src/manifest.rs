@@ -332,6 +332,8 @@ mod tests {
             meta: None,
             nodes,
             edges,
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 

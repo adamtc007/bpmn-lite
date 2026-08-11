@@ -90,6 +90,8 @@ pub fn ir_to_dto(graph: &IRGraph, workflow_id: &str) -> Result<WorkflowGraphDto>
         meta: None,
         nodes,
         edges,
+    default_guard_budget: None,
+    default_retry_policy: None,
     })
 }
 
@@ -322,6 +324,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();
@@ -427,6 +431,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();
@@ -519,6 +525,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();
@@ -593,6 +601,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();
@@ -684,6 +694,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();

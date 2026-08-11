@@ -686,6 +686,15 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 None,
                 w.span,
             ),
+            ExecutionNode::MultiInstance(mi) => (
+                "multi_instance".to_owned(),
+                format!(
+                    "For each of {} (max {}): {}",
+                    mi.collection_flag_name, mi.declared_max, mi.task_type
+                ),
+                Some(mi.task_type.clone()),
+                mi.span,
+            ),
         };
 
         nodes.push(VisualNodeDto {
@@ -759,6 +768,13 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
                 });
             }
             ExecutionNode::End(_) => {}
+            ExecutionNode::MultiInstance(mi) => {
+                edges.push(VisualEdgeDto {
+                    from: id.clone(),
+                    to: mi.next.clone(),
+                    condition: None,
+                });
+            }
         }
     }
 
@@ -6029,7 +6045,7 @@ async fn save_design_session_endpoint(
                 .into_response();
         }
     };
-    let dto = match bpmn_lite_authoring::ir_to_dto(&ir, &record.name) {
+    let mut dto = match bpmn_lite_authoring::ir_to_dto(&ir, &record.name) {
         Ok(dto) => dto,
         Err(e) => {
             return (
@@ -6042,6 +6058,14 @@ async fn save_design_session_endpoint(
                 .into_response();
         }
     };
+    // G5.1/G5.2 — `ir_to_dto` only projects `IRGraph`; the process-level
+    // guard-budget/retry-policy defaults live on the `DesignerDag` root
+    // (no `IRNode` home, same reasoning as `schema.rs`'s `admit()` doc
+    // comment) and must be carried across explicitly or a value set via
+    // `Operation::SetDefaultGuardBudget`/`SetDefaultRetryPolicy` would be
+    // silently dropped at save time.
+    dto.default_guard_budget = dag.default_guard_budget();
+    dto.default_retry_policy = dag.default_retry_policy();
     // Rider 2 (G2 BLOCKER-2 ruling): two stores, two roles. The DAG stays
     // authoritative in the SESSION store (GraphEdit events, untouched by
     // this endpoint); the PLAN store must hold a compiled artifact
@@ -11349,6 +11373,8 @@ mod tests {
                 is_default: false,
                 on_error: None,
             }],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 
@@ -12446,6 +12472,470 @@ mod tests {
         assert!(
             last["completed_at"].as_i64().is_some(),
             "Completed carries a timestamp: {last:?}"
+        );
+    }
+
+    /// G5.3 — a session ending in `IRNode::End { terminate: true }`, built
+    /// the ONLY way an End node's `terminate` flag is reachable today: the
+    /// caller supplies the full `IRNode` value inside a generic
+    /// `AppendNode` operation (there is no dedicated "terminating end"
+    /// production/palette entry, and none is being added — see the G5
+    /// receipt). This is exactly the "hand-craft the JSON against the
+    /// generic graph-edit endpoint" path the S6 matrix gap named as
+    /// reachable-but-untested; this helper and its two callers below are
+    /// that path, now proven and cemented.
+    async fn build_terminate_session(app: &Router, name: &str) -> String {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": name }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end_term".into(),
+                    terminate: true,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "terminate build" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "terminate graph-edit must admit: {body:?}"
+        );
+        session_id
+    }
+
+    /// GREEN cement: `IRNode::End { terminate: true }`, authored via the
+    /// generic graph-edit endpoint (no dedicated production exists — see
+    /// `build_terminate_session`'s doc comment), publishes, spawns, and
+    /// runs to `Terminated` (NOT `Completed`) through the real engine —
+    /// closing the S6 matrix's END-TERMINATE row, previously untested
+    /// anywhere above the bytecode-instruction level
+    /// (`bpmn-lite-engine::tests::t_term_4_parse_terminate_end_event`
+    /// proves the XML→`Instr::EndTerminate` lowering; this proves the
+    /// SAME flag through the graph/DTO/REST authoring surface).
+    #[tokio::test]
+    async fn test_terminate_instance_runs_to_terminated() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let session_id = build_terminate_session(&app, "terminate run session").await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "terminate-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "terminate save must publish: {body:?}");
+
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/terminate-template/spawn",
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        let mut last = serde_json::json!({});
+        for _ in 0..6 {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            last = body_json(response).await;
+            if last["state"] != "Running" {
+                break;
+            }
+        }
+        assert_eq!(
+            last["state"], "Terminated",
+            "an End node with terminate:true must end the instance Terminated, \
+             not Completed: {last:?}"
+        );
+    }
+
+    /// G5.4b — the missing REST-integration-test counterpart to
+    /// `build_branched_session`/`test_branched_instance_runs_to_completion`
+    /// (`CreateParallelRegion`), for `CreateInclusiveRegion`. Both branches
+    /// carry an `== false` condition on their own flag name; the calling
+    /// test's spawn payload supplies `false` for both (traced while writing
+    /// this test: a graph-authored inclusive condition's `flag_name`
+    /// becomes a PLACEHOLDER check — `V2LoadPlaceholderMatch` against
+    /// `instance.placeholder_values`, populated verbatim from spawn's JSON
+    /// payload — not a `Value`-flag check; `ir_plan::project_ir`'s
+    /// diverging-gateway arm converts `ConditionExpr.flag_name` straight
+    /// into `SplitExecFlow.placeholder`). Making both conditions live is
+    /// what makes the fork genuinely DYNAMIC-arity rather than a single
+    /// predetermined branch.
+    async fn build_inclusive_session(app: &Router, name: &str) -> String {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": name }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let fork = new_key();
+        let join = new_key();
+        let b1 = new_key();
+        let b2 = new_key();
+        let t2 = new_key();
+        let cond = |flag: &str| bpmn_lite_compiler::ConditionExpr {
+            flag_name: flag.to_string(),
+            op: bpmn_lite_compiler::ConditionOp::Eq,
+            literal: bpmn_lite_compiler::ConditionLiteral::Bool(false),
+        };
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::CreateInclusiveRegion {
+                anchor: t1,
+                fork_key: fork,
+                fork_node_id: "ifork".into(),
+                join_key: join,
+                join_node_id: "ijoin".into(),
+                entry_edge_id: "f2".into(),
+                branches: vec![
+                    designer_graph::ops::RegionBranch {
+                        key: b1,
+                        node: task_ir("b1"),
+                        in_edge_id: "f3a".into(),
+                        out_edge_id: "f4a".into(),
+                        condition: Some(cond("flag_a")),
+                    },
+                    designer_graph::ops::RegionBranch {
+                        key: b2,
+                        node: task_ir("b2"),
+                        in_edge_id: "f3b".into(),
+                        out_edge_id: "f4b".into(),
+                        condition: Some(cond("flag_b")),
+                    },
+                ],
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: join,
+                key: t2,
+                node: task_ir("t2"),
+                edge_id: "f5".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t2,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f6".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "inclusive build" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "inclusive graph-edit must admit: {body:?}"
+        );
+        session_id
+    }
+
+    /// GREEN cement: an inclusive (OR) region with two branches both live
+    /// by construction publishes, spawns, and runs to `Completed` through
+    /// the real engine — and mid-flight the fork is observable as 2 fibers
+    /// parked on 2 waiting jobs simultaneously, the same dynamic-arity
+    /// signature `test_branched_instance_runs_to_completion` proves for
+    /// `GatewayAnd`, now proven for `GatewayInclusive` at the REST layer
+    /// (previously crate-level/admission-only — `ops::tests::
+    /// inclusive_region_with_conditions_admits` — never executed).
+    #[tokio::test]
+    async fn test_inclusive_instance_runs_to_completion_with_two_live_branches() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let session_id = build_inclusive_session(&app, "inclusive run session").await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "inclusive-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "inclusive save must publish: {body:?}");
+
+        // Both conditions check `== false`; supplying `false` for both
+        // placeholders via the spawn payload (`V2LoadPlaceholderMatch`
+        // reads `instance.placeholder_values`, populated verbatim from
+        // this JSON object — traced while writing this test) makes both
+        // branches live simultaneously, proving genuine dynamic-arity fork
+        // rather than a single predetermined branch.
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/inclusive-template/spawn",
+                    serde_json::json!({ "payload": { "flag_a": false, "flag_b": false } }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        let mut saw_dynamic_fork_midflight = false;
+        let mut last = serde_json::json!({});
+        for _ in 0..12 {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            last = body_json(response).await;
+            if last["waiting_jobs"].as_array().unwrap().len() == 2
+                && last["fiber_count"].as_u64().unwrap() >= 2
+            {
+                saw_dynamic_fork_midflight = true;
+            }
+            if last["state"] == "Completed" {
+                break;
+            }
+        }
+        assert!(
+            saw_dynamic_fork_midflight,
+            "both inclusive branches must be observable in flight simultaneously \
+             (2 waiting jobs, >= 2 fibers) — a single-branch fallback would never \
+             show it: {last:?}"
+        );
+        assert_eq!(
+            last["state"], "Completed",
+            "inclusive instance must complete within 12 advance rounds: {last:?}"
+        );
+    }
+
+    /// G5.4b — the REST-integration-test counterpart for
+    /// `CreateMultiInstanceRegion`, closing the last row of the S6 matrix's
+    /// REST-integration gap. Only reachable at all as of G5.4a (`ir_plan.rs`
+    /// previously refused every graph carrying an `IRNode::MultiInstance`
+    /// with `UnsupportedNode` at the save step, before an instance could
+    /// ever be spawned).
+    ///
+    /// Uses an UNDECLARED collection flag (empty/zero-length by
+    /// construction) rather than a real supplied collection: instantiation-
+    /// time parameter supply is explicitly out of scope for this whole plan
+    /// ("instance creation / the factory (Designer ends at a manifest-
+    /// bearing template)" — plan doc §0), and no REST endpoint can write an
+    /// arbitrary flag today regardless (`advance_instance_endpoint` always
+    /// completes jobs with empty `orch_flags`; spawn's initial payload binds
+    /// declared placeholders/DataObjects, never a raw `Value::Array` flag —
+    /// traced while writing this test, see `bpmn_lite_engine::tests::
+    /// set_collection`, a store-level-only test backdoor with no REST
+    /// counterpart). This still proves the real thing G5.4a fixed: the full
+    /// graph-edit → save → spawn → advance round trip for an MI region
+    /// reaches a real `V2MiArityCheck`/`V2Fork`/`V2Join` bytecode execution
+    /// (crate-level: `dsl::frontend::tests::
+    /// multi_instance_projected_from_ir_lowers_with_arity_check_and_join`)
+    /// and completes cleanly with zero elements — the engine-level
+    /// `t_mi_v2_empty_collection_completes_without_incident` case, now
+    /// proven reachable over HTTP.
+    async fn build_mi_session(app: &Router, name: &str) -> String {
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": name }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let start_key = seed_start_key(sid);
+
+        let t1 = new_key();
+        let mi = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: start_key,
+                key: t1,
+                node: task_ir("t1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::CreateMultiInstanceRegion {
+                anchor: t1,
+                key: mi,
+                node: bpmn_lite_compiler::IRNode::MultiInstance {
+                    id: "verify_each".into(),
+                    name: "verify_each".into(),
+                    task_type: "noop".into(),
+                    collection_flag_name: "directors".into(),
+                    declared_max: 2,
+                    inputs: Vec::new(),
+                },
+                edge_id: "f2".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: mi,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f3".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops, "note": "MI build" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "MI graph-edit must admit: {body:?}");
+        session_id
+    }
+
+    /// GREEN cement: a `MultiInstance` region — reachable only via the
+    /// generic `CreateMultiInstanceRegion` operation (no palette entry adds
+    /// declared_max/collection beyond what that operation already takes) —
+    /// publishes, spawns, and runs to `Completed` through the real engine.
+    /// See `build_mi_session`'s doc comment for why the collection is
+    /// empty/undeclared rather than real data.
+    #[tokio::test]
+    async fn test_mi_instance_runs_to_completion_with_empty_collection() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+        let session_id = build_mi_session(&app, "MI run session").await;
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "mi-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "MI save must publish (this is exactly G5.4a's fix — MI used to \
+             422 with 'no WorkflowExecutionPlan representation yet' here): {body:?}"
+        );
+
+        let spawn = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/bpmn/templates/mi-template/spawn",
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let instance_id = spawn["instance_id"].as_str().unwrap().to_owned();
+
+        let mut last = serde_json::json!({});
+        for _ in 0..6 {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/bpmn/instances/{instance_id}/advance"),
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            last = body_json(response).await;
+            if last["state"] != "Running" {
+                break;
+            }
+        }
+        assert_eq!(
+            last["state"], "Completed",
+            "an empty-collection MI region must run to Completed via real \
+             V2MiArityCheck/V2Fork/V2Join bytecode, not stall or error: {last:?}"
+        );
+        assert!(
+            last["waiting_jobs"].as_array().unwrap().is_empty(),
+            "an empty collection must never dispatch a real job: {last:?}"
         );
     }
 

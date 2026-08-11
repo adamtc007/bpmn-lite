@@ -378,6 +378,27 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                 }
             }
 
+            IRNode::MultiInstance {
+                id,
+                task_type,
+                collection_flag_name,
+                declared_max,
+                ..
+            } => {
+                let next = single_successor(ir, idx)?;
+                nodes.insert(
+                    id.clone(),
+                    ExecutionNode::MultiInstance(crate::dsl::plan::MultiInstanceExecNode {
+                        id: id.clone(),
+                        task_type: task_type.clone(),
+                        collection_flag_name: collection_flag_name.clone(),
+                        declared_max: *declared_max,
+                        next,
+                        span: None,
+                    }),
+                );
+            }
+
             IRNode::DataObject { .. } => {
                 // Structural-only, zero bytecode (ir.rs's own doc comment) —
                 // no ExecutionNode representation needed or possible.
@@ -924,5 +945,37 @@ mod tests {
         let err = project_ir(&g, "wf".into())
             .expect_err("the second parallel edge's Neq condition must not be silently dropped");
         assert!(matches!(err, IrPlanError::UnsupportedConditionOperator { .. }));
+    }
+
+    /// G5.4a (GREEN, regression): `IRNode::MultiInstance` used to fall into
+    /// the `UnsupportedNode` catch-all — a graph-backed session containing
+    /// one could never reach `WorkflowExecutionPlan`, and therefore never
+    /// the save-as-template REST endpoint's success path. Confirms the
+    /// projected `ExecutionNode::MultiInstance` carries every field
+    /// verbatim.
+    #[test]
+    fn multi_instance_projects_instead_of_refusing() {
+        let mut g = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let mi = g.add_node(IRNode::MultiInstance {
+            id: "verify_each".into(),
+            name: "verify_each".into(),
+            task_type: "verify_director".into(),
+            collection_flag_name: "directors".into(),
+            declared_max: 5,
+            inputs: Vec::new(),
+        });
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, mi, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(mi, end, IREdge { id: "e2".into(), condition: None });
+
+        let plan = project_ir(&g, "wf".into()).expect("MultiInstance must project, not refuse");
+        let ExecutionNode::MultiInstance(node) = &plan.nodes()["verify_each"] else {
+            panic!("expected ExecutionNode::MultiInstance, got {:?}", plan.nodes()["verify_each"]);
+        };
+        assert_eq!(node.task_type, "verify_director");
+        assert_eq!(node.collection_flag_name, "directors");
+        assert_eq!(node.declared_max, 5);
+        assert_eq!(node.next, "end");
     }
 }

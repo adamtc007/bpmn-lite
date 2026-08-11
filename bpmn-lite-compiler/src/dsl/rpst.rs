@@ -125,6 +125,10 @@ fn dfs_walk(
         ExecutionNode::End(_) => {
             split_stack.clear();
         }
+        // G5.4a: linear node, same as Task/Wait/MessageWait above.
+        ExecutionNode::MultiInstance(mi) => {
+            dfs_walk(&mi.next, plan, visited, split_stack, errors);
+        }
     }
 }
 

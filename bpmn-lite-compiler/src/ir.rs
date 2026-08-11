@@ -2,6 +2,24 @@ use bpmn_lite_types::{DataObjectRole, DataObjectType};
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 
+/// G5.2 — raw, unvalidated declaration of a workflow-level default retry
+/// policy. Fields mirror `bpmn_lite_types::RetryPolicy::new`'s parameters
+/// exactly; validation (non-zero fields, `max_delay_ms >= base_delay_ms`)
+/// happens inside `lower_with_default` via `RetryPolicy::new` itself — the
+/// same "declare raw, validate at lower time" split `default_failure_budget`
+/// already uses via `ScopeFailureBudget::new`. Kept distinct from
+/// `RetryPolicy` itself (rather than authoring/deserializing that type
+/// directly) because `RetryPolicy`'s derived `Deserialize` would construct
+/// an instance without running `new`'s bounds check — an externally
+/// reachable unvalidated-artifact path this type exists to avoid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryPolicyDecl {
+    pub version: u32,
+    pub max_attempts: u32,
+    pub base_delay_ms: u64,
+    pub max_delay_ms: u64,
+}
+
 /// Gateway direction for parallel/exclusive gateways.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GatewayDirection {

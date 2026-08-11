@@ -336,6 +336,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();
@@ -382,6 +384,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let result = dto_to_ir(&dto);
@@ -448,6 +452,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let ir = dto_to_ir(&dto).unwrap();

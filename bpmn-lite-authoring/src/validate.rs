@@ -391,6 +391,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 
@@ -520,6 +522,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         let errors = validate_dto(&dto);
         assert!(errors.iter().any(|e| e.rule == "V7"), "Expected V7 error");
@@ -568,6 +572,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         let errors = validate_dto(&dto);
         assert!(

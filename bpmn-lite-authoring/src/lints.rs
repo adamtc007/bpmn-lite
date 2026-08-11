@@ -458,6 +458,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 
@@ -605,6 +607,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         let reg = make_registry_with(vec![VerbContract {
             task_type: "do_work".to_string(),
@@ -685,6 +689,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         // Contract has catch-all "*"
         let reg = make_registry_with(vec![VerbContract {
@@ -753,6 +759,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         let reg = make_registry_with(vec![VerbContract {
             task_type: "do_work".to_string(),
@@ -811,6 +819,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         // Empty registry — no contracts registered
         let reg = ContractRegistry::new();
@@ -865,6 +875,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
         let reg = make_registry_with(vec![VerbContract {
             task_type: "do_work".to_string(),
@@ -1006,6 +1018,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let reg = make_registry_with(vec![VerbContract {
@@ -1119,6 +1133,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let reg = make_registry_with(vec![

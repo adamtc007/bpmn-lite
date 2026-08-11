@@ -139,6 +139,23 @@ pub enum Operation {
         guard: NodeKey,
         failure_budget: Option<u32>,
     },
+    /// G5.1 — set the workflow-level default guard failure budget (the
+    /// value `SetGuardBudget { failure_budget: None, .. }` inherits).
+    /// Process-level, not node-anchored: no target existence to check, so
+    /// this operation cannot be refused. `None` reverts to the compiled-in
+    /// conservative default. Validated (non-zero) at `admit()` time via
+    /// `ScopeFailureBudget::new`, same split `SetGuardBudget` already uses.
+    SetDefaultGuardBudget { failure_budget: Option<u32> },
+    /// G5.2 — set the workflow-level default retry policy (the R5 artifact
+    /// field previously reachable only via
+    /// `CompiledProgram::with_default_retry_policy` in Rust). Same
+    /// process-level, unrefusable shape as `SetDefaultGuardBudget`. `None`
+    /// reverts to `RetryPolicy::conservative_default()`. `policy`'s fields
+    /// are raw/unvalidated (see `RetryPolicyDecl`'s doc comment); validated
+    /// via `RetryPolicy::new` at `admit()` time.
+    SetDefaultRetryPolicy {
+        policy: Option<bpmn_lite_compiler::RetryPolicyDecl>,
+    },
     /// Set the correlation-source expression on a waiting node
     /// (MessageWait / HumanWait / SendTask — anything else is refused).
     SetCorrelationSource {
@@ -685,6 +702,14 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                 } => *fb = failure_budget,
                 _ => unreachable!("kind checked above"),
             }
+        }
+
+        Operation::SetDefaultGuardBudget { failure_budget } => {
+            candidate.default_guard_budget = failure_budget;
+        }
+
+        Operation::SetDefaultRetryPolicy { policy } => {
+            candidate.default_retry_policy = policy;
         }
 
         Operation::SetCorrelationSource {
@@ -1684,6 +1709,180 @@ mod tests {
             .candidate
             .admit()
             .expect("budgeted guard must still admit end to end");
+    }
+
+    /// G5.1 (GREEN): `SetDefaultGuardBudget` is process-level (no anchor to
+    /// refuse against) and reaches the sealed envelope end to end through
+    /// `admit()` — the same theorem `process_default_guard_budget_reaches_
+    /// the_sealed_envelope` (`schema.rs`) proves for direct field
+    /// assignment, now proven for the `Operation` surface the field used to
+    /// lack entirely.
+    #[test]
+    fn set_default_guard_budget_reaches_the_sealed_envelope() {
+        let (base, _s, _t1, _e) = linear("recv-g5-1");
+        let staged = apply(
+            &base,
+            Operation::SetDefaultGuardBudget {
+                failure_budget: Some(7),
+            },
+            Provenance::default(),
+        )
+        .expect("SetDefaultGuardBudget is process-level and cannot be refused");
+        let workflow = staged
+            .candidate
+            .admit()
+            .expect("declared default must compile");
+        assert_eq!(
+            workflow
+                .envelope()
+                .metadata()
+                .default_guard_budget()
+                .max_failures(),
+            7,
+            "the operation-declared default must land in the artifact"
+        );
+    }
+
+    /// G5.1 (RED): `SetDefaultGuardBudget(Some(0))` is rejected at
+    /// admission — a zero ceiling would quarantine on the first rollback of
+    /// every guard, same rule `ScopeFailureBudget::new` already enforces
+    /// for the XML `defaultFailureBudget` path.
+    #[test]
+    fn set_default_guard_budget_zero_refused_at_admission() {
+        let (base, _s, _t1, _e) = linear("recv-g5-1-red");
+        let staged = apply(
+            &base,
+            Operation::SetDefaultGuardBudget {
+                failure_budget: Some(0),
+            },
+            Provenance::default(),
+        )
+        .expect("staging a declared value is never refused (process-level)");
+        staged
+            .candidate
+            .admit()
+            .expect_err("a zero default guard budget must be rejected at admission");
+    }
+
+    /// G5.2 (GREEN): `SetDefaultRetryPolicy` reaches the sealed envelope end
+    /// to end through `admit()` — this is the first construction path for
+    /// the R5 workflow-level retry policy above raw Rust API calls to
+    /// `CompiledProgram::with_default_retry_policy`.
+    #[test]
+    fn set_default_retry_policy_reaches_the_sealed_envelope() {
+        let (base, _s, _t1, _e) = linear("recv-g5-2");
+        let decl = bpmn_lite_compiler::RetryPolicyDecl {
+            version: 1,
+            max_attempts: 3,
+            base_delay_ms: 500,
+            max_delay_ms: 30_000,
+        };
+        let staged = apply(
+            &base,
+            Operation::SetDefaultRetryPolicy { policy: Some(decl) },
+            Provenance::default(),
+        )
+        .expect("SetDefaultRetryPolicy is process-level and cannot be refused");
+        let workflow = staged
+            .candidate
+            .admit()
+            .expect("declared retry policy must compile");
+        let expected =
+            bpmn_lite_types::RetryPolicy::new(1, 3, 500, 30_000).expect("valid by construction");
+        assert_eq!(
+            workflow.envelope().metadata().default_retry_policy(),
+            expected,
+            "the operation-declared retry policy must land in the artifact"
+        );
+    }
+
+    /// G5.2 (RED): an invalid `RetryPolicyDecl` (max_delay_ms < base_delay_ms)
+    /// is rejected at admission, not silently clamped.
+    #[test]
+    fn set_default_retry_policy_invalid_bounds_refused_at_admission() {
+        let (base, _s, _t1, _e) = linear("recv-g5-2-red");
+        let decl = bpmn_lite_compiler::RetryPolicyDecl {
+            version: 1,
+            max_attempts: 3,
+            base_delay_ms: 30_000,
+            max_delay_ms: 500,
+        };
+        let staged = apply(
+            &base,
+            Operation::SetDefaultRetryPolicy { policy: Some(decl) },
+            Provenance::default(),
+        )
+        .expect("staging a declared value is never refused (process-level)");
+        staged
+            .candidate
+            .admit()
+            .expect_err("max_delay_ms < base_delay_ms must be rejected at admission");
+    }
+
+    /// G5.3 (GREEN): `IRNode::End { terminate: true }` — reachable only by
+    /// supplying the full node value inside a generic `AppendNode` (no
+    /// dedicated production exists; none is being added, per the G5
+    /// receipt) — admits and lowers to a compiled program containing
+    /// `Instr::EndTerminate`. Compare
+    /// `bpmn_lite_engine::tests::t_term_4_parse_terminate_end_event`, which
+    /// proves the SAME instruction from the XML `<terminateEventDefinition>`
+    /// front-end; this is the graph/`Operation` front-end's counterpart.
+    #[test]
+    fn append_terminating_end_reaches_compiled_bytecode() {
+        // Not `linear()` — its t1 already has an outgoing edge to a
+        // non-terminating end, and `AppendNode` refuses an anchor that
+        // already has one (that is `InsertAfter`'s job). Build start->t1
+        // only, so t1 is a legal `AppendNode` anchor.
+        let mut base = DesignerDag::new("recv-g5-3");
+        let s = base
+            .insert_node(
+                key(),
+                IRNode::Start { id: "start".into() },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let t1 = base
+            .insert_node(key(), task("t1"), None, Provenance::default())
+            .unwrap();
+        base.insert_edge(
+            s,
+            t1,
+            DesignerEdge {
+                id: "e1".into(),
+                condition: None,
+                provenance: Provenance::default(),
+            },
+        )
+        .unwrap();
+
+        let staged = apply(
+            &base,
+            Operation::AppendNode {
+                anchor: t1,
+                key: key(),
+                node: IRNode::End {
+                    id: "term_end".into(),
+                    terminate: true,
+                },
+                edge_id: "g5_3_out".into(),
+            },
+            Provenance::default(),
+        )
+        .expect("AppendNode with terminate:true must be admitted");
+        let workflow = staged
+            .candidate
+            .admit()
+            .expect("terminating end must compile end to end");
+        let has_end_terminate = workflow
+            .envelope()
+            .instructions()
+            .iter()
+            .any(|i| matches!(i, bpmn_lite_types::Instr::EndTerminate));
+        assert!(
+            has_end_terminate,
+            "compiled program must contain Instr::EndTerminate"
+        );
     }
 
     /// Receipt 6 (RED): SetGuardBudget on a ServiceTask (not a guard) is

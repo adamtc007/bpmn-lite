@@ -545,6 +545,12 @@ impl<'a> Linter<'a> {
                                 ExecutionNode::Wait(w) => Some(w.next.clone()),
                                 ExecutionNode::MessageWait(w) => Some(w.next.clone()),
                                 ExecutionNode::End(e) => Some(e.id.clone()),
+                                // G5.4a: MI has no DSL S-expression production
+                                // (no construction path exists for a DSL-authored
+                                // Split to reach one as a branch target), but the
+                                // match must stay exhaustive — treat it like any
+                                // other linear node.
+                                ExecutionNode::MultiInstance(m) => Some(m.next.clone()),
                             };
                             if let Some(next_id) = next_of_target {
                                 if let Some(ref current_meet) = meet_point {
@@ -618,6 +624,12 @@ impl<'a> Linter<'a> {
                             }
                         }
                         ExecutionNode::End(_) => {}
+                        // G5.4a: see the Pass 3.5 meet-point arm above.
+                        ExecutionNode::MultiInstance(m) => {
+                            if m.next == meet_id {
+                                m.next = join_id.clone();
+                            }
+                        }
                     }
                 }
             }

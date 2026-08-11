@@ -1,4 +1,4 @@
-use bpmn_lite_compiler::{FfiInputBinding, GatewayDirection};
+use bpmn_lite_compiler::{FfiInputBinding, GatewayDirection, RetryPolicyDecl};
 use serde::{Deserialize, Serialize};
 
 // ── Helper defaults for serde ──
@@ -24,6 +24,16 @@ pub struct WorkflowGraphDto {
     pub meta: Option<TemplateMeta>,
     pub nodes: Vec<NodeDto>,
     pub edges: Vec<EdgeDto>,
+    /// G5.1 — workflow-level default guard failure budget. Mirrors
+    /// `DesignerDag.default_guard_budget`; validated (non-zero) at
+    /// `lower_with_default` time, not here.
+    #[serde(default)]
+    pub default_guard_budget: Option<u32>,
+    /// G5.2 — workflow-level default retry policy. Mirrors
+    /// `DesignerDag.default_retry_policy`; raw/unvalidated (see
+    /// `RetryPolicyDecl`'s doc comment).
+    #[serde(default)]
+    pub default_retry_policy: Option<RetryPolicyDecl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

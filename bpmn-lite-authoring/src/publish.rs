@@ -6,7 +6,7 @@ use crate::manifest::derive_parameter_manifest;
 use crate::registry::{SourceFormat, TemplateState, TemplateStore, WorkflowTemplate};
 use crate::{dto_to_ir, validate, yaml};
 use anyhow::{anyhow, Result};
-use bpmn_lite_compiler::{lower, verify, verify_bytecode};
+use bpmn_lite_compiler::{lower_with_default, verify, verify_bytecode};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_types::CompiledProgram;
 use std::fmt::Write;
@@ -37,7 +37,11 @@ pub fn compile_program_from_dto(dto: &WorkflowGraphDto) -> Result<CompiledProgra
         return Err(anyhow!("Verification failed:\n{}", msgs.join("\n")));
     }
 
-    let program = lower(&ir)?;
+    // G5.1/G5.2: carry the DTO's workflow-level defaults through, the same
+    // way `DesignerDag::admit()` carries `self.default_guard_budget`/
+    // `self.default_retry_policy` — an undeclared value keeps its
+    // conservative default (`lower_with_default`'s own doc comment).
+    let program = lower_with_default(&ir, dto.default_guard_budget, dto.default_retry_policy)?;
 
     let bytecode_errors = verify_bytecode(&program);
     if !bytecode_errors.is_empty() {
@@ -205,8 +209,10 @@ pub(crate) fn publish_workflow_from_dto(
         return Err(anyhow!("Verification failed:\n{}", msgs.join("\n")));
     }
 
-    // 6. Lower to bytecode
-    let program = lower(&ir)?;
+    // 6. Lower to bytecode. G5.1/G5.2: carry the DTO's workflow-level
+    // guard-budget/retry-policy defaults through (same reasoning as
+    // `compile_program_from_dto` above).
+    let program = lower_with_default(&ir, dto.default_guard_budget, dto.default_retry_policy)?;
 
     // 7. Bytecode verification
     let bytecode_errors = verify_bytecode(&program);
@@ -318,6 +324,99 @@ edges:
             generate_bpmn: false,
             verb_registry_hash: None,
         }
+    }
+
+    /// G5.1/G5.2 (GREEN): a DTO carrying `default_guard_budget`/
+    /// `default_retry_policy` — the values `Operation::SetDefaultGuardBudget`/
+    /// `SetDefaultRetryPolicy` would populate via the REST graph-edit path
+    /// — actually reach the compiled `CompiledProgram`, not just the
+    /// designer-graph-level `admit()` theorem (`ops.rs`'s
+    /// `set_default_guard_budget_reaches_the_sealed_envelope`/
+    /// `set_default_retry_policy_reaches_the_sealed_envelope` prove that
+    /// half; this proves the DTO/publish half of the same chain).
+    #[test]
+    fn t_pub_14_g5_workflow_defaults_reach_the_compiled_program() {
+        use crate::dto::{EdgeDto, NodeDto};
+        use bpmn_lite_compiler::RetryPolicyDecl;
+
+        let dto = WorkflowGraphDto {
+            id: "g5_defaults".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+            ],
+            edges: vec![EdgeDto {
+                from: "start".to_string(),
+                to: "end".to_string(),
+                condition: None,
+                is_default: false,
+                on_error: None,
+            }],
+            default_guard_budget: Some(4),
+            default_retry_policy: Some(RetryPolicyDecl {
+                version: 1,
+                max_attempts: 2,
+                base_delay_ms: 250,
+                max_delay_ms: 8_000,
+            }),
+        };
+
+        let program = compile_program_from_dto(&dto).expect("must compile with declared defaults");
+        assert_eq!(program.default_guard_budget().max_failures(), 4);
+        assert_eq!(
+            program.default_retry_policy(),
+            bpmn_lite_types::RetryPolicy::new(1, 2, 250, 8_000).unwrap()
+        );
+    }
+
+    /// G5.2 (RED): an invalid declared retry policy is rejected at compile
+    /// time, not silently clamped — same discipline
+    /// `set_default_retry_policy_invalid_bounds_refused_at_admission`
+    /// (`ops.rs`) proves for the designer-graph `Operation` path.
+    #[test]
+    fn t_pub_15_g5_invalid_default_retry_policy_refused() {
+        use crate::dto::{EdgeDto, NodeDto};
+        use bpmn_lite_compiler::RetryPolicyDecl;
+
+        let dto = WorkflowGraphDto {
+            id: "g5_invalid".to_string(),
+            meta: None,
+            nodes: vec![
+                NodeDto::Start {
+                    id: "start".to_string(),
+                },
+                NodeDto::End {
+                    id: "end".to_string(),
+                    terminate: false,
+                },
+            ],
+            edges: vec![EdgeDto {
+                from: "start".to_string(),
+                to: "end".to_string(),
+                condition: None,
+                is_default: false,
+                on_error: None,
+            }],
+            default_guard_budget: None,
+            default_retry_policy: Some(RetryPolicyDecl {
+                version: 1,
+                max_attempts: 2,
+                base_delay_ms: 8_000,
+                max_delay_ms: 250,
+            }),
+        };
+
+        let result = compile_program_from_dto(&dto);
+        assert!(
+            result.is_err(),
+            "max_delay_ms < base_delay_ms must be rejected, got {result:?}"
+        );
     }
 
     /// T-PUB-6: Minimal YAML publishes successfully, state=Published.
@@ -545,6 +644,8 @@ edges:
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let template_store = MemoryTemplateStore::new();

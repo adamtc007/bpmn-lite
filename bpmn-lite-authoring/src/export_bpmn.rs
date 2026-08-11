@@ -684,6 +684,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 
@@ -770,6 +772,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let xml = dto_to_bpmn_xml(&dto).unwrap();
@@ -879,6 +883,8 @@ mod tests {
                     on_error: None,
                 },
             ],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let xml = dto_to_bpmn_xml(&dto).unwrap();
@@ -974,6 +980,8 @@ mod error_catalog_tests {
                 EdgeDto { from: "catcher".to_string(), to: "handler".to_string(), condition: None, is_default: false, on_error: None },
                 EdgeDto { from: "handler".to_string(), to: "err_end".to_string(), condition: None, is_default: false, on_error: None },
             ],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 

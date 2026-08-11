@@ -137,6 +137,14 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
     let join_plan = BTreeMap::new();
     let mut fork_pairing: BTreeMap<String, Addr> = BTreeMap::new();
     let mut v2_guard_budgets: BTreeMap<Addr, ScopeFailureBudget> = BTreeMap::new();
+    // G5.4a: this pipeline is otherwise entirely placeholder-based (no
+    // other node kind ever needs a raw `FlagKey`) — `MultiInstance` is the
+    // first, since its `V2Mi*`/`StoreFlag` words (mirroring
+    // `lowering::lower_multi_instance_v2` exactly) operate over
+    // `instance.flags`, not placeholders. Scoped to this function; folded
+    // into `flag_symbol_table` below for debuggability, same as
+    // `lowering.rs`'s `flag_intern`.
+    let mut flag_ids: BTreeMap<String, bpmn_lite_types::FlagKey> = BTreeMap::new();
 
     for node_id in &order {
         let node = &plan.nodes[node_id];
@@ -386,7 +394,79 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                 if guardn_close_ends.contains(&node.id) {
                     instructions.push(Instr::V2GuardNEnd);
                 }
-                instructions.push(Instr::End);
+                // G5.3: `EndExecNode::status`'s doc comment documents the
+                // `"terminated"` sentinel `ir_plan::project_ir` sets for a
+                // graph-authored `IRNode::End { terminate: true }` — before
+                // this arm existed, EVERY End (terminating or not) silently
+                // lowered as ordinary `Instr::End` here, so `terminate:true`
+                // authored via the graph/DTO/REST surface compiled but had
+                // no effect at runtime. Any other status string (including
+                // DSL-authored free-text labels) is unaffected.
+                if node.status == "terminated" {
+                    instructions.push(Instr::EndTerminate);
+                } else {
+                    instructions.push(Instr::End);
+                }
+            }
+            // G5.4a: mirrors `lowering::lower_multi_instance_v2` exactly —
+            // V2MiArityCheck, V2Fork, `declared_max` synthesized branch
+            // headers (V2MiIndexLive + BrIfNot + V2MiLoadElement +
+            // StoreFlag + ExecDslTask + Jump each — `ExecDslTask`, not
+            // `ExecNative`, matching THIS pipeline's own `Task` arm above,
+            // not the XML/IR-graph lowering's job-dispatch word), V2Join,
+            // trailing Jump. Only the body-dispatch instruction and the
+            // task/flag interning maps differ from the mirrored function;
+            // the instruction shape and addressing are identical.
+            ExecutionNode::MultiInstance(node) => {
+                let collection_flag = intern_flag(&node.collection_flag_name, &mut flag_ids);
+                let task_type = intern_task(&node.task_type, &mut task_ids, &mut task_manifest);
+
+                let fork_addr = base + 1u32;
+                let join_addr = fork_addr + 1u32 + node.declared_max.saturating_mul(6);
+
+                instructions.push(Instr::V2MiArityCheck {
+                    collection_flag,
+                    max: node.declared_max,
+                });
+
+                let mut header_addr = fork_addr + 1u32;
+                let mut headers: Vec<Addr> = Vec::with_capacity(node.declared_max as usize);
+                for _ in 0..node.declared_max {
+                    headers.push(header_addr);
+                    header_addr += 6u32;
+                }
+                instructions.push(Instr::V2Fork {
+                    targets: headers.into_boxed_slice(),
+                    pairing: fork_addr,
+                });
+
+                for index in 0..node.declared_max {
+                    let element_flag = intern_flag(
+                        &format!("{}_mi_element_{index}", node.id),
+                        &mut flag_ids,
+                    );
+                    instructions.push(Instr::V2MiIndexLive {
+                        collection_flag,
+                        index,
+                    });
+                    instructions.push(Instr::BrIfNot { target: join_addr });
+                    instructions.push(Instr::V2MiLoadElement {
+                        collection_flag,
+                        index,
+                    });
+                    instructions.push(Instr::StoreFlag { key: element_flag });
+                    instructions.push(Instr::ExecDslTask {
+                        task_type,
+                        static_args: BTreeMap::new(),
+                        produces_placeholder: None,
+                    });
+                    instructions.push(Instr::Jump { target: join_addr });
+                }
+
+                instructions.push(Instr::V2Join { pairing: fork_addr });
+                instructions.push(Instr::Jump {
+                    target: target(&addresses, &node.next)?,
+                });
             }
         }
     }
@@ -403,7 +483,10 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         message_name_map: message_name_map,
         write_set: BTreeMap::new(),
         task_manifest: task_manifest,
-        flag_symbol_table: BTreeMap::new(),
+        // G5.4a: `flag_ids`' only writers are MI's own arm above — empty
+        // for every plan without one, matching this field's prior
+        // always-empty behavior exactly.
+        flag_symbol_table: flag_ids.into_iter().map(|(name, key)| (key, name)).collect(),
         data_objects: BTreeMap::new(),
         ffi_task_decls: BTreeMap::new(),
     }
@@ -528,6 +611,10 @@ fn instruction_count(
         {
             Ok(2)
         }
+        // G5.4a: V2MiArityCheck(1) + V2Fork(1) + declared_max synthesized
+        // branch headers (6 each) + V2Join(1) + trailing Jump(1) — same
+        // formula as `lowering::estimate_instr_count`'s `MultiInstance` arm.
+        ExecutionNode::MultiInstance(node) => Ok(4 + node.declared_max.saturating_mul(6)),
         _ => Ok(1),
     }
 }
@@ -675,6 +762,21 @@ fn intern_task(
     task_id
 }
 
+/// G5.4a — mirrors `lowering::intern_flag` for this pipeline's own
+/// (previously nonexistent) `FlagKey` namespace; see `flag_ids`'s doc
+/// comment at its declaration site.
+fn intern_flag(
+    name: &str,
+    flag_ids: &mut BTreeMap<String, bpmn_lite_types::FlagKey>,
+) -> bpmn_lite_types::FlagKey {
+    if let Some(&key) = flag_ids.get(name) {
+        return key;
+    }
+    let key = flag_ids.len() as bpmn_lite_types::FlagKey;
+    flag_ids.insert(name.to_string(), key);
+    key
+}
+
 fn routes(
     split: &super::plan::SplitExecNode,
     addresses: &BTreeMap<String, Addr>,
@@ -712,6 +814,7 @@ fn outgoing(node: &ExecutionNode) -> Vec<&str> {
         ExecutionNode::Wait(node) => vec![&node.next],
         ExecutionNode::MessageWait(node) => vec![&node.next],
         ExecutionNode::End(_) => Vec::new(),
+        ExecutionNode::MultiInstance(node) => vec![&node.next],
     }
 }
 
@@ -1543,5 +1646,131 @@ mod tests {
             })
             .expect("a V2Fork must be emitted");
         assert_eq!(fork_targets, 3, "two conditional + one default → three targets");
+    }
+
+    /// G5.3 (GREEN, regression): a graph-authored `IRNode::End { terminate:
+    /// true }`, projected to a plan via `ir_plan::project_ir` (which sets
+    /// `EndExecNode::status = "terminated"`) and lowered through THIS
+    /// front-end — the one `/bpmn/instances` spawn/advance actually
+    /// executes — must emit `Instr::EndTerminate`, not `Instr::End`. Before
+    /// this fix, `status` was recorded but never read here, so a
+    /// graph/DTO/REST-authored terminating end silently ran as an ordinary
+    /// completion (found writing the G5 REST-level receipt,
+    /// `bpmn-lite-server-designer::rest::tests::
+    /// test_terminate_instance_runs_to_terminated`).
+    #[test]
+    fn terminating_end_projected_from_ir_lowers_to_end_terminate() {
+        use crate::ir::{IREdge, IRGraph, IRNode};
+        use petgraph::graph::DiGraph;
+
+        let mut graph: IRGraph = DiGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let end = graph.add_node(IRNode::End {
+            id: "end".to_string(),
+            terminate: true,
+        });
+        graph.add_edge(
+            start,
+            end,
+            IREdge {
+                id: "f1".to_string(),
+                condition: None,
+            },
+        );
+
+        let plan = super::super::ir_plan::project_ir(&graph, "g5_3_terminate".to_string())
+            .expect("Start -> terminating End must project");
+        let workflow = DslFrontend::lower(&plan).expect("must lower and verify");
+        let instructions = workflow.envelope().instructions();
+        assert!(
+            instructions
+                .iter()
+                .any(|i| matches!(i, Instr::EndTerminate)),
+            "projected terminate:true must lower to Instr::EndTerminate: {instructions:?}"
+        );
+        assert!(
+            !instructions.iter().any(|i| matches!(i, Instr::End)),
+            "a single terminating end must not ALSO emit an ordinary End: {instructions:?}"
+        );
+    }
+
+    /// G5.4a (GREEN): a graph-authored `IRNode::MultiInstance`, projected
+    /// via `ir_plan::project_ir` and lowered through this front-end,
+    /// compiles to a verified program carrying the exact same instruction
+    /// shape `lowering::lower_multi_instance_v2` (the XML/IR-graph
+    /// front-end) produces: `V2MiArityCheck` naming the declared max,
+    /// `declared_max` `ExecDslTask` bodies (this front-end's task-dispatch
+    /// word — see the emission arm's doc comment for why not `ExecNative`),
+    /// and a `V2Join`. This is the REST `/bpmn/instances` execution path's
+    /// own compiler — the crate-level counterpart to
+    /// `bpmn-lite-server-designer::rest::tests`'s planned REST-level MI
+    /// integration test (G5.4b).
+    #[test]
+    fn multi_instance_projected_from_ir_lowers_with_arity_check_and_join() {
+        use crate::ir::{IREdge, IRGraph, IRNode};
+        use petgraph::graph::DiGraph;
+
+        let mut graph: IRGraph = DiGraph::new();
+        let start = graph.add_node(IRNode::Start {
+            id: "start".to_string(),
+        });
+        let mi = graph.add_node(IRNode::MultiInstance {
+            id: "verify_each".to_string(),
+            name: "verify_each".to_string(),
+            task_type: "verify_director".to_string(),
+            collection_flag_name: "directors".to_string(),
+            declared_max: 3,
+            inputs: Vec::new(),
+        });
+        let end = graph.add_node(IRNode::End {
+            id: "end".to_string(),
+            terminate: false,
+        });
+        graph.add_edge(
+            start,
+            mi,
+            IREdge {
+                id: "f1".to_string(),
+                condition: None,
+            },
+        );
+        graph.add_edge(
+            mi,
+            end,
+            IREdge {
+                id: "f2".to_string(),
+                condition: None,
+            },
+        );
+
+        let plan = super::super::ir_plan::project_ir(&graph, "g5_4a_mi".to_string())
+            .expect("Start -> MultiInstance -> End must project");
+        let workflow = DslFrontend::lower(&plan).expect("must lower and verify end to end");
+        let instructions = workflow.envelope().instructions();
+
+        let arity_max = instructions
+            .iter()
+            .find_map(|i| match i {
+                Instr::V2MiArityCheck { max, .. } => Some(*max),
+                _ => None,
+            })
+            .expect("must emit V2MiArityCheck");
+        assert_eq!(arity_max, 3, "arity check must name the declared max");
+
+        let exec_dsl_task_count = instructions
+            .iter()
+            .filter(|i| matches!(i, Instr::ExecDslTask { .. }))
+            .count();
+        assert_eq!(
+            exec_dsl_task_count, 3,
+            "one ExecDslTask body per declared_max branch"
+        );
+
+        assert!(
+            instructions.iter().any(|i| matches!(i, Instr::V2Join { .. })),
+            "must emit V2Join to retire the MI fork"
+        );
     }
 }

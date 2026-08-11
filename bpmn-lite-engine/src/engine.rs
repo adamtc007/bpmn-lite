@@ -741,6 +741,7 @@ impl BpmnLiteEngine {
         let artifact = bpmn_lite_compiler::Compiler::lower_with_default(
             &ir,
             process_meta.default_failure_budget,
+            None,
         )?;
         enforce_artifact_limits(&artifact)?;
         let bytecode_version = artifact.hash().into_bytes();

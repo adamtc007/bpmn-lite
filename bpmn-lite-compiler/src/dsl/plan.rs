@@ -284,6 +284,7 @@ pub enum ExecutionNode {
     Wait(WaitExecNode),
     MessageWait(MessageWaitExecNode),
     End(EndExecNode),
+    MultiInstance(MultiInstanceExecNode),
 }
 
 impl ExecutionNode {
@@ -296,6 +297,7 @@ impl ExecutionNode {
             Self::Wait(n) => &n.id,
             Self::MessageWait(n) => &n.id,
             Self::End(n) => &n.id,
+            Self::MultiInstance(n) => &n.id,
         }
     }
 
@@ -316,6 +318,7 @@ impl ExecutionNode {
             Self::Wait(n) => vec![n.next.as_str()],
             Self::MessageWait(n) => vec![n.next.as_str()],
             Self::End(_) => vec![],
+            Self::MultiInstance(n) => vec![n.next.as_str()],
         }
     }
 
@@ -493,7 +496,37 @@ pub struct JoinExecNode {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EndExecNode {
     pub id: String,
+    /// Free-form for the DSL S-expression front-end (`(end-event :status
+    /// "done")` — any label is legal there and carries no instruction-level
+    /// meaning). G5.3: `ir_plan::project_ir` overloads this field with the
+    /// literal sentinel `"terminated"` to carry `IRNode::End`'s `terminate`
+    /// flag across the IR→plan boundary (`EndExecNode` has no separate
+    /// bool). `frontend::lower_plan` checks for exactly that sentinel and
+    /// emits `Instr::EndTerminate` instead of `Instr::End` — any other
+    /// string (including DSL-authored labels) lowers as an ordinary end,
+    /// unchanged.
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<bpmn_lite_types::SourceSpan>,
+}
+
+/// G5.4a: the plan-level projection of `IRNode::MultiInstance` — closes the
+/// gap where a graph-authored MI region could not reach
+/// `WorkflowExecutionPlan` at all (`ir_plan::project_ir` fell into its
+/// `UnsupportedNode` catch-all), which in turn meant a graph-backed design
+/// session containing one could never reach the save-as-template REST
+/// endpoint's success path. Only what `frontend::lower_plan`'s emission
+/// needs to reproduce `lowering::lower_multi_instance_v2`'s instruction
+/// shape — `inputs` (G4.0's per-element bindings) is authoring-time/
+/// manifest-derivation data only, same as on `IRNode::MultiInstance`
+/// itself, and has no bytecode-level meaning here either.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MultiInstanceExecNode {
+    pub id: String,
+    pub task_type: String,
+    pub collection_flag_name: String,
+    pub declared_max: u32,
+    pub next: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<bpmn_lite_types::SourceSpan>,
 }

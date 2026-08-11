@@ -307,6 +307,8 @@ mod tests {
                 is_default: false,
                 on_error: None,
             }],
+            default_guard_budget: None,
+            default_retry_policy: None,
         }
     }
 
@@ -355,6 +357,8 @@ mod tests {
                 is_default: false,
                 on_error: None,
             }],
+        default_guard_budget: None,
+        default_retry_policy: None,
         };
 
         let tpl = WorkflowTemplate {

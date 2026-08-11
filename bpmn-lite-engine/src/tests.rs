@@ -5235,6 +5235,8 @@ async fn t_auth_2_inclusive_gateway_yaml() {
                 on_error: None,
             },
         ],
+    default_guard_budget: None,
+    default_retry_policy: None,
     };
 
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
