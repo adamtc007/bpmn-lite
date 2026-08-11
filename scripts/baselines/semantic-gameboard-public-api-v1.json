@@ -2,18 +2,83 @@
   "cargo_public_api_version": "0.52.0",
   "simplification": "-sss",
   "surfaces": [
-    {"package": "utterance-engine", "features": "", "items": 547, "sha256": "a8912b6f36893581fd23010c286b39bcd18957ef78697eeb91b280b110a99502"},
-    {"package": "utterance-engine", "features": "candle-probe", "items": 573, "sha256": "436bb44466251d1ec027a00d38d7e830bc95ce41fab072c8dca42b02639f773e"},
-    {"package": "utterance-engine", "features": "embed,candle-probe", "items": 583, "sha256": "469092c2e5825d1f92e7da2fdf7697ed49285ee5b5a7a45f75c9aca9d756edd4"},
-    {"package": "utterance-engine", "features": "q9-capture", "items": 686, "sha256": "9815626fe93a3b4dac0810894256bfb5dafe407f05acb9884d1c7533aab0cedc"},
-    {"package": "bpmn-lite-server-designer", "features": "", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
-    {"package": "bpmn-lite-server-designer", "features": "candle-probe", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
-    {"package": "bpmn-lite-server-designer", "features": "embed,candle-probe", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"},
-    {"package": "bpmn-lite-server-designer", "features": "q9-capture", "items": 8, "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"}
+    {
+      "package": "utterance-engine",
+      "features": "",
+      "items": 556,
+      "sha256": "f354ba264b10ad1e061bdda72b381854de5751239eaa0f31671eb71a9f2f9f3e"
+    },
+    {
+      "package": "utterance-engine",
+      "features": "candle-probe",
+      "items": 582,
+      "sha256": "428349ff009979ca62cac9b1b46b514fe17f53c7add3b39c2286ba598195e81b"
+    },
+    {
+      "package": "utterance-engine",
+      "features": "embed,candle-probe",
+      "items": 592,
+      "sha256": "39fbfeee242eb385b88b75e830bd17dafd1c0604d0861618f772bc519b3e90ad"
+    },
+    {
+      "package": "utterance-engine",
+      "features": "q9-capture",
+      "items": 695,
+      "sha256": "fded232e5e96ce91829ff29ae19d2191e94657ca6f208143cca04c84f8592a62"
+    },
+    {
+      "package": "bpmn-lite-server-designer",
+      "features": "",
+      "items": 8,
+      "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"
+    },
+    {
+      "package": "bpmn-lite-server-designer",
+      "features": "candle-probe",
+      "items": 8,
+      "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"
+    },
+    {
+      "package": "bpmn-lite-server-designer",
+      "features": "embed,candle-probe",
+      "items": 8,
+      "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"
+    },
+    {
+      "package": "bpmn-lite-server-designer",
+      "features": "q9-capture",
+      "items": 8,
+      "sha256": "8b3ea0f6f1762e702261e1fc8b4dc99dee2ff5fd8d9fb229f8d5a2402ae39576"
+    }
   ],
   "approved_pub_modules": {
-    "utterance-engine/src/lib.rs": ["board", "bpmn_board", "capture", "context", "contract", "corpus_schema", "dev_capture", "disposition", "exact", "fixtures", "funnel", "metrics", "pair", "policy", "retrieval", "trained_ranker"],
-    "designer-graph/src/lib.rs": ["board_candidate", "ops", "positional", "productions", "schema"],
-    "bpmn-lite-server-designer/src/lib.rs": ["rest"]
+    "utterance-engine/src/lib.rs": [
+      "board",
+      "bpmn_board",
+      "capture",
+      "context",
+      "contract",
+      "corpus_schema",
+      "dev_capture",
+      "disposition",
+      "exact",
+      "fixtures",
+      "funnel",
+      "metrics",
+      "pair",
+      "policy",
+      "retrieval",
+      "trained_ranker"
+    ],
+    "designer-graph/src/lib.rs": [
+      "board_candidate",
+      "ops",
+      "positional",
+      "productions",
+      "schema"
+    ],
+    "bpmn-lite-server-designer/src/lib.rs": [
+      "rest"
+    ]
   }
 }

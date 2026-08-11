@@ -3,7 +3,8 @@
 use designer_graph::board_candidate::{CandidateId, LegalityOracle};
 use designer_graph::ops::Operation;
 use designer_graph::positional::PositionalLegality;
-use designer_graph::schema::{DesignerDag, NodeKey};
+use designer_graph::productions::apply_production;
+use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 use semantic_decision_contracts::{
     ApplicabilityFact, ApplicabilityState, BoardPath, CandidateSemanticSlice, DecisionBoardError,
     DesignBelief, DesignFocus, DesignPosition, DisclosureClass, DomainIdentity, EvidenceLane,
@@ -379,6 +380,136 @@ pub fn build_bpmn_design_position(
     .map_err(BpmnBoardError::from)
 }
 
+/// Route-derived content hash over an ordered sequence of `GraphEdit`
+/// operation payloads. Lifted from `bpmn-lite-server-designer`'s
+/// `graph_content_hash(record)` (identical framing, byte for byte) so
+/// G2.2's chain-fold can predict a hypothetical step's route hash the
+/// same way real ratification computes it: if the same operations are
+/// later actually ratified in the same order, the real value matches
+/// this prediction exactly, not merely resembles it.
+pub fn graph_content_hash_over<'a>(payloads: impl Iterator<Item = &'a str>) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"bpmn-lite-designer-graph-content-v1");
+    for payload in payloads {
+        hasher.update((payload.len() as u64).to_be_bytes());
+        hasher.update(payload.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// G2.1: run the same board/position pipeline as [`build_bpmn_design_position`]
+/// against a staged, unratified `DesignerDag` clone -- a hypothetical
+/// mid-chain state -- rather than the session's live reconstruction.
+///
+/// Per Adam's ruling A (G2.2), the returned position carries
+/// `origin_position`'s `history_hash` UNCHANGED: history is provably
+/// non-authoritative (I30), and a hypothetical step has no edit-log entry
+/// to project one from -- synthesising history for a move that has not
+/// happened would be inventing evidence. `current_graph_revision` and
+/// `board` are likewise passed through unchanged from the real, ratified
+/// session: only the route-derived `graph_hash` (caller-supplied, see
+/// `graph_content_hash_over`) and the content-derived `graph_state_hash`
+/// (recomputed inside `build_bpmn_design_position` from `staged_dag`
+/// itself) actually reflect the hypothetical step.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_hypothetical_position(
+    staged_dag: &DesignerDag,
+    board: &SemanticDecisionBoard,
+    current_graph_revision: &str,
+    hypothetical_graph_hash: &str,
+    compiler_profile: &str,
+    origin_position: &DesignPosition,
+    focus: DesignFocus,
+) -> Result<DesignPosition, BpmnBoardError> {
+    build_bpmn_design_position(
+        staged_dag,
+        board,
+        current_graph_revision,
+        hypothetical_graph_hash,
+        compiler_profile,
+        origin_position.history_hash().as_str(),
+        focus,
+        None,
+    )
+}
+
+/// One link in a hypothetical chain: the operation tape a single move
+/// materializes to (the exact tape [`materialize_bpmn_workbook`] would
+/// produce for that move against the position it was resolved from).
+#[derive(Clone, Debug)]
+pub struct ChainStep {
+    pub move_id: LegalMoveId,
+    pub operations: Vec<Operation>,
+}
+
+/// G2.2: fold a chain of hypothetical moves over a staged `DesignerDag`,
+/// deriving each step's position against the PRECEDING step's result --
+/// never against the original, unchanged position (I30-adjacent: a
+/// hypothetical step's legality must be checked against the graph its
+/// own predecessor actually produces, not assumed stable). Each step is
+/// staged via the same `apply_production` + `admit()` compiler-admission
+/// boundary every real move goes through -- an illegal step-n+1-given-
+/// step-n aborts the fold with the compiler's own refusal, not a
+/// fabricated one.
+///
+/// `real_graph_edit_payloads` is the live session's actual ratified edit
+/// log, unmodified throughout the fold. Each step's route-derived
+/// `graph_hash` is computed by extending that real log with the
+/// serialized operations of every hypothetical step applied so far
+/// (`graph_content_hash_over`), so the predicted values match what real
+/// step-by-step ratification would later persist.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_hypothetical_chain(
+    dag: &DesignerDag,
+    board: &SemanticDecisionBoard,
+    origin_position: &DesignPosition,
+    current_graph_revision: &str,
+    compiler_profile: &str,
+    real_graph_edit_payloads: &[&str],
+    focus: DesignFocus,
+    moves: &[ChainStep],
+) -> Result<Vec<DesignPosition>, BpmnBoardError> {
+    let mut candidate = dag.clone();
+    let mut hypothetical_payloads: Vec<String> = Vec::new();
+    let mut positions = Vec::with_capacity(moves.len());
+    for step in moves {
+        let staged = apply_production(&candidate, step.operations.clone(), Provenance::default())
+            .map_err(|error| BpmnBoardError::GraphProjection(error.to_string()))?;
+        if let Err(errors) = staged.candidate.admit() {
+            return Err(BpmnBoardError::CompilerRefused {
+                candidate_id: step.move_id.as_str().to_string(),
+                diagnostics: errors.into_iter().map(|error| error.message).collect(),
+            });
+        }
+        candidate = staged.candidate;
+
+        let payload = serde_json::to_string(&step.operations)
+            .map_err(|error| BpmnBoardError::PreviewEncoding(error.to_string()))?;
+        hypothetical_payloads.push(payload);
+
+        let extended_graph_hash = graph_content_hash_over(
+            real_graph_edit_payloads
+                .iter()
+                .copied()
+                .chain(hypothetical_payloads.iter().map(String::as_str)),
+        );
+
+        let position = resolve_hypothetical_position(
+            &candidate,
+            board,
+            current_graph_revision,
+            &extended_graph_hash,
+            compiler_profile,
+            origin_position,
+            focus.clone(),
+        )?;
+        positions.push(position);
+    }
+    Ok(positions)
+}
+
 /// Attach complete, finite evidence to every legal move and project the same
 /// fused record back to the existing candidate-level policy input. Evidence can
 /// rank a move but can neither add nor remove legal moves.
@@ -456,6 +587,7 @@ pub fn update_bpmn_design_belief(
 /// Select one deterministic, position-bound game interaction from complete move
 /// evidence and bounded belief. Models and belief remain evidence-only; the
 /// returned packet cannot add a legal move or mutate the graph.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_bpmn_game_disposition(
     board: &SemanticDecisionBoard,
     position: &DesignPosition,
@@ -464,6 +596,7 @@ pub fn decide_bpmn_game_disposition(
     observed_intent: &str,
     attempt_id: MoveAttemptId,
     attempts: &[MoveAttemptReceipt],
+    resolved_chain: Option<&crate::disposition::ResolvedChain>,
 ) -> Result<semantic_decision_contracts::GameDisposition, BpmnBoardError> {
     crate::disposition::decide_game(
         board,
@@ -473,6 +606,7 @@ pub fn decide_bpmn_game_disposition(
         observed_intent,
         attempt_id,
         attempts,
+        resolved_chain,
     )
     .map_err(|error| BpmnBoardError::Continuity(error.to_string()))
 }
@@ -1214,6 +1348,7 @@ mod tests {
             "controlled",
             MoveAttemptId::new("attempt-permutation").unwrap(),
             &[],
+            None,
         )
         .unwrap();
         let mut reversed = evidence.clone();
@@ -1226,6 +1361,7 @@ mod tests {
             "controlled",
             MoveAttemptId::new("attempt-permutation").unwrap(),
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(first, second);
@@ -1240,6 +1376,7 @@ mod tests {
             "controlled",
             MoveAttemptId::new("attempt-incomplete").unwrap(),
             &[],
+            None,
         )
         .is_err());
 
@@ -1271,6 +1408,7 @@ mod tests {
             "stale evidence",
             MoveAttemptId::new("attempt-stale-evidence").unwrap(),
             &[],
+            None,
         )
         .is_err());
     }
@@ -1300,6 +1438,7 @@ mod tests {
             "ambiguous fixture",
             MoveAttemptId::new("attempt-third-ranked").unwrap(),
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(disposition.kind(), GameDispositionKind::ClarifyMoves);
@@ -1346,6 +1485,7 @@ mod tests {
             "hidden move",
             MoveAttemptId::new("attempt-hidden").unwrap(),
             &[],
+            None,
         )
         .unwrap();
         assert!(disposition.selected_moves().iter().all(|move_id| {
@@ -1906,6 +2046,7 @@ mod tests {
             "remind then escalate",
             MoveAttemptId::new("capture-attempt").unwrap(),
             &history,
+            None,
         )
         .unwrap();
         let turn_attempt = disposition
@@ -2258,5 +2399,251 @@ mod tests {
             })
             .unwrap();
         assert_eq!(final_task, ("Review".into(), "review".into()));
+    }
+
+    /// G2.1/G2.2: `resolve_hypothetical_chain` must derive step 2's
+    /// position against step 1's ACTUAL result, not the origin position
+    /// unchanged -- the exact defect Gate G2 exists to close. Proves:
+    /// (1) each returned position's legal moves reflect the graph AFTER
+    /// its own step (a node only step 1 creates is anchorable by step
+    /// 2's position, never by the origin's); (2) `history_hash` is
+    /// carried through from the origin UNCHANGED at every step (Adam's
+    /// ruling A, I30 -- no edit-log entry exists yet for a hypothetical
+    /// move); (3) each step's route-derived `graph_hash` matches
+    /// `graph_content_hash_over` applied to the real payload log extended
+    /// with that step's own serialized operations -- an honest
+    /// prediction of what real, later, step-by-step ratification would
+    /// actually persist, not an arbitrary placeholder.
+    #[test]
+    fn hypothetical_chain_resolves_each_step_against_its_predecessor_not_the_origin() {
+        let (dag, start, task) = fixture();
+        let board =
+            build_bpmn_semantic_board(&dag, Some((start, "start")), "rev-1", &PolicyFilter::default())
+                .unwrap();
+        let origin = build_bpmn_design_position(
+            &dag,
+            &board,
+            "rev-1",
+            &"a".repeat(64),
+            "compiler-profile-v1",
+            &"b".repeat(64),
+            DesignFocus::element(GraphElementRef::new("start").unwrap()),
+            None,
+        )
+        .unwrap();
+        let seed_move_id = origin.legal_moves().first().unwrap().move_id().clone();
+
+        // fixture()'s bare `start -> task-1` has no EndEvent, so
+        // admission (verify) would refuse before either step is even
+        // reached -- step 1 both extends the chain AND supplies the
+        // EndEvent the graph needs at every subsequent step.
+        let task_2 = NodeKey(Uuid::from_u128(3));
+        let end_key = NodeKey(Uuid::from_u128(4));
+        let step_1_ops = vec![
+            Operation::AppendNode {
+                anchor: task,
+                key: task_2,
+                node: IRNode::ServiceTask {
+                    id: "task-2".into(),
+                    name: "Approve".into(),
+                    task_type: "approve".into(),
+                },
+                edge_id: "flow-2".into(),
+            },
+            Operation::AppendNode {
+                anchor: task_2,
+                key: end_key,
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow-end".into(),
+            },
+        ];
+        let task_3_anchor_id = "task-2".to_string();
+        // Step 2 must insert BEFORE the now-terminal `end`, not append
+        // after `task_2` (which already has an outgoing edge post-step-1
+        // and would refuse AppendNode's no-existing-outgoing-edge rule).
+        let step_2_ops = vec![Operation::InsertBefore {
+            anchor: end_key,
+            key: NodeKey(Uuid::from_u128(5)),
+            node: IRNode::ServiceTask {
+                id: "task-3".into(),
+                name: "Publish".into(),
+                task_type: "publish".into(),
+            },
+            edge_id: "flow-3".into(),
+        }];
+        let steps = [
+            ChainStep {
+                move_id: seed_move_id.clone(),
+                operations: step_1_ops.clone(),
+            },
+            ChainStep {
+                move_id: seed_move_id,
+                operations: step_2_ops.clone(),
+            },
+        ];
+
+        let real_payloads: Vec<&str> = Vec::new();
+        let positions = resolve_hypothetical_chain(
+            &dag,
+            &board,
+            &origin,
+            "rev-1",
+            "compiler-profile-v1",
+            &real_payloads,
+            DesignFocus::element(GraphElementRef::new("start").unwrap()),
+            &steps,
+        )
+        .unwrap();
+        assert_eq!(positions.len(), 2);
+
+        // (1) step 2's position can only see "task-2" (step 1's own
+        // output) as an anchorable node once it ACTUALLY exists in the
+        // staged graph -- proving step 2 resolved against step 1's
+        // result, not the origin (which never had "task-2" at all).
+        let step_2_ir = {
+            // Re-derive the staged dag the same way the chain fold did,
+            // to confirm the node id used as step 2's anchor is real.
+            let staged_1 = designer_graph::productions::apply_production(
+                &dag,
+                step_1_ops.clone(),
+                Provenance::default(),
+            )
+            .unwrap();
+            staged_1.candidate.to_ir().unwrap()
+        };
+        assert!(step_2_ir
+            .node_weights()
+            .any(|node| matches!(node, IRNode::ServiceTask { id, .. } if id == &task_3_anchor_id)));
+        assert!(positions[1]
+            .legal_moves()
+            .iter()
+            .any(|legal_move| legal_move.anchor().is_some()));
+
+        // (2) history_hash carried unchanged at every step.
+        assert_eq!(positions[0].history_hash(), origin.history_hash());
+        assert_eq!(positions[1].history_hash(), origin.history_hash());
+
+        // (3) route-derived graph_hash matches the honest prediction:
+        // real payloads (empty here) extended with each step's own
+        // serialized operations, hashed with graph_content_hash_over --
+        // exactly what real step-by-step ratification would persist.
+        let step_1_payload = serde_json::to_string(&step_1_ops).unwrap();
+        let expected_1 = graph_content_hash_over(std::iter::once(step_1_payload.as_str()));
+        assert_eq!(positions[0].graph_hash().as_str(), expected_1);
+
+        let step_2_payload = serde_json::to_string(&step_2_ops).unwrap();
+        let expected_2 = graph_content_hash_over(
+            [step_1_payload.as_str(), step_2_payload.as_str()].into_iter(),
+        );
+        assert_eq!(positions[1].graph_hash().as_str(), expected_2);
+
+        // Distinct steps must not collide on graph_hash or graph_state_hash.
+        assert_ne!(positions[0].graph_hash(), positions[1].graph_hash());
+        assert_ne!(positions[0].state_id(), positions[1].state_id());
+    }
+
+    /// G2.1/G2.2, the refusal half of Gate G2: "a line whose second move
+    /// is illegal given the first is refused." Step 2 re-anchors
+    /// `AppendNode` on the SAME node step 1 already anchored -- legal in
+    /// isolation (before step 1, that anchor has no outgoing edge), but
+    /// `AppendNode` refuses "anchor already has an outgoing edge" once
+    /// step 1 has actually run. `resolve_hypothetical_chain` must catch
+    /// this because it stages step 2 against step 1's REAL result, never
+    /// against the origin unchanged -- proving the fold doesn't just
+    /// carry positions forward cosmetically but actually re-verifies
+    /// each step's operations against the real intermediate graph.
+    #[test]
+    fn hypothetical_chain_refuses_a_second_step_only_illegal_because_of_the_first() {
+        let (dag, start, task) = fixture();
+        let board =
+            build_bpmn_semantic_board(&dag, Some((start, "start")), "rev-1", &PolicyFilter::default())
+                .unwrap();
+        let origin = build_bpmn_design_position(
+            &dag,
+            &board,
+            "rev-1",
+            &"a".repeat(64),
+            "compiler-profile-v1",
+            &"b".repeat(64),
+            DesignFocus::element(GraphElementRef::new("start").unwrap()),
+            None,
+        )
+        .unwrap();
+        let seed_move_id = origin.legal_moves().first().unwrap().move_id().clone();
+
+        let task_2 = NodeKey(Uuid::from_u128(3));
+        let end_key = NodeKey(Uuid::from_u128(4));
+        let step_1_ops = vec![
+            Operation::AppendNode {
+                anchor: task,
+                key: task_2,
+                node: IRNode::ServiceTask {
+                    id: "task-2".into(),
+                    name: "Approve".into(),
+                    task_type: "approve".into(),
+                },
+                edge_id: "flow-2".into(),
+            },
+            Operation::AppendNode {
+                anchor: task_2,
+                key: end_key,
+                node: IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow-end".into(),
+            },
+        ];
+        // Legal in isolation against the ORIGIN (`task` has no outgoing
+        // edge there) -- illegal only because step 1 already gave `task`
+        // an outgoing edge to "task-2".
+        let step_2_ops = vec![Operation::AppendNode {
+            anchor: task,
+            key: NodeKey(Uuid::from_u128(5)),
+            node: IRNode::ServiceTask {
+                id: "task-3".into(),
+                name: "Publish".into(),
+                task_type: "publish".into(),
+            },
+            edge_id: "flow-3".into(),
+        }];
+        assert!(
+            apply(&dag, step_2_ops[0].clone(), Provenance::default()).is_ok(),
+            "sanity: step 2's operation is legal against the ORIGIN graph in isolation"
+        );
+
+        let steps = [
+            ChainStep {
+                move_id: seed_move_id.clone(),
+                operations: step_1_ops,
+            },
+            ChainStep {
+                move_id: seed_move_id,
+                operations: step_2_ops,
+            },
+        ];
+        let real_payloads: Vec<&str> = Vec::new();
+        let result = resolve_hypothetical_chain(
+            &dag,
+            &board,
+            &origin,
+            "rev-1",
+            "compiler-profile-v1",
+            &real_payloads,
+            DesignFocus::element(GraphElementRef::new("start").unwrap()),
+            &steps,
+        );
+        let error = result.expect_err(
+            "step 2 must be refused once verified against step 1's REAL result, \
+             not silently accepted as it would be if resolved against the origin",
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("outgoing edge"),
+            "the correct theorem (AppendNode's no-existing-outgoing-edge rule) must be named: {message}"
+        );
     }
 }

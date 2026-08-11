@@ -174,6 +174,7 @@ fn main() {
             "perf harness utterance",
             MoveAttemptId::new("attempt-perf").unwrap(),
             &[],
+            None,
         )
         .unwrap()
     });

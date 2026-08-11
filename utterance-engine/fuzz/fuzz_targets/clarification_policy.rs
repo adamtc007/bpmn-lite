@@ -149,6 +149,7 @@ fuzz_target!(|data: &[u8]| {
         "fuzz utterance no compound syntax",
         MoveAttemptId::new("attempt-clarification-fuzz").unwrap(),
         &[],
+        None,
     )
     .unwrap();
     disposition.validate_for_position(&position).unwrap();

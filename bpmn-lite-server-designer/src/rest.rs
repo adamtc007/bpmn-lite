@@ -3014,16 +3014,224 @@ fn graph_identity_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String 
 /// Canonical SHA-256 content identity of the authoritative graph edit log.
 /// This is deliberately separate from the legacy blake3 revision identity,
 /// whose bytes remain unchanged for board and proposal compatibility.
+/// Delegates to `graph_content_hash_over` (G2.2) so chain-preview's
+/// hypothetical route-hash extension uses the identical framing, not a
+/// parallel reimplementation that could drift from this one.
 fn graph_content_hash(record: &bpmn_lite_store::DesignSessionRecord) -> String {
-    use sha2::{Digest, Sha256};
+    utterance_engine::bpmn_board::graph_content_hash_over(
+        record.graph_edit_payloads().into_iter(),
+    )
+}
 
-    let mut hasher = Sha256::new();
-    hasher.update(b"bpmn-lite-designer-graph-content-v1");
-    for payload in record.graph_edit_payloads() {
-        hasher.update((payload.len() as u64).to_be_bytes());
-        hasher.update(payload.as_bytes());
+/// G2.3 outcome of attempting to resolve a compound (`"<a>; <b>"`)
+/// utterance as a chain-verified plan.
+enum CompoundChainOutcome {
+    /// `observed_intent` is not compound syntax; proceed exactly as before.
+    NotCompound,
+    /// Both spans resolved, span 2 verified against the position span 1
+    /// actually produces (not the original, unchanged position).
+    Ready(utterance_engine::disposition::ResolvedChain),
+    /// Compound syntax detected and span 1 was ACTUALLY materialised and
+    /// compiler-admitted, but span 2 is proven illegal against the
+    /// resulting graph (or span 1 itself fails compiler admission) --
+    /// named diagnostics, the case Gate G2 requires a refusal for.
+    Refused { diagnostics: Vec<String> },
+    /// Compound syntax detected but chaining could not even be ATTEMPTED
+    /// -- span 1 doesn't resolve to a legal move at all, or (the common
+    /// case) its candidate has a required argument (`Condition`,
+    /// `SubprocessReference`) `start_workbook` can never auto-extract
+    /// from free text, only from an explicit typed answer, so it can
+    /// never reach `ReadyForDryRun` from utterance text alone. This is
+    /// NOT a proven conflict -- falls back to `compound_plan`'s pre-G2.3
+    /// same-position resolution (declares the two-move intent without
+    /// verifying it), preserving existing behavior for compound
+    /// utterances whose moves are legitimately incomplete pending
+    /// clarification, exactly as before this tranche.
+    Unverifiable,
+}
+
+/// A synthetic evidence hash for a compound-plan chain step. Mirrors the
+/// `WorkbookEvidence::PaletteSelection` convention already used for the
+/// palette-selection endpoint (`rest.rs`, "palette-selection-v1" tag) and
+/// the direct-edit-equivalence probe ("direct-edit-equivalence-probe" tag)
+/// -- a versioned SHA-256 digest of a preimage binding the hash to the
+/// exact position and move it evidences, so provenance stays distinguishable
+/// even though there is no real `DecisionRecord` behind an exact-phrase
+/// compound span.
+fn compound_span_evidence_hash(
+    position: &semantic_decision_contracts::DesignPosition,
+    move_id: &semantic_decision_contracts::LegalMoveId,
+    span: &str,
+) -> anyhow::Result<semantic_decision_contracts::EvidenceRecordHash> {
+    use sha2::{Digest, Sha256};
+    semantic_decision_contracts::EvidenceRecordHash::new(format!(
+        "{:x}",
+        Sha256::digest(
+            format!(
+                "compound-plan-step-v1\0{}\0{}\0{}",
+                position.state_id().as_str(),
+                move_id.as_str(),
+                span
+            )
+            .as_bytes()
+        )
+    ))
+    .map_err(anyhow::Error::from)
+}
+
+/// G2.3: server-layer chain-fold orchestration for a compound utterance.
+///
+/// Detection stays pure and lives in `StrictCompoundSyntax`
+/// (`utterance-engine`, unchanged). Everything AFTER detection that must
+/// actually materialise and compiler-admit span 1 against a real
+/// `DesignerDag` has to live HERE: turning a `LegalMoveId` into a real
+/// `Vec<Operation>` tape always requires a `ProposalWorkbook`
+/// (`materialize_workbook`), and the only production path that builds one
+/// is `proposal::start_workbook` -- a server-layer function `utterance-
+/// engine`'s `disposition.rs` cannot reach and, per the established crate-
+/// boundary discipline (workbook/session materialization is server-only;
+/// no existing precedent constructs a `ProposalWorkbook` from utterance-
+/// engine at runtime), should not gain. Rule 7 substrate check surfaced
+/// this 2026-08-11; Adam ruled: move the orchestration here rather than
+/// give utterance-engine a new, precedent-breaking construction path.
+///
+/// Span 1 is resolved and materialised exactly like `compound_plan`'s
+/// existing (pre-G2.3) span resolution -- governed exact match, highest-
+/// evidence legal move for that candidate. Span 2 is resolved the SAME
+/// way, but against `resolve_hypothetical_position`'s (G2.1) result for
+/// the `DesignerDag` span 1's operations actually produce and the compiler
+/// actually admits (via `resolve_hypothetical_chain`, G2.2) -- never
+/// against the original, unchanged position.
+#[allow(clippy::too_many_arguments)]
+fn resolve_compound_chain(
+    dag: &designer_graph::schema::DesignerDag,
+    board: &semantic_decision_contracts::SemanticDecisionBoard,
+    position: &semantic_decision_contracts::DesignPosition,
+    evidence: &[semantic_decision_contracts::MoveEvidence],
+    observed_intent: &str,
+    current_graph_revision: &str,
+    real_graph_edit_payloads: &[&str],
+    anchor: Option<designer_graph::schema::NodeKey>,
+) -> anyhow::Result<CompoundChainOutcome> {
+    use utterance_engine::disposition::{ActionSpanProducer, ResolvedChain, StrictCompoundSyntax};
+    use utterance_engine::exact::{governed_exact, ExactMatch};
+
+    let Some(span_evidence) = StrictCompoundSyntax.detect(observed_intent, board) else {
+        return Ok(CompoundChainOutcome::NotCompound);
+    };
+    let spans = span_evidence.spans;
+
+    let probabilities = evidence
+        .iter()
+        .map(|item| (item.move_id(), item.probability().get()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let resolve_span = |pos: &semantic_decision_contracts::DesignPosition, span: &str| {
+        match governed_exact(board, span) {
+            ExactMatch::Unique(candidate) => pos
+                .legal_moves()
+                .iter()
+                .filter(|legal_move| legal_move.candidate_id().as_str() == candidate)
+                .max_by(|left, right| {
+                    probabilities
+                        .get(left.move_id())
+                        .copied()
+                        .unwrap_or(0.0)
+                        .total_cmp(&probabilities.get(right.move_id()).copied().unwrap_or(0.0))
+                        .then_with(|| right.move_id().cmp(left.move_id()))
+                })
+                .map(|legal_move| legal_move.move_id().clone()),
+            ExactMatch::None | ExactMatch::Collision(_) => None,
+        }
+    };
+
+    let Some(move_1) = resolve_span(position, &spans[0]) else {
+        return Ok(CompoundChainOutcome::Unverifiable);
+    };
+
+    let evidence_hash = compound_span_evidence_hash(position, &move_1, &spans[0])?;
+    let workbook = match crate::proposal::start_workbook(
+        dag,
+        anchor,
+        board,
+        crate::proposal::SelectedMove {
+            position,
+            move_id: &move_1,
+        },
+        crate::proposal::WorkbookEvidence::PaletteSelection(evidence_hash),
+        &spans[0],
+        0,
+    ) {
+        Ok(workbook) => workbook,
+        Err(_) => return Ok(CompoundChainOutcome::Unverifiable),
+    };
+    if !matches!(
+        workbook.status(),
+        semantic_decision_contracts::ProposalStatus::ReadyForDryRun
+            | semantic_decision_contracts::ProposalStatus::ReadyForRatification
+    ) {
+        // Common case: a candidate argument kind (`Condition`,
+        // `SubprocessReference`) that `start_workbook` can only fill via
+        // an explicit typed answer, never free-text extraction -- there
+        // is no way to materialise span 1 from the utterance alone.
+        return Ok(CompoundChainOutcome::Unverifiable);
     }
-    hex::encode(hasher.finalize())
+    let bound = utterance_engine::bpmn_board::materialize_bpmn_workbook(dag, &workbook)?;
+
+    let steps = [utterance_engine::bpmn_board::ChainStep {
+        move_id: move_1.clone(),
+        operations: bound.operations().to_vec(),
+    }];
+    let positions = match utterance_engine::bpmn_board::resolve_hypothetical_chain(
+        dag,
+        board,
+        position,
+        current_graph_revision,
+        DESIGNER_COMPILER_PROFILE_IDENTITY,
+        real_graph_edit_payloads,
+        position.focus().clone(),
+        &steps,
+    ) {
+        Ok(positions) => positions,
+        // Blind-review finding (2026-08-11): classify by variant, don't
+        // blanket-catch. `GraphProjection` (the op-application/apply_
+        // production refusal) and `CompilerRefused` and `StaleBoardAnchor`
+        // (the board's bound anchor going stale because span 1 removed
+        // the node span 2 needs) are genuinely "span 2 illegal given span
+        // 1" -- name them, don't 500 them. Everything else
+        // (`MissingSemanticContract` -- registry/oracle drift,
+        // `ResourceLimit`, `StaleBoardRevision`, `Shared`, `Gameboard`,
+        // `InvalidAnchor`) is an orthogonal system/infra error that has
+        // nothing to do with span 2's legality; mislabeling it as a
+        // "refusal" would bury a real bug behind a business-logic-shaped
+        // diagnostic. Propagate those as real errors instead.
+        Err(
+            error @ (utterance_engine::bpmn_board::BpmnBoardError::GraphProjection(_)
+            | utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused { .. }
+            | utterance_engine::bpmn_board::BpmnBoardError::StaleBoardAnchor { .. }),
+        ) => {
+            return Ok(CompoundChainOutcome::Refused {
+                diagnostics: vec![error.to_string()],
+            })
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let position_2 = positions.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!("resolve_hypothetical_chain returned no positions for one step")
+    })?;
+
+    let Some(move_2) = resolve_span(&position_2, &spans[1]) else {
+        return Ok(CompoundChainOutcome::Refused {
+            diagnostics: vec![format!(
+                "span '{}' is not a legal move once '{}' has been applied",
+                spans[1], spans[0]
+            )],
+        });
+    };
+
+    Ok(CompoundChainOutcome::Ready(ResolvedChain {
+        spans,
+        moves: vec![move_1, move_2],
+    }))
 }
 
 /// Reconstruct the bounded typed-attempt projection observed by a position.
@@ -4697,6 +4905,24 @@ async fn session_utterance_endpoint(
                 &attempts,
                 previous_belief.as_ref(),
             )?;
+            let real_payloads = record_session.graph_edit_payloads();
+            let compound_chain = resolve_compound_chain(
+                &dag,
+                &board,
+                &position,
+                &evidence.move_evidence,
+                &body.text,
+                &graph_identity,
+                &real_payloads,
+                anchor_key,
+            )?;
+            let resolved_chain = match compound_chain {
+                CompoundChainOutcome::NotCompound | CompoundChainOutcome::Unverifiable => None,
+                CompoundChainOutcome::Ready(chain) => Some(chain),
+                CompoundChainOutcome::Refused { diagnostics } => {
+                    return Err(anyhow::anyhow!("compound plan refused: {diagnostics:?}"));
+                }
+            };
             let game_disposition = utterance_engine::bpmn_board::decide_bpmn_game_disposition(
                 &board,
                 &position,
@@ -4708,6 +4934,7 @@ async fn session_utterance_endpoint(
                     record_session.events.len()
                 ))?,
                 &attempts,
+                resolved_chain.as_ref(),
             )?;
             let move_evidence = evidence.move_evidence.clone();
             let (disposition, record) = decide_with_action_spans(

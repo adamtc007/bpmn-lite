@@ -20,6 +20,21 @@ pub struct ActionSpanEvidence {
     pub spans: Vec<String>,
 }
 
+/// G2.3: a compound-utterance chain the CALLER has already validated by
+/// actually materialising and compiler-admitting span 1, then resolving
+/// span 2 against the position span 1 produces -- `utterance-engine` has
+/// no production path to do that itself (workbook construction is a
+/// server-layer concern, `bpmn-lite-server-designer::proposal::start_workbook`;
+/// see the G2.3 receipt for the Rule 7 substrate check that ruled this).
+/// `compound_plan` trusts `moves` only when `spans` matches what it itself
+/// detects for the SAME utterance -- a stale or mismatched chain is never
+/// silently reused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedChain {
+    pub spans: Vec<String>,
+    pub moves: Vec<LegalMoveId>,
+}
+
 pub trait ActionSpanProducer: Send + Sync {
     fn producer_id(&self) -> &'static str;
     fn detect(&self, utterance: &str, board: &SemanticDecisionBoard) -> Option<ActionSpanEvidence>;
@@ -77,6 +92,7 @@ pub(crate) fn game_policy_identity() -> String {
     format!("{GAME_POLICY_ID}@{}", hasher.finalize().to_hex())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn decide_game(
     board: &SemanticDecisionBoard,
     position: &DesignPosition,
@@ -85,6 +101,7 @@ pub(crate) fn decide_game(
     observed_intent: &str,
     attempt_id: MoveAttemptId,
     attempts: &[MoveAttemptReceipt],
+    resolved_chain: Option<&ResolvedChain>,
 ) -> anyhow::Result<GameDisposition> {
     validate_game_inputs(position, evidence, belief)?;
     let ranked = rank_moves(position, evidence, belief);
@@ -113,7 +130,7 @@ pub(crate) fn decide_game(
         )?);
     }
 
-    if let Some(plan) = compound_plan(board, position, evidence, observed_intent) {
+    if let Some(plan) = compound_plan(board, position, evidence, observed_intent, resolved_chain) {
         return Ok(GameDisposition::compound_plan(
             position,
             plan,
@@ -407,8 +424,26 @@ fn compound_plan(
     position: &DesignPosition,
     evidence: &[MoveEvidence],
     observed_intent: &str,
+    resolved_chain: Option<&ResolvedChain>,
 ) -> Option<Vec<LegalMoveId>> {
     let spans = StrictCompoundSyntax.detect(observed_intent, board)?.spans;
+    if let Some(chain) = resolved_chain {
+        // G2.3: the caller (server layer -- see `ResolvedChain`'s doc
+        // comment) already materialised span 1, compiler-admitted it, and
+        // resolved span 2 against the position span 1 actually produces.
+        // Trust it ONLY for these exact spans; a mismatched/stale chain
+        // (e.g. left over from a different utterance) is never reused --
+        // fall through to `None` (no compound plan at all) rather than
+        // silently resolving span 2 against the wrong position.
+        return (chain.spans == spans).then(|| chain.moves.clone());
+    }
+    // No pre-validated chain (e.g. a caller with no `DesignerDag` access,
+    // or a test exercising this function directly): resolve every span
+    // against the SAME unchanged `position`. Correct for span 1; for
+    // span 2+ this is a known approximation (G2.3 receipt) -- it can only
+    // ever find span 2 legal when it happens to ALSO be legal before
+    // span 1 is applied, never when span 1 is what makes it legal, and it
+    // cannot catch span 2 becoming illegal because of span 1.
     let probabilities = evidence
         .iter()
         .map(|item| (item.move_id(), item.probability().get()))

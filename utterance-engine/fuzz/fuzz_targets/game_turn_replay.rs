@@ -128,6 +128,7 @@ fn build_turn(
         "fuzz observed intent, no compound syntax",
         MoveAttemptId::new(format!("attempt-turn-{index}")).unwrap(),
         &[],
+        None,
     )
     .unwrap();
     disposition.validate_for_position(position).unwrap();
@@ -260,6 +261,7 @@ fuzz_target!(|data: &[u8]| {
             // for a reason unrelated to the axis under test.
             MoveAttemptId::new(format!("attempt-turn-{index}")).unwrap(),
             &[],
+            None,
         )
         .unwrap();
         let (chosen_move, compiler_result, applicable) = match axis {

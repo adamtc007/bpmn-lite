@@ -305,6 +305,7 @@ fuzz_target!(|data: &[u8]| {
         utterance,
         MoveAttemptId::new(format!("disposition-{scenario}")).unwrap(),
         &history,
+        None,
     )
     .unwrap();
     disposition.validate_for_position(&position).unwrap();

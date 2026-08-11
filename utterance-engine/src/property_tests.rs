@@ -305,6 +305,7 @@ mod gameboard {
                 "property fuzz utterance",
                 MoveAttemptId::new("attempt-property-off-board").unwrap(),
                 &[],
+                None,
             );
             prop_assert!(result.is_err());
         }

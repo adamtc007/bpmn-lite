@@ -692,6 +692,7 @@ mod tests {
             "show options",
             MoveAttemptId::new("capture-attempt").unwrap(),
             &history,
+            None,
         )
         .unwrap();
         let attempt = disposition

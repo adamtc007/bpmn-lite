@@ -152,6 +152,7 @@ fn gold_third_ranked_move_is_surfaced_by_one_governed_clarification() {
         "fixture ambiguous request",
         MoveAttemptId::new("fixture-attempt").unwrap(),
         &[],
+        None,
     )
     .unwrap();
 
@@ -279,6 +280,7 @@ fn repeated_wrong_move_traffic_keeps_the_disposition_loop_bounded() {
             "fixture ambiguous request",
             MoveAttemptId::new(format!("wrong-move-{turn}")).unwrap(),
             window,
+            None,
         )
         .unwrap();
         durations.push(started.elapsed());
