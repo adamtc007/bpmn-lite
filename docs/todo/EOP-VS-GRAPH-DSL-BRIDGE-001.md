@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Forks A/B/E ruled (Adam, 2026-08-13 — see §5); C/D/F/G recommendations pending explicit ratification at B0. No implementation approved yet.** |
+| Status | **All forks ruled (Adam, 2026-08-13 — A/B/E explicitly, C/D/F/G accepted as recommended; see §5). Implementation plan: `EOP-PLAN-GRAPH-DSL-BRIDGE-001.md`.** |
 | Baseline researched | `1b3d390` (2026-08-13), branch `codex/bpmn-gameboard-refactor` |
 | Purpose | Satisfy the U4 precondition of `EOP-PLAN-UTTERANCE-DETERMINISTIC-FUZZ-001` and §8.1/§27-item-10 of `EOP-VS-BPMN-CAPABILITY-FABRIC-004`: define the requirement, the ground truth, and the forks a bridge implementation plan must rule before it can be written. |
 | Decides | Nothing. Every fork in §5 is surfaced with a recommendation; peer review rules them. |
