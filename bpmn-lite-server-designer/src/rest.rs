@@ -785,6 +785,51 @@ fn plan_to_visual_graph(plan: &WorkflowExecutionPlan) -> VisualGraphDto {
     }
 }
 
+/// `IRNode::DataObject` carries zero bytecode and never becomes an
+/// `ExecutionNode`, so `plan_to_visual_graph` never sees it — the graph
+/// endpoint is the enriched execution map, and a structural declaration
+/// with no flow edges belongs on it as a data node, distinct from the
+/// runbook's raw operation-tape rendering. Rendered as unconnected nodes
+/// (no `VisualEdgeDto`s -- `DataObject` carries no `next`/flow fields to
+/// project) alongside the flow nodes `plan_to_visual_graph` already built.
+fn data_object_visual_nodes(ir: &bpmn_lite_compiler::IRGraph) -> Vec<VisualNodeDto> {
+    ir.node_weights()
+        .filter_map(|node| match node {
+            bpmn_lite_compiler::IRNode::DataObject {
+                id,
+                name,
+                type_decl,
+                role,
+            } => {
+                let type_label = match type_decl {
+                    bpmn_lite_types::DataObjectType::Primitive(primitive) => match primitive {
+                        bpmn_lite_types::PrimitiveType::Bool => "bool".to_owned(),
+                        bpmn_lite_types::PrimitiveType::I64 => "i64".to_owned(),
+                        bpmn_lite_types::PrimitiveType::F64 => "f64".to_owned(),
+                        bpmn_lite_types::PrimitiveType::String => "string".to_owned(),
+                    },
+                    bpmn_lite_types::DataObjectType::SemOsDomain { domain_id, .. } => {
+                        format!("semos-domain:{domain_id}")
+                    }
+                };
+                let role_label = match role {
+                    bpmn_lite_types::DataObjectRole::Input => "input",
+                    bpmn_lite_types::DataObjectRole::Output => "output",
+                    bpmn_lite_types::DataObjectRole::Internal => "internal",
+                };
+                Some(VisualNodeDto {
+                    id: id.clone(),
+                    label: format!("Data object: {name} ({type_label}, {role_label})"),
+                    kind: "data_object".to_owned(),
+                    plug: None,
+                    span: None,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 // ── Router ──────────────────────────────────────────────────────────────
 
 /// GET /bpmn/health — service-identity health contract. The runner and
@@ -4148,7 +4193,22 @@ async fn answer_proposal_endpoint(
             .into_response();
     }
     let dag = validated_dag.expect("checked above");
-    let mut workbook =
+    // A workbook whose only required slot auto-resolves from the anchor
+    // (e.g. `op.delete_subgraph`'s single `target` argument) reaches
+    // `ReadyForDryRun` inside `start_workbook`, never `NeedsArguments`.
+    // `apply_explicit_answers` rejects any call once the workbook is past
+    // `NeedsArguments`, including the zero-answers call this endpoint's own
+    // callers (bare "confirm" submissions, and `palette_select_endpoint`,
+    // which always submits `answers: []`) make when there is nothing left
+    // to answer. Treat "no answers submitted, nothing pending" as a no-op
+    // pass-through instead of an error; a non-empty answer set submitted to
+    // an already-resolved workbook is still rejected below as genuine
+    // misuse.
+    let mut workbook = if body.answers.is_empty()
+        && pending.workbook.status() != semantic_decision_contracts::ProposalStatus::NeedsArguments
+    {
+        pending.workbook.clone()
+    } else {
         match crate::proposal::apply_explicit_answers(&dag, pending.workbook.clone(), body.answers)
         {
             Ok(workbook) => workbook,
@@ -4162,7 +4222,8 @@ async fn answer_proposal_endpoint(
                 )
                     .into_response();
             }
-        };
+        }
+    };
 
     if workbook.status() == semantic_decision_contracts::ProposalStatus::NeedsArguments {
         let mut updated = PendingProposal {
@@ -6995,7 +7056,8 @@ async fn session_graph_endpoint(
             Ok(plan) => plan,
             Err(e) => return fail(vec![format!("project_ir: {e}")]),
         };
-        let graph = plan_to_visual_graph(&plan);
+        let mut graph = plan_to_visual_graph(&plan);
+        graph.nodes.extend(data_object_visual_nodes(&ir));
         let layout = layered_layout(&graph);
         return Json(serde_json::json!({
             "compiles": true,
@@ -13136,7 +13198,19 @@ mod tests {
 
         let t1 = new_key();
         let mi = new_key();
+        let directors = new_key();
         let ops = vec![
+            // G7.4: verify_data_objects now requires collection_flag_name
+            // ('directors' below) to name a declared DataObject.
+            designer_graph::ops::Operation::CreateDataObject {
+                key: directors,
+                id: "directors".into(),
+                name: "directors".into(),
+                type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                    bpmn_lite_types::PrimitiveType::String,
+                ),
+                role: bpmn_lite_types::DataObjectRole::Input,
+            },
             designer_graph::ops::Operation::AppendNode {
                 anchor: start_key,
                 key: t1,
@@ -13821,6 +13895,869 @@ mod tests {
         assert!(
             designer_graph::schema::DesignerDag::ir_graphs_equivalent(&ir_1, &ir_2),
             "two independent replays of the identical tape must produce equivalent IR graphs"
+        );
+    }
+
+    // ── Super-user REPL build: 6-step/2-branch/2-loop, utterance-driven ──
+
+    /// One utterance -> ratify hop. Posts `text` at `anchor`, prints the
+    /// full response body (this is a debugging aid — the binding surface
+    /// is lexical-overlap-against-current-legal-moves, not free text, so
+    /// failures must be diagnosed from the real disposition/workbook, not
+    /// guessed at), asserts the workbook reached `ReadyForRatification`
+    /// (i.e. a `proposal_id` was staged), ratifies it, and returns the
+    /// ratify response body for the caller to inspect if it wants to.
+    async fn utter_and_ratify(
+        app: &axum::Router,
+        session_id: &str,
+        text: &str,
+        anchor: &str,
+    ) -> Value {
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": text, "anchor": anchor }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        println!(
+            "UTTER anchor={anchor:?} text={text:?}\n  -> status={status} disposition={:?} proposal={:?} workbook={:?}",
+            body["disposition"], body["proposal"], body["workbook"]
+        );
+        assert_eq!(status, StatusCode::OK, "utterance call must succeed: {body}");
+        let proposal_id = body["proposal"]["proposal_id"].as_str().unwrap_or_else(|| {
+            panic!(
+                "utterance did not stage a ready-to-ratify proposal (message={:?}): {body}",
+                body["message"]
+            )
+        });
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{proposal_id}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let ratify_body = body_json(response).await;
+        println!("  RATIFY {proposal_id} -> status={status} body={ratify_body}");
+        assert_eq!(status, StatusCode::OK, "ratify must succeed: {ratify_body}");
+        ratify_body
+    }
+
+    /// Fetch the gameboard (legal-moves) view at `anchor` — used, per the
+    /// task's iterative-empirical approach, to inspect what is actually
+    /// legally offered at the current position before constructing the
+    /// next utterance, rather than guessing.
+    async fn gameboard_at(app: &axum::Router, session_id: &str, anchor: &str) -> Value {
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sessions/{session_id}/gameboard?anchor={anchor}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await
+    }
+
+    /// Deterministic candidate selection via `/palette/select` (bypasses
+    /// lexical utterance binding entirely) -- returns raw status + body so
+    /// callers can assert on either the fixed 422 (pre-fix) or the OK
+    /// ratify-ready response (post-fix) rather than panicking internally.
+    async fn palette_select(
+        app: &axum::Router,
+        session_id: &str,
+        move_id: &str,
+        anchor: &str,
+    ) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/palette/select"),
+                serde_json::json!({ "move_id": move_id, "anchor": anchor }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        (status, body)
+    }
+
+    /// Find the single node id in the current graph whose id contains
+    /// `substring` — used to discover the workbook-id-suffixed fork/join
+    /// node ids `op.create_parallel_region` synthesizes (unpredictable in
+    /// advance: the suffix is the server-minted `WorkbookId`).
+    async fn find_node_id_containing(app: &axum::Router, session_id: &str, substring: &str) -> String {
+        let graph = graph_body(app, session_id).await;
+        let matches: Vec<String> = graph["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .filter(|id| id.contains(substring))
+            .map(|id| id.to_string())
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one node id containing {substring:?}, found {matches:?} in {graph}"
+        );
+        matches.into_iter().next().unwrap()
+    }
+
+    /// G-REPL — the super-user REPL persona, end to end: an expert dictates
+    /// workflow-construction MOVES as natural-language utterances (never
+    /// raw `/graph-edit` JSON), each utterance binds against the CURRENT
+    /// legal-moves set at the current anchor (lexical overlap against
+    /// `board_candidate.rs`'s phrase bank — see `BINDABLE_UTTERANCE` and
+    /// `proposal::start_workbook`), stages a proposal, and ratify mutates
+    /// the session graph. Builds: start -> task1 -> task2 -> [2-way
+    /// parallel fork: branch1 -> task5, branch2 -> task6] -> join -> task3
+    /// -> task4 -> end (6 named ServiceTasks total: task1, task2,
+    /// parallel_branch_1, parallel_branch_2, task3, task4; one matched
+    /// GatewayAnd fork/join pair as the 2-way branch).
+    ///
+    /// G7 CLOSED the reachability gap this test originally found and
+    /// documented (`op.create_multi_instance_region`'s `collection`
+    /// argument is a `DataReference` that must name an EXISTING
+    /// `IRNode::DataObject`, and no `Operation` variant could ever create
+    /// one through `/graph-edit` post-seed — see
+    /// EOP-PLAN-BPMN-DESIGN-003 G7). `op.create_data_object` now mints one
+    /// via utterance (anchored at Start only — every session has exactly
+    /// one, always present post-seed). The build below is 100%
+    /// utterance+ratify, including both MI regions over dictated
+    /// DataObjects — no `/graph-edit` fallback remains except the one
+    /// truly unavoidable step (the very first node, before any anchor
+    /// exists to utter from). An isolated probe still proves the RED
+    /// half: an utterance naming an UNDECLARED collection is refused
+    /// (stuck at `NeedsArguments`, not silently admitted) — the same
+    /// fail-closed `mentioned_id` binding, now exercised against a real
+    /// declared-DataObject world instead of an empty one.
+    #[tokio::test]
+    async fn test_super_user_repl_builds_6_step_2_branch_2_loop_workflow() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        // ── Unavoidable minimal seed: start -> task1 -> end ──────────────
+        // The very first node cannot itself be reached by utterance (no
+        // anchor yet exists to utter from) — same precedent as
+        // `seed_graph_backed_session`.
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "repl build session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let t1 = new_key();
+        let seed_ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: t1,
+                node: task_ir("task1"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": seed_ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "minimal seed must admit");
+
+        // ── Step 1: InsertAfter task1 -> task2 (utterance-driven) ────────
+        let board_at_task1 = gameboard_at(&app, &session_id, "task1").await;
+        println!(
+            "gameboard @task1 legal move candidate ids: {:?}",
+            board_at_task1["legal_moves"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["candidate_id"].clone())
+                .collect::<Vec<_>>()
+        );
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Places a node on an existing route, after the selected node called 'task2'",
+            "task1",
+        )
+        .await;
+
+        // ── Step 2: open a 2-way parallel fork/join region after task2 ───
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Run every declared branch concurrently and join them all in parallel, 2 branches",
+            "task2",
+        )
+        .await;
+        let after_fork = graph_body(&app, &session_id).await;
+        println!("graph after fork: {after_fork}");
+        let node_ids: Vec<String> = after_fork["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            node_ids.iter().any(|id| id == "parallel_branch_1"),
+            "expected default branch-1 body name: {node_ids:?}"
+        );
+        assert!(
+            node_ids.iter().any(|id| id == "parallel_branch_2"),
+            "expected default branch-2 body name: {node_ids:?}"
+        );
+        let join_id = find_node_id_containing(&app, &session_id, "_join").await;
+
+        // ── Step 3: attempt the bounded loops via utterance FIRST — the
+        // real finding, not an assumption. Run this probe in an ISOLATED
+        // throwaway session (its own seed, task1 only) rather than against
+        // the main build: staging even an incomplete workbook writes a
+        // terminal move-attempt receipt into the session's history, and
+        // leaving that dangling (there is no clean "undo the attempt
+        // history entry" operation, only reject-the-proposal, which does
+        // not retract the receipt) would poison every subsequent utterance
+        // in the SAME session with an attempt-identity collision. Isolating
+        // the probe keeps the main 6-step build's history clean while still
+        // proving the finding against a real, live gameboard position. ────
+        {
+            let probe_session_id = body_json(
+                app.clone()
+                    .oneshot(post_json(
+                        "/api/dsl/sessions",
+                        serde_json::json!({ "name": "MI-utterance-reachability probe" }),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await["session_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let probe_sid: Uuid = probe_session_id.parse().unwrap();
+            let probe_t1 = new_key();
+            let probe_seed_ops = vec![
+                designer_graph::ops::Operation::AppendNode {
+                    anchor: seed_start_key(probe_sid),
+                    key: probe_t1,
+                    node: task_ir("probe_task"),
+                    edge_id: "f1".into(),
+                },
+                designer_graph::ops::Operation::AppendNode {
+                    anchor: probe_t1,
+                    key: new_key(),
+                    node: bpmn_lite_compiler::IRNode::End {
+                        id: "end".into(),
+                        terminate: false,
+                    },
+                    edge_id: "f2".into(),
+                },
+            ];
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{probe_session_id}/graph-edit"),
+                    serde_json::json!({ "operations": probe_seed_ops }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "probe seed must admit");
+
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{probe_session_id}/utterance"),
+                    serde_json::json!({
+                        "text": "Create a per-element multi-instance region over 'ghost_collection' with a declared maximum of 2",
+                        "anchor": "probe_task",
+                    }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mi_attempt = body_json(response).await;
+            println!("MI utterance attempt @probe_task (isolated probe session): {mi_attempt}");
+            assert_eq!(
+                mi_attempt["proposal"]["status"], "needs_arguments",
+                "G7.5 RED: naming an UNDECLARED collection ('ghost_collection', never \
+                 created via op.create_data_object in this session) must NOT reach \
+                 ReadyForRatification — mentioned_id must fail closed against the \
+                 real declared-DataObject world, not just an empty one: {mi_attempt}"
+            );
+            assert!(
+                mi_attempt["proposal"]["operations"].is_null(),
+                "an incomplete workbook must never materialize operations: {mi_attempt}"
+            );
+            let missing_slots: Vec<&str> = mi_attempt["workbook"]["slots"]
+                .as_array()
+                .map(|slots| {
+                    slots
+                        .iter()
+                        .filter(|slot| slot["value"]["state"] == "missing")
+                        .filter_map(|slot| slot["name"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            println!("MI workbook slots left unresolved: {missing_slots:?}");
+            assert!(
+                missing_slots.contains(&"collection"),
+                "expected 'collection' to be the stuck slot: {mi_attempt}"
+            );
+            assert!(
+                !missing_slots.contains(&"declared_max"),
+                "declared_max SHOULD resolve from utterance text ('maximum of 2') — \
+                 only 'collection' is the structural gap: {mi_attempt}"
+            );
+        }
+
+        // ── Steps 3a/3b: dictate the two loop collections into existence
+        // (G7's `op.create_data_object`, anchored at Start — the only
+        // anchor it's offered at) then build each MI region over the
+        // named collection. 100% utterance+ratify — no `/graph-edit`. ───
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Declare a new named data object with a primitive type, available for \
+             later reference by id, called 'items_1', of type string",
+            "start",
+        )
+        .await;
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Declare a new named data object with a primitive type, available for \
+             later reference by id, called 'items_2', of type string",
+            "start",
+        )
+        .await;
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Create a per-element multi-instance region over 'items_1' with a \
+             declared maximum of 2",
+            "parallel_branch_1",
+        )
+        .await;
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Create a per-element multi-instance region over 'items_2' with a \
+             declared maximum of 2",
+            "parallel_branch_2",
+        )
+        .await;
+        let after_mi = graph_body(&app, &session_id).await;
+        let mi_node_ids: Vec<String> = after_mi["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            mi_node_ids.iter().any(|id| id == "for_each_items_1"),
+            "expected the dictated MI region over items_1: {mi_node_ids:?}"
+        );
+        assert!(
+            mi_node_ids.iter().any(|id| id == "for_each_items_2"),
+            "expected the dictated MI region over items_2: {mi_node_ids:?}"
+        );
+
+        // ── Steps 4/5: continue the utterance-driven chain past the join:
+        // join -> task3 -> task4 -> end. ─────────────────────────────────
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Places a node on an existing route, after the selected node called 'task3'",
+            &join_id,
+        )
+        .await;
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Places a node on an existing route, after the selected node called 'task4'",
+            "task3",
+        )
+        .await;
+
+        // ── Final shape assertions ───────────────────────────────────────
+        let final_graph = graph_body(&app, &session_id).await;
+        println!("FINAL graph: {final_graph}");
+        assert_eq!(final_graph["compiles"], true, "{final_graph}");
+        let final_ids: Vec<String> = final_graph["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .map(|s| s.to_string())
+            .collect();
+        for expected in [
+            "start",
+            "task1",
+            "task2",
+            "parallel_branch_1",
+            "parallel_branch_2",
+            "for_each_items_1",
+            "for_each_items_2",
+            "task3",
+            "task4",
+            "end",
+        ] {
+            assert!(
+                final_ids.iter().any(|id| id == expected),
+                "expected node {expected:?} in final graph: {final_ids:?}"
+            );
+        }
+        // 6 named service-task steps: task1, task2, parallel_branch_1,
+        // parallel_branch_2, task3, task4.
+        let six_steps = [
+            "task1",
+            "task2",
+            "parallel_branch_1",
+            "parallel_branch_2",
+            "task3",
+            "task4",
+        ];
+        assert_eq!(
+            six_steps
+                .iter()
+                .filter(|id| final_ids.contains(&id.to_string()))
+                .count(),
+            6
+        );
+
+        // End-to-end admissibility proof: save publishes the graph this
+        // utterance-driven build produced.
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/save"),
+                serde_json::json!({ "template_name": "repl-build-template" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "utterance-built workflow must save/publish: {body}");
+    }
+
+    /// G7 focused REPL exercise (2026-08-13) — independent of the 6-step/
+    /// 2-branch/2-loop build above, drives `op.create_data_object`
+    /// end-to-end plus both of its ruled referential-integrity gates
+    /// (F-G7b verifier tightening, F-G7c delete integrity) purely through
+    /// `/api/dsl/sessions/:id/utterance` -> ratify, real HTTP round trips,
+    /// no `/graph-edit` except the one unavoidable first-node seed.
+    #[tokio::test]
+    async fn test_g7_create_data_object_utterance_and_referential_integrity() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state.clone());
+
+        // ── Unavoidable minimal seed: start -> verify_each -> end ────────
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "g7 create-data-object session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let t1 = new_key();
+        let seed_ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: t1,
+                node: task_ir("verify_each"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f2".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": seed_ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "minimal seed must admit");
+
+        // ── RED (before any DataObject exists): naming an undeclared
+        // collection stays stuck at needs_arguments — mentioned_id must
+        // fail closed against an empty declared-DataObject world. ───────
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Create a per-element multi-instance region over 'directors' with a declared maximum of 3",
+                    "anchor": "verify_each",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let pre_declare_attempt = body_json(response).await;
+        println!("MI attempt BEFORE 'directors' is declared: {pre_declare_attempt}");
+        assert_eq!(
+            pre_declare_attempt["proposal"]["status"], "needs_arguments",
+            "MI over an undeclared collection must not reach ReadyForRatification: {pre_declare_attempt}"
+        );
+        let missing: Vec<&str> = pre_declare_attempt["workbook"]["slots"]
+            .as_array()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .filter(|slot| slot["value"]["state"] == "missing")
+                    .filter_map(|slot| slot["name"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            missing.contains(&"collection"),
+            "expected 'collection' to be the stuck slot: {pre_declare_attempt}"
+        );
+
+        // ── G7.1/G7.2/G7.3: dictate 'directors' into existence via
+        // op.create_data_object, anchored at Start (the only anchor it's
+        // offered at, per the 2026-08-13 ruling). ───────────────────────
+        let create_body = utter_and_ratify(
+            &app,
+            &session_id,
+            "Declare a new named data object with a primitive type, available for \
+             later reference by id, called 'directors', of type string",
+            "start",
+        )
+        .await;
+        println!("CreateDataObject ratify body: {create_body}");
+        assert_eq!(create_body["proposal_status"], "ratified");
+
+        // `IRNode::DataObject` carries zero bytecode instructions and never
+        // becomes an `ExecutionNode`, so `plan_to_visual_graph` alone can't
+        // see it -- but the graph endpoint is the enriched execution map
+        // (2026-08-13 ruling: DataObjects belong on it, distinct from the
+        // runbook's raw operation-tape rendering), so `session_graph_endpoint`
+        // now additionally projects `IRNode::DataObject`s straight off the
+        // `IRGraph` as unconnected `"data_object"`-kind nodes. Verify both
+        // surfaces: the runbook (G6.2, shows every ratified `Operation`
+        // verbatim) and the graph (the enriched map a user actually looks at).
+        let runbook_response = app
+            .clone()
+            .oneshot(get_req(&format!("/api/dsl/sessions/{session_id}/runbook")))
+            .await
+            .unwrap();
+        assert_eq!(runbook_response.status(), StatusCode::OK);
+        let runbook_body = body_json(runbook_response).await;
+        let runbook = runbook_body["runbook"].as_str().unwrap();
+        println!("runbook after declaring 'directors': {runbook}");
+        assert!(
+            runbook.contains("(create-data-object")
+                && runbook.contains("\"directors\"")
+                && runbook.contains("Primitive(String)"),
+            "expected a create-data-object line naming 'directors' as a string: {runbook}"
+        );
+
+        let graph_after_declare = graph_body(&app, &session_id).await;
+        let directors_node = graph_after_declare["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"].as_str() == Some("directors"))
+            .unwrap_or_else(|| panic!("'directors' must appear as a data_object node on /graph: {graph_after_declare}"));
+        assert_eq!(directors_node["kind"], "data_object");
+        assert!(
+            directors_node["label"]
+                .as_str()
+                .is_some_and(|label| label.contains("directors") && label.contains("string")),
+            "unexpected data_object label: {directors_node}"
+        );
+
+        // ── Same undeclared-name probe again, unrelated collection —
+        // still refused: declaring 'directors' must not loosen binding
+        // for a DIFFERENT undeclared name. ────────────────────────────
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({
+                    "text": "Create a per-element multi-instance region over 'ghost_collection' with a declared maximum of 3",
+                    "anchor": "verify_each",
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ghost_attempt = body_json(response).await;
+        assert_eq!(
+            ghost_attempt["proposal"]["status"], "needs_arguments",
+            "MI over a DIFFERENT still-undeclared collection must stay refused \
+             even after 'directors' is declared: {ghost_attempt}"
+        );
+
+        // ── G7.3 GREEN: MI over the now-declared 'directors' binds and
+        // ratifies for real. ─────────────────────────────────────────────
+        let mi_body = utter_and_ratify(
+            &app,
+            &session_id,
+            "Create a per-element multi-instance region over 'directors' with a \
+             declared maximum of 3",
+            "verify_each",
+        )
+        .await;
+        println!("MI ratify body: {mi_body}");
+        assert_eq!(mi_body["proposal_status"], "ratified");
+
+        let after_mi = graph_body(&app, &session_id).await;
+        println!("graph after MI: {after_mi}");
+        assert_eq!(after_mi["compiles"], true, "{after_mi}");
+        let mi_node = after_mi["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == "for_each_directors")
+            .unwrap_or_else(|| panic!("expected for_each_directors MI node: {after_mi}"));
+        assert_eq!(mi_node["kind"], "multi_instance");
+
+        // ── G7.4/F-G7c RED: deleting 'directors' while the MI region
+        // still references it as its collection must be refused. FINDING:
+        // the refusal is enforced a layer earlier than a ratify-time
+        // check — `apply()`'s new referential-integrity error surfaces
+        // during the compiler-preview dry-run enumeration itself
+        // (`legal_moves.rs::position_bound_move` -> `preview_operations`),
+        // so `op.delete_subgraph` never becomes a legal move at the
+        // 'directors' anchor at all while it's referenced, rather than
+        // staging and then failing at ratify. Proven directly against the
+        // real gameboard, not asserted from source reading. ─────────────
+        let board_while_referenced = gameboard_at(&app, &session_id, "directors").await;
+        let candidates_while_referenced: Vec<&str> = board_while_referenced["legal_moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["candidate_id"].as_str())
+            .collect();
+        println!("legal moves @directors WHILE referenced: {candidates_while_referenced:?}");
+        assert!(
+            !candidates_while_referenced.contains(&"op.delete_subgraph"),
+            "op.delete_subgraph must NOT be offered while 'directors' is still \
+             referenced by for_each_directors: {candidates_while_referenced:?}"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/utterance"),
+                serde_json::json!({ "text": "Delete the anchor node or a complete enclosed region", "anchor": "directors" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let delete_attempt = body_json(response).await;
+        println!("DeleteNode(directors) attempt while referenced: {delete_attempt}");
+        assert!(
+            delete_attempt["proposal"]["proposal_id"].is_null(),
+            "no move can be selected -- there is nothing legal to ratify: {delete_attempt}"
+        );
+        assert_ne!(
+            delete_attempt["disposition"]["kind"], "propose_move",
+            "refused-before-staging, not a stageable proposal: {delete_attempt}"
+        );
+
+        // Graph must be unchanged by the refused delete: the MI region
+        // (a real flow node, unlike the DataObject) is still present.
+        let after_refused_delete = graph_body(&app, &session_id).await;
+        let ids_after_refusal: Vec<String> = after_refused_delete["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(ids_after_refusal.iter().any(|id| id == "for_each_directors"));
+
+        // ── G7.4/F-G7c GREEN, proven precisely rather than by deleting the
+        // referencing MI region: mid-chain flow-node deletion is refused
+        // for an UNRELATED, pre-existing reason noted in G2's own receipt
+        // (`Operation::DeleteNode` doesn't reconnect predecessor -> successor,
+        // so removing `for_each_directors` would disconnect
+        // verify_each -> end regardless of G7 — confirmed directly: it is
+        // NOT even offered as a legal move at that anchor). Isolating
+        // F-G7c's own claim instead: declare a SECOND, never-referenced
+        // DataObject and confirm the gameboard offers `op.delete_subgraph`
+        // for IT while 'directors' (still referenced) stays refused, then
+        // actually ratify the delete over HTTP via `/palette/select`
+        // (deterministic move selection, bypassing lexical utterance
+        // binding) to close the real GREEN loop end to end.
+        utter_and_ratify(
+            &app,
+            &session_id,
+            "Declare a new named data object with a primitive type, available for \
+             later reference by id, called 'scratch', of type string",
+            "start",
+        )
+        .await;
+
+        let board_at_scratch = gameboard_at(&app, &session_id, "scratch").await;
+        let candidates_at_scratch: Vec<&str> = board_at_scratch["legal_moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["candidate_id"].as_str())
+            .collect();
+        println!("legal moves @scratch (never referenced): {candidates_at_scratch:?}");
+        assert!(
+            candidates_at_scratch.contains(&"op.delete_subgraph"),
+            "op.delete_subgraph must be offered for an unreferenced data object: {candidates_at_scratch:?}"
+        );
+
+        // 'directors' must STILL be refused — declaring/offering delete on
+        // an unrelated data object has no bearing on the first's
+        // referential integrity.
+        let board_at_directors_final = gameboard_at(&app, &session_id, "directors").await;
+        let candidates_at_directors_final: Vec<&str> = board_at_directors_final["legal_moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["candidate_id"].as_str())
+            .collect();
+        println!("legal moves @directors (still referenced): {candidates_at_directors_final:?}");
+        assert!(
+            !candidates_at_directors_final.contains(&"op.delete_subgraph"),
+            "'directors' must stay refused -- deleting an unrelated data object \
+             must not loosen its referential integrity: {candidates_at_directors_final:?}"
+        );
+
+        // Close the GREEN loop for real: select `op.delete_subgraph` at
+        // 'scratch' via `/palette/select`. `scratch`'s only argument
+        // (`target`) auto-resolves positionally from the anchor inside
+        // `start_workbook`, so its workbook is born at `ReadyForDryRun`,
+        // never `NeedsArguments` -- previously `palette_select_endpoint`'s
+        // unconditional zero-answers call into `answer_proposal_endpoint`
+        // would 422 here ("workbook in ReadyForDryRun does not accept
+        // answers"). Fixed by treating a zero-answer submission against a
+        // workbook that isn't `NeedsArguments` as a no-op pass-through
+        // instead of a hard error (`answer_proposal_endpoint`, rest.rs).
+        // `/palette/select` takes the move's content-hash `move_id`, not
+        // its human-readable `candidate_id` -- pull the real hash off the
+        // legal move we already located above.
+        let scratch_delete_move_id = board_at_scratch["legal_moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["candidate_id"].as_str() == Some("op.delete_subgraph"))
+            .and_then(|m| m["move_id"].as_str())
+            .expect("op.delete_subgraph legal move must carry a move_id hash");
+        let (delete_status, delete_body) =
+            palette_select(&app, &session_id, scratch_delete_move_id, "scratch").await;
+        println!("PALETTE SELECT delete@scratch -> status={delete_status} body={delete_body}");
+        assert_eq!(
+            delete_status,
+            StatusCode::OK,
+            "palette/select must now accept an anchor-complete candidate with no free-text answers: {delete_body}"
+        );
+        assert_eq!(
+            delete_body["proposal_status"], "ready_for_ratification",
+            "palette selection stages, it does not auto-ratify: {delete_body}"
+        );
+        let delete_proposal_id = delete_body["proposal_id"]
+            .as_str()
+            .expect("palette selection must stage a ratifiable proposal");
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/proposals/{delete_proposal_id}/ratify"),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let ratify_status = response.status();
+        let ratify_body = body_json(response).await;
+        println!("RATIFY {delete_proposal_id} (palette delete) -> status={ratify_status} body={ratify_body}");
+        assert_eq!(ratify_status, StatusCode::OK, "ratify must succeed: {ratify_body}");
+        assert_eq!(
+            ratify_body["proposal_status"], "ratified",
+            "delete of the unreferenced 'scratch' object must ratify cleanly: {ratify_body}"
+        );
+
+        // 'scratch' must actually be gone: it's no longer a valid anchor.
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sessions/{session_id}/gameboard?anchor=scratch"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "'scratch' must no longer resolve as a graph anchor after being deleted"
+        );
+
+        // 'directors' remains untouched and still referenced.
+        let board_at_directors_post_delete = gameboard_at(&app, &session_id, "directors").await;
+        let candidates_at_directors_post_delete: Vec<&str> =
+            board_at_directors_post_delete["legal_moves"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["candidate_id"].as_str())
+                .collect();
+        assert!(
+            !candidates_at_directors_post_delete.contains(&"op.delete_subgraph"),
+            "'directors' referential integrity must be unaffected by an unrelated delete: {candidates_at_directors_post_delete:?}"
+        );
+
+        let final_graph = graph_body(&app, &session_id).await;
+        println!("FINAL graph: {final_graph}");
+        assert_eq!(final_graph["compiles"], true, "{final_graph}");
+        let final_ids: Vec<String> = final_graph["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            final_ids.iter().any(|id| id == "for_each_directors"),
+            "the MI region referencing 'directors' must still be present: {final_ids:?}"
         );
     }
 }

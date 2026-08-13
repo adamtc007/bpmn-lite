@@ -4213,6 +4213,14 @@ mod tests {
     fn make_multi_instance_graph(declared_max: u32) -> IRGraph {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
+        // G7.4: verify_data_objects now requires collection_flag_name to
+        // name a declared DataObject on this (raw graph-edit) path too.
+        graph.add_node(IRNode::DataObject {
+            id: "doc_count".to_string(),
+            name: "doc_count".to_string(),
+            type_decl: DataObjectType::Primitive(PrimitiveType::I64),
+            role: DataObjectRole::Internal,
+        });
         let mi = graph.add_node(IRNode::MultiInstance {
             id: "verify_docs".to_string(),
             name: "Verify Doc".to_string(),

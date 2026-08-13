@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "candidate_schema_version": 4,
+  "candidate_schema_version": 5,
   "source_commit": "b5b2844d9352b7f2ff56696ac34ce8e09813af98",
   "semantic_contract_state": "pre_phase_3",
   "candidates": [
@@ -96,6 +96,12 @@
     },
     {
       "id": "op.delete_subgraph",
+      "kind": "operation",
+      "semantic_contract": false,
+      "binding": "supported"
+    },
+    {
+      "id": "op.create_data_object",
       "kind": "operation",
       "semantic_contract": false,
       "binding": "supported"

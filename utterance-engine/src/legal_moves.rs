@@ -1,6 +1,7 @@
 //! Private deterministic legal-move enumeration and graph preview.
 
 use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
+use bpmn_lite_types::{DataObjectRole, DataObjectType, PrimitiveType};
 use designer_graph::board_candidate::{CandidateId, LegalityOracle};
 use designer_graph::ops::{GuardTrigger, Operation, RegionBranch};
 use designer_graph::positional::PositionalLegality;
@@ -45,6 +46,7 @@ pub(crate) const MATERIALIZED_CANDIDATE_IDS: &[&str] = &[
     "op.set_guard_budget",
     "op.set_correlation_source",
     "op.delete_subgraph",
+    "op.create_data_object",
     "prod.request_and_wait",
     "prod.reminder_then_escalate",
     "prod.interrupting_timeout",
@@ -411,6 +413,31 @@ fn count(workbook: &ProposalWorkbook, name: &str) -> Result<u32, BpmnBoardError>
     }
 }
 
+fn text(workbook: &ProposalWorkbook, name: &str) -> Result<String, BpmnBoardError> {
+    match value(workbook, name)? {
+        SlotValue::Text(value) => Ok(value.clone()),
+        _ => Err(BpmnBoardError::Binding(format!(
+            "slot '{name}' is not text"
+        ))),
+    }
+}
+
+/// G7.3 (F-G7a ruling): the four proposal.rs-canonicalised primitive-type
+/// words; anything else is a bug upstream in `primitive_type_word`, not a
+/// user-facing case (proposal.rs never resolves the slot to any other
+/// string).
+fn primitive_data_object_type(word: &str) -> Result<DataObjectType, BpmnBoardError> {
+    match word {
+        "bool" => Ok(DataObjectType::Primitive(PrimitiveType::Bool)),
+        "integer" => Ok(DataObjectType::Primitive(PrimitiveType::I64)),
+        "decimal" => Ok(DataObjectType::Primitive(PrimitiveType::F64)),
+        "string" => Ok(DataObjectType::Primitive(PrimitiveType::String)),
+        other => Err(BpmnBoardError::Binding(format!(
+            "slot 'data_type' has an unrecognised primitive type word '{other}'"
+        ))),
+    }
+}
+
 fn duration(workbook: &ProposalWorkbook, name: &str) -> Result<u64, BpmnBoardError> {
     match value(workbook, name)? {
         SlotValue::DurationMillis(value) => Ok(*value),
@@ -665,6 +692,20 @@ pub(crate) fn materialize_workbook(
                     edge_id: format!("flow_{name}"),
                 }],
                 format!("repeat over '{collection}' up to {maximum} times"),
+            )
+        }
+        "op.create_data_object" => {
+            let name = identifier(workbook, "name")?;
+            let type_decl = primitive_data_object_type(&text(workbook, "data_type")?)?;
+            (
+                vec![Operation::CreateDataObject {
+                    key: ids.next_key(),
+                    id: name.clone(),
+                    name: name.clone(),
+                    type_decl,
+                    role: DataObjectRole::Internal,
+                }],
+                format!("declare a new data object '{name}'"),
             )
         }
         "op.attach_guard" => {

@@ -1,0 +1,7 @@
+{
+  "workflo#_id": "sfeed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "5tart", "next": "end" } }
+  },
+  "stxar t_node"                 

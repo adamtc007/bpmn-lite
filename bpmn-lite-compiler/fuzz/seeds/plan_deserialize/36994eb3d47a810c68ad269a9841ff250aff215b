@@ -1,0 +1,11 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "end": { "Eew_\\\ue6333loorkow_\\\u33333ow_\\\ue666666666v66666666666666v66666666666\\ow_\\\ue66666v646666666r_": { "id": "start", "next": "endches": []
+}

@@ -113,6 +113,10 @@ pub fn render_operation(op: &Operation) -> String {
             "(set-correlation-source :node {:?} :correlation {corr_key_source:?})",
             node.0
         ),
+        Operation::CreateDataObject { key, id, name, type_decl, role } => format!(
+            "(create-data-object :key {:?} :id {id:?} :name {name:?} :type {type_decl:?} :role {role:?})",
+            key.0
+        ),
         Operation::CreateParallelRegion {
             anchor, fork_key, fork_node_id, join_key, join_node_id, entry_edge_id, branches,
         } => format!(

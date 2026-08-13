@@ -1,0 +1,4 @@
+{"workflow_id": "seed",
+  "nodes": {
+    "": { "End": { "id": "end", "status": "done" } },
+    "star":		

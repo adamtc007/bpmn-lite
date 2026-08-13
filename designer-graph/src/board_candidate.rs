@@ -28,7 +28,13 @@ use serde::{Deserialize, Serialize};
 /// never boarded by any position, and RESEARCH-002/V3 confirmed they
 /// appear zero times in every corpus artifact. The catalogue no longer
 /// claims capabilities with no construction path.
-const CANDIDATE_SCHEMA_VERSION: u32 = 4;
+///
+/// v4 -> v5 (G7.2, EOP-PLAN-BPMN-DESIGN-003 v0.3): `CreateDataObject`
+/// added — mints an `IRNode::DataObject` post-seed, closing the
+/// MI-`collection`-slot utterance-reachability gap found by the
+/// super-user REPL test. Deliberate, receipted board-hash change, same
+/// precedent as the v3->v4 bump.
+const CANDIDATE_SCHEMA_VERSION: u32 = 5;
 
 /// The §12.1 atomic graph-operation set. Variant set mirrors the V&S
 /// verbatim; the two guard operations mirror the opcode trichotomy
@@ -52,6 +58,7 @@ pub enum OperationKind {
     SetGuardBudget,
     SetCorrelationSource,
     DeleteSubgraph,
+    CreateDataObject,
 }
 
 /// The §12.2 production catalogue (Q4's candidate set; pruned/extended
@@ -90,7 +97,7 @@ pub enum CandidateId {
 }
 
 impl OperationKind {
-    pub const ALL: [OperationKind; 16] = [
+    pub const ALL: [OperationKind; 17] = [
         OperationKind::AppendNode,
         OperationKind::InsertBefore,
         OperationKind::InsertAfter,
@@ -107,6 +114,7 @@ impl OperationKind {
         OperationKind::SetGuardBudget,
         OperationKind::SetCorrelationSource,
         OperationKind::DeleteSubgraph,
+        OperationKind::CreateDataObject,
     ];
 
     pub fn canonical_id(self) -> &'static str {
@@ -127,6 +135,7 @@ impl OperationKind {
             OperationKind::SetGuardBudget => "op.set_guard_budget",
             OperationKind::SetCorrelationSource => "op.set_correlation_source",
             OperationKind::DeleteSubgraph => "op.delete_subgraph",
+            OperationKind::CreateDataObject => "op.create_data_object",
         }
     }
 
@@ -149,6 +158,7 @@ impl OperationKind {
             OperationKind::SetGuardBudget => "Set a guard's failure budget (overrides the workflow default)",
             OperationKind::SetCorrelationSource => "Set a wait node's message correlation source expression",
             OperationKind::DeleteSubgraph => "Delete the anchor node or a complete enclosed region",
+            OperationKind::CreateDataObject => "Declare a new named data object with a primitive type, available for later reference by id",
         }
     }
 }
@@ -285,7 +295,7 @@ mod tests {
             .collect();
         let unique: BTreeSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "duplicate canonical id");
-        assert_eq!(ids.len(), 21);
+        assert_eq!(ids.len(), 22);
 
         let golden: BTreeSet<&str> = [
             "op.append_node",
@@ -304,6 +314,7 @@ mod tests {
             "op.set_guard_budget",
             "op.set_correlation_source",
             "op.delete_subgraph",
+            "op.create_data_object",
             "prod.request_and_wait",
             "prod.reminder_then_escalate",
             "prod.interrupting_timeout",
@@ -313,7 +324,7 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(unique, golden, "canonical id set drifted from golden");
-        assert_eq!(CANDIDATE_SCHEMA_VERSION, 4);
+        assert_eq!(CANDIDATE_SCHEMA_VERSION, 5);
     }
 
     /// CEMENT (review F6): descriptions are board-hash inputs — a
@@ -350,7 +361,7 @@ mod tests {
     }
 
     const GOLDEN_DESCRIPTION_HASH: &str =
-        "fad1424ba62c6c3be926086466c9b80fb7fef5fffa4611b386a865984e0ba8e7";
+        "2cf9200134859b689d403bd7feea29d4c6e172bba9fb40974f1ec264a3f48a0e";
 
     /// Legality-oracle default assembly is deterministic and sorted.
     #[test]
@@ -367,7 +378,7 @@ mod tests {
         }
         let a = Everything.legal_candidates(None);
         let b = Everything.legal_candidates(None);
-        assert_eq!(a.len(), 21);
+        assert_eq!(a.len(), 22);
         let ids_a: Vec<&str> = a.iter().map(|c| c.canonical_id.as_str()).collect();
         let ids_b: Vec<&str> = b.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(ids_a, ids_b);
@@ -391,6 +402,6 @@ mod tests {
                 vec![]
             }
         }
-        assert_eq!(Doubled.legal_candidates(None).len(), 16);
+        assert_eq!(Doubled.legal_candidates(None).len(), 17);
     }
 }

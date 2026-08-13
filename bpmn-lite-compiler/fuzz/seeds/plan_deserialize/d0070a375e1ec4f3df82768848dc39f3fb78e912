@@ -1,0 +1,8 @@
+{
+  "vorkflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "End": { "id": "end", "status":  "done" } },
+    "start": { "End": { "id": "end", "status": "don									{
+  "workflow_id": "seed",
+  		 no

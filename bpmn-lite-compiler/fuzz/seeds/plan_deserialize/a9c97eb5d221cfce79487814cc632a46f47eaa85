@@ -1,0 +1,10 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id+": "start", "next'": "e",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest": null,
+  lregime_version": nu{
+  "workf_id": "ll,s
+ "mathemateeid

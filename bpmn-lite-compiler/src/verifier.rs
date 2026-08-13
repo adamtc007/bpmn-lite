@@ -981,6 +981,31 @@ fn verify_data_objects(graph: &IRGraph) -> Vec<VerifyError> {
         }
     }
 
+    // G7.4 (F-G7b ruled): every MultiInstance.collection_flag_name names a
+    // declared DataObject — one semantics on both the utterance/proposal
+    // path (which already required this via `mentioned_id`) and the raw
+    // graph-edit path (which previously accepted any string). Scoped to
+    // `collection_flag_name` only — correlation-source references are a
+    // separate, unruled, larger follow-up (EOP-PLAN-BPMN-DESIGN-003 §3).
+    for idx in graph.node_indices() {
+        if let IRNode::MultiInstance {
+            id,
+            collection_flag_name,
+            ..
+        } = &graph[idx]
+        {
+            if !declared.contains_key(collection_flag_name) {
+                errors.push(VerifyError {
+                    message: format!(
+                        "unresolved MultiInstance collection '{collection_flag_name}' in \
+                         node '{id}': no data object with id '{collection_flag_name}'"
+                    ),
+                    element_id: Some(id.clone()),
+                });
+            }
+        }
+    }
+
     errors
 }
 

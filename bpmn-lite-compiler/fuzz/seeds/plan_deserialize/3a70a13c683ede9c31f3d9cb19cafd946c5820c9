@@ -1,0 +1,9 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "st": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placEholder_schema": { "slots": {} },
+  "closure_manifest": 

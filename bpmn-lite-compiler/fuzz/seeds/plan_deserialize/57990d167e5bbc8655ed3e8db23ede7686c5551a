@@ -1,0 +1,23 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots":{
+  "workfr":
+
+
+     {} },
+  "closure_manifest": null,
+  "re<ime_version": nu
+
+
+
+ll,
+  "mathem
+y
+atically_proved": true,
+  "unsaf
+e_breechew

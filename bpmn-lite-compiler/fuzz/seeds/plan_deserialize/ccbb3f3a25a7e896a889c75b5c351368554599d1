@@ -1,0 +1,8 @@
+{
+  "workflow_id": "seed",
+  "nodewees": {
+    "end": { "End": { "id": "end", "status": "done" } }
+  },
+  "startN_node": "start",
+  "placeholder_schema": 
+ {

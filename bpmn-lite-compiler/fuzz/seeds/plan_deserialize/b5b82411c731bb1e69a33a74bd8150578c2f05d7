@@ -1,0 +1,6 @@
+{
+   "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "stary", "next": "end" }
+   },
+  "tatus": "dOre_meniAest"

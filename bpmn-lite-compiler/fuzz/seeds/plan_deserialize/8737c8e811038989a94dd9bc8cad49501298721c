@@ -1,0 +1,6 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+ "en": { "Start": { "id": "start", "next": "end" } }
+  },
+  "placeholder_schema": 							   "": []a}

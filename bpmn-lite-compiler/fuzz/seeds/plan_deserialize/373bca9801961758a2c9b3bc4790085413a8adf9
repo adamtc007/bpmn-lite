@@ -1,0 +1,12 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "end"{ : "Eer_o_o null,
+  "re<ime_version": nullt am "hematically_proved": trkflow_id": "e_brches": []
+}

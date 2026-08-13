@@ -1,0 +1,5 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+ "stxart_node"                    "clotti:

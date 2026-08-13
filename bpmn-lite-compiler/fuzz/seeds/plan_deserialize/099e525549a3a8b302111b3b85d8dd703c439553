@@ -1,0 +1,16 @@
+{
+  "wo#rnodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "end": { "Eer_o_mfeid": { "Eer_": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "pnd1chema": { "slots": {} },
+  "closure_manifest":{
+    "end": { "Eer_o_mfeid": { "Eer_": { "idkflv@w_id": "seed",
+  "nodes": {
+1

@@ -117,6 +117,14 @@ impl<'a> PositionalLegality<'a> {
                 out.push(OperationKind::Connect);
             }
         }
+        // G7.1 (ruled 2026-08-13): CreateDataObject is a structural
+        // declaration, not flow, and has no natural anchor. Offered only
+        // at Start — always exactly one, always present post-seed — so
+        // it stays utterance-reachable without a new anchorless
+        // LegalityOracle path.
+        if is_start(ir) {
+            out.push(OperationKind::CreateDataObject);
+        }
         // AppendNode: chain extension — flow (non-End) or a guard opening
         // its escape path; only where no outgoing edge exists (staging
         // rule, mirrored).

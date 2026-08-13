@@ -1,0 +1,7 @@
+{
+  "wtrkflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "e",
+  "placeholdd": "start", "next": "closure_manis_proved": true,
+  "unsar

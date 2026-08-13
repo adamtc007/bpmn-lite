@@ -1,0 +1,9 @@
+{
+  "workflow_id": "seed",
+  "nod:s": {
+    "enstart": { "Start": { "id": "start", "n1ext": "e" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots"   
+ },"} "closure_manifest"< null,
+  "regimcalunsa: { "id": "start", 

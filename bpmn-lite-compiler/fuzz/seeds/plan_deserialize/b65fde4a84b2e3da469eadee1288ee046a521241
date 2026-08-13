@@ -1,0 +1,13 @@
+{
+  "work": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end",
+  "nodes": {
+    "end": { "End": { "id": "end", "stats": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+ $},
+  "sta*t_node"{
+: "start",
+ 
+  " 

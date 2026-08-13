@@ -1,0 +1,13 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "enTd": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  ,
+     "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  ,
+    "start": { "Start": { "id": "start},
+  "start_node": "start",
+  "prt_node": "start",
+  "placeholdeholder_schema": { "s:ches":

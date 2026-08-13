@@ -615,6 +615,17 @@ edges:
                     type_decl: DataObjectType::Primitive(PrimitiveType::String),
                     role: DataObjectRole::Input,
                 },
+                // G7.4: verify_data_objects now requires collection_flag_name
+                // ('directors' below) to name a declared DataObject; `Input`
+                // is the semantically-correct role for a client-supplied
+                // collection (manifest.rs's collection_flag_names guard
+                // keeps this classified Collection, not Scalar).
+                NodeDto::DataObject {
+                    id: "directors".to_string(),
+                    name: "directors".to_string(),
+                    type_decl: DataObjectType::Primitive(PrimitiveType::String),
+                    role: DataObjectRole::Input,
+                },
                 NodeDto::MultiInstance {
                     id: "verify_each_director".to_string(),
                     task_type: "verify_director".to_string(),

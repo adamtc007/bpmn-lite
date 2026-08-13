@@ -1,0 +1,10 @@
+{
+  "workflov_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_nchema": { "slots": {} },
+  "closure_manifest": ": {} },
+  "closure_manifest": nulnsafe_breeches": []
+}

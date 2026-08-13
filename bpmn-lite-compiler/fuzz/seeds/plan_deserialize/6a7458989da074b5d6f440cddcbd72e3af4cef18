@@ -1,0 +1,11 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "strt", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholdeholder_schema": { "lots": {} },
+  "closure_manifest": null,
+  "regime_version": null,
+":

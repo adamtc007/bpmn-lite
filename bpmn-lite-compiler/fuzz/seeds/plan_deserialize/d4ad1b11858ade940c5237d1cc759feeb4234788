@@ -1,0 +1,9 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "enl": { "End": { "id": "end", "status": "do", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": { "seed",
+ ": { "id": "st]
+}

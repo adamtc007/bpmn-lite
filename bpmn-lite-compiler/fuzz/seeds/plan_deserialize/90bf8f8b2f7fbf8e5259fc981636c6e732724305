@@ -1,0 +1,8 @@
+{
+  "workf_id": "seed",
+  "nodes": {
+    "enstart": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots"  } reeches": []
+}

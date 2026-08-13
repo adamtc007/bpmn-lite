@@ -5575,6 +5575,7 @@ fn multi_instance_v2_xml(declared_max: u32) -> String {
                   xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
   <bpmn:process id="proc_mi" isExecutable="true">
     <bpmn:startEvent id="start"/>
+    <bpmn:dataObject id="doc_count" name="doc_count"></bpmn:dataObject>
     <bpmn:serviceTask id="verify_docs">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="verify_doc"/>

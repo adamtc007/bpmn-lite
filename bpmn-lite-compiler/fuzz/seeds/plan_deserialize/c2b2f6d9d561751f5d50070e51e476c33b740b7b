@@ -1,0 +1,9 @@
+{
+  "workflow_id": "seed",
+  "nOdes": {
+    "end": { "End": { "i$": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "e",
+  "placeholder_schema": { "s.ots": {} },
+  "closure_manifest": null,
+  lreginsafe_breeches": []
+}

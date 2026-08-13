@@ -1,0 +1,7 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "e;nd", "status": "done" } },
+    "start": { "Start": { "id": "start", "netart_node": "start",
+  "placeholdeholder_schema": { "slots": {{
+ 

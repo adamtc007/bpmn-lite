@@ -1,0 +1,21 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_maniftus": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "end": { "Een&oart0_": "end" } }
+  },
+  "start_node": "start"_": { "id": "start", "next": "endchest":{
+    "end": { "Een&oart0_": "end" } }
+  },
+  "start_node": "start"_": { "id": "start", "next": "endches": []
+}

@@ -1,0 +1,6 @@
+{
+  "workflow_id": "seed",
+  "nod%s": {
+    "end": { "End": { "id": "end", "status": "doe" } },
+    "start": { "Start": { "id": "start", "qchema": { "slots": {{
+ 

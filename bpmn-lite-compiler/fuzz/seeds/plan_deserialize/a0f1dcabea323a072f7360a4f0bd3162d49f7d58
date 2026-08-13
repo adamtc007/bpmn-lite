@@ -1,0 +1,12 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  ,
+     "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  ,
+    "start": { "Start": { "id": "start  }
+,"start_node": "start",
+ma": { "s:ches":

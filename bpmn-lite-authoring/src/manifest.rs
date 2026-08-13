@@ -147,11 +147,27 @@ pub(crate) fn derive_parameter_manifest(
         }
     };
 
+    // G7.4: a name driving an MI region (`collection_flag`) is classified
+    // Collection by the walk below, never Scalar by this loop -- even when
+    // it also carries an explicit `Input` declaration (the now-mandatory
+    // shape for a client-supplied collection, since collections must be
+    // declared). `upsert` never widens an existing entry's `kind`, so
+    // registering Scalar here first would permanently shadow the more
+    // specific Collection classification.
+    let collection_flag_names: HashSet<&str> = dto
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            NodeDto::MultiInstance { collection_flag, .. } => Some(collection_flag.as_str()),
+            _ => None,
+        })
+        .collect();
+
     // Explicit DataObject::Input declarations — always a scalar slot, even
     // if nothing in the workflow references the name yet.
     for node in &dto.nodes {
         if let NodeDto::DataObject { id, name, role, .. } = node {
-            if *role == DataObjectRole::Input {
+            if *role == DataObjectRole::Input && !collection_flag_names.contains(name.as_str()) {
                 upsert(
                     &mut slots,
                     &mut index,

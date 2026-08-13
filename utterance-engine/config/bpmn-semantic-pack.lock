@@ -2,12 +2,12 @@ schema_version: 1
 compiler_version: semantic-pack/0.2.2
 source:
   path: utterance-engine/config/bpmn-semantic-pack.yaml
-  sha256: 7aab1a6455410180f786d8e72db106758562bf9dc3fd76db61382163d459567d
+  sha256: 99dcf38944f0aa2c2b51affe556517ab02fbad815d6d37e94e2f03f1c7e303f2
 pack:
   id: bpmn.designer
   version: 1.0.0
   canonicalization_version: 1
-  artifact_sha256: e9d3f3e462f56e992bbe7f6b1746a963e91292bbcf64b4169face95ee4bdba18
+  artifact_sha256: 00d2a4a78de4a3877af7bb31b3751155954df3495f60aec32eebe98de0ce744a
 dependencies: []
 adapter_bindings:
   - bpmn.designer.op.append_node
@@ -16,6 +16,7 @@ adapter_bindings:
   - bpmn.designer.op.close_parallel_region
   - bpmn.designer.op.connect
   - bpmn.designer.op.create_branch
+  - bpmn.designer.op.create_data_object
   - bpmn.designer.op.create_inclusive_region
   - bpmn.designer.op.create_multi_instance_region
   - bpmn.designer.op.create_parallel_region

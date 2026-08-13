@@ -1,0 +1,26 @@
+[package]
+name = "dmn-lite-bridge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dmn-lite-bridge = { path = ".." }
+dmn-lite-compiler = { path = "../../dmn-lite-compiler" }
+dmn-lite-parser = { path = "../../dmn-lite-parser" }
+ffi-types = { path = "../../ffi-types" }
+futures-executor = "0.3"
+uuid = { version = "1", features = ["v4"] }
+
+[[bin]]
+name = "owner_invoke_decode"
+path = "fuzz_targets/owner_invoke_decode.rs"
+test = false
+doc = false
+bench = false

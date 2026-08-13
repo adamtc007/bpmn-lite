@@ -1,0 +1,10 @@
+{
+  "workfloes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_nodb": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "ew_id": ["sejd",		["sejd	0"e_breeches": []
+}

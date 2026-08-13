@@ -1,0 +1,5 @@
+{
+  "workflo": "seed",
+  "nodes": {
+    "end": { "End": {"next" }},
+fl

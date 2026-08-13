@@ -1,0 +1,11 @@
+{
+  "workflow_id": "seed",
+  "n&odes": {
+    "end": { "End": { "id": "d", "status": "done" } }
+  },
+  "startN_node": "start",
+  "placeholder_schema":	{
+  "w
+ 
+ []
+}

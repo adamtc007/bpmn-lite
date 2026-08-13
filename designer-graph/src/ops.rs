@@ -47,6 +47,7 @@
 use crate::schema::{DesignerDag, DesignerEdge, NodeKey, Provenance};
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{ConditionExpr, GatewayDirection, IRNode, TimerSpec};
+use bpmn_lite_types::{DataObjectRole, DataObjectType};
 use petgraph::algo::has_path_connecting;
 use serde::{Deserialize, Serialize};
 
@@ -161,6 +162,23 @@ pub enum Operation {
     SetCorrelationSource {
         node: NodeKey,
         corr_key_source: String,
+    },
+    /// G7.1 — mint a new `IRNode::DataObject` post-seed. No anchor, no
+    /// edge: a DataObject is a structural declaration, not flow (mirrors
+    /// what `DesignerDag::seed` does at construction time, moved behind
+    /// the staged-operation refusal discipline so it is reachable after
+    /// a session has started). Duplicate BPMN id is refused here, not
+    /// deferred to the verifier. Positional legality (ruled 2026-08-13):
+    /// offered only when anchored at `Start` (`positional.rs`'s
+    /// `is_start` branch) — every session has exactly one, always
+    /// present post-seed, so the op stays reachable without a new
+    /// anchorless `LegalityOracle` path.
+    CreateDataObject {
+        key: NodeKey,
+        id: String,
+        name: String,
+        type_decl: DataObjectType,
+        role: DataObjectRole,
     },
     /// Insert a complete parallel fork…join region after `anchor`
     /// (InsertAfter semantics: anchor's former outgoing edges re-point,
@@ -514,6 +532,33 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                      guard(s) {dependent_labels:?}; delete the guard(s) first"
                 ));
             }
+            // G7.4/F-G7c: a DataObject still named by a live MultiInstance
+            // region's collection_flag_name would dangle the same way an
+            // attached guard would — refuse, naming both ids (mirrors the
+            // guard-dangling rule above).
+            if let Some(target_node) = candidate.node(target) {
+                if let IRNode::DataObject { id: target_id, .. } = &target_node.ir {
+                    let referencing: Vec<String> = candidate
+                        .graph()
+                        .node_weights()
+                        .filter_map(|n| match &n.ir {
+                            IRNode::MultiInstance {
+                                id,
+                                collection_flag_name,
+                                ..
+                            } if collection_flag_name == target_id => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    if !referencing.is_empty() {
+                        return Err(anyhow!(
+                            "DeleteNode refused: data object '{target_id}' ({target:?}) is \
+                             still referenced as the collection of multi-instance region(s) \
+                             {referencing:?}; delete or repoint the region(s) first"
+                        ));
+                    }
+                }
+            }
             candidate.remove_node(target)?;
         }
 
@@ -746,6 +791,28 @@ pub fn apply(base: &DesignerDag, op: Operation, provenance: Provenance) -> Resul
                 } => *corr_key_source = new_source,
                 _ => unreachable!("kind checked above"),
             }
+        }
+
+        Operation::CreateDataObject {
+            key,
+            id,
+            name,
+            type_decl,
+            role,
+        } => {
+            // `insert_node` already refuses a duplicate BPMN id (schema.rs
+            // `bpmn_ids.insert` check) — don't defer that to the verifier.
+            candidate.insert_node(
+                key,
+                IRNode::DataObject {
+                    id,
+                    name,
+                    type_decl,
+                    role,
+                },
+                None,
+                provenance.clone(),
+            )?;
         }
 
         Operation::CreateParallelRegion {
@@ -1238,6 +1305,83 @@ mod tests {
             Provenance::default(),
         )
         .expect("task delete must succeed once unguarded");
+    }
+
+    /// G7.4/F-G7c: a DataObject still referenced as an MI region's
+    /// collection -> DeleteNode(data object) refused naming both ids
+    /// (RED), mirroring `delete_refuses_dangling_guard` above; delete or
+    /// repoint the region first, then the data object deletes clean
+    /// (GREEN).
+    #[test]
+    fn delete_refuses_dangling_mi_collection_reference() {
+        let (mut base, _s, t1, _e) = linear("recv7");
+        let directors = base
+            .insert_node(
+                key(),
+                IRNode::DataObject {
+                    id: "directors".into(),
+                    name: "directors".into(),
+                    type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                        bpmn_lite_types::PrimitiveType::String,
+                    ),
+                    role: bpmn_lite_types::DataObjectRole::Input,
+                },
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let staged_mi = apply(
+            &base,
+            Operation::CreateMultiInstanceRegion {
+                anchor: t1,
+                key: key(),
+                node: IRNode::MultiInstance {
+                    id: "verify_each".into(),
+                    name: "verify_each".into(),
+                    task_type: "noop".into(),
+                    collection_flag_name: "directors".into(),
+                    declared_max: 2,
+                    inputs: Vec::new(),
+                },
+                edge_id: "e_mi".into(),
+            },
+            Provenance::default(),
+        )
+        .expect("MultiInstance region construction must succeed");
+        let dag = staged_mi.candidate;
+
+        // RED: deleting the data object while the MI region still
+        // references it as its collection.
+        let err = apply(
+            &dag,
+            Operation::DeleteNode { target: directors },
+            Provenance::default(),
+        )
+        .expect_err("delete of a referenced data object must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("directors"), "error must name the data object: {msg}");
+        assert!(
+            msg.contains("verify_each"),
+            "error must name the referencing region: {msg}"
+        );
+
+        // GREEN: delete the referencing region first...
+        let mi_key = dag
+            .key_for_bpmn_id("verify_each")
+            .expect("mi region must resolve");
+        let staged_region_gone = apply(
+            &dag,
+            Operation::DeleteNode { target: mi_key },
+            Provenance::default(),
+        )
+        .expect("region delete must succeed");
+        // ...then the data object deletes clean.
+        apply(
+            &staged_region_gone.candidate,
+            Operation::DeleteNode { target: directors },
+            Provenance::default(),
+        )
+        .expect("data object delete must succeed once unreferenced");
     }
 
     /// Receipt 6 (GREEN): delete t2 then insert a new node with BPMN id
@@ -2524,7 +2668,23 @@ mod tests {
     /// refused, naming the offending node id.
     #[test]
     fn multi_instance_region_admits_and_non_mi_node_refused() {
-        let (base, _s, t1, _e) = linear("region5");
+        let (mut base, _s, t1, _e) = linear("region5");
+        // G7.4: verify_data_objects now requires collection_flag_name
+        // ('items', mi_node's convention) to name a declared DataObject.
+        base.insert_node(
+            key(),
+            IRNode::DataObject {
+                id: "items".into(),
+                name: "items".into(),
+                type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                    bpmn_lite_types::PrimitiveType::String,
+                ),
+                role: bpmn_lite_types::DataObjectRole::Internal,
+            },
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
         let mi_key = key();
         let staged = apply(
             &base,

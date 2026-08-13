@@ -1,0 +1,25 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "ende": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "end": { "Eer_o_mfeid": { "Eer_": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "pnds": {} },
+  "closure_manifest":{
+    "end": { "E": { "Eer_o_mfeid": { "Eer_": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "pnds": {} },
+  "closure_manifest":{
+    "end": { "Eer_o_mfeid": { "Eer_": { "id": "start", "next": "end" } }
+  },e_breeches": []
+}

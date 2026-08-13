@@ -1,0 +1,8 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "stt_node": "start",
+  "placeholder_osure_manifest": null,
+  "regime_version": null,
+  "mathematically_proved": true,
+  "unsafe}

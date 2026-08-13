@@ -1,0 +1,13 @@
+{
+   "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "startN_node": "start",
+  "placeholder_schema": 
+ 
+ 
+ 
+ 
+ []
+}

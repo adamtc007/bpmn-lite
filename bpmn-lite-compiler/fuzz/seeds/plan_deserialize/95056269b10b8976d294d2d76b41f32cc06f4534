@@ -1,0 +1,11 @@
+{
+  "wnode": "stt",
+  "placeholder_schema": { "slots"				:							 {
+    " {ifest":{
+  "workflow_id": "seed",
+  "n&odes": {
+    "end": { "End": { "id": "d", "status": "done" } }
+  },
+  "startN_node": "start",
+  "placeholder_schema":	{
+  "

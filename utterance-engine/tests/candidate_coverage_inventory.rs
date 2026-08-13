@@ -31,7 +31,9 @@ fn phase_one_inventory_matches_the_complete_candidate_catalogue() {
     // `prod.timer_message_race`) from both the live catalogue and this
     // receipt -- 26 -> 21. Discovered missed during G2 work: G1.3's own
     // verification never ran this integration test binary.
-    assert_eq!(recorded.len(), 21);
+    // G7.2 (2026-08-13): added `op.create_data_object` -- 21 -> 22 (see
+    // EOP-PLAN-BPMN-DESIGN-003 G7, super-user REPL test finding).
+    assert_eq!(recorded.len(), 22);
     assert!(inventory["candidates"]
         .as_array()
         .unwrap()

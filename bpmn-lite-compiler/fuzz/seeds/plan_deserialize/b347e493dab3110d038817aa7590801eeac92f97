@@ -1,0 +1,9 @@
+{
+ "workflow_id": "seed",
+  "nodes": {
+    "en": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_nochema": { "slots": {} },
+  "closure_manifest"  true,
+  "unsafe_brmeches": []
+}

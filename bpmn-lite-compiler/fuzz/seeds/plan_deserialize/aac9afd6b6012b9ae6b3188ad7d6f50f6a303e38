@@ -1,0 +1,15 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "placeholder_schema": { "slots": {} },
+  "closure_manifest":{
+    "elow_id": "seed",
+  "nodes": {
+    "end": {
+  "nodes": {
+    "end": { "Ed": trkflow_id": "e_breeches": []
+}

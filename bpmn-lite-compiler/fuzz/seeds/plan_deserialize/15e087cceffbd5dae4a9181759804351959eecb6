@@ -1,0 +1,6 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "donefa" } },
+    "start": { "Start": { "id": "start", "next": "enne" } },
+   " start": { "Start": { "id": "start", "next": "end" }node               lder_schema": { "slots": {}

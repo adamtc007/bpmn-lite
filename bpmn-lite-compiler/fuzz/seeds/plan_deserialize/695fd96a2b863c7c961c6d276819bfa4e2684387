@@ -1,0 +1,9 @@
+{
+  "workflow_id": "",
+  "nodes": {
+    "end": { "End": { "id": "e-nd", "status":"n doe" } },
+    "start": { "Start": { "id": "start", "next": "cend" } }
+  },
+  "start_node"          
+  "workflmatti: []
+}

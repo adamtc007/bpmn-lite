@@ -1,0 +1,12 @@
+{
+  "workflow_id": "seed",
+  "nodes": {
+    "end": { "End": { "idid": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "st": null,
+  "re<ime_version": null,
+  "mathematically_proved": t: { ow_id": "e_breeches{ "id": "start", "next": "end" } }
+  },
+  "": []
+}

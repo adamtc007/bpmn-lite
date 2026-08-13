@@ -1,0 +1,14 @@
+{
+  "workflow_id": "seed",
+  "#odes": {
+    "end": { "Endtatus": "done" } },
+    "start": { "Start": { "id": "start", "next": "end",
+  "nodes": {
+    "end": { "End": { "id": "end", "s": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+ $},
+  ": []
+}

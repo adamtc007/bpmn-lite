@@ -1,0 +1,7 @@
+{
+  "workf_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "'start": { "Start": { "id": "start", "next": "end" } }
+  },
+tart "id": "st"s":

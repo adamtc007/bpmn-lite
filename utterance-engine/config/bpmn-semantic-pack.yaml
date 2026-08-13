@@ -344,6 +344,39 @@ capabilities:
   risk: reversible
   title: Create a multi-instance region
 - action_class: create
+  adapter_binding: bpmn.designer.op.create_data_object
+  applicability: The session has started (a Start node exists to anchor the declaration)
+  arguments:
+  - clarification_prompt: What should the new data object be called?
+    kind: identifier
+    name: name
+    required: true
+  - clarification_prompt: What primitive type does it hold — bool, integer, decimal, or string?
+    kind: text
+    name: data_type
+    required: true
+  effect: Declares a new named, typed data object, resolvable by later utterances mentioning its name
+  extensions:
+    bpmn.binder_support: supported
+  id: op.create_data_object
+  intent_summary: Mint a brand-new named value with no prior existence in this session
+  negative_contrasts:
+  - candidate_id: op.create_multi_instance_region
+    distinction: This mints a brand-new value; multi-instance consumes a value that must already be declared
+  phrases:
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: canonical
+    text: declare a data object
+  - locale: en-GB
+    provenance: bpmn.semantic-profile.v1
+    role: paraphrase
+    text: create a named value with a type
+  positive_examples:
+  - Create a string collection called 'directors'
+  risk: reversible
+  title: Declare a data object
+- action_class: create
   adapter_binding: bpmn.designer.op.attach_guard
   applicability: The anchor is a task or supported wait host without an incompatible guard
   arguments:
@@ -758,6 +791,7 @@ declarations:
   - conditions
   - correlation_source
   - data_reference
+  - data_type
   - deadline
   - declared_max
   - duration
@@ -773,6 +807,7 @@ declarations:
   - max_attempts
   - max_fires
   - max_reminders
+  - name
   - node
   - notification
   - outcome

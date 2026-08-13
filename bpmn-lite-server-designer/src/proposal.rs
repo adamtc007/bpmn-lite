@@ -243,6 +243,20 @@ fn bare_integer(text: &str) -> Option<u32> {
     })
 }
 
+/// G7.3 (F-G7a ruling): token match over the four primitive-type words a
+/// `CreateDataObject` utterance may name; `None` when no such word is
+/// present, so the caller falls through to the clarification prompt
+/// rather than guessing a type.
+fn primitive_type_word(utterance: &str) -> Option<&'static str> {
+    words(utterance).into_iter().find_map(|word| match word.as_str() {
+        "bool" | "boolean" => Some("bool"),
+        "integer" | "int" => Some("integer"),
+        "decimal" | "float" | "double" => Some("decimal"),
+        "string" | "text" => Some("string"),
+        _ => None,
+    })
+}
+
 fn count_for_slot(name: &str, utterance: &str, quoted: &[String]) -> Option<u32> {
     match name {
         "max_fires" | "max_reminders" => followed_count(utterance, &["time", "times"]),
@@ -689,6 +703,13 @@ pub(crate) fn start_workbook(
                     millis
                         .filter(|value| *value > 0 && *value <= MAX_DURATION_MS)
                         .map(SlotValue::DurationMillis)
+                }
+                // G7.3 (F-G7a ruling): `data_type` is a token match over the
+                // four primitive-type words, not a quoted-text slot — it
+                // does not consume the shared quoted-name index (the
+                // quoted name is `op.create_data_object`'s `name` slot).
+                ArgumentKind::Text if argument.name == "data_type" => {
+                    primitive_type_word(utterance).map(|word| SlotValue::Text(word.to_string()))
                 }
                 ArgumentKind::Text => quoted.get(identifier_index).cloned().map(|text| {
                     identifier_index += 1;

@@ -1,0 +1,10 @@
+{
+  "workf_id": "seed",
+  "nodes": {
+    "end": { "End": { "id": "end", "status": "done" } },
+    "start": { "Start": { "id": "start", "next": "end" } }
+  },
+  "start_node": "start",
+  "plaflow_id": "seed",
+  "nodes": {
+{ "Start": tar:t  

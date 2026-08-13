@@ -1,0 +1,6 @@
+{
+  "wdes": {
+   "start": { "Start": { "id": "start", "next": "e" } }
+  },
+  "starTt_node": "start",
+  "start_node"
