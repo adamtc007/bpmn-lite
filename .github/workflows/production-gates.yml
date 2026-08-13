@@ -48,6 +48,10 @@ jobs:
         run: cargo install cargo-public-api --version 0.52.0 --locked
       - name: Semantic Gameboard API and dependency boundary
         run: python3 scripts/check-semantic-gameboard-boundaries.py
+      - name: No unreviewed #[cfg(test)] pub items
+        run: python3 scripts/check-test-only-pub.py
+      - name: Test-topology classification (R3)
+        run: python3 scripts/check-test-topology.py
       - name: Checked BPMN invocation-pack gate
         run: cargo run -p xtask -- pack-check bpmn
       - name: BPMN semantic mapper contract gates

@@ -83,7 +83,7 @@ use bpmn_lite_types::{EffectId, ErrorClass, TenantId, Timestamp, Uuid, Value};
 // --cfg test regardless of this attribute). Real, validated, actively-used
 // tooling; just not reachable from a plain `cargo build`.
 #[cfg(test)]
-pub mod covering;
+pub(crate) mod covering;
 pub mod fault;
 
 // ─── Tape (shared with the engine_commands target) ───────────────────

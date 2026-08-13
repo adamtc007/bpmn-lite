@@ -1119,50 +1119,6 @@ pub enum TickOperation {
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct TransactionContext {
-    pub instance_id: Uuid,
-    pub tenant_id: String,
-    // H3 (EOP-PLAN-CRATE-HYGIENE-001, R5): `add_op`/`get_join_count` exist
-    // to be the mutation/query surface for this collection; a public field
-    // let external code bypass `add_op`. Note: this struct itself has zero
-    // callers anywhere in the workspace as of H3 (grep-confirmed) — kept,
-    // not deleted, since dead-code removal is out of this tranche's
-    // module-export-review scope; flagged in the H3 receipt for the H6
-    // final inventory to rule on.
-    ops: Vec<TickOperation>,
-}
-
-impl TransactionContext {
-    pub fn new(instance_id: Uuid, tenant_id: String) -> Self {
-        Self {
-            instance_id,
-            tenant_id,
-            ops: Vec::new(),
-        }
-    }
-
-    pub fn add_op(&mut self, op: TickOperation) {
-        self.ops.push(op);
-    }
-
-    pub fn get_join_count(&self, join_id: JoinId, base_count: u16) -> u16 {
-        let mut count = base_count;
-        for op in &self.ops {
-            match op {
-                TickOperation::JoinArrive { join_id: jid } if *jid == join_id => {
-                    count += 1;
-                }
-                TickOperation::JoinReset { join_id: jid } if *jid == join_id => {
-                    count = 0;
-                }
-                _ => {}
-            }
-        }
-        count
-    }
-}
-
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("TakePendingInvocation: already consumed")]
 pub struct AlreadyConsumedError;

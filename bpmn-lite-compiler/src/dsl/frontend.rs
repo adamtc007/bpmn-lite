@@ -50,27 +50,6 @@ impl std::fmt::Display for FrontendError {
 
 impl std::error::Error for FrontendError {}
 
-/// A source language which lowers into the one verifier-admitted runtime form.
-// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): pub(super) — zero consumers anywhere
-// in the workspace, not even internally (confirmed dead_code); `lower_plan`
-// is the real, consumed entry point. Not deleted — flagged in the H4
-// receipt, same discipline as H3's `TransactionContext` finding.
-pub(super) trait WorkflowFrontend {
-    type Source: ?Sized;
-
-    fn lower(source: &Self::Source) -> Result<VerifiedWorkflow, FrontendError>;
-}
-
-pub(super) struct DslFrontend;
-
-impl WorkflowFrontend for DslFrontend {
-    type Source = WorkflowExecutionPlan;
-
-    fn lower(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, FrontendError> {
-        lower_plan(plan)
-    }
-}
-
 pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, FrontendError> {
     // WS-D D2: validate every guard set before sizing runs, so a
     // contradictory shape refuses by name instead of mis-sizing.
@@ -1030,8 +1009,8 @@ mod tests {
     #[test]
     fn dsl_frontend_is_deterministic_and_embeds_task_and_route_data() {
         let plan = routing_plan();
-        let first = DslFrontend::lower(&plan).unwrap();
-        let second = DslFrontend::lower(&plan).unwrap();
+        let first = lower_plan(&plan).unwrap();
+        let second = lower_plan(&plan).unwrap();
         assert_eq!(first.hash(), second.hash());
 
         let instructions = first.envelope().instructions();
@@ -1072,7 +1051,7 @@ mod tests {
           (end-event :id end :status "done"))"#;
         let registry = StubPlaceholderRegistry::new().with_demo_bindings();
         let plan = crate::dsl::compile(src, &registry).expect("compile");
-        let workflow = DslFrontend::lower(&plan).expect("lower");
+        let workflow = lower_plan(&plan).expect("lower");
         let instructions = workflow.envelope().instructions();
 
         assert!(
@@ -1188,7 +1167,7 @@ mod tests {
     #[test]
     fn dsl_parallel_split_join_lowers_to_v2_fork_join_with_matching_pairing() {
         let plan = parallel_plan();
-        let workflow = DslFrontend::lower(&plan).expect("v2 Fork/Join must be verifier-admitted");
+        let workflow = lower_plan(&plan).expect("v2 Fork/Join must be verifier-admitted");
         let instructions = workflow.envelope().instructions();
 
         let fork_pairing = instructions
@@ -1296,7 +1275,7 @@ mod tests {
     fn dsl_inclusive_split_pure_conditional_lowers_to_v2_fork_with_zero_match_precheck() {
         let plan = inclusive_plan(false);
         let workflow =
-            DslFrontend::lower(&plan).expect("v2 inclusive split/join must be verifier-admitted");
+            lower_plan(&plan).expect("v2 inclusive split/join must be verifier-admitted");
         let instructions = workflow.envelope().instructions();
 
         assert!(
@@ -1406,7 +1385,7 @@ mod tests {
 
     /// GREEN (WS-D D2, the phase's core receipt): the SAME guarded IR
     /// graph lowered via the XML path (`Compiler::lower_v2`) and via the
-    /// plan path (`project_ir` → `DslFrontend::lower`) produces the
+    /// plan path (`project_ir` → `lower_plan`) produces the
     /// IDENTICAL guard scaffold — same opcodes in the same order, same
     /// budget at the guard-open address, same verifier-enforced
     /// `V2GuardArmTimer`-at-open+1 adjacency — with only the body word
@@ -1418,7 +1397,7 @@ mod tests {
 
         let xml_program = crate::lowering::lower_v2(&g).expect("XML path must lower");
         let plan = crate::dsl::ir_plan::project_ir(&g, "wf".into()).expect("must project");
-        let workflow = DslFrontend::lower(&plan).expect("plan path must lower and verify");
+        let workflow = lower_plan(&plan).expect("plan path must lower and verify");
         let plan_instrs = workflow.envelope().instructions();
 
         assert_eq!(
@@ -1475,7 +1454,7 @@ mod tests {
 
         let xml_program = crate::lowering::lower_v2(&g).expect("XML path must lower");
         let plan = crate::dsl::ir_plan::project_ir(&g, "wf".into()).expect("must project");
-        let workflow = DslFrontend::lower(&plan).expect("plan path must lower and verify");
+        let workflow = lower_plan(&plan).expect("plan path must lower and verify");
         let plan_instrs = workflow.envelope().instructions();
 
         assert_eq!(guard_block(xml_program.program()), guard_block(plan_instrs));
@@ -1527,7 +1506,7 @@ mod tests {
                 escape_entry: "end".into(),
             });
         }
-        let workflow = DslFrontend::lower(&plan).expect("error-guarded plan must lower");
+        let workflow = lower_plan(&plan).expect("error-guarded plan must lower");
         let instrs = workflow.envelope().instructions();
         let arms: Vec<Option<String>> = instrs
             .iter()
@@ -1570,7 +1549,7 @@ mod tests {
                     span: None,
                 }),
             );
-            let workflow = DslFrontend::lower(&plan).expect("wait-bearing plan must lower");
+            let workflow = lower_plan(&plan).expect("wait-bearing plan must lower");
             let instrs = workflow.envelope().instructions();
             let wait_pos = instrs
                 .iter()
@@ -1606,7 +1585,7 @@ mod tests {
             t.guards.push(timer("bt2", crate::ir::TimerSpec::Duration { ms: 2 }, true));
         }
         assert!(matches!(
-            DslFrontend::lower(&plan),
+            lower_plan(&plan),
             Err(FrontendError::UnsupportedPlanConstruct(ref m)) if m.contains("timer guards")
         ));
 
@@ -1619,7 +1598,7 @@ mod tests {
             ));
         }
         assert!(matches!(
-            DslFrontend::lower(&plan),
+            lower_plan(&plan),
             Err(FrontendError::UnsupportedPlanConstruct(ref m)) if m.contains("Cycle")
         ));
     }
@@ -1632,7 +1611,7 @@ mod tests {
     fn dsl_inclusive_split_with_default_flow_omits_zero_match_precheck() {
         let plan = inclusive_plan(true);
         let workflow =
-            DslFrontend::lower(&plan).expect("v2 inclusive split/join must be verifier-admitted");
+            lower_plan(&plan).expect("v2 inclusive split/join must be verifier-admitted");
         let instructions = workflow.envelope().instructions();
 
         assert!(
@@ -1686,7 +1665,7 @@ mod tests {
 
         let plan = super::super::ir_plan::project_ir(&graph, "g5_3_terminate".to_string())
             .expect("Start -> terminating End must project");
-        let workflow = DslFrontend::lower(&plan).expect("must lower and verify");
+        let workflow = lower_plan(&plan).expect("must lower and verify");
         let instructions = workflow.envelope().instructions();
         assert!(
             instructions
@@ -1751,7 +1730,7 @@ mod tests {
 
         let plan = super::super::ir_plan::project_ir(&graph, "g5_4a_mi".to_string())
             .expect("Start -> MultiInstance -> End must project");
-        let workflow = DslFrontend::lower(&plan).expect("must lower and verify end to end");
+        let workflow = lower_plan(&plan).expect("must lower and verify end to end");
         let instructions = workflow.envelope().instructions();
 
         let arity_max = instructions

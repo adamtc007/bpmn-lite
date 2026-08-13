@@ -1,0 +1,6 @@
+# EOP-PLAN-CRATE-HYGIENE-001 H6: reviewed exceptions for #[cfg(test)] pub
+# items (checked by scripts/check-test-only-pub.py). One `path:line # reason`
+# per exception, reviewed at the point it's added. Expected empty — the one
+# candidate found during H6 (bpmn-lite-engine/fuzz/src/lib.rs's `covering`
+# module) was tightened to pub(crate) instead of listed here, since its only
+# consumer is inside the same crate's own #[cfg(test)] mod tests.

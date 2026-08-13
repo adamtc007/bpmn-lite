@@ -125,7 +125,6 @@ dependencies = [
  "bpmn-lite-kernel",
  "bpmn-lite-store",
  "bpmn-lite-types",
- "bpmn-lite-vm",
  "chrono",
  "dsl-manifest",
  "ffi-dispatcher",
@@ -189,15 +188,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "bpmn-lite-vm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "serde_json",
 ]
 
 [[package]]

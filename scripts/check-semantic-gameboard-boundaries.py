@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts/baselines/semantic-gameboard-public-api-v1.json"
 FIXTURES = ROOT / "scripts/fixtures/gameboard_api"
+GENERATED_BASELINES = ROOT / "docs/generated/public-api-baselines"
 
 
 def run(command, *, cwd=ROOT, check=True):
@@ -57,6 +58,65 @@ def check_modules_and_globs(baseline):
         for rust in source_path.rglob("*.rs"):
             if re.search(r"pub\s+use\s+[^;]*::\s*\*\s*;", rust.read_text()):
                 raise SystemExit(f"glob public re-export refused: {rust.relative_to(ROOT)}")
+
+
+def check_workspace_public_api_baselines():
+    """H6 (EOP-PLAN-CRATE-HYGIENE-001): extends the narrow surface check above
+    workspace-wide. Every library package's committed full-text baseline
+    (docs/generated/public-api-baselines/<crate>.txt, produced by the exact
+    `cargo public-api -p <crate> -sss` invocation recorded in that file's own
+    `# command:` header) must match the crate's actual current surface. This
+    is the same gate mechanism as check_public_api above, not a second one —
+    it reads a different, wider baseline set."""
+    checked = []
+    for baseline_file in sorted(GENERATED_BASELINES.glob("*.txt")):
+        if baseline_file.name == "BASELINE_REVISION.txt":
+            continue
+        lines = baseline_file.read_text().splitlines()
+        header = {}
+        body_start = len(lines)
+        for index, line in enumerate(lines):
+            if line.startswith("# "):
+                key, _, value = line[2:].partition(":")
+                header[key.strip()] = value.strip()
+            elif line == "":
+                body_start = index + 1
+                break
+        package = header.get("package")
+        if not package:
+            raise SystemExit(f"{baseline_file}: missing '# package:' header")
+        expected = "\n".join(lines[body_start:]).strip("\n")
+        actual = run(["cargo", "public-api", "-p", package, "-sss"]).stdout.strip("\n")
+        if actual != expected:
+            raise SystemExit(
+                f"public API drift in {package} (baseline: "
+                f"{baseline_file.relative_to(ROOT)}) — update the baseline only "
+                "after naming the consumer, owning facade, stability contract and "
+                "reason in a tranche receipt:\n"
+                f"--- expected ({baseline_file.name}) ---\n{expected}\n"
+                f"--- actual (cargo public-api -p {package} -sss) ---\n{actual}"
+            )
+        checked.append(package)
+    return checked
+
+
+def check_baseline_coverage(checked_packages):
+    """A library package with no committed baseline is unprotected by the
+    ratchet above — fail closed rather than silently skip it."""
+    metadata = json.loads(
+        run(["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"]).stdout
+    )
+    lib_packages = {
+        package["name"]
+        for package in metadata["packages"]
+        if any("lib" in target["kind"] for target in package["targets"])
+    }
+    missing = lib_packages - set(checked_packages)
+    if missing:
+        raise SystemExit(
+            "library package(s) with no committed public-API baseline in "
+            f"docs/generated/public-api-baselines/: {sorted(missing)}"
+        )
 
 
 def check_dependencies():
@@ -114,6 +174,8 @@ def main():
     baseline = json.loads(BASELINE.read_text())
     actual = check_public_api(baseline)
     check_modules_and_globs(baseline)
+    checked_packages = check_workspace_public_api_baselines()
+    check_baseline_coverage(checked_packages)
     check_dependencies()
     compile_fixture("facade_consumer.rs", True)
     compile_fixture("internal_module_import.rs", False)

@@ -1,5 +1,5 @@
 # package: bpmn-lite-store
-# baseline_revision: updated H3, EOP-PLAN-CRATE-HYGIENE-001 — see H3 receipt for the diff that produced this
+# baseline_revision: updated H6, EOP-PLAN-CRATE-HYGIENE-001 — TransactionContext deleted (confirmed dead code, zero callers, see H6 receipt)
 # command: cargo public-api -p bpmn-lite-store -sss
 
 pub mod bpmn_lite_store
@@ -160,13 +160,6 @@ pub bpmn_lite_store::store::TemplateSummary::created_at: alloc::string::String
 pub bpmn_lite_store::store::TemplateSummary::latest_version: u32
 pub bpmn_lite_store::store::TemplateSummary::name: alloc::string::String
 pub bpmn_lite_store::store::TemplateSummary::plan_hash: [u8; 32]
-pub struct bpmn_lite_store::store::TransactionContext
-pub bpmn_lite_store::store::TransactionContext::instance_id: uuid::Uuid
-pub bpmn_lite_store::store::TransactionContext::tenant_id: alloc::string::String
-impl bpmn_lite_store::TransactionContext
-pub fn bpmn_lite_store::TransactionContext::add_op(&mut self, bpmn_lite_store::TickOperation)
-pub fn bpmn_lite_store::TransactionContext::get_join_count(&self, bpmn_lite_types::types::JoinId, u16) -> u16
-pub fn bpmn_lite_store::TransactionContext::new(uuid::Uuid, alloc::string::String) -> Self
 pub trait bpmn_lite_store::store::AdminProjectionStore: core::marker::Send + core::marker::Sync
 pub fn bpmn_lite_store::store::AdminProjectionStore::append_design_session_event<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, &'life2 bpmn_lite_store::DesignSessionEventKind) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<u64>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn bpmn_lite_store::store::AdminProjectionStore::append_dev_capture_record<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, alloc::string::String) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<u64>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -587,13 +580,6 @@ pub bpmn_lite_store::TemplateSummary::created_at: alloc::string::String
 pub bpmn_lite_store::TemplateSummary::latest_version: u32
 pub bpmn_lite_store::TemplateSummary::name: alloc::string::String
 pub bpmn_lite_store::TemplateSummary::plan_hash: [u8; 32]
-pub struct bpmn_lite_store::TransactionContext
-pub bpmn_lite_store::TransactionContext::instance_id: uuid::Uuid
-pub bpmn_lite_store::TransactionContext::tenant_id: alloc::string::String
-impl bpmn_lite_store::TransactionContext
-pub fn bpmn_lite_store::TransactionContext::add_op(&mut self, bpmn_lite_store::TickOperation)
-pub fn bpmn_lite_store::TransactionContext::get_join_count(&self, bpmn_lite_types::types::JoinId, u16) -> u16
-pub fn bpmn_lite_store::TransactionContext::new(uuid::Uuid, alloc::string::String) -> Self
 pub trait bpmn_lite_store::AdminProjectionStore: core::marker::Send + core::marker::Sync
 pub fn bpmn_lite_store::AdminProjectionStore::append_design_session_event<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, &'life2 bpmn_lite_store::DesignSessionEventKind) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<u64>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn bpmn_lite_store::AdminProjectionStore::append_dev_capture_record<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, alloc::string::String) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<u64>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait

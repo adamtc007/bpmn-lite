@@ -1,0 +1,57 @@
+# EOP-PLAN-CRATE-HYGIENE-001 H6 — R3 test-topology manifest.
+# Checked by scripts/check-test-topology.py. One `path class` per Cargo
+# integration-test target (a direct child of some crate's tests/ dir; helper
+# files pulled in via `mod` from a subdirectory, e.g. tests/common/mod.rs or
+# tests/differential/*.rs, are not separate targets and are not listed here).
+# class is one of: intra, inter, multi (R3: Intra-crate / Inter-crate
+# contract / Multi-crate application). Rule: every multi-classified target
+# must live under xtask/tests/, and everything under xtask/tests/ must be
+# multi-classified — xtask/tests is the sole multi-crate application-test
+# home (plan §3 decision 1, H1). Derived from docs/generated/
+# h0-test-topology-inventory.md, updated for the H1/H1-followup/H2 moves.
+
+bpmn-lite-authoring/tests/importer_compatibility_tests.rs inter
+bpmn-lite-engine/tests/correlation_content.rs inter
+bpmn-lite-engine/tests/differential_bpmn.rs inter
+bpmn-lite-engine/tests/send_task.rs inter
+bpmn-lite-ffi-http/tests/response_decode.rs inter
+dmn-lite-analysis/tests/config_tests.rs inter
+dmn-lite-analysis/tests/cost_tests.rs inter
+dmn-lite-analysis/tests/determinism_tests.rs inter
+dmn-lite-analysis/tests/fixture_tests.rs inter
+dmn-lite-analysis/tests/gap_tests.rs inter
+dmn-lite-analysis/tests/overlap_tests.rs inter
+dmn-lite-analysis/tests/sa001_tests.rs inter
+dmn-lite-analysis/tests/unreachable_tests.rs inter
+dmn-lite-compiler/tests/catalogue_tests.rs intra
+dmn-lite-compiler/tests/compile_tests.rs inter
+dmn-lite-compiler/tests/emit_tests.rs inter
+dmn-lite-compiler/tests/hash_tests.rs inter
+dmn-lite-compiler/tests/verify_tests.rs inter
+dmn-lite-engine/tests/differential_runner.rs inter
+dmn-lite-engine/tests/reference_tests.rs inter
+dmn-lite-engine/tests/vm_tests.rs inter
+dmn-lite-engine/tests/vm_trace_tests.rs inter
+dmn-lite-parser/tests/arity.rs intra
+dmn-lite-parser/tests/diagnostics.rs intra
+dmn-lite-parser/tests/happy_path.rs intra
+dmn-lite-parser/tests/lexer_edges.rs intra
+dmn-lite-parser/tests/out_of_profile.rs intra
+dmn-lite-parser/tests/recovery.rs intra
+dmn-lite-parser/tests/round_trip.rs intra
+dmn-lite-parser/tests/spans.rs intra
+utterance-engine/tests/candidate_coverage_inventory.rs inter
+utterance-engine/tests/evaluator_serving_packet_identity.rs intra
+utterance-engine/tests/gameboard_disposition.rs inter
+utterance-engine/tests/shared_contract_compat.rs inter
+xtask/tests/authoring_engine_vertical.rs multi
+xtask/tests/bus_graph_instantiation_vertical.rs multi
+xtask/tests/bus_postgres_vertical.rs multi
+xtask/tests/demo_corpus_vertical.rs multi
+xtask/tests/dmn_vertical.rs multi
+xtask/tests/ffi_vertical.rs multi
+xtask/tests/runner_application.rs multi
+xtask/tests/runner_array_limits_vertical.rs multi
+xtask/tests/store_postgres_bus_outbox_vertical.rs multi
+xtask/tests/store_postgres_engine_fault_injection_vertical.rs multi
+xtask/tests/store_postgres_engine_kernel_vertical.rs multi

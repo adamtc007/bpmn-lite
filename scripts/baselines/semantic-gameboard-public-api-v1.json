@@ -64,7 +64,6 @@
       "exact",
       "fixtures",
       "funnel",
-      "metrics",
       "pair",
       "policy",
       "retrieval",
@@ -75,7 +74,6 @@
       "ops",
       "positional",
       "productions",
-      "runbook",
       "schema"
     ],
     "bpmn-lite-server-designer/src/lib.rs": [
