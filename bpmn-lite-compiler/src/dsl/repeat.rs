@@ -101,12 +101,45 @@ fn find_all_predecessor_ids(workflow: &WorkflowSource, target_id: &str) -> Vec<S
 
 fn find_all_predecessor_ids_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<String>) {
     for node in nodes {
+        // Exhaustive over NodeAst — NO wildcard arm: the D2 blind review
+        // proved the old `_ => {}` silently skipped TimerWait (and D1's
+        // guard) predecessors, so `repeat_n_times` left their `:next`
+        // dangling at the wrapped task while returning Ok. A new variant
+        // must break this compile, not fall through (B0's structural
+        // fail-closed rule; same convention as
+        // diagnostics_executor::find_all_predecessors_rec, this
+        // function's twin).
         match node {
-            NodeAst::Start(s) if s.next == target_id => acc.push(s.id.clone()),
-            NodeAst::Task(t) if t.next == target_id => acc.push(t.id.clone()),
-            NodeAst::MessageWait(w) if w.next == target_id => acc.push(w.id.clone()),
-            NodeAst::Join(j) if j.next == target_id => acc.push(j.id.clone()),
-            NodeAst::Loop(l) if l.next == target_id => acc.push(l.id.clone()),
+            NodeAst::Start(s) => {
+                if s.next == target_id {
+                    acc.push(s.id.clone());
+                }
+            }
+            NodeAst::Task(t) => {
+                if t.next == target_id {
+                    acc.push(t.id.clone());
+                }
+            }
+            NodeAst::MessageWait(w) => {
+                if w.next == target_id {
+                    acc.push(w.id.clone());
+                }
+            }
+            NodeAst::TimerWait(w) => {
+                if w.next == target_id {
+                    acc.push(w.id.clone());
+                }
+            }
+            NodeAst::Join(j) => {
+                if j.next == target_id {
+                    acc.push(j.id.clone());
+                }
+            }
+            NodeAst::Loop(l) => {
+                if l.next == target_id {
+                    acc.push(l.id.clone());
+                }
+            }
             NodeAst::Split(sp) => {
                 for flow in &sp.flows {
                     if flow.next == target_id {
@@ -114,7 +147,20 @@ fn find_all_predecessor_ids_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Ve
                     }
                 }
             }
-            _ => {}
+            // D1 guards: `next` is the escape-flow entry — a flow
+            // reference like any other for predecessor discovery (same
+            // ruling as the diagnostics-executor twin).
+            NodeAst::BoundaryTimer(g) => {
+                if g.next == target_id {
+                    acc.push(g.id.clone());
+                }
+            }
+            NodeAst::BoundaryError(g) => {
+                if g.next == target_id {
+                    acc.push(g.id.clone());
+                }
+            }
+            NodeAst::End(_) => {}
         }
         if let NodeAst::Loop(l) = node {
             find_all_predecessor_ids_rec(&l.body, target_id, acc);
@@ -175,6 +221,89 @@ mod tests {
                 .any(|n| matches!(n, NodeAst::Task(t) if t.id == "charge")),
             "the bare task must no longer exist outside the loop"
         );
+    }
+
+    /// D2 blind-review red→green: with the old `_ => {}` wildcard in
+    /// `find_all_predecessor_ids_rec`, a timer-wait predecessor was
+    /// silently skipped — `repeat_n_times` returned Ok while leaving
+    /// `w1 :next charge` dangling at the removed task and splicing the
+    /// loop at the wrong anchor (the resulting source failed compile
+    /// with "':next charge' references unknown node"). Exhaustive match
+    /// fixes it; this cements the rewire.
+    #[test]
+    fn repeat_n_times_rewires_a_timer_wait_predecessor() {
+        let mut workflow = parse_workflow_str(
+            r#"(workflow test
+  (start-event :id start :next w1)
+  (timer-wait :id w1 :duration-ms 1000 :next charge)
+  (service-task :id charge :verb billing.charge :next end)
+  (end-event :id end :status "done")
+)"#,
+        )
+        .expect("parse");
+
+        repeat_n_times(&mut workflow, "charge", 3, Some("charge-loop")).expect("repeat_n_times");
+
+        let w1 = workflow
+            .nodes
+            .iter()
+            .find_map(|n| match n {
+                NodeAst::TimerWait(w) if w.id == "w1" => Some(w),
+                _ => None,
+            })
+            .expect("timer-wait present");
+        assert_eq!(w1.next, "charge-loop", "timer-wait predecessor rewired to the loop");
+
+        // The whole result must still be a compilable workflow.
+        let mut reg = crate::dsl::linter::StubPlaceholderRegistry::new();
+        reg.register_verb("billing.charge", crate::dsl::linter::BindingDecl::default());
+        let printed = crate::dsl::refactor::ToSexpr::to_sexpr(&workflow, 0);
+        crate::dsl::compile(&printed, &reg).expect("rewired workflow must recompile");
+    }
+
+    /// Same axis for a D1 boundary guard whose escape enters the wrapped
+    /// task: discovery must find the guard predecessor so its `next` is
+    /// rewired OFF the removed task (no dangling reference; the result
+    /// recompiles). NOTE this cements discovery only: `repeat_n_times`
+    /// has a PRE-EXISTING multi-predecessor defect (not guard-specific —
+    /// two service-task predecessors show it too) where only the anchor
+    /// predecessor is routed through the loop and every other one is
+    /// left rewired to the exit, bypassing the retry. Surfaced at the D2
+    /// gate for a separate ruling; do not strengthen this assertion to
+    /// "== charge-loop" until that ruling lands.
+    #[test]
+    fn repeat_n_times_rewires_a_guard_escape_predecessor_off_the_removed_task() {
+        let mut workflow = parse_workflow_str(
+            r#"(workflow test
+  (start-event :id start :next protected)
+  (service-task :id protected :verb cbu.host :next charge)
+  (boundary-error :id g1 :host protected :next charge)
+  (service-task :id charge :verb billing.charge :next end)
+  (end-event :id end :status "done")
+)"#,
+        )
+        .expect("parse");
+
+        repeat_n_times(&mut workflow, "charge", 3, Some("charge-loop")).expect("repeat_n_times");
+
+        let g1 = workflow
+            .nodes
+            .iter()
+            .find_map(|n| match n {
+                NodeAst::BoundaryError(g) if g.id == "g1" => Some(g),
+                _ => None,
+            })
+            .expect("guard present");
+        assert_ne!(
+            g1.next, "charge",
+            "guard escape must not dangle at the removed task"
+        );
+
+        let mut reg = crate::dsl::linter::StubPlaceholderRegistry::new();
+        reg.register_verb("billing.charge", crate::dsl::linter::BindingDecl::default());
+        reg.register_verb("cbu.host", crate::dsl::linter::BindingDecl::default());
+        let printed = crate::dsl::refactor::ToSexpr::to_sexpr(&workflow, 0);
+        crate::dsl::compile(&printed, &reg).expect("rewired workflow must recompile");
     }
 
     #[test]

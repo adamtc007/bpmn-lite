@@ -716,6 +716,13 @@ mod tests {
             &wrap("  (boundary-error :id g1 :host start :next esc)"),
             "not a service task",
         );
+        // D2 blind-review cement: a timer-wait host specifically —
+        // TimerWait is now a core node a designer can plausibly target,
+        // and the D2.0 freeze wrongly claimed this red already existed.
+        expect_err(
+            "(workflow red\n  (start-event :id start :next w1)\n  (timer-wait :id w1 :duration-ms 100 :next end)\n  (boundary-error :id g1 :host w1 :next esc)\n  (end-event :id esc :status \"done\")\n  (end-event :id end :status \"completed\"))",
+            "not a service task",
+        );
     }
 
     /// D2: all three timer-wait shapes print→parse→print fixpoint and

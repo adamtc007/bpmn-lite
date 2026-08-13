@@ -1,6 +1,8 @@
 # D2.0 Freeze — TimerWait DSL form (EOP-PLAN-DSL-PARITY-001)
 
-**Status:** awaiting ratification — D2 code begins only after acceptance.
+**Status:** RATIFIED (Adam, 2026-08-13, "go" in-session after the freeze was
+presented at the D2 open; status line flipped during the D2 blind-review
+corrections — the ratification itself predates D2 code).
 **Scope:** make `IRNode::TimerWait` DSL-representable; `emit_dsl` unsupported set 8 → 7.
 
 ## 1. Frozen grammar
@@ -37,8 +39,13 @@
   member (no special placement). Emission arm: id token check → exactly one
   outgoing flow edge (mirror of `ir_plan`'s `single_successor`) → unconditioned
   edge → print frozen form. `TimerWait` may host boundary guards? NO — guards
-  attach to ServiceTask hosts only (D1 frozen; `GuardOnUnsupportedHost` already
-  covers a TimerWait host and its red test exists).
+  attach to ServiceTask hosts only (D1 frozen; the `GuardOnUnsupportedHost`
+  MECHANISM covers a TimerWait host). ~~and its red test exists~~ **CORRECTION
+  (D2 blind review):** no TimerWait-host red test existed at ratification — the
+  only emit-side red used a MessageWait host, the only lint-side red used a
+  Start host. Both TimerWait-host reds were added as a D2 review correction
+  (`red_guard_on_timer_wait_host` in emit.rs; the timer-wait-host axis in
+  refactor.rs's `guard_red_axes_refuse_at_parse_or_lint`).
 
 ## 3. Refusal axes (red fixtures)
 

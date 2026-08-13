@@ -10237,6 +10237,99 @@ mod tests {
         assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);
     }
 
+    /// D2 blind-review witness: the dsl-receipt endpoint's behaviour for
+    /// a graph-backed session containing a TimerWait flipped from
+    /// refused(emission) to green when TimerWait joined the emission
+    /// core — this pins the green side (exact frozen form, recompile,
+    /// non-mutation), the witness the D2 tranche initially omitted.
+    #[tokio::test]
+    async fn test_dsl_receipt_timer_wait_graph_emits_timer_wait() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        // Own chain (not the seed helper — its End key is discarded):
+        // start → review_documents → cooldown(timer-wait) → end.
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "proposal session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let t1 = new_key();
+        let w = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: w,
+                node: bpmn_lite_compiler::IRNode::TimerWait {
+                    id: "cooldown".into(),
+                    spec: bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+                },
+                edge_id: "f2".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: w,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f3".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let receipt_uri = format!("/api/dsl/sessions/{session_id}/dsl-receipt");
+        let graph_uri = format!("/api/dsl/sessions/{session_id}/graph");
+        let graph_before =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        let response = app.clone().oneshot(get_req(&receipt_uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt = body_json(response).await;
+        assert!(
+            receipt["refused"].is_null(),
+            "timer-wait graph must emit since D2: {receipt}"
+        );
+        let source = receipt["source"].as_str().expect("source string");
+        assert!(
+            source.contains("(timer-wait :id cooldown :duration-ms 60000 :next end)"),
+            "emitted source must carry the exact frozen timer-wait form: {source}"
+        );
+        let mut reg = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new();
+        for sym in receipt["required_symbols"].as_array().expect("symbols") {
+            reg.register_verb(
+                sym.as_str().unwrap(),
+                bpmn_lite_compiler::dsl::BindingDecl::default(),
+            );
+        }
+        bpmn_lite_compiler::dsl::compile(source, &reg)
+            .expect("timer-wait receipt source must recompile in-contract");
+        let graph_after =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);
+    }
+
     /// B3 — unknown session is 404; a session with no graph edits
     /// refuses at the "session" stage (its DSL text is authoritative
     /// already — nothing to project).

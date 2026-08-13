@@ -1483,6 +1483,29 @@ mod tests {
         }
     }
 
+    /// D2 blind-review cement: TimerWait joined the emission core, so a
+    /// designer can now realistically attach a guard to one — the
+    /// guards-on-ServiceTask-only rule (D1 frozen) must refuse it by
+    /// name. (The D2.0 freeze claimed this red existed; it did not —
+    /// recorded as a freeze correction in the D2 receipt.)
+    #[test]
+    fn red_guard_on_timer_wait_host() {
+        let ir = guard_on(timer("tw", TimerSpec::Duration { ms: 1000 }));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::GuardOnUnsupportedHost {
+                guard_id,
+                host,
+                host_kind,
+            }) => {
+                assert_eq!(
+                    (guard_id.as_str(), host.as_str(), host_kind),
+                    ("g1", "tw", "TimerWait")
+                );
+            }
+            other => panic!("expected GuardOnUnsupportedHost, got {other:?}"),
+        }
+    }
+
     #[test]
     fn red_guard_escape_out_degree_zero_and_two() {
         // 0 escape edges
