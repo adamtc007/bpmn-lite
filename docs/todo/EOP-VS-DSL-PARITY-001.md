@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **DRAFT — for peer review. No implementation approved.** |
+| Status | **All forks A–G ruled as recommended (Adam, "agree", 2026-08-13). Implementation plan: `EOP-PLAN-DSL-PARITY-001.md`.** |
 | Predecessor | `EOP-PLAN-GRAPH-DSL-BRIDGE-001` (CLOSED, B0–B3 accepted 2026-08-13) — the staging skeleton whose refusal catalogue is this document's backlog. |
 | Mandate | Fork-A ruling (Adam, 2026-08-13): full parity is the required end state — "it's simply not done otherwise." Fabric-V&S criterion 19: every runtime artifact emittable as canonical DSL and rebuildable to identical artifact identity. |
 | Decides | Nothing. §4's forks carry recommendations; peer review rules them. |
@@ -145,5 +145,4 @@ tranche touches the file, receipt-noted — no dedicated tranches.*
       (expected: P1 guards/timer/MI first, per-kind gates, B2 harness as
       the acceptance machine).
 
-**Status: no implementation approved. This document decides nothing; it
-surfaces.**
+**Forks A–G ruled as recommended, 2026-08-13. Scope of the successor plan: P1 + P1½ + P3-XOR + loop-provenance + flow-order canonicalisation; P2 deferred to its own future programme.**
