@@ -22,9 +22,10 @@
 //! leaves the graph identity untouched (cemented below).
 //!
 //! CI: this module rides the workspace test job in
-//! `.github/workflows/production-gates.yml` ("Run full test suite",
-//! `cargo test --workspace ...`) — it runs on every PR, not only under a
-//! local `cargo test` (the gate that doesn't run is not a gate).
+//! `.github/workflows/production-gates.yml` (the "Migrations, RLS,
+//! recovery, integration, and property tests" step, `cargo test
+//! --workspace ...`) — it runs on every PR, not only under a local
+//! `cargo test` (the gate that doesn't run is not a gate).
 //!
 //! Cement-locked: once green, these receipts are permanent. The
 //! mutation red-trace for this harness (deliberately corrupting the
@@ -111,10 +112,15 @@ fn derived_registry(receipt: &DslReceipt) -> StubPlaceholderRegistry {
 ///    order (`edges_directed`, most-recent-first), which is
 ///    edit-order-derived, not content-canonical, while emission's flow
 ///    order is frozen as edge-id-sorted. And-flow order carries no
-///    execution semantics (all flows fire), so flows compare as a
-///    multiset. The underlying observation — two equivalent edit orders
-///    give `project_ir` plans different stored bytes — is surfaced in
-///    the B2 receipt as a standalone finding, not silently "fixed" here.
+///    OUTCOME semantics (all flows fire; the kernel's V2Join barrier
+///    reconciles by arrival count, never branch index) — though it does
+///    feed V2Fork target order and hence fiber-ID/tape ordering, so
+///    order-differing plans are outcome-equivalent but not
+///    replay-tape-identical. Flows therefore compare as a multiset. The
+///    underlying observation — two equivalent edit orders give
+///    `project_ir` plans different stored bytes and different lowered
+///    fork order — is surfaced in the B2 receipt as a standalone
+///    finding, not silently "fixed" here.
 fn normalize_plan(plan: &mut serde_json::Value) {
     if let Some(nodes) = plan.get_mut("nodes").and_then(|n| n.as_object_mut()) {
         for node in nodes.values_mut() {

@@ -48,19 +48,28 @@ And-block fixture.
 Disposition — **B0 equality-table amendment (recorded here per the
 amendment rule): `Split.flows` compares as a multiset** (sorted by
 content before comparison). Grounds: And-flow order carries no
-execution semantics (all flows fire); the frozen table ruled the
-*fields* compared but never ruled flow *order*; and the alternative —
-changing `project_ir` to sort — would change the stored bytes of a
-shipped production artifact path, which is not this plan's to decide.
+**outcome** semantics — the blind review traced every consumer: flows
+lower in order into `Instr::V2Fork{targets}`, and the kernel's barrier
+reconciles by arrival **count**, never branch index; in-core Parallel
+flows carry no conditions/placeholders. (First draft said "no execution
+semantics" — the review narrowed it: order DOES feed V2Fork target
+order and hence fiber-ID and event-tape ordering, so order-differing
+plans are outcome-equivalent but not replay-tape-identical.) The frozen
+table ruled the *fields* compared but never ruled flow *order*; and the
+alternative — changing `project_ir` to sort — would change the stored
+bytes of a shipped production artifact path, which is not this plan's
+to decide.
 
 **Surfaced as a standalone observation (outside this plan's scope, for
 a ruling if you want one): `project_ir`'s flow order is not
 content-canonical.** Two edit orders building `ir_graphs_equivalent`
 graphs produce plans with differently-ordered `flows` arrays — i.e.
-different stored plan JSON/bytes for the same design content. Same
-family as the route-derived-vs-content-derived hash trap already
-documented in `schema.rs:352-362`. Nothing downstream is known to
-depend on flow order; flagged, not fixed.
+different stored plan JSON/bytes for the same design content, AND
+(per the review's tracing) different lowered `V2Fork` target order,
+fiber-ID assignment, and event-tape ordering at runtime. Same family as
+the route-derived-vs-content-derived hash trap already documented in
+`schema.rs:352-362`, and directly relevant to G6's replay-equivalence
+work on this branch. Outcome semantics unaffected; flagged, not fixed.
 
 ## Mutation red-trace (harness proven able to fail)
 
@@ -79,12 +88,15 @@ assertion `left == right` failed: DSL-compiled plan must equal project_ir plan f
 
 ## CI wiring
 
-The module rides `.github/workflows/production-gates.yml`'s "Run full
-test suite" step (`cargo test --workspace --features
-postgres,database,embed,candle-probe -- --test-threads=1`,
-production-gates.yml:95) — it runs on every PR, not only under a local
-`cargo test`. Runtime is trivial (8 tests, <10 ms), per the plan's
-"rides the existing test job" clause; no dedicated step needed.
+The module rides `.github/workflows/production-gates.yml`'s
+"Migrations, RLS, recovery, integration, and property tests" step
+(`cargo test --workspace --features postgres,database,embed,candle-probe
+-- --test-threads=1`, production-gates.yml:95, workflow triggered
+`on: pull_request`) — it runs on every PR, not only under a local
+`cargo test`. (First draft cited a step name that doesn't exist —
+"Run full test suite" — caught by blind review; command and line were
+correct.) Runtime is trivial (8 tests, <10 ms), per the plan's "rides
+the existing test job" clause; no dedicated step needed.
 
 ## Verification
 
@@ -102,6 +114,17 @@ production-gates.yml:95) — it runs on every PR, not only under a local
   equality-table amendment (flows-as-multiset, above).
 
 - **Known deviations or explicitly parked work:**
+  - **Plan item 2 substitution (declared after blind review flagged it
+    as undeclared):** the plan says "assert the re-parsed
+    `WorkflowSource` equals the emitted AST"; the harness instead
+    asserts the print→parse→print **string fixpoint**. Direct AST
+    equality is impossible as specified — re-parsed spans are real
+    source positions, emitted spans are zero, and the AST types derive
+    no `PartialEq` — so byte-fixpoint of the printed form is the
+    faithful substitute (any field `ToSexpr` prints is covered;
+    plan-equality separately covers every plan-relevant field). Residual
+    risk: a future AST field that is neither printed nor plan-relevant
+    could diverge silently — accepted, ratify at this gate.
   - The `project_ir` flow-order observation (above) — surfaced for a
     separate ruling, untouched here.
   - Red-side "unchanged identity" is cemented via one representative
@@ -110,8 +133,35 @@ production-gates.yml:95) — it runs on every PR, not only under a local
     `&IRGraph` signature makes mutation structurally impossible, so one
     identity cement is defence in depth, not the load-bearing proof.
 
-- **Blind peer-review findings and dispositions:** pending — dispatched
-  at this receipt's close.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context) performed the load-bearing check this
+  tranche hinges on — exhaustively tracing every consumer of
+  `Split.flows` through frontend lowering into the kernel's
+  `V2Fork`/`V2Join` to establish whether the multiset amendment hides a
+  semantic divergence (verdict: sound for outcome semantics — barrier
+  reconciliation is count-based, no branch indexing anywhere; but order
+  feeds fork-target/fiber-ID/tape ordering, see the narrowed wording
+  above). Also verified `normalize_plan`'s totality (serde_json without
+  `preserve_order` → deterministic stringification; all 8 span fields in
+  the plan shape are inside node variants — the strip is complete and
+  nothing compared is over-normalized), `parse_workflow_str`'s
+  strictness (errs on ANY parse error — the B0 vacuous-test disease
+  cannot recur through this entry point), fixture faithfulness to B0's
+  G1–G7, CI wiring live on `pull_request`, and reproduced all test runs
+  and the mutation red-trace (restoring the file byte-exact). Verdict:
+  core claims stand; three findings, all disposed by edits:
+  1. "No execution semantics" narrowed to "no OUTCOME semantics" with
+     the fork-order/tape-ordering consequence stated (amendment wording
+     + observation enriched above).
+  2. The plan-item-2 AST-equality→string-fixpoint substitution was an
+     undeclared deviation — now declared under known deviations with
+     its rationale and residual risk.
+  3. The cited CI step name ("Run full test suite") didn't exist —
+     corrected to the real step name in receipt and module doc.
+  The reviewer also noted the witness proof is near-tautological today
+  (same function both sides) — retained deliberately: it cements
+  against a future regression to the route-derived hashes, which is
+  exactly the naming trap `schema.rs:352-362` documents.
 
 - **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 
