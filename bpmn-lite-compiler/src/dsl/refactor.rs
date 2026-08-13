@@ -345,9 +345,19 @@ mod tests {
     use bpmn_lite_types::SourceSpan;
 
     fn parse_sexpr(source: &str) -> WorkflowSource {
-        let (tokens, _) = crate::dsl::lexer::lex(source);
+        // Fail on ANY lex/parse error, not just a missing workflow: the
+        // parser's recovery loop silently drops a failed node, so an
+        // error-swallowing helper "proves" round-trips on a workflow
+        // missing the very node under test (B0 blind-review finding — a
+        // quoted-vs-symbol mismatch in a message-wait fixture hid exactly
+        // that way).
+        let (tokens, lex_errs) = crate::dsl::lexer::lex(source);
+        assert!(lex_errs.is_empty(), "lex errors in fixture: {lex_errs:?}");
         let mut p = crate::dsl::parser::Parser::new(tokens);
-        p.parse_workflow().expect("parse failed")
+        let wf = p.parse_workflow();
+        let errs = p.into_errors();
+        assert!(errs.is_empty(), "parse errors in fixture: {errs:?}");
+        wf.expect("parse failed")
     }
 
     #[test]
@@ -500,7 +510,7 @@ mod tests {
         let source = r#"(workflow test-linear-roundtrip
   (start-event :id start :next fetch)
   (service-task :id fetch :verb cbu.create :next wait-reply)
-  (message-wait :id wait-reply :name "reply-received" :correlation-source "@case-id" :next end)
+  (message-wait :id wait-reply :name reply-received :correlation-source case-id :next end)
   (end-event :id end :status "terminated"))"#;
         assert_print_reparse_fixpoint(source);
     }

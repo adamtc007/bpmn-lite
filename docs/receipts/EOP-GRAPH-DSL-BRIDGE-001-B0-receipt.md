@@ -35,7 +35,15 @@ parser errors): all three split modes + the linear core shapes
 (start/task/message-wait/terminate-end); `split-and` additionally
 recompiles. **Red trace:** mutation-verified — reverting the And head
 makes `split_and_print_reparse_roundtrip_and_recompiles` fail; restored,
-6/6 pass; full crate suite 178/0.
+6/6 pass; full crate suite 178/0. **Corrected after blind review:** the
+first version of the linear-shapes fixture quoted the message-wait
+values, which the parser silently dropped via its recovery loop (the
+shared `parse_sexpr` helper swallowed the errors), so the message-wait
+leg was initially vacuous — helper hardened to fail on any lex/parse
+error, fixture corrected to bare symbols, re-verified green. Production
+impact independently confirmed by the reviewer: `to_sexpr` output is fed
+straight to `dsl::compile` in the designer server's macro-apply endpoint
+(`rest.rs:1706-1709`), not only in tests.
 
 Two parser/AST asymmetries surfaced (recorded for the parity programme,
 not fixed): (a) the grammar cannot express a plug-less `Xor`/`Or` split,
@@ -59,11 +67,37 @@ during B1 must come back here as amendments, per the plan's receipt rule.
 | `MultipleStarts { ids }` | >1 `Start` | Defence in depth (`find_start` semantics); canonical order needs a unique root. |
 | `CyclicGraph { id }` | Any cycle (named witness node) | Topological emission order is undefined on a cycle. `emit_dsl` takes a raw `IRGraph`; admission is not assumed. |
 | `UnreachableNode { id }` | Node not reachable from `Start` | Fail closed, never silently skip (house rule); names the node. |
-| `WrongOutDegree { id, count }` | Non-gateway node with ≠1 outgoing edge | Mirrors `IrPlanError::WrongOutDegree`; every linear `NodeAst` carries exactly one `next`. |
+| `WrongOutDegree { id, count }` | Non-gateway node — **or converging gateway** — with ≠1 outgoing edge | Mirrors `IrPlanError::WrongOutDegree`, including its application to converging gateways (`single_successor` at ir_plan.rs:370); `JoinAst` carries a single `next`. **Wording corrected after blind review** — first freeze said "non-gateway node" only, leaving a 2-out And-join uncovered. |
 | `UnmatchedGateway { id }` | `GatewayAnd` with no `gateway_pairs` partner | Reuses the existing oracle — no hand-rolled re-pairing. |
-| `ConditionOnParallelFlow { gateway_id, edge_id }` | Eq-condition on an And-diverging edge | The DSL grammar cannot express it (asymmetry (b) above) — `ir_plan` would accept it, so emitted-then-recompiled could never match; refuse instead. |
-| `UnrepresentableCondition { id }` | Condition on any other in-core edge | Mirrors `IrPlanError::UnrepresentableCondition`; no in-core linear `NodeAst` carries a condition field. |
+| `ConditionOnParallelFlow { gateway_id, edge_id }` | **Any** condition (any `ConditionOp`) on an And-diverging edge | The DSL grammar cannot express it (asymmetry (b) above) — `ir_plan` would accept an Eq one, so emitted-then-recompiled could never match; refuse instead. **Reworded after blind review** — first freeze said "Eq-condition", leaving `Neq`/`Lt`/`Gt` falling between this and the next variant's wording. |
+| `UnrepresentableCondition { id }` | **Any** condition (any operator) on any other in-core edge | Mirrors `IrPlanError::UnrepresentableCondition`; no in-core linear `NodeAst` carries a condition field. Same any-operator rewording as above. |
+| `DuplicateNodeId { id }` | Two in-core nodes sharing one BPMN id | **Added after blind review** — the plan's "at minimum" list mandates it and the first freeze omitted it without a deviation note. Defence in depth (`DesignerDag` fail-closes on duplicates, but `emit_dsl` takes a raw `IRGraph`); a duplicate would silently merge in the `BTreeMap`-shaped plan. |
+| `UnrepresentableToken { node_id, field, value }` | Any pass-through string (BPMN id, `task_type`, message `name`/`correlation_key_source`) that does not lex as a DSL Symbol token (charset alnum/`_`/`=`/`-`/`.`, non-empty) | **Added after blind review.** §0.3 freezes verbatim id pass-through, and the printer emits these as bare symbol tokens (`parse_kw_symbol` on re-parse) — a string with a space/`@`/`:`/etc. would print to source the parser rejects. Refuse at emission, naming node, field, and offending value. |
 | `ProcessDeclUnrepresentable { field }` | `default_guard_budget` / `default_retry_policy` set | Fork-G ruling: grammar audit confirmed no process-level syntax exists; refuse, never drop. |
+
+**Refusal-check ordering (frozen — added after blind review, which showed
+"first refusal wins in canonical node order" is undefined exactly where
+canonical order doesn't exist):** checks run in two stages. **Stage 0,
+whole-graph pre-checks, fixed order:** `MissingStart` → `MultipleStarts` →
+`DuplicateNodeId` → `CyclicGraph` → `UnreachableNode`. Only after all five
+pass does a canonical topological order exist. **Stage 1, per-node scan in
+that canonical order**, per node: `UnsupportedNode` →
+`UnrepresentableToken` → `WrongOutDegree` → `UnmatchedGateway` →
+`ConditionOnParallelFlow`/`UnrepresentableCondition` (edge checks on the
+node's outgoing edges, in canonical edge order) —
+`ProcessDeclUnrepresentable` runs between the stages (graph-level field,
+needs no node order). First refusal wins; the same graph always yields
+the same refusal.
+
+**Deviation (recorded, for ratification):** the plan's "at minimum" list
+also names "non-`Eq` edge condition" as its own axis mirroring
+`IrPlanError::UnsupportedConditionOperator`. No such variant is frozen —
+in-core, EVERY condition is unrepresentable regardless of operator (And
+flows can't carry one grammatically; linear nodes have no condition
+field), so the two any-operator variants above subsume it. A dedicated
+operator variant becomes necessary only when a conditioned-flow kind
+(Xor/Or/Inclusive) enters scope — that is the parity programme's
+concern.
 
 Non-refusals, documented as contract notes rather than errors:
 - **`ServiceTask.name` is dropped from emitted DSL** (new B0 finding):
@@ -114,7 +148,9 @@ delivery_mode(BestEffort via shared formula), static_args(empty —
 produces/consumes(empty), guards(empty — any `Boundary*` in the graph
 already refused as `UnsupportedNode`), loop_origin(None both)};
 `MessageWaitExecNode{id, name, correlation_key_source, next}` (emitted
-verbatim as `:name`/`:correlation-source`);
+verbatim as `:name`/`:correlation-source` — as bare Symbol tokens, which
+is what `parse_message_wait` requires; non-symbol-lexable values refuse
+via `UnrepresentableToken`, so "verbatim" is guarded, not assumed);
 `SplitExecNode{id, mode=Parallel, routing_socket(None both — And splits
 take no plug on either path), flows(placeholder/expected None — conditions
 refused), join, produces_placeholder(None)}; `JoinExecNode{id, mode,
@@ -145,10 +181,16 @@ graph containing that kind); R11 `MissingStart`; R12 `MultipleStarts`;
 R13 `CyclicGraph` (hand-built `IRGraph` — `emit_dsl` takes the raw graph,
 admission not assumed); R14 `UnreachableNode`; R15 `WrongOutDegree`;
 R16 `UnmatchedGateway` (diverging And, no converging partner);
-R17 `ConditionOnParallelFlow`; R18 `UnrepresentableCondition` (Connect-
-style conditioned edge between two tasks); R19/R20
-`ProcessDeclUnrepresentable` × both fields. Every red fixture also
-asserts no partial artifact and unchanged `graph_state_hash`.
+R17 `ConditionOnParallelFlow` (one Eq, one non-Eq sub-case);
+R18 `UnrepresentableCondition` (Connect-style conditioned edge between
+two tasks); R19/R20 `ProcessDeclUnrepresentable` × both fields;
+R21 `DuplicateNodeId` (hand-built `IRGraph`, two tasks named `t1`);
+R22 `UnrepresentableToken` × BPMN id with a space; R23
+`UnrepresentableToken` × message `correlation_key_source` containing
+`@` (the exact class the blind review's scratch test hit); R24
+`WrongOutDegree` on a converging gateway (2 outgoing). Every red
+fixture also asserts no partial artifact and unchanged
+`graph_state_hash`.
 
 ## Ground-truth refinements folded into the V&S this tranche
 
@@ -179,8 +221,39 @@ asserts no partial artifact and unchanged `graph_state_hash`.
   - Registry discipline for plug/task_type — the one new contract
     element; explicitly listed for ratification.
 
-- **Blind peer-review findings and dispositions:** pending — dispatched
-  at this receipt's close.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context) re-derived the defect fix (including
+  reading the pre-fix printer via `git show 32e4de0^`, reproducing the
+  mutation red-trace, and confirming the production impact claim by
+  finding the real non-test `to_sexpr` callers —
+  `bpmn-lite-server-designer/src/rest.rs:1706` feeding `dsl::compile`,
+  plus `bpmn-lite-authoring/src/diagnostics_executor.rs`), verified every
+  "compared" ruling in the equality table against both construction
+  sites, verified the registry discipline (`register_verb` + empty
+  `BindingDecl` → `Known`, no hidden defaults), and reproduced all test
+  runs. Verdict: four findings, all disposed by edits (not argument):
+  1. **The message-wait cement leg was vacuous** — the fixture quoted
+     values the parser requires as bare symbols; the error-swallowing
+     `parse_sexpr` helper let the parser's recovery loop silently drop
+     the node, so the fixpoint was proven on a workflow *without* the
+     message-wait (the reviewer proved this empirically with a scratch
+     parse). Disposed: helper hardened to fail on any lex/parse error,
+     fixture corrected to symbol tokens, 6/6 re-verified — the
+     message-wait leg is now genuinely proven.
+  2. **Two plan-mandated catalogue axes were missing without a deviation
+     note** (duplicate-id; non-Eq operator). Disposed: `DuplicateNodeId`
+     added; the non-Eq axis recorded as an explicit
+     subsumed-by-any-operator-wording deviation for ratification, with
+     both condition variants reworded to "any operator."
+  3. **No refusal axis existed for non-symbol-lexable pass-through
+     strings** (ids, task_types, message names/correlation sources)
+     despite §0.3's verbatim rule. Disposed: `UnrepresentableToken`
+     added, with red fixtures R22/R23.
+  4. **Refusal ordering was undefined exactly where canonical order
+     doesn't exist** (no/multiple starts, cycles). Disposed: two-stage
+     ordering frozen (whole-graph pre-checks in fixed order, then the
+     canonical per-node scan). Also corrected `WrongOutDegree`'s wording
+     to cover converging gateways (reviewer's finding), with fixture R24.
 
 - **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 
