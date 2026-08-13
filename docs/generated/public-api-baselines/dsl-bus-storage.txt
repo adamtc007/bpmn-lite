@@ -1,0 +1,67 @@
+# package: dsl-bus-storage
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dsl-bus-storage -sss
+
+pub mod dsl_bus_storage
+pub enum dsl_bus_storage::BusEndpoint
+pub dsl_bus_storage::BusEndpoint::Invocation
+pub dsl_bus_storage::BusEndpoint::Result
+impl dsl_bus_storage::BusEndpoint
+pub const fn dsl_bus_storage::BusEndpoint::as_str(self) -> &'static str
+pub enum dsl_bus_storage::BusStorageError
+pub dsl_bus_storage::BusStorageError::InvalidColumn
+pub dsl_bus_storage::BusStorageError::InvalidColumn::column: &'static str
+pub dsl_bus_storage::BusStorageError::InvalidColumn::value: alloc::string::String
+pub dsl_bus_storage::BusStorageError::LostClaim(uuid::Uuid)
+pub dsl_bus_storage::BusStorageError::Sqlx(sqlx_core::error::Error)
+pub enum dsl_bus_storage::InboxStatus
+pub dsl_bus_storage::InboxStatus::Processed
+pub dsl_bus_storage::InboxStatus::Received
+impl dsl_bus_storage::InboxStatus
+pub const fn dsl_bus_storage::InboxStatus::as_str(self) -> &'static str
+pub enum dsl_bus_storage::InsertOutcome
+pub dsl_bus_storage::InsertOutcome::Duplicate
+pub dsl_bus_storage::InsertOutcome::Inserted
+impl dsl_bus_storage::InsertOutcome
+pub const fn dsl_bus_storage::InsertOutcome::was_inserted(self) -> bool
+pub enum dsl_bus_storage::OutboxStatus
+pub dsl_bus_storage::OutboxStatus::Dispatching
+pub dsl_bus_storage::OutboxStatus::Failed
+pub dsl_bus_storage::OutboxStatus::Pending
+pub dsl_bus_storage::OutboxStatus::Retrying
+pub dsl_bus_storage::OutboxStatus::Submitted
+impl dsl_bus_storage::OutboxStatus
+pub const fn dsl_bus_storage::OutboxStatus::as_str(self) -> &'static str
+pub struct dsl_bus_storage::InboxEntry
+pub dsl_bus_storage::InboxEntry::endpoint: dsl_bus_storage::BusEndpoint
+pub dsl_bus_storage::InboxEntry::execution_id: core::option::Option<uuid::Uuid>
+pub dsl_bus_storage::InboxEntry::idempotency_key: uuid::Uuid
+pub dsl_bus_storage::InboxEntry::payload: core::option::Option<alloc::vec::Vec<u8>>
+pub dsl_bus_storage::InboxEntry::received_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub dsl_bus_storage::InboxEntry::source_domain: alloc::string::String
+pub dsl_bus_storage::InboxEntry::tenant_id: alloc::string::String
+impl dsl_bus_storage::InboxEntry
+pub fn dsl_bus_storage::InboxEntry::new_received(uuid::Uuid, impl core::convert::Into<alloc::string::String>, dsl_bus_storage::BusEndpoint, core::option::Option<uuid::Uuid>, core::option::Option<alloc::vec::Vec<u8>>, alloc::string::String) -> Self
+pub struct dsl_bus_storage::OutboxEntry
+pub dsl_bus_storage::OutboxEntry::callout_id: core::option::Option<uuid::Uuid>
+pub dsl_bus_storage::OutboxEntry::created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub dsl_bus_storage::OutboxEntry::execution_id: core::option::Option<uuid::Uuid>
+pub dsl_bus_storage::OutboxEntry::id: uuid::Uuid
+pub dsl_bus_storage::OutboxEntry::idempotency_key: uuid::Uuid
+pub dsl_bus_storage::OutboxEntry::payload: alloc::vec::Vec<u8>
+pub dsl_bus_storage::OutboxEntry::target_domain: alloc::string::String
+pub dsl_bus_storage::OutboxEntry::target_endpoint: dsl_bus_storage::BusEndpoint
+pub dsl_bus_storage::OutboxEntry::tenant_id: alloc::string::String
+impl dsl_bus_storage::OutboxEntry
+pub fn dsl_bus_storage::OutboxEntry::attempt_count(&self) -> i32
+pub fn dsl_bus_storage::OutboxEntry::claim_token(&self) -> core::option::Option<uuid::Uuid>
+pub fn dsl_bus_storage::OutboxEntry::new_pending(uuid::Uuid, impl core::convert::Into<alloc::string::String>, dsl_bus_storage::BusEndpoint, alloc::vec::Vec<u8>, uuid::Uuid, alloc::string::String) -> Self
+pub async fn dsl_bus_storage::claim_pending_outbox(&mut sqlx_postgres::connection::PgConnection, i64, &str, uuid::Uuid, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> dsl_bus_storage::Result<alloc::vec::Vec<dsl_bus_storage::OutboxEntry>>
+pub async fn dsl_bus_storage::insert_inbox(impl sqlx_postgres::PgExecutor<'_>, &dsl_bus_storage::InboxEntry) -> dsl_bus_storage::Result<dsl_bus_storage::InsertOutcome>
+pub async fn dsl_bus_storage::insert_outbox(impl sqlx_postgres::PgExecutor<'_>, &dsl_bus_storage::OutboxEntry) -> dsl_bus_storage::Result<dsl_bus_storage::InsertOutcome>
+pub async fn dsl_bus_storage::lookup_inbox(impl sqlx_postgres::PgExecutor<'_>, uuid::Uuid) -> dsl_bus_storage::Result<core::option::Option<dsl_bus_storage::InboxEntry>>
+pub async fn dsl_bus_storage::mark_inbox_processed(impl sqlx_postgres::PgExecutor<'_>, uuid::Uuid) -> dsl_bus_storage::Result<()>
+pub async fn dsl_bus_storage::mark_outbox_retry(impl sqlx_postgres::PgExecutor<'_>, uuid::Uuid, uuid::Uuid, i64, &str) -> dsl_bus_storage::Result<()>
+pub async fn dsl_bus_storage::mark_outbox_submitted(impl sqlx_postgres::PgExecutor<'_>, uuid::Uuid, uuid::Uuid, uuid::Uuid) -> dsl_bus_storage::Result<()>
+pub async fn dsl_bus_storage::migrate(&sqlx_postgres::PgPool) -> core::result::Result<(), sqlx_core::migrate::error::MigrateError>
+pub type dsl_bus_storage::Result<T> = core::result::Result<T, dsl_bus_storage::BusStorageError>

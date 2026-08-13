@@ -1,0 +1,38 @@
+# package: bpmn-lite-ffi-http
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-ffi-http -sss
+
+pub mod bpmn_lite_ffi_http
+pub enum bpmn_lite_ffi_http::HttpIdempotency
+pub bpmn_lite_ffi_http::HttpIdempotency::Idempotent
+pub bpmn_lite_ffi_http::HttpIdempotency::IdempotentWithKey
+pub bpmn_lite_ffi_http::HttpIdempotency::IdempotentWithKey::selector: alloc::string::String
+pub bpmn_lite_ffi_http::HttpIdempotency::NonIdempotent
+pub enum bpmn_lite_ffi_http::HttpMethod
+pub bpmn_lite_ffi_http::HttpMethod::Get
+pub bpmn_lite_ffi_http::HttpMethod::Post
+impl bpmn_lite_ffi_http::HttpMethod
+pub fn bpmn_lite_ffi_http::HttpMethod::as_reqwest(&self) -> http::method::Method
+pub fn bpmn_lite_ffi_http::HttpMethod::default_idempotency(&self) -> bpmn_lite_ffi_http::HttpIdempotency
+pub struct bpmn_lite_ffi_http::HttpFfiOwner
+impl bpmn_lite_ffi_http::HttpFfiOwner
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::new() -> Self
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::register_template(&self, alloc::string::String, bpmn_lite_ffi_http::HttpMethod, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, u64, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<u16>, bpmn_lite_ffi_http::HttpIdempotency, alloc::vec::Vec<ffi_types::schema::FieldSchema>, alloc::vec::Vec<ffi_types::schema::FieldSchema>, alloc::string::String, alloc::string::String) -> anyhow::Result<ffi_types::template::FfiTemplate>
+impl core::default::Default for bpmn_lite_ffi_http::HttpFfiOwner
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::default() -> Self
+impl ffi_types::owner::FfiExecutionOwner for bpmn_lite_ffi_http::HttpFfiOwner
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::invoke<'life0, 'async_trait>(&'life0 self, ffi_types::wire::FfiCall) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<ffi_types::wire::FfiResult>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::owner_type(&self) -> &str
+pub fn bpmn_lite_ffi_http::HttpFfiOwner::supports_template(&self, &[u8; 32]) -> bool
+pub struct bpmn_lite_ffi_http::HttpTemplateConfig
+pub bpmn_lite_ffi_http::HttpTemplateConfig::idempotency: bpmn_lite_ffi_http::HttpIdempotency
+pub bpmn_lite_ffi_http::HttpTemplateConfig::method: bpmn_lite_ffi_http::HttpMethod
+pub bpmn_lite_ffi_http::HttpTemplateConfig::path_params: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_ffi_http::HttpTemplateConfig::static_headers: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub bpmn_lite_ffi_http::HttpTemplateConfig::success_status_codes: alloc::vec::Vec<u16>
+pub bpmn_lite_ffi_http::HttpTemplateConfig::timeout: core::time::Duration
+pub bpmn_lite_ffi_http::HttpTemplateConfig::url: alloc::string::String
+impl bpmn_lite_ffi_http::HttpTemplateConfig
+pub fn bpmn_lite_ffi_http::HttpTemplateConfig::from_owner_metadata(&[u8], bpmn_lite_ffi_http::HttpIdempotency) -> anyhow::Result<Self>
+pub fn bpmn_lite_ffi_http::HttpTemplateConfig::is_success_status(&self, u16) -> bool
+pub fn bpmn_lite_ffi_http::HttpTemplateConfig::to_owner_metadata(&str, &bpmn_lite_ffi_http::HttpMethod, &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, u64, &[alloc::string::String], &[u16]) -> anyhow::Result<alloc::vec::Vec<u8>>

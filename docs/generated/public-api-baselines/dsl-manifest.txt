@@ -1,0 +1,88 @@
+# package: dsl-manifest
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dsl-manifest -sss
+
+pub mod dsl_manifest
+pub enum dsl_manifest::ManifestError
+pub dsl_manifest::ManifestError::Io(alloc::string::String)
+pub dsl_manifest::ManifestError::Parse(alloc::string::String)
+pub dsl_manifest::ManifestError::Serialize(alloc::string::String)
+pub dsl_manifest::ManifestError::Validation(alloc::string::String)
+pub enum dsl_manifest::ServiceKind
+pub dsl_manifest::ServiceKind::EntityService
+pub dsl_manifest::ServiceKind::InvocationService
+pub dsl_manifest::ServiceKind::SemOsService
+pub struct dsl_manifest::DecisionEntry
+pub dsl_manifest::DecisionEntry::description: core::option::Option<alloc::string::String>
+pub dsl_manifest::DecisionEntry::id: alloc::string::String
+pub dsl_manifest::DecisionEntry::inputs: alloc::vec::Vec<dsl_manifest::InputSpec>
+pub dsl_manifest::DecisionEntry::output: dsl_manifest::DecisionOutput
+pub struct dsl_manifest::DecisionOutput
+pub dsl_manifest::DecisionOutput::enum_values: alloc::vec::Vec<alloc::string::String>
+pub dsl_manifest::DecisionOutput::type_name: alloc::string::String
+pub struct dsl_manifest::ExternalReferencePin
+pub dsl_manifest::ExternalReferencePin::content_hash: alloc::string::String
+pub dsl_manifest::ExternalReferencePin::domain: alloc::string::String
+pub struct dsl_manifest::FsmApplicability
+pub dsl_manifest::FsmApplicability::entity: alloc::string::String
+pub dsl_manifest::FsmApplicability::postconditions: alloc::vec::Vec<alloc::string::String>
+pub dsl_manifest::FsmApplicability::preconditions: alloc::vec::Vec<alloc::string::String>
+pub struct dsl_manifest::InputSpec
+pub dsl_manifest::InputSpec::name: alloc::string::String
+pub dsl_manifest::InputSpec::required: bool
+pub dsl_manifest::InputSpec::type_name: alloc::string::String
+pub struct dsl_manifest::Manifest
+pub dsl_manifest::Manifest::breaking_changes_since: alloc::vec::Vec<alloc::string::String>
+pub dsl_manifest::Manifest::catalogue_version: alloc::string::String
+pub dsl_manifest::Manifest::domain: alloc::string::String
+pub dsl_manifest::Manifest::generated_at: alloc::string::String
+pub dsl_manifest::Manifest::generated_from_snapshot: core::option::Option<alloc::string::String>
+pub dsl_manifest::Manifest::imported_pins: alloc::vec::Vec<dsl_manifest::ExternalReferencePin>
+pub dsl_manifest::Manifest::manifest_version: alloc::string::String
+pub dsl_manifest::Manifest::services: alloc::vec::Vec<dsl_manifest::ServiceDeclaration>
+impl dsl_manifest::Manifest
+pub fn dsl_manifest::Manifest::add_decision(&mut self, dsl_manifest::DecisionEntry)
+pub fn dsl_manifest::Manifest::add_verb(&mut self, dsl_manifest::VerbEntry)
+pub fn dsl_manifest::Manifest::decision_ids(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn dsl_manifest::Manifest::decisions(&self) -> &[dsl_manifest::DecisionEntry]
+pub fn dsl_manifest::Manifest::declared_services(&self) -> &[dsl_manifest::ServiceDeclaration]
+pub fn dsl_manifest::Manifest::declares_service(&self, dsl_manifest::ServiceKind) -> bool
+pub fn dsl_manifest::Manifest::load_from_path(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, dsl_manifest::ManifestError>
+pub fn dsl_manifest::Manifest::load_from_yaml(&str) -> core::result::Result<Self, dsl_manifest::ManifestError>
+pub fn dsl_manifest::Manifest::lookup_decision(&self, &str) -> core::option::Option<&dsl_manifest::DecisionEntry>
+pub fn dsl_manifest::Manifest::lookup_type(&self, &str) -> core::option::Option<&dsl_manifest::TypeEntry>
+pub fn dsl_manifest::Manifest::lookup_verb(&self, &str) -> core::option::Option<&dsl_manifest::VerbEntry>
+pub fn dsl_manifest::Manifest::remove_verb(&mut self, &str) -> core::option::Option<dsl_manifest::VerbEntry>
+pub fn dsl_manifest::Manifest::to_yaml(&self) -> core::result::Result<alloc::string::String, dsl_manifest::ManifestError>
+pub fn dsl_manifest::Manifest::types(&self) -> &[dsl_manifest::TypeEntry]
+pub fn dsl_manifest::Manifest::verb_ids(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn dsl_manifest::Manifest::verbs(&self) -> &[dsl_manifest::VerbEntry]
+pub struct dsl_manifest::OutputSpec
+pub dsl_manifest::OutputSpec::produces: core::option::Option<alloc::string::String>
+pub struct dsl_manifest::ResourceDependency
+pub dsl_manifest::ResourceDependency::entity_type: core::option::Option<alloc::string::String>
+pub dsl_manifest::ResourceDependency::from_input: alloc::string::String
+pub dsl_manifest::ResourceDependency::kind: alloc::string::String
+pub struct dsl_manifest::ServiceDeclaration
+pub dsl_manifest::ServiceDeclaration::available: bool
+pub dsl_manifest::ServiceDeclaration::capabilities: alloc::vec::Vec<alloc::string::String>
+pub dsl_manifest::ServiceDeclaration::kind: dsl_manifest::ServiceKind
+pub struct dsl_manifest::Signature
+pub dsl_manifest::Signature::inputs: alloc::vec::Vec<dsl_manifest::InputSpec>
+pub dsl_manifest::Signature::output: core::option::Option<dsl_manifest::OutputSpec>
+pub struct dsl_manifest::TypeEntry
+pub dsl_manifest::TypeEntry::description: core::option::Option<alloc::string::String>
+pub dsl_manifest::TypeEntry::kind: alloc::string::String
+pub dsl_manifest::TypeEntry::name: alloc::string::String
+pub dsl_manifest::TypeEntry::uuid_type: core::option::Option<alloc::string::String>
+pub dsl_manifest::TypeEntry::values: alloc::vec::Vec<alloc::string::String>
+pub struct dsl_manifest::VerbEntry
+pub dsl_manifest::VerbEntry::authority_required: alloc::string::String
+pub dsl_manifest::VerbEntry::coordination_policy: core::option::Option<alloc::string::String>
+pub dsl_manifest::VerbEntry::description: core::option::Option<alloc::string::String>
+pub dsl_manifest::VerbEntry::effect_class: alloc::string::String
+pub dsl_manifest::VerbEntry::fsm_applicability: core::option::Option<dsl_manifest::FsmApplicability>
+pub dsl_manifest::VerbEntry::id: alloc::string::String
+pub dsl_manifest::VerbEntry::resource_dependencies: alloc::vec::Vec<dsl_manifest::ResourceDependency>
+pub dsl_manifest::VerbEntry::signature: dsl_manifest::Signature
+pub dsl_manifest::VerbEntry::transaction_policy: core::option::Option<alloc::string::String>

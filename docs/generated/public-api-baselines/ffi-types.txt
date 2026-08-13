@@ -1,0 +1,111 @@
+# package: ffi-types
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p ffi-types -sss
+
+pub mod ffi_types
+pub mod ffi_types::wire
+pub enum ffi_types::wire::FfiIncidentClass
+pub ffi_types::wire::FfiIncidentClass::BusinessRejection
+pub ffi_types::wire::FfiIncidentClass::BusinessRejection::rejection_code: alloc::string::String
+pub ffi_types::wire::FfiIncidentClass::ContractViolation
+pub ffi_types::wire::FfiIncidentClass::Transient
+pub enum ffi_types::wire::FfiResult
+pub ffi_types::wire::FfiResult::Incident
+pub ffi_types::wire::FfiResult::Incident::error_class: ffi_types::wire::FfiIncidentClass
+pub ffi_types::wire::FfiResult::Incident::message: alloc::string::String
+pub ffi_types::wire::FfiResult::Incident::retry_hint_ms: core::option::Option<u64>
+pub ffi_types::wire::FfiResult::NoMatch
+pub ffi_types::wire::FfiResult::NoMatch::trace_payload: core::option::Option<alloc::vec::Vec<u8>>
+pub ffi_types::wire::FfiResult::Success
+pub ffi_types::wire::FfiResult::Success::new_domain_payload: core::option::Option<alloc::string::String>
+pub ffi_types::wire::FfiResult::Success::output_payload: alloc::vec::Vec<u8>
+pub ffi_types::wire::FfiResult::Success::trace_payload: alloc::vec::Vec<u8>
+pub struct ffi_types::wire::FfiCall
+pub ffi_types::wire::FfiCall::caller_task_id: alloc::string::String
+pub ffi_types::wire::FfiCall::input_payload: alloc::vec::Vec<u8>
+pub ffi_types::wire::FfiCall::invocation_id: uuid::Uuid
+pub ffi_types::wire::FfiCall::process_instance_id: uuid::Uuid
+pub ffi_types::wire::FfiCall::template_id: [u8; 32]
+pub ffi_types::wire::FfiCall::tenant_id: alloc::string::String
+pub enum ffi_types::FfiIncidentClass
+pub ffi_types::FfiIncidentClass::BusinessRejection
+pub ffi_types::FfiIncidentClass::BusinessRejection::rejection_code: alloc::string::String
+pub ffi_types::FfiIncidentClass::ContractViolation
+pub ffi_types::FfiIncidentClass::Transient
+pub enum ffi_types::FfiOutcomeKind
+pub ffi_types::FfiOutcomeKind::Incident
+pub ffi_types::FfiOutcomeKind::NoMatch
+pub ffi_types::FfiOutcomeKind::Pending
+pub ffi_types::FfiOutcomeKind::Success
+impl ffi_types::FfiOutcomeKind
+pub fn ffi_types::FfiOutcomeKind::as_str(&self) -> &'static str
+pub enum ffi_types::FfiResult
+pub ffi_types::FfiResult::Incident
+pub ffi_types::FfiResult::Incident::error_class: ffi_types::wire::FfiIncidentClass
+pub ffi_types::FfiResult::Incident::message: alloc::string::String
+pub ffi_types::FfiResult::Incident::retry_hint_ms: core::option::Option<u64>
+pub ffi_types::FfiResult::NoMatch
+pub ffi_types::FfiResult::NoMatch::trace_payload: core::option::Option<alloc::vec::Vec<u8>>
+pub ffi_types::FfiResult::Success
+pub ffi_types::FfiResult::Success::new_domain_payload: core::option::Option<alloc::string::String>
+pub ffi_types::FfiResult::Success::output_payload: alloc::vec::Vec<u8>
+pub ffi_types::FfiResult::Success::trace_payload: alloc::vec::Vec<u8>
+pub enum ffi_types::Idempotency
+pub ffi_types::Idempotency::Idempotent
+pub ffi_types::Idempotency::IdempotentWithKey
+pub ffi_types::Idempotency::IdempotentWithKey::selector: alloc::string::String
+pub ffi_types::Idempotency::NonIdempotent
+pub enum ffi_types::SchemaKind
+pub ffi_types::SchemaKind::Bool
+pub ffi_types::SchemaKind::F64
+pub ffi_types::SchemaKind::I64
+pub ffi_types::SchemaKind::Opaque
+pub ffi_types::SchemaKind::Opaque::owner_format: alloc::string::String
+pub ffi_types::SchemaKind::Opaque::owner_schema: alloc::vec::Vec<u8>
+pub ffi_types::SchemaKind::SemOsDomain
+pub ffi_types::SchemaKind::SemOsDomain::domain_id: uuid::Uuid
+pub ffi_types::SchemaKind::SemOsDomain::version_hash: [u8; 32]
+pub ffi_types::SchemaKind::String
+pub struct ffi_types::FfiCall
+pub ffi_types::FfiCall::caller_task_id: alloc::string::String
+pub ffi_types::FfiCall::input_payload: alloc::vec::Vec<u8>
+pub ffi_types::FfiCall::invocation_id: uuid::Uuid
+pub ffi_types::FfiCall::process_instance_id: uuid::Uuid
+pub ffi_types::FfiCall::template_id: [u8; 32]
+pub ffi_types::FfiCall::tenant_id: alloc::string::String
+pub struct ffi_types::FfiTemplate
+pub ffi_types::FfiTemplate::idempotency: ffi_types::Idempotency
+pub ffi_types::FfiTemplate::input_schema: alloc::vec::Vec<ffi_types::FieldSchema>
+pub ffi_types::FfiTemplate::output_schema: alloc::vec::Vec<ffi_types::FieldSchema>
+pub ffi_types::FfiTemplate::owner_metadata: alloc::vec::Vec<u8>
+pub ffi_types::FfiTemplate::owner_type: alloc::string::String
+pub ffi_types::FfiTemplate::published_at: i64
+pub ffi_types::FfiTemplate::publisher: alloc::string::String
+pub ffi_types::FfiTemplate::template_id: [u8; 32]
+pub ffi_types::FfiTemplate::tenant_id: alloc::string::String
+pub struct ffi_types::FieldSchema
+pub ffi_types::FieldSchema::kind: ffi_types::SchemaKind
+pub ffi_types::FieldSchema::name: alloc::string::String
+pub ffi_types::FieldSchema::required: bool
+pub struct ffi_types::ForeignFunctionInvocationRecord
+pub ffi_types::ForeignFunctionInvocationRecord::caller_pc: u32
+pub ffi_types::ForeignFunctionInvocationRecord::caller_process_instance_id: uuid::Uuid
+pub ffi_types::ForeignFunctionInvocationRecord::caller_task_id: alloc::string::String
+pub ffi_types::ForeignFunctionInvocationRecord::error_payload: core::option::Option<alloc::vec::Vec<u8>>
+pub ffi_types::ForeignFunctionInvocationRecord::input_payload: alloc::vec::Vec<u8>
+pub ffi_types::ForeignFunctionInvocationRecord::invocation_id: uuid::Uuid
+pub ffi_types::ForeignFunctionInvocationRecord::invoked_at: i64
+pub ffi_types::ForeignFunctionInvocationRecord::outcome_kind: ffi_types::FfiOutcomeKind
+pub ffi_types::ForeignFunctionInvocationRecord::output_payload: core::option::Option<alloc::vec::Vec<u8>>
+pub ffi_types::ForeignFunctionInvocationRecord::owner_type: alloc::string::String
+pub ffi_types::ForeignFunctionInvocationRecord::template_id: [u8; 32]
+pub ffi_types::ForeignFunctionInvocationRecord::tenant_id: alloc::string::String
+pub ffi_types::ForeignFunctionInvocationRecord::trace_payload: core::option::Option<alloc::vec::Vec<u8>>
+pub const ffi_types::GLOBAL_TENANT_ID: &str
+pub trait ffi_types::FfiCatalogueSnapshot: core::marker::Send + core::marker::Sync
+pub fn ffi_types::FfiCatalogueSnapshot::lookup(&self, &[u8; 32]) -> core::option::Option<&ffi_types::FfiTemplate>
+pub trait ffi_types::FfiExecutionOwner: core::marker::Send + core::marker::Sync
+pub fn ffi_types::FfiExecutionOwner::invoke<'life0, 'async_trait>(&'life0 self, ffi_types::wire::FfiCall) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<ffi_types::wire::FfiResult>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn ffi_types::FfiExecutionOwner::owner_type(&self) -> &str
+pub fn ffi_types::FfiExecutionOwner::supports_template(&self, &[u8; 32]) -> bool
+pub fn ffi_types::compute_template_id(&ffi_types::FfiTemplate) -> [u8; 32]

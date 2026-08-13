@@ -1,0 +1,6 @@
+# package: bpmn-lite-vm
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-vm -sss
+
+pub mod bpmn_lite_vm
+pub fn bpmn_lite_vm::compute_hash(&str) -> [u8; 32]

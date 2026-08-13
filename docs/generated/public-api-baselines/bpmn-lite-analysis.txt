@@ -1,0 +1,30 @@
+# package: bpmn-lite-analysis
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-analysis -sss
+
+pub mod bpmn_lite_analysis
+pub enum bpmn_lite_analysis::FindingKind
+pub bpmn_lite_analysis::FindingKind::ConstantCondition
+pub bpmn_lite_analysis::FindingKind::ConstantCondition::always_taken: bool
+pub bpmn_lite_analysis::FindingKind::ConstantCondition::branch_addr: u32
+pub bpmn_lite_analysis::FindingKind::FfiTemplatePinned
+pub bpmn_lite_analysis::FindingKind::FfiTemplatePinned::ffi_task_addr: u32
+pub bpmn_lite_analysis::FindingKind::FfiTemplatePinned::template_id_hex: alloc::string::String
+pub bpmn_lite_analysis::FindingKind::UnwrittenFlagCondition
+pub bpmn_lite_analysis::FindingKind::UnwrittenFlagCondition::branch_addr: u32
+pub bpmn_lite_analysis::FindingKind::UnwrittenFlagCondition::flag_key: bpmn_lite_types::types::FlagKey
+pub bpmn_lite_analysis::FindingKind::UnwrittenFlagCondition::flag_name: core::option::Option<alloc::string::String>
+pub enum bpmn_lite_analysis::Severity
+pub bpmn_lite_analysis::Severity::Info
+pub bpmn_lite_analysis::Severity::Warning
+pub struct bpmn_lite_analysis::AnalysisReport
+pub bpmn_lite_analysis::AnalysisReport::findings: alloc::vec::Vec<bpmn_lite_analysis::Finding>
+impl bpmn_lite_analysis::AnalysisReport
+pub fn bpmn_lite_analysis::AnalysisReport::warning_count(&self) -> usize
+pub fn bpmn_lite_analysis::AnalysisReport::warnings(&self) -> impl core::iter::traits::iterator::Iterator<Item = &bpmn_lite_analysis::Finding>
+pub struct bpmn_lite_analysis::Finding
+pub bpmn_lite_analysis::Finding::element_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_analysis::Finding::kind: bpmn_lite_analysis::FindingKind
+pub bpmn_lite_analysis::Finding::message: alloc::string::String
+pub bpmn_lite_analysis::Finding::severity: bpmn_lite_analysis::Severity
+pub fn bpmn_lite_analysis::analyse(&bpmn_lite_types::types::CompiledProgram) -> bpmn_lite_analysis::AnalysisReport

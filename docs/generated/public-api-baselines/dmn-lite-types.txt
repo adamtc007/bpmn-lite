@@ -1,0 +1,683 @@
+# package: dmn-lite-types
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-types -sss
+
+pub mod dmn_lite_types
+pub enum dmn_lite_types::CatalogueError
+pub dmn_lite_types::CatalogueError::DuplicateDomainId
+pub dmn_lite_types::CatalogueError::DuplicateDomainId::first_domain: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateDomainId::second_domain: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateDomainId::value: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateDomainName
+pub dmn_lite_types::CatalogueError::DuplicateDomainName::name: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueId
+pub dmn_lite_types::CatalogueError::DuplicateValueId::domain_name: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueId::first_symbol: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueId::second_symbol: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueId::value: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueSymbol
+pub dmn_lite_types::CatalogueError::DuplicateValueSymbol::domain_name: alloc::string::String
+pub dmn_lite_types::CatalogueError::DuplicateValueSymbol::symbol: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidDomainId
+pub dmn_lite_types::CatalogueError::InvalidDomainId::domain_name: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidDomainId::value: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidSnapshotId
+pub dmn_lite_types::CatalogueError::InvalidSnapshotId::value: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidValueId
+pub dmn_lite_types::CatalogueError::InvalidValueId::domain_name: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidValueId::symbol: alloc::string::String
+pub dmn_lite_types::CatalogueError::InvalidValueId::value: alloc::string::String
+pub dmn_lite_types::CatalogueError::Io
+pub dmn_lite_types::CatalogueError::Io::message: alloc::string::String
+pub dmn_lite_types::CatalogueError::Io::path: alloc::string::String
+pub dmn_lite_types::CatalogueError::Toml
+pub dmn_lite_types::CatalogueError::Toml::message: alloc::string::String
+pub enum dmn_lite_types::ComparisonOp
+pub dmn_lite_types::ComparisonOp::Eq
+pub dmn_lite_types::ComparisonOp::Ge
+pub dmn_lite_types::ComparisonOp::Gt
+pub dmn_lite_types::ComparisonOp::Le
+pub dmn_lite_types::ComparisonOp::Lt
+pub dmn_lite_types::ComparisonOp::NotEq
+impl dmn_lite_types::ComparisonOp
+pub fn dmn_lite_types::ComparisonOp::as_str(self) -> &'static str
+pub enum dmn_lite_types::CompileError
+pub dmn_lite_types::CompileError::AssignmentTypeMismatch
+pub dmn_lite_types::CompileError::AssignmentTypeMismatch::literal_type: alloc::string::String
+pub dmn_lite_types::CompileError::AssignmentTypeMismatch::output: alloc::string::String
+pub dmn_lite_types::CompileError::AssignmentTypeMismatch::output_type: alloc::string::String
+pub dmn_lite_types::CompileError::AssignmentTypeMismatch::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::Catalogue
+pub dmn_lite_types::CompileError::Catalogue::source: dmn_lite_types::CatalogueError
+pub dmn_lite_types::CompileError::DuplicateInputField
+pub dmn_lite_types::CompileError::DuplicateInputField::name: alloc::string::String
+pub dmn_lite_types::CompileError::DuplicateInputField::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateInputField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateOutputAssignment
+pub dmn_lite_types::CompileError::DuplicateOutputAssignment::output: alloc::string::String
+pub dmn_lite_types::CompileError::DuplicateOutputAssignment::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateOutputAssignment::rule: alloc::string::String
+pub dmn_lite_types::CompileError::DuplicateOutputAssignment::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateOutputField
+pub dmn_lite_types::CompileError::DuplicateOutputField::name: alloc::string::String
+pub dmn_lite_types::CompileError::DuplicateOutputField::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateOutputField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateRuleId
+pub dmn_lite_types::CompileError::DuplicateRuleId::name: alloc::string::String
+pub dmn_lite_types::CompileError::DuplicateRuleId::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::DuplicateRuleId::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::EmptyInputs
+pub dmn_lite_types::CompileError::EmptyInputs::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::EmptyOutputs
+pub dmn_lite_types::CompileError::EmptyOutputs::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::MissingDomainOnEnum
+pub dmn_lite_types::CompileError::MissingDomainOnEnum::field: alloc::string::String
+pub dmn_lite_types::CompileError::MissingDomainOnEnum::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::MissingOutputAssignment
+pub dmn_lite_types::CompileError::MissingOutputAssignment::output: alloc::string::String
+pub dmn_lite_types::CompileError::MissingOutputAssignment::rule: alloc::string::String
+pub dmn_lite_types::CompileError::MissingOutputAssignment::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::MultipleCatchAllRules
+pub dmn_lite_types::CompileError::MultipleCatchAllRules::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::MultipleCatchAllRules::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::OrderedComparisonOnNonNumeric
+pub dmn_lite_types::CompileError::OrderedComparisonOnNonNumeric::field: alloc::string::String
+pub dmn_lite_types::CompileError::OrderedComparisonOnNonNumeric::field_type: alloc::string::String
+pub dmn_lite_types::CompileError::OrderedComparisonOnNonNumeric::op: alloc::string::String
+pub dmn_lite_types::CompileError::OrderedComparisonOnNonNumeric::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::PredicateTypeMismatch
+pub dmn_lite_types::CompileError::PredicateTypeMismatch::field: alloc::string::String
+pub dmn_lite_types::CompileError::PredicateTypeMismatch::field_type: alloc::string::String
+pub dmn_lite_types::CompileError::PredicateTypeMismatch::literal_type: alloc::string::String
+pub dmn_lite_types::CompileError::PredicateTypeMismatch::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::RangeOnNonNumeric
+pub dmn_lite_types::CompileError::RangeOnNonNumeric::field: alloc::string::String
+pub dmn_lite_types::CompileError::RangeOnNonNumeric::field_type: alloc::string::String
+pub dmn_lite_types::CompileError::RangeOnNonNumeric::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch::element_type: alloc::string::String
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch::field: alloc::string::String
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch::field_type: alloc::string::String
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch::index: usize
+pub dmn_lite_types::CompileError::SetMemberTypeMismatch::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnknownDomain
+pub dmn_lite_types::CompileError::UnknownDomain::name: alloc::string::String
+pub dmn_lite_types::CompileError::UnknownDomain::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnknownDomainValue
+pub dmn_lite_types::CompileError::UnknownDomainValue::domain: alloc::string::String
+pub dmn_lite_types::CompileError::UnknownDomainValue::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnknownDomainValue::symbol: alloc::string::String
+pub dmn_lite_types::CompileError::UnknownInputField
+pub dmn_lite_types::CompileError::UnknownInputField::name: alloc::string::String
+pub dmn_lite_types::CompileError::UnknownInputField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnknownOutputField
+pub dmn_lite_types::CompileError::UnknownOutputField::name: alloc::string::String
+pub dmn_lite_types::CompileError::UnknownOutputField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnreachableAfterCatchAll
+pub dmn_lite_types::CompileError::UnreachableAfterCatchAll::catch_all: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileError::UnreachableAfterCatchAll::rule: alloc::string::String
+pub dmn_lite_types::CompileError::UnreachableAfterCatchAll::span: dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::CompileWarning
+pub dmn_lite_types::CompileWarning::DomainOnNonEnum
+pub dmn_lite_types::CompileWarning::DomainOnNonEnum::domain: alloc::string::String
+pub dmn_lite_types::CompileWarning::DomainOnNonEnum::field: alloc::string::String
+pub dmn_lite_types::CompileWarning::DomainOnNonEnum::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::CompileWarning::DomainOnNonEnum::type_name: alloc::string::String
+pub dmn_lite_types::CompileWarning::EmptyRules
+pub dmn_lite_types::CompileWarning::EmptyRules::span: dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::EvalError
+pub dmn_lite_types::EvalError::InputDomainMismatch
+pub dmn_lite_types::EvalError::InputDomainMismatch::domain: alloc::string::String
+pub dmn_lite_types::EvalError::InputDomainMismatch::field: alloc::string::String
+pub dmn_lite_types::EvalError::InputDomainMismatch::field_id: dmn_lite_types::FieldId
+pub dmn_lite_types::EvalError::InputDomainMismatch::symbol: alloc::string::String
+pub dmn_lite_types::EvalError::InputSchemaMismatch
+pub dmn_lite_types::EvalError::InputSchemaMismatch::actual: usize
+pub dmn_lite_types::EvalError::InputSchemaMismatch::expected: usize
+pub dmn_lite_types::EvalError::InputTypeMismatch
+pub dmn_lite_types::EvalError::InputTypeMismatch::actual: alloc::string::String
+pub dmn_lite_types::EvalError::InputTypeMismatch::expected: alloc::string::String
+pub dmn_lite_types::EvalError::InputTypeMismatch::field: alloc::string::String
+pub dmn_lite_types::EvalError::InputTypeMismatch::field_id: dmn_lite_types::FieldId
+pub dmn_lite_types::EvalError::MultipleMatches
+pub dmn_lite_types::EvalError::MultipleMatches::rules: alloc::vec::Vec<dmn_lite_types::RuleId>
+pub dmn_lite_types::EvalError::NoMatch
+pub dmn_lite_types::EvalError::SchemaHashMismatch
+pub enum dmn_lite_types::FieldOverlap
+pub dmn_lite_types::FieldOverlap::Any
+pub dmn_lite_types::FieldOverlap::Boolean(bool)
+pub dmn_lite_types::FieldOverlap::EnumSet
+pub dmn_lite_types::FieldOverlap::EnumSet::values: alloc::vec::Vec<dmn_lite_types::ValueId>
+pub dmn_lite_types::FieldOverlap::IntegerInterval
+pub dmn_lite_types::FieldOverlap::IntegerInterval::lower: core::option::Option<i64>
+pub dmn_lite_types::FieldOverlap::IntegerInterval::lower_inclusive: bool
+pub dmn_lite_types::FieldOverlap::IntegerInterval::upper: core::option::Option<i64>
+pub dmn_lite_types::FieldOverlap::IntegerInterval::upper_inclusive: bool
+pub dmn_lite_types::FieldOverlap::Opaque
+pub dmn_lite_types::FieldOverlap::Opaque::reason: alloc::string::String
+pub dmn_lite_types::FieldOverlap::StringOpaque
+pub dmn_lite_types::FieldOverlap::StringOpaque::description: alloc::string::String
+pub enum dmn_lite_types::FindingKind
+pub dmn_lite_types::FindingKind::AnalysisLimitedByStringInput
+pub dmn_lite_types::FindingKind::AnalysisLimitedByStringInput::affected_fields: alloc::vec::Vec<alloc::string::String>
+pub dmn_lite_types::FindingKind::CostCeilingExceeded
+pub dmn_lite_types::FindingKind::CostCeilingExceeded::ceiling: usize
+pub dmn_lite_types::FindingKind::CostCeilingExceeded::computed: usize
+pub dmn_lite_types::FindingKind::Gap
+pub dmn_lite_types::FindingKind::Gap::catch_all_present: bool
+pub dmn_lite_types::FindingKind::Gap::gap_summary: dmn_lite_types::GapSummary
+pub dmn_lite_types::FindingKind::Overlap
+pub dmn_lite_types::FindingKind::Overlap::overlap_summary: dmn_lite_types::OverlapSummary
+pub dmn_lite_types::FindingKind::Overlap::rule_a: dmn_lite_types::RuleId
+pub dmn_lite_types::FindingKind::Overlap::rule_b: dmn_lite_types::RuleId
+pub dmn_lite_types::FindingKind::UniqueWithCatchAll
+pub dmn_lite_types::FindingKind::UniqueWithCatchAll::catch_all_rule: dmn_lite_types::RuleId
+pub dmn_lite_types::FindingKind::UnreachableRule
+pub dmn_lite_types::FindingKind::UnreachableRule::shadowing: dmn_lite_types::RuleId
+pub dmn_lite_types::FindingKind::UnreachableRule::unreachable: dmn_lite_types::RuleId
+pub enum dmn_lite_types::HitPolicy
+pub dmn_lite_types::HitPolicy::First
+pub dmn_lite_types::HitPolicy::Unique
+pub enum dmn_lite_types::HitPolicyAst
+pub dmn_lite_types::HitPolicyAst::First(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::HitPolicyAst::Unique(dmn_lite_types::SourceSpan)
+impl dmn_lite_types::HitPolicyAst
+pub fn dmn_lite_types::HitPolicyAst::span(&self) -> dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::InputContextError
+pub dmn_lite_types::InputContextError::FieldIdOutOfBounds
+pub dmn_lite_types::InputContextError::FieldIdOutOfBounds::arity: usize
+pub dmn_lite_types::InputContextError::FieldIdOutOfBounds::field_id: dmn_lite_types::FieldId
+pub dmn_lite_types::InputContextError::SlotCountMismatch
+pub dmn_lite_types::InputContextError::SlotCountMismatch::actual: usize
+pub dmn_lite_types::InputContextError::SlotCountMismatch::expected: usize
+pub dmn_lite_types::InputContextError::UnknownFieldName
+pub dmn_lite_types::InputContextError::UnknownFieldName::name: alloc::string::String
+pub enum dmn_lite_types::Instr
+pub dmn_lite_types::Instr::And
+pub dmn_lite_types::Instr::Br(u32)
+pub dmn_lite_types::Instr::BrFalse(u32)
+pub dmn_lite_types::Instr::BrTrue(u32)
+pub dmn_lite_types::Instr::Dup
+pub dmn_lite_types::Instr::EndDecision
+pub dmn_lite_types::Instr::Eq
+pub dmn_lite_types::Instr::Ge
+pub dmn_lite_types::Instr::Gt
+pub dmn_lite_types::Instr::InSet
+pub dmn_lite_types::Instr::IsNotNull
+pub dmn_lite_types::Instr::IsNull
+pub dmn_lite_types::Instr::Le
+pub dmn_lite_types::Instr::LoadField(dmn_lite_types::FieldId)
+pub dmn_lite_types::Instr::Lt
+pub dmn_lite_types::Instr::Not
+pub dmn_lite_types::Instr::NotEq
+pub dmn_lite_types::Instr::Or
+pub dmn_lite_types::Instr::Pop
+pub dmn_lite_types::Instr::PushConst(dmn_lite_types::ConstId)
+pub dmn_lite_types::Instr::PushConstSet(dmn_lite_types::ConstSetId)
+pub dmn_lite_types::Instr::RangeCheck(dmn_lite_types::RangeId)
+pub dmn_lite_types::Instr::RuleMatched(dmn_lite_types::RuleId)
+pub dmn_lite_types::Instr::StoreOutput(dmn_lite_types::OutputFieldId, dmn_lite_types::ConstId)
+pub dmn_lite_types::Instr::StoreOutputTos(dmn_lite_types::OutputFieldId)
+impl dmn_lite_types::Instr
+pub fn dmn_lite_types::Instr::is_reserved(&self) -> bool
+pub fn dmn_lite_types::Instr::mnemonic(&self) -> &'static str
+pub enum dmn_lite_types::LiteralAst
+pub dmn_lite_types::LiteralAst::Boolean
+pub dmn_lite_types::LiteralAst::Boolean::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::LiteralAst::Boolean::value: bool
+pub dmn_lite_types::LiteralAst::Number(dmn_lite_types::NumberLitAst)
+pub dmn_lite_types::LiteralAst::String(dmn_lite_types::StringLitAst)
+pub dmn_lite_types::LiteralAst::Symbol(dmn_lite_types::SymbolAst)
+impl dmn_lite_types::LiteralAst
+pub fn dmn_lite_types::LiteralAst::span(&self) -> dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::NumberKind
+pub dmn_lite_types::NumberKind::Decimal
+pub dmn_lite_types::NumberKind::Integer
+pub enum dmn_lite_types::ParseError
+pub dmn_lite_types::ParseError::DuplicateField
+pub dmn_lite_types::ParseError::DuplicateField::keyword: alloc::string::String
+pub dmn_lite_types::ParseError::DuplicateField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::EmptySet
+pub dmn_lite_types::ParseError::EmptySet::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MalformedNumber
+pub dmn_lite_types::ParseError::MalformedNumber::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MalformedNumber::text: alloc::string::String
+pub dmn_lite_types::ParseError::MalformedString
+pub dmn_lite_types::ParseError::MalformedString::reason: alloc::string::String
+pub dmn_lite_types::ParseError::MalformedString::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MissingField
+pub dmn_lite_types::ParseError::MissingField::keyword: alloc::string::String
+pub dmn_lite_types::ParseError::MissingField::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MultipleCatchAllRules
+pub dmn_lite_types::ParseError::MultipleCatchAllRules::previous: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MultipleCatchAllRules::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MultipleDecisions
+pub dmn_lite_types::ParseError::MultipleDecisions::first_decision: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::MultipleDecisions::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::TooFewPredicates
+pub dmn_lite_types::ParseError::TooFewPredicates::combinator: alloc::string::String
+pub dmn_lite_types::ParseError::TooFewPredicates::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnexpectedChar
+pub dmn_lite_types::ParseError::UnexpectedChar::ch: char
+pub dmn_lite_types::ParseError::UnexpectedChar::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnexpectedEof
+pub dmn_lite_types::ParseError::UnexpectedEof::expected: alloc::string::String
+pub dmn_lite_types::ParseError::UnexpectedEof::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnexpectedToken
+pub dmn_lite_types::ParseError::UnexpectedToken::expected: alloc::string::String
+pub dmn_lite_types::ParseError::UnexpectedToken::found: alloc::string::String
+pub dmn_lite_types::ParseError::UnexpectedToken::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnknownHitPolicy
+pub dmn_lite_types::ParseError::UnknownHitPolicy::name: alloc::string::String
+pub dmn_lite_types::ParseError::UnknownHitPolicy::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnsupportedConstruct
+pub dmn_lite_types::ParseError::UnsupportedConstruct::name: alloc::string::String
+pub dmn_lite_types::ParseError::UnsupportedConstruct::profile: alloc::string::String
+pub dmn_lite_types::ParseError::UnsupportedConstruct::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::UnsupportedHitPolicy
+pub dmn_lite_types::ParseError::UnsupportedHitPolicy::name: alloc::string::String
+pub dmn_lite_types::ParseError::UnsupportedHitPolicy::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::ParseError::WildcardMixedWithPredicates
+pub dmn_lite_types::ParseError::WildcardMixedWithPredicates::span: dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::PredicateAst
+pub dmn_lite_types::PredicateAst::And
+pub dmn_lite_types::PredicateAst::And::items: alloc::vec::Vec<dmn_lite_types::PredicateAst>
+pub dmn_lite_types::PredicateAst::And::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Eq
+pub dmn_lite_types::PredicateAst::Eq::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Eq::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Eq::value: dmn_lite_types::LiteralAst
+pub dmn_lite_types::PredicateAst::Ge
+pub dmn_lite_types::PredicateAst::Ge::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Ge::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Ge::value: dmn_lite_types::NumberLitAst
+pub dmn_lite_types::PredicateAst::Gt
+pub dmn_lite_types::PredicateAst::Gt::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Gt::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Gt::value: dmn_lite_types::NumberLitAst
+pub dmn_lite_types::PredicateAst::InSet
+pub dmn_lite_types::PredicateAst::InSet::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::InSet::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::InSet::values: alloc::vec::Vec<dmn_lite_types::LiteralAst>
+pub dmn_lite_types::PredicateAst::IsNotNull
+pub dmn_lite_types::PredicateAst::IsNotNull::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::IsNotNull::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::IsNull
+pub dmn_lite_types::PredicateAst::IsNull::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::IsNull::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Le
+pub dmn_lite_types::PredicateAst::Le::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Le::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Le::value: dmn_lite_types::NumberLitAst
+pub dmn_lite_types::PredicateAst::Lt
+pub dmn_lite_types::PredicateAst::Lt::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Lt::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Lt::value: dmn_lite_types::NumberLitAst
+pub dmn_lite_types::PredicateAst::Not
+pub dmn_lite_types::PredicateAst::Not::inner: alloc::boxed::Box<dmn_lite_types::PredicateAst>
+pub dmn_lite_types::PredicateAst::Not::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::NotEq
+pub dmn_lite_types::PredicateAst::NotEq::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::NotEq::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::NotEq::value: dmn_lite_types::LiteralAst
+pub dmn_lite_types::PredicateAst::Or
+pub dmn_lite_types::PredicateAst::Or::items: alloc::vec::Vec<dmn_lite_types::PredicateAst>
+pub dmn_lite_types::PredicateAst::Or::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Range
+pub dmn_lite_types::PredicateAst::Range::field: dmn_lite_types::SymbolAst
+pub dmn_lite_types::PredicateAst::Range::lower: dmn_lite_types::RangeBound
+pub dmn_lite_types::PredicateAst::Range::lower_inclusive: bool
+pub dmn_lite_types::PredicateAst::Range::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::PredicateAst::Range::upper: dmn_lite_types::RangeBound
+pub dmn_lite_types::PredicateAst::Range::upper_inclusive: bool
+impl dmn_lite_types::PredicateAst
+pub fn dmn_lite_types::PredicateAst::span(&self) -> dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::RangeBound
+pub dmn_lite_types::RangeBound::Unbounded(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::RangeBound::Value(dmn_lite_types::NumberLitAst)
+impl dmn_lite_types::RangeBound
+pub fn dmn_lite_types::RangeBound::span(&self) -> dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::ResolvedType
+pub dmn_lite_types::ResolvedType::Bool
+pub dmn_lite_types::ResolvedType::Decimal
+pub dmn_lite_types::ResolvedType::Enum
+pub dmn_lite_types::ResolvedType::Enum::domain_id: dmn_lite_types::DomainId
+pub dmn_lite_types::ResolvedType::Integer
+pub dmn_lite_types::ResolvedType::Str
+impl dmn_lite_types::ResolvedType
+pub fn dmn_lite_types::ResolvedType::is_numeric(&self) -> bool
+pub fn dmn_lite_types::ResolvedType::type_name(&self) -> &'static str
+pub enum dmn_lite_types::Severity
+pub dmn_lite_types::Severity::Error
+pub dmn_lite_types::Severity::Info
+pub dmn_lite_types::Severity::Warning
+pub enum dmn_lite_types::TraceOutcome
+pub dmn_lite_types::TraceOutcome::EvalError
+pub dmn_lite_types::TraceOutcome::Match
+pub dmn_lite_types::TraceOutcome::Match::rule_id: dmn_lite_types::RuleId
+pub dmn_lite_types::TraceOutcome::MultipleMatches
+pub dmn_lite_types::TraceOutcome::MultipleMatches::rules: alloc::vec::Vec<dmn_lite_types::RuleId>
+pub dmn_lite_types::TraceOutcome::NoMatch
+pub enum dmn_lite_types::TypeRefAst
+pub dmn_lite_types::TypeRefAst::Bool(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::TypeRefAst::Decimal(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::TypeRefAst::Enum(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::TypeRefAst::Integer(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::TypeRefAst::String(dmn_lite_types::SourceSpan)
+impl dmn_lite_types::TypeRefAst
+pub fn dmn_lite_types::TypeRefAst::span(&self) -> dmn_lite_types::SourceSpan
+pub enum dmn_lite_types::TypedPredicate
+pub dmn_lite_types::TypedPredicate::And
+pub dmn_lite_types::TypedPredicate::And::items: alloc::vec::Vec<dmn_lite_types::TypedPredicate>
+pub dmn_lite_types::TypedPredicate::And::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::Comparison
+pub dmn_lite_types::TypedPredicate::Comparison::field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedPredicate::Comparison::op: dmn_lite_types::ComparisonOp
+pub dmn_lite_types::TypedPredicate::Comparison::rhs: dmn_lite_types::TypedValue
+pub dmn_lite_types::TypedPredicate::Comparison::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::InSet
+pub dmn_lite_types::TypedPredicate::InSet::field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedPredicate::InSet::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::InSet::values: alloc::vec::Vec<dmn_lite_types::TypedValue>
+pub dmn_lite_types::TypedPredicate::IsNotNull
+pub dmn_lite_types::TypedPredicate::IsNotNull::field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedPredicate::IsNotNull::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::IsNull
+pub dmn_lite_types::TypedPredicate::IsNull::field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedPredicate::IsNull::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::Not
+pub dmn_lite_types::TypedPredicate::Not::inner: alloc::boxed::Box<dmn_lite_types::TypedPredicate>
+pub dmn_lite_types::TypedPredicate::Not::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::Or
+pub dmn_lite_types::TypedPredicate::Or::items: alloc::vec::Vec<dmn_lite_types::TypedPredicate>
+pub dmn_lite_types::TypedPredicate::Or::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::Range
+pub dmn_lite_types::TypedPredicate::Range::field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedPredicate::Range::lower: core::option::Option<dmn_lite_types::TypedValue>
+pub dmn_lite_types::TypedPredicate::Range::lower_inclusive: bool
+pub dmn_lite_types::TypedPredicate::Range::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedPredicate::Range::upper: core::option::Option<dmn_lite_types::TypedValue>
+pub dmn_lite_types::TypedPredicate::Range::upper_inclusive: bool
+pub enum dmn_lite_types::TypedValue
+pub dmn_lite_types::TypedValue::Bool(bool)
+pub dmn_lite_types::TypedValue::Decimal(f64)
+pub dmn_lite_types::TypedValue::Enum
+pub dmn_lite_types::TypedValue::Enum::domain_id: dmn_lite_types::DomainId
+pub dmn_lite_types::TypedValue::Enum::value_id: dmn_lite_types::ValueId
+pub dmn_lite_types::TypedValue::Integer(i64)
+pub dmn_lite_types::TypedValue::Null
+pub dmn_lite_types::TypedValue::Str(alloc::string::String)
+pub enum dmn_lite_types::TypedWhen
+pub dmn_lite_types::TypedWhen::CatchAll(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::TypedWhen::Predicates(alloc::vec::Vec<dmn_lite_types::TypedPredicate>, dmn_lite_types::SourceSpan)
+pub enum dmn_lite_types::VerifierError
+pub dmn_lite_types::VerifierError::BranchTargetOutOfBounds
+pub dmn_lite_types::VerifierError::BranchTargetOutOfBounds::at: u32
+pub dmn_lite_types::VerifierError::BranchTargetOutOfBounds::len: usize
+pub dmn_lite_types::VerifierError::BranchTargetOutOfBounds::target: u32
+pub dmn_lite_types::VerifierError::DanglingInstruction
+pub dmn_lite_types::VerifierError::DanglingInstruction::at: u32
+pub dmn_lite_types::VerifierError::HitPolicyShapeMismatch
+pub dmn_lite_types::VerifierError::HitPolicyShapeMismatch::actual_shape: alloc::string::String
+pub dmn_lite_types::VerifierError::HitPolicyShapeMismatch::expected_shape: alloc::string::String
+pub dmn_lite_types::VerifierError::HitPolicyShapeMismatch::policy: alloc::string::String
+pub dmn_lite_types::VerifierError::InstructionSpanLengthMismatch
+pub dmn_lite_types::VerifierError::InstructionSpanLengthMismatch::instructions: usize
+pub dmn_lite_types::VerifierError::InstructionSpanLengthMismatch::source_spans: usize
+pub dmn_lite_types::VerifierError::MissingEndDecision
+pub dmn_lite_types::VerifierError::MultipleEndDecisions
+pub dmn_lite_types::VerifierError::NonZeroStackAtEnd
+pub dmn_lite_types::VerifierError::NonZeroStackAtEnd::at: u32
+pub dmn_lite_types::VerifierError::NonZeroStackAtEnd::height: usize
+pub dmn_lite_types::VerifierError::ReservedOpcode
+pub dmn_lite_types::VerifierError::ReservedOpcode::at: u32
+pub dmn_lite_types::VerifierError::ReservedOpcode::opcode: alloc::string::String
+pub dmn_lite_types::VerifierError::StackJoinMismatch
+pub dmn_lite_types::VerifierError::StackJoinMismatch::at: u32
+pub dmn_lite_types::VerifierError::StackJoinMismatch::heights: alloc::vec::Vec<usize>
+pub dmn_lite_types::VerifierError::StackUnderflow
+pub dmn_lite_types::VerifierError::StackUnderflow::actual: usize
+pub dmn_lite_types::VerifierError::StackUnderflow::at: u32
+pub dmn_lite_types::VerifierError::StackUnderflow::expected: usize
+pub dmn_lite_types::VerifierError::TypeMismatch
+pub dmn_lite_types::VerifierError::TypeMismatch::at: u32
+pub dmn_lite_types::VerifierError::TypeMismatch::expected: alloc::string::String
+pub dmn_lite_types::VerifierError::TypeMismatch::found: alloc::string::String
+pub dmn_lite_types::VerifierError::UnknownConstId
+pub dmn_lite_types::VerifierError::UnknownConstId::at: u32
+pub dmn_lite_types::VerifierError::UnknownConstId::id: u32
+pub dmn_lite_types::VerifierError::UnknownConstSetId
+pub dmn_lite_types::VerifierError::UnknownConstSetId::at: u32
+pub dmn_lite_types::VerifierError::UnknownConstSetId::id: u32
+pub dmn_lite_types::VerifierError::UnknownLoadFieldId
+pub dmn_lite_types::VerifierError::UnknownLoadFieldId::at: u32
+pub dmn_lite_types::VerifierError::UnknownLoadFieldId::field: u32
+pub dmn_lite_types::VerifierError::UnknownRangeId
+pub dmn_lite_types::VerifierError::UnknownRangeId::at: u32
+pub dmn_lite_types::VerifierError::UnknownRangeId::id: u32
+pub dmn_lite_types::VerifierError::UnknownRuleId
+pub dmn_lite_types::VerifierError::UnknownRuleId::at: u32
+pub dmn_lite_types::VerifierError::UnknownStoreOutputId
+pub dmn_lite_types::VerifierError::UnknownStoreOutputId::at: u32
+pub dmn_lite_types::VerifierError::UnknownStoreOutputId::field: u32
+pub dmn_lite_types::VerifierError::UnreachableEndDecision
+pub enum dmn_lite_types::WhenAst
+pub dmn_lite_types::WhenAst::CatchAll(dmn_lite_types::SourceSpan)
+pub dmn_lite_types::WhenAst::Predicates(alloc::vec::Vec<dmn_lite_types::PredicateAst>, dmn_lite_types::SourceSpan)
+pub struct dmn_lite_types::AnalysisFinding
+pub dmn_lite_types::AnalysisFinding::description: alloc::string::String
+pub dmn_lite_types::AnalysisFinding::kind: dmn_lite_types::FindingKind
+pub dmn_lite_types::AnalysisFinding::severity: dmn_lite_types::Severity
+pub dmn_lite_types::AnalysisFinding::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::AnalysisReport
+pub dmn_lite_types::AnalysisReport::cost_bound: dmn_lite_types::CostBound
+pub dmn_lite_types::AnalysisReport::findings: alloc::vec::Vec<dmn_lite_types::AnalysisFinding>
+pub struct dmn_lite_types::ArtifactHash(_)
+impl dmn_lite_types::ArtifactHash
+pub const dmn_lite_types::ArtifactHash::ZERO: Self
+pub fn dmn_lite_types::ArtifactHash::as_bytes(&self) -> &[u8; 32]
+pub fn dmn_lite_types::ArtifactHash::from_bytes([u8; 32]) -> Self
+pub struct dmn_lite_types::AssignmentAst
+pub dmn_lite_types::AssignmentAst::output: dmn_lite_types::SymbolAst
+pub dmn_lite_types::AssignmentAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::AssignmentAst::value: dmn_lite_types::LiteralAst
+pub struct dmn_lite_types::Catalogue
+pub dmn_lite_types::Catalogue::created_at: alloc::string::String
+pub dmn_lite_types::Catalogue::snapshot_id: dmn_lite_types::SnapshotId
+pub dmn_lite_types::Catalogue::snapshot_version: alloc::string::String
+impl dmn_lite_types::Catalogue
+pub fn dmn_lite_types::Catalogue::domains(&self) -> impl core::iter::traits::iterator::Iterator<Item = &dmn_lite_types::Domain>
+pub fn dmn_lite_types::Catalogue::new(dmn_lite_types::SnapshotId, alloc::string::String, alloc::string::String, alloc::vec::Vec<dmn_lite_types::Domain>) -> Self
+pub fn dmn_lite_types::Catalogue::resolve_domain(&self, &str) -> core::option::Option<&dmn_lite_types::Domain>
+pub fn dmn_lite_types::Catalogue::snapshot_id(&self) -> dmn_lite_types::SnapshotId
+pub struct dmn_lite_types::CompileContext
+pub dmn_lite_types::CompileContext::compiled_at: std::time::SystemTime
+pub dmn_lite_types::CompileContext::compiler_version: alloc::string::String
+pub dmn_lite_types::CompileContext::sem_os_snapshot_id: dmn_lite_types::SnapshotId
+pub struct dmn_lite_types::CompiledDecision
+pub dmn_lite_types::CompiledDecision::artifact_hash: dmn_lite_types::ArtifactHash
+pub dmn_lite_types::CompiledDecision::compile_context: dmn_lite_types::CompileContext
+pub dmn_lite_types::CompiledDecision::const_pool: alloc::vec::Vec<dmn_lite_types::TypedValue>
+pub dmn_lite_types::CompiledDecision::const_set_pool: alloc::vec::Vec<alloc::sync::Arc<[dmn_lite_types::TypedValue]>>
+pub dmn_lite_types::CompiledDecision::decision_id: dmn_lite_types::DecisionId
+pub dmn_lite_types::CompiledDecision::hit_policy: dmn_lite_types::HitPolicy
+pub dmn_lite_types::CompiledDecision::input_schema: alloc::vec::Vec<dmn_lite_types::FieldSchema>
+pub dmn_lite_types::CompiledDecision::instructions: alloc::vec::Vec<dmn_lite_types::Instr>
+pub dmn_lite_types::CompiledDecision::name: alloc::string::String
+pub dmn_lite_types::CompiledDecision::output_schema: alloc::vec::Vec<dmn_lite_types::FieldSchema>
+pub dmn_lite_types::CompiledDecision::range_pool: alloc::vec::Vec<dmn_lite_types::RangeEntry>
+pub dmn_lite_types::CompiledDecision::rule_map: alloc::vec::Vec<dmn_lite_types::RuleMapEntry>
+pub dmn_lite_types::CompiledDecision::source_spans: alloc::vec::Vec<dmn_lite_types::SourceSpan>
+pub dmn_lite_types::CompiledDecision::typed_ir: dmn_lite_types::TypedDecision
+pub struct dmn_lite_types::ConstId(pub u32)
+pub struct dmn_lite_types::ConstSetId(pub u32)
+pub struct dmn_lite_types::CostBound
+pub dmn_lite_types::CostBound::exact: bool
+pub dmn_lite_types::CostBound::total_predicates: usize
+pub struct dmn_lite_types::DecisionAst
+pub dmn_lite_types::DecisionAst::decision_id: core::option::Option<dmn_lite_types::StringLitAst>
+pub dmn_lite_types::DecisionAst::hit_policy: dmn_lite_types::HitPolicyAst
+pub dmn_lite_types::DecisionAst::inputs: alloc::vec::Vec<dmn_lite_types::InputDeclAst>
+pub dmn_lite_types::DecisionAst::name: dmn_lite_types::SymbolAst
+pub dmn_lite_types::DecisionAst::outputs: alloc::vec::Vec<dmn_lite_types::OutputDeclAst>
+pub dmn_lite_types::DecisionAst::rules: alloc::vec::Vec<dmn_lite_types::RuleAst>
+pub dmn_lite_types::DecisionAst::span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::DecisionId(pub alloc::string::String)
+impl core::fmt::Display for dmn_lite_types::DecisionId
+pub fn dmn_lite_types::DecisionId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::Domain
+pub dmn_lite_types::Domain::description: alloc::string::String
+pub dmn_lite_types::Domain::domain_id: dmn_lite_types::DomainId
+pub dmn_lite_types::Domain::name: alloc::string::String
+impl dmn_lite_types::Domain
+pub fn dmn_lite_types::Domain::has_value(&self, &str) -> bool
+pub fn dmn_lite_types::Domain::new(dmn_lite_types::DomainId, alloc::string::String, alloc::string::String, alloc::vec::Vec<dmn_lite_types::DomainValue>) -> Self
+pub fn dmn_lite_types::Domain::resolve_value(&self, &str) -> core::option::Option<dmn_lite_types::ValueId>
+pub fn dmn_lite_types::Domain::value_count(&self) -> usize
+pub fn dmn_lite_types::Domain::values(&self) -> impl core::iter::traits::iterator::Iterator<Item = &dmn_lite_types::DomainValue>
+pub struct dmn_lite_types::DomainId(pub uuid::Uuid)
+impl core::fmt::Display for dmn_lite_types::DomainId
+pub fn dmn_lite_types::DomainId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::DomainValue
+pub dmn_lite_types::DomainValue::symbol: alloc::string::String
+pub dmn_lite_types::DomainValue::value_id: dmn_lite_types::ValueId
+pub struct dmn_lite_types::EntityRef
+pub dmn_lite_types::EntityRef::domain_id: dmn_lite_types::DomainId
+pub dmn_lite_types::EntityRef::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::EntityRef::value_id: dmn_lite_types::ValueId
+pub struct dmn_lite_types::EvaluationTrace
+pub dmn_lite_types::EvaluationTrace::outcome: dmn_lite_types::TraceOutcome
+pub dmn_lite_types::EvaluationTrace::rules: alloc::vec::Vec<dmn_lite_types::RuleTrace>
+pub struct dmn_lite_types::FieldId(pub usize)
+impl core::fmt::Display for dmn_lite_types::FieldId
+pub fn dmn_lite_types::FieldId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::FieldSchema
+pub dmn_lite_types::FieldSchema::field_id: dmn_lite_types::FieldId
+pub dmn_lite_types::FieldSchema::field_type: dmn_lite_types::ResolvedType
+pub dmn_lite_types::FieldSchema::name: alloc::string::String
+pub dmn_lite_types::FieldSchema::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::GapSummary
+pub dmn_lite_types::GapSummary::approximate_count: core::option::Option<usize>
+pub dmn_lite_types::GapSummary::examples: alloc::vec::Vec<dmn_lite_types::UncoveredInputExample>
+pub struct dmn_lite_types::InputDeclAst
+pub dmn_lite_types::InputDeclAst::domain_ref: dmn_lite_types::SymbolAst
+pub dmn_lite_types::InputDeclAst::name: dmn_lite_types::SymbolAst
+pub dmn_lite_types::InputDeclAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::InputDeclAst::type_ref: dmn_lite_types::TypeRefAst
+pub struct dmn_lite_types::NumberLitAst
+pub dmn_lite_types::NumberLitAst::kind: dmn_lite_types::NumberKind
+pub dmn_lite_types::NumberLitAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::NumberLitAst::text: alloc::string::String
+pub struct dmn_lite_types::OutputDeclAst
+pub dmn_lite_types::OutputDeclAst::domain_ref: dmn_lite_types::SymbolAst
+pub dmn_lite_types::OutputDeclAst::name: dmn_lite_types::SymbolAst
+pub dmn_lite_types::OutputDeclAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::OutputDeclAst::type_ref: dmn_lite_types::TypeRefAst
+pub struct dmn_lite_types::OutputFieldId(pub u32)
+pub struct dmn_lite_types::OverlapSummary
+pub dmn_lite_types::OverlapSummary::per_field: alloc::vec::Vec<dmn_lite_types::FieldOverlap>
+pub struct dmn_lite_types::PredicateTrace
+pub dmn_lite_types::PredicateTrace::description: alloc::string::String
+pub dmn_lite_types::PredicateTrace::result: bool
+pub dmn_lite_types::PredicateTrace::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::RangeEntry
+pub dmn_lite_types::RangeEntry::lower: core::option::Option<dmn_lite_types::TypedValue>
+pub dmn_lite_types::RangeEntry::lower_inclusive: bool
+pub dmn_lite_types::RangeEntry::upper: core::option::Option<dmn_lite_types::TypedValue>
+pub dmn_lite_types::RangeEntry::upper_inclusive: bool
+pub struct dmn_lite_types::RangeId(pub u32)
+pub struct dmn_lite_types::RuleAst
+pub dmn_lite_types::RuleAst::id: dmn_lite_types::SymbolAst
+pub dmn_lite_types::RuleAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::RuleAst::then: alloc::vec::Vec<dmn_lite_types::AssignmentAst>
+pub dmn_lite_types::RuleAst::when: dmn_lite_types::WhenAst
+pub struct dmn_lite_types::RuleId(pub usize)
+impl core::fmt::Display for dmn_lite_types::RuleId
+pub fn dmn_lite_types::RuleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::RuleMapEntry
+pub dmn_lite_types::RuleMapEntry::entry_addr: u32
+pub dmn_lite_types::RuleMapEntry::rule_id: dmn_lite_types::RuleId
+pub dmn_lite_types::RuleMapEntry::rule_name: alloc::string::String
+pub dmn_lite_types::RuleMapEntry::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::RuleTrace
+pub dmn_lite_types::RuleTrace::matched: bool
+pub dmn_lite_types::RuleTrace::predicates: alloc::vec::Vec<dmn_lite_types::PredicateTrace>
+pub dmn_lite_types::RuleTrace::rule_id: dmn_lite_types::RuleId
+pub dmn_lite_types::RuleTrace::rule_name: alloc::string::String
+pub dmn_lite_types::RuleTrace::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::SchemaHash(pub u64)
+pub struct dmn_lite_types::SnapshotId(pub uuid::Uuid)
+impl core::fmt::Display for dmn_lite_types::SnapshotId
+pub fn dmn_lite_types::SnapshotId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::Source
+pub dmn_lite_types::Source::decisions: alloc::vec::Vec<dmn_lite_types::DecisionAst>
+pub dmn_lite_types::Source::span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::SourceSpan
+pub dmn_lite_types::SourceSpan::end: u32
+pub dmn_lite_types::SourceSpan::start: u32
+impl dmn_lite_types::SourceSpan
+pub fn dmn_lite_types::SourceSpan::is_empty(self) -> bool
+pub fn dmn_lite_types::SourceSpan::len(self) -> u32
+pub fn dmn_lite_types::SourceSpan::merge(self, dmn_lite_types::SourceSpan) -> Self
+pub fn dmn_lite_types::SourceSpan::new(u32, u32) -> Self
+impl core::fmt::Display for dmn_lite_types::SourceSpan
+pub fn dmn_lite_types::SourceSpan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::StringLitAst
+pub dmn_lite_types::StringLitAst::span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::StringLitAst::value: alloc::string::String
+pub struct dmn_lite_types::SymbolAst
+pub dmn_lite_types::SymbolAst::name: alloc::string::String
+pub dmn_lite_types::SymbolAst::span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::TypedAssignment
+pub dmn_lite_types::TypedAssignment::output_field: dmn_lite_types::FieldId
+pub dmn_lite_types::TypedAssignment::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedAssignment::value: dmn_lite_types::TypedValue
+pub struct dmn_lite_types::TypedDecision
+pub dmn_lite_types::TypedDecision::decision_id: dmn_lite_types::DecisionId
+pub dmn_lite_types::TypedDecision::hit_policy: dmn_lite_types::HitPolicy
+pub dmn_lite_types::TypedDecision::input_schema: alloc::vec::Vec<dmn_lite_types::FieldSchema>
+pub dmn_lite_types::TypedDecision::name: alloc::string::String
+pub dmn_lite_types::TypedDecision::output_schema: alloc::vec::Vec<dmn_lite_types::FieldSchema>
+pub dmn_lite_types::TypedDecision::resolved_entities: alloc::vec::Vec<dmn_lite_types::EntityRef>
+pub dmn_lite_types::TypedDecision::rules: alloc::vec::Vec<dmn_lite_types::TypedRule>
+pub dmn_lite_types::TypedDecision::source_span: dmn_lite_types::SourceSpan
+pub struct dmn_lite_types::TypedInputContext
+pub dmn_lite_types::TypedInputContext::schema_hash: dmn_lite_types::SchemaHash
+impl dmn_lite_types::TypedInputContext
+pub fn dmn_lite_types::TypedInputContext::from_slots(&[dmn_lite_types::FieldSchema], alloc::vec::Vec<core::option::Option<dmn_lite_types::TypedValue>>) -> core::result::Result<Self, dmn_lite_types::InputContextError>
+pub fn dmn_lite_types::TypedInputContext::get(&self, dmn_lite_types::FieldId) -> core::option::Option<&dmn_lite_types::TypedValue>
+pub fn dmn_lite_types::TypedInputContext::is_empty(&self) -> bool
+pub fn dmn_lite_types::TypedInputContext::is_missing(&self, dmn_lite_types::FieldId) -> bool
+pub fn dmn_lite_types::TypedInputContext::len(&self) -> usize
+pub struct dmn_lite_types::TypedInputContextBuilder
+impl dmn_lite_types::TypedInputContextBuilder
+pub fn dmn_lite_types::TypedInputContextBuilder::build(self) -> dmn_lite_types::TypedInputContext
+pub fn dmn_lite_types::TypedInputContextBuilder::new(&[dmn_lite_types::FieldSchema]) -> Self
+pub fn dmn_lite_types::TypedInputContextBuilder::set(&mut self, dmn_lite_types::FieldId, dmn_lite_types::TypedValue) -> &mut Self
+pub fn dmn_lite_types::TypedInputContextBuilder::set_by_name(&mut self, &str, dmn_lite_types::TypedValue) -> core::result::Result<&mut Self, dmn_lite_types::InputContextError>
+pub fn dmn_lite_types::TypedInputContextBuilder::set_null(&mut self, dmn_lite_types::FieldId) -> &mut Self
+pub struct dmn_lite_types::TypedOutputContext
+pub dmn_lite_types::TypedOutputContext::schema_hash: dmn_lite_types::SchemaHash
+impl dmn_lite_types::TypedOutputContext
+pub fn dmn_lite_types::TypedOutputContext::from_slots(&[dmn_lite_types::FieldSchema], alloc::vec::Vec<dmn_lite_types::TypedValue>) -> Self
+pub fn dmn_lite_types::TypedOutputContext::get(&self, dmn_lite_types::FieldId) -> &dmn_lite_types::TypedValue
+pub fn dmn_lite_types::TypedOutputContext::get_by_name<'a>(&'a self, &[dmn_lite_types::FieldSchema], &str) -> core::option::Option<&'a dmn_lite_types::TypedValue>
+pub fn dmn_lite_types::TypedOutputContext::is_empty(&self) -> bool
+pub fn dmn_lite_types::TypedOutputContext::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &dmn_lite_types::TypedValue>
+pub fn dmn_lite_types::TypedOutputContext::len(&self) -> usize
+pub struct dmn_lite_types::TypedRule
+pub dmn_lite_types::TypedRule::rule_id: dmn_lite_types::RuleId
+pub dmn_lite_types::TypedRule::rule_name: alloc::string::String
+pub dmn_lite_types::TypedRule::source_span: dmn_lite_types::SourceSpan
+pub dmn_lite_types::TypedRule::then: alloc::vec::Vec<dmn_lite_types::TypedAssignment>
+pub dmn_lite_types::TypedRule::when: dmn_lite_types::TypedWhen
+pub struct dmn_lite_types::UncoveredInputExample
+pub dmn_lite_types::UncoveredInputExample::field_values: alloc::vec::Vec<dmn_lite_types::TypedValue>
+pub struct dmn_lite_types::ValueId(pub uuid::Uuid)
+impl core::fmt::Display for dmn_lite_types::ValueId
+pub fn dmn_lite_types::ValueId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct dmn_lite_types::VerifiedDecision(_)
+impl dmn_lite_types::VerifiedDecision
+pub fn dmn_lite_types::VerifiedDecision::as_compiled(&self) -> &dmn_lite_types::CompiledDecision
+pub fn dmn_lite_types::compute_schema_hash(&[dmn_lite_types::FieldSchema]) -> dmn_lite_types::SchemaHash
+pub fn dmn_lite_types::verify(dmn_lite_types::CompiledDecision) -> core::result::Result<dmn_lite_types::VerifiedDecision, dmn_lite_types::VerifierError>

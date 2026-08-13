@@ -1,0 +1,13 @@
+# package: dmn-lite-analysis
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-analysis -sss
+
+pub mod dmn_lite_analysis
+pub struct dmn_lite_analysis::AnalysisConfig
+pub dmn_lite_analysis::AnalysisConfig::cost_ceiling: usize
+pub dmn_lite_analysis::AnalysisConfig::emit_info: bool
+pub dmn_lite_analysis::AnalysisConfig::max_gap_examples: usize
+impl core::default::Default for dmn_lite_analysis::AnalysisConfig
+pub fn dmn_lite_analysis::AnalysisConfig::default() -> Self
+pub fn dmn_lite_analysis::analyse(&dmn_lite_types::compiled::VerifiedDecision, &dmn_lite_types::catalogue::Catalogue) -> dmn_lite_types::analysis::AnalysisReport
+pub fn dmn_lite_analysis::analyse_with_config(&dmn_lite_types::compiled::VerifiedDecision, &dmn_lite_types::catalogue::Catalogue, &dmn_lite_analysis::AnalysisConfig) -> dmn_lite_types::analysis::AnalysisReport

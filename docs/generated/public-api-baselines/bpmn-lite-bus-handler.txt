@@ -1,0 +1,32 @@
+# package: bpmn-lite-bus-handler
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-bus-handler -sss
+
+pub mod bpmn_lite_bus_handler
+pub enum bpmn_lite_bus_handler::ProcessAdvancerError
+pub bpmn_lite_bus_handler::ProcessAdvancerError::Internal(alloc::string::String)
+pub bpmn_lite_bus_handler::ProcessAdvancerError::Malformed(alloc::string::String)
+pub bpmn_lite_bus_handler::ProcessAdvancerError::UnknownExecution(uuid::Uuid)
+impl core::convert::From<bpmn_lite_bus_handler::ProcessAdvancerError> for dsl_bus_server::server::BusServerError
+pub fn dsl_bus_server::server::BusServerError::from(bpmn_lite_bus_handler::ProcessAdvancerError) -> Self
+pub struct bpmn_lite_bus_handler::BpmnLiteBusHandler
+impl bpmn_lite_bus_handler::BpmnLiteBusHandler
+pub fn bpmn_lite_bus_handler::BpmnLiteBusHandler::from_arc(alloc::sync::Arc<dyn bpmn_lite_bus_handler::ProcessAdvancer>) -> Self
+pub fn bpmn_lite_bus_handler::BpmnLiteBusHandler::new<A: bpmn_lite_bus_handler::ProcessAdvancer>(A) -> Self
+pub fn bpmn_lite_bus_handler::BpmnLiteBusHandler::new_with_engine<A: bpmn_lite_bus_handler::ProcessAdvancer>(A, alloc::sync::Arc<bpmn_lite_engine::engine::BpmnLiteEngine>, sqlx_postgres::PgPool) -> Self
+impl dsl_bus_server::services::InvocationDispatcher for bpmn_lite_bus_handler::BpmnLiteBusHandler
+pub fn bpmn_lite_bus_handler::BpmnLiteBusHandler::dispatch<'life0, 'async_trait>(&'life0 self, dsl_bus_server::services::InvocationContext, alloc::vec::Vec<dsl_bus_protocol::v1::ResolvedBinding>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<dsl_bus_server::services::InvocationOutcome, dsl_bus_server::server::BusServerError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl dsl_bus_server::services::ResultDispatcher for bpmn_lite_bus_handler::BpmnLiteBusHandler
+pub fn bpmn_lite_bus_handler::BpmnLiteBusHandler::dispatch<'life0, 'async_trait>(&'life0 self, dsl_bus_server::services::ResultContext, dsl_bus_protocol::v1::ExecutionOutcome) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), dsl_bus_server::server::BusServerError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct bpmn_lite_bus_handler::ProcessAdvanceInput
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::audit_reference: alloc::string::String
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::bindings: alloc::vec::Vec<dsl_bus_protocol::v1::ResolvedBinding>
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::execution_id: uuid::Uuid
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::idempotency_key: uuid::Uuid
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::outcome_detail: alloc::string::String
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::outcome_kind: dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::source_domain: alloc::string::String
+pub bpmn_lite_bus_handler::ProcessAdvanceInput::tenant_id: alloc::string::String
+pub const bpmn_lite_bus_handler::HANDLED_VERBS: &[&str]
+pub trait bpmn_lite_bus_handler::ProcessAdvancer: core::marker::Send + core::marker::Sync + 'static
+pub fn bpmn_lite_bus_handler::ProcessAdvancer::advance<'life0, 'async_trait>(&'life0 self, bpmn_lite_bus_handler::ProcessAdvanceInput) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), bpmn_lite_bus_handler::ProcessAdvancerError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait

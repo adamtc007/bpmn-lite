@@ -1,0 +1,10 @@
+# package: dmn-lite-engine
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-engine -sss
+
+pub mod dmn_lite_engine
+pub struct dmn_lite_engine::EvaluationOutput
+pub dmn_lite_engine::EvaluationOutput::output: dmn_lite_types::values::TypedOutputContext
+pub dmn_lite_engine::EvaluationOutput::trace: dmn_lite_types::trace::EvaluationTrace
+pub fn dmn_lite_engine::evaluate(&dmn_lite_types::compiled::VerifiedDecision, &dmn_lite_types::values::TypedInputContext, &str) -> core::result::Result<dmn_lite_engine::EvaluationOutput, dmn_lite_types::errors::EvalError>
+pub fn dmn_lite_engine::reference_evaluate(&dmn_lite_types::ir::TypedDecision, &dmn_lite_types::values::TypedInputContext, &str) -> core::result::Result<dmn_lite_engine::EvaluationOutput, dmn_lite_types::errors::EvalError>

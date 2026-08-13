@@ -1,0 +1,77 @@
+# package: bpmn-lite-ffi-grpc
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-ffi-grpc -sss
+
+pub mod bpmn_lite_ffi_grpc
+pub mod bpmn_lite_ffi_grpc::proto
+pub mod bpmn_lite_ffi_grpc::proto::ffi_bridge_client
+pub struct bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>
+impl bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<tonic::transport::channel::Channel>
+pub async fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::invoke(&mut self, impl tonic::request::IntoRequest<bpmn_lite_ffi_grpc::proto::FfiBridgeRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_ffi_grpc::proto::FfiBridgeResponse>, tonic::status::Status>
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::max_encoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::new(T) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::with_interceptor<F>(T, F) -> bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_client::FfiBridgeClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod bpmn_lite_ffi_grpc::proto::ffi_bridge_server
+pub struct bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>
+impl<T> bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::new(T) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T> where T: bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridge, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::Error = core::convert::Infallible
+pub type bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>
+pub const bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridgeServer<T>::NAME: &'static str
+pub const bpmn_lite_ffi_grpc::proto::ffi_bridge_server::SERVICE_NAME: &str
+pub trait bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridge: core::marker::Send + core::marker::Sync + 'static
+pub fn bpmn_lite_ffi_grpc::proto::ffi_bridge_server::FfiBridge::invoke<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_ffi_grpc::proto::FfiBridgeRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_ffi_grpc::proto::FfiBridgeResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct bpmn_lite_ffi_grpc::proto::FfiBridgeRequest
+pub bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::inputs_json: alloc::vec::Vec<u8>
+pub bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::invocation_id: alloc::string::String
+impl core::default::Default for bpmn_lite_ffi_grpc::proto::FfiBridgeRequest
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_ffi_grpc::proto::FfiBridgeRequest
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_ffi_grpc::proto::FfiBridgeRequest
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::clear(&mut self)
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_ffi_grpc::proto::FfiBridgeResponse
+pub bpmn_lite_ffi_grpc::proto::FfiBridgeResponse::outputs_json: alloc::vec::Vec<u8>
+impl core::default::Default for bpmn_lite_ffi_grpc::proto::FfiBridgeResponse
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_ffi_grpc::proto::FfiBridgeResponse
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_ffi_grpc::proto::FfiBridgeResponse
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeResponse::clear(&mut self)
+pub fn bpmn_lite_ffi_grpc::proto::FfiBridgeResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_ffi_grpc::GrpcFfiOwner
+impl bpmn_lite_ffi_grpc::GrpcFfiOwner
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::new() -> Self
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::register_template(&self, alloc::string::String, u64, alloc::vec::Vec<ffi_types::schema::FieldSchema>, alloc::vec::Vec<ffi_types::schema::FieldSchema>, ffi_types::idempotency::Idempotency, alloc::string::String, alloc::string::String) -> anyhow::Result<ffi_types::template::FfiTemplate>
+impl core::default::Default for bpmn_lite_ffi_grpc::GrpcFfiOwner
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::default() -> Self
+impl ffi_types::owner::FfiExecutionOwner for bpmn_lite_ffi_grpc::GrpcFfiOwner
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::invoke<'life0, 'async_trait>(&'life0 self, ffi_types::wire::FfiCall) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<ffi_types::wire::FfiResult>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::owner_type(&self) -> &str
+pub fn bpmn_lite_ffi_grpc::GrpcFfiOwner::supports_template(&self, &[u8; 32]) -> bool
+pub struct bpmn_lite_ffi_grpc::GrpcTemplateConfig
+pub bpmn_lite_ffi_grpc::GrpcTemplateConfig::endpoint: alloc::string::String
+pub bpmn_lite_ffi_grpc::GrpcTemplateConfig::timeout: core::time::Duration
+impl bpmn_lite_ffi_grpc::GrpcTemplateConfig
+pub fn bpmn_lite_ffi_grpc::GrpcTemplateConfig::from_owner_metadata(&[u8]) -> anyhow::Result<Self>
+pub fn bpmn_lite_ffi_grpc::GrpcTemplateConfig::to_owner_metadata(&str, u64) -> anyhow::Result<alloc::vec::Vec<u8>>

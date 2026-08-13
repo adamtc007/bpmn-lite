@@ -1,0 +1,213 @@
+# package: bpmn-lite-authoring
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-authoring -sss
+
+pub mod bpmn_lite_authoring
+pub enum bpmn_lite_authoring::FixAction
+pub bpmn_lite_authoring::FixAction::AddDecisionStub
+pub bpmn_lite_authoring::FixAction::AddDecisionStub::decision: alloc::string::String
+pub bpmn_lite_authoring::FixAction::AddDecisionStub::domain: alloc::string::String
+pub bpmn_lite_authoring::FixAction::AddVerbStub
+pub bpmn_lite_authoring::FixAction::AddVerbStub::domain: alloc::string::String
+pub bpmn_lite_authoring::FixAction::AddVerbStub::verb: alloc::string::String
+pub bpmn_lite_authoring::FixAction::ImportManifest
+pub bpmn_lite_authoring::FixAction::ImportManifest::domain: alloc::string::String
+pub bpmn_lite_authoring::FixAction::InjectJoinNode
+pub bpmn_lite_authoring::FixAction::InjectJoinNode::join_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::InjectJoinNode::next_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::InjectJoinNode::predecessor_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::InjectJoinNode::split_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::RemoveUnusedNode
+pub bpmn_lite_authoring::FixAction::RemoveUnusedNode::node_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::WireDeadEnd
+pub bpmn_lite_authoring::FixAction::WireDeadEnd::node_id: alloc::string::String
+pub bpmn_lite_authoring::FixAction::WireDeadEnd::target_id: alloc::string::String
+pub enum bpmn_lite_authoring::FlagOp
+pub bpmn_lite_authoring::FlagOp::Eq
+pub bpmn_lite_authoring::FlagOp::Gt
+pub bpmn_lite_authoring::FlagOp::Lt
+pub bpmn_lite_authoring::FlagOp::Neq
+pub enum bpmn_lite_authoring::FlagValue
+pub bpmn_lite_authoring::FlagValue::Bool(bool)
+pub bpmn_lite_authoring::FlagValue::I64(i64)
+pub enum bpmn_lite_authoring::NodeDto
+pub bpmn_lite_authoring::NodeDto::BoundaryError
+pub bpmn_lite_authoring::NodeDto::BoundaryError::error_code: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::NodeDto::BoundaryError::host: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::BoundaryError::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::cycle_max: core::option::Option<u32>
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::cycle_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::deadline_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::duration_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::host: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::BoundaryTimer::interrupting: bool
+pub bpmn_lite_authoring::NodeDto::DataObject
+pub bpmn_lite_authoring::NodeDto::DataObject::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::DataObject::name: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::DataObject::role: bpmn_lite_types::ffi_bindings::DataObjectRole
+pub bpmn_lite_authoring::NodeDto::DataObject::type_decl: bpmn_lite_types::ffi_bindings::DataObjectType
+pub bpmn_lite_authoring::NodeDto::End
+pub bpmn_lite_authoring::NodeDto::End::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::End::terminate: bool
+pub bpmn_lite_authoring::NodeDto::ExclusiveGateway
+pub bpmn_lite_authoring::NodeDto::ExclusiveGateway::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::HumanWait
+pub bpmn_lite_authoring::NodeDto::HumanWait::corr_key_source: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::HumanWait::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::HumanWait::task_kind: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::InclusiveGateway
+pub bpmn_lite_authoring::NodeDto::InclusiveGateway::direction: bpmn_lite_compiler::ir::GatewayDirection
+pub bpmn_lite_authoring::NodeDto::InclusiveGateway::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::InclusiveGateway::join: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::NodeDto::MessageWait
+pub bpmn_lite_authoring::NodeDto::MessageWait::corr_key_source: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::MessageWait::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::MessageWait::name: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::MultiInstance
+pub bpmn_lite_authoring::NodeDto::MultiInstance::bpmn_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::NodeDto::MultiInstance::collection_flag: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::MultiInstance::declared_max: u32
+pub bpmn_lite_authoring::NodeDto::MultiInstance::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::MultiInstance::inputs: alloc::vec::Vec<bpmn_lite_compiler::ir::FfiInputBinding>
+pub bpmn_lite_authoring::NodeDto::MultiInstance::task_type: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::ParallelGateway
+pub bpmn_lite_authoring::NodeDto::ParallelGateway::direction: bpmn_lite_compiler::ir::GatewayDirection
+pub bpmn_lite_authoring::NodeDto::ParallelGateway::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::ParallelGateway::join: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::NodeDto::RaceWait
+pub bpmn_lite_authoring::NodeDto::RaceWait::arms: alloc::vec::Vec<bpmn_lite_authoring::RaceArm>
+pub bpmn_lite_authoring::NodeDto::RaceWait::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::ServiceTask
+pub bpmn_lite_authoring::NodeDto::ServiceTask::bpmn_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::NodeDto::ServiceTask::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::ServiceTask::task_type: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::Start
+pub bpmn_lite_authoring::NodeDto::Start::id: alloc::string::String
+pub bpmn_lite_authoring::NodeDto::TimerWait
+pub bpmn_lite_authoring::NodeDto::TimerWait::cycle_max: core::option::Option<u32>
+pub bpmn_lite_authoring::NodeDto::TimerWait::cycle_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::TimerWait::deadline_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::TimerWait::duration_ms: core::option::Option<u64>
+pub bpmn_lite_authoring::NodeDto::TimerWait::id: alloc::string::String
+impl bpmn_lite_authoring::NodeDto
+pub fn bpmn_lite_authoring::NodeDto::id(&self) -> &str
+pub enum bpmn_lite_authoring::RaceArmKind
+pub bpmn_lite_authoring::RaceArmKind::Message
+pub bpmn_lite_authoring::RaceArmKind::Message::corr_key_source: alloc::string::String
+pub bpmn_lite_authoring::RaceArmKind::Message::name: alloc::string::String
+pub bpmn_lite_authoring::RaceArmKind::Timer
+pub bpmn_lite_authoring::RaceArmKind::Timer::duration_ms: u64
+pub bpmn_lite_authoring::RaceArmKind::Timer::interrupting: bool
+pub enum bpmn_lite_authoring::SlotKind
+pub bpmn_lite_authoring::SlotKind::Collection
+pub bpmn_lite_authoring::SlotKind::Collection::element_shape: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_authoring::SlotKind::ElementScoped
+pub bpmn_lite_authoring::SlotKind::ElementScoped::collection_slot: alloc::string::String
+pub bpmn_lite_authoring::SlotKind::ElementScoped::field: alloc::string::String
+pub bpmn_lite_authoring::SlotKind::Scalar
+pub enum bpmn_lite_authoring::SourceFormat
+pub bpmn_lite_authoring::SourceFormat::Agent
+pub bpmn_lite_authoring::SourceFormat::BpmnImport
+pub bpmn_lite_authoring::SourceFormat::Graph
+pub bpmn_lite_authoring::SourceFormat::Yaml
+pub enum bpmn_lite_authoring::TemplateState
+pub bpmn_lite_authoring::TemplateState::Draft
+pub bpmn_lite_authoring::TemplateState::Published
+pub bpmn_lite_authoring::TemplateState::Retired
+pub struct bpmn_lite_authoring::EdgeDto
+pub bpmn_lite_authoring::EdgeDto::condition: core::option::Option<bpmn_lite_authoring::FlagCondition>
+pub bpmn_lite_authoring::EdgeDto::from: alloc::string::String
+pub bpmn_lite_authoring::EdgeDto::is_default: bool
+pub bpmn_lite_authoring::EdgeDto::on_error: core::option::Option<bpmn_lite_authoring::ErrorEdge>
+pub bpmn_lite_authoring::EdgeDto::to: alloc::string::String
+pub struct bpmn_lite_authoring::ErrorEdge
+pub bpmn_lite_authoring::ErrorEdge::error_code: alloc::string::String
+pub bpmn_lite_authoring::ErrorEdge::retries: u32
+pub struct bpmn_lite_authoring::FlagCondition
+pub bpmn_lite_authoring::FlagCondition::flag: alloc::string::String
+pub bpmn_lite_authoring::FlagCondition::op: bpmn_lite_authoring::FlagOp
+pub bpmn_lite_authoring::FlagCondition::value: bpmn_lite_authoring::FlagValue
+pub struct bpmn_lite_authoring::MemoryTemplateStore
+impl bpmn_lite_authoring::MemoryTemplateStore
+pub fn bpmn_lite_authoring::MemoryTemplateStore::new() -> Self
+impl bpmn_lite_authoring::TemplateStore for bpmn_lite_authoring::MemoryTemplateStore
+pub fn bpmn_lite_authoring::MemoryTemplateStore::list<'life0, 'life1, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, core::option::Option<bpmn_lite_authoring::TemplateState>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<alloc::vec::Vec<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::load<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::load_latest_published<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::save<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_authoring::WorkflowTemplate) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::set_state<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32, bpmn_lite_authoring::TemplateState) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::default::Default for bpmn_lite_authoring::MemoryTemplateStore
+pub fn bpmn_lite_authoring::MemoryTemplateStore::default() -> Self
+pub struct bpmn_lite_authoring::ParameterManifest
+pub bpmn_lite_authoring::ParameterManifest::slots: alloc::vec::Vec<bpmn_lite_authoring::ParameterSlot>
+impl bpmn_lite_authoring::ParameterManifest
+pub fn bpmn_lite_authoring::ParameterManifest::suppliable(&self) -> impl core::iter::traits::iterator::Iterator<Item = &bpmn_lite_authoring::ParameterSlot>
+pub struct bpmn_lite_authoring::ParameterSlot
+pub bpmn_lite_authoring::ParameterSlot::kind: bpmn_lite_authoring::SlotKind
+pub bpmn_lite_authoring::ParameterSlot::name: alloc::string::String
+pub bpmn_lite_authoring::ParameterSlot::node_ids: alloc::vec::Vec<alloc::string::String>
+pub struct bpmn_lite_authoring::PublishOptions
+pub bpmn_lite_authoring::PublishOptions::contract_registry: core::option::Option<bpmn_lite_authoring::contracts::ContractRegistry>
+pub bpmn_lite_authoring::PublishOptions::generate_bpmn: bool
+pub bpmn_lite_authoring::PublishOptions::process_key: alloc::string::String
+pub bpmn_lite_authoring::PublishOptions::session_id: core::option::Option<uuid::Uuid>
+pub bpmn_lite_authoring::PublishOptions::source_format: bpmn_lite_authoring::SourceFormat
+pub bpmn_lite_authoring::PublishOptions::template_key: alloc::string::String
+pub bpmn_lite_authoring::PublishOptions::template_version: u32
+pub bpmn_lite_authoring::PublishOptions::verb_registry_hash: core::option::Option<alloc::string::String>
+pub struct bpmn_lite_authoring::PublishResult
+pub bpmn_lite_authoring::PublishResult::lint_diagnostics: alloc::vec::Vec<bpmn_lite_authoring::lints::LintDiagnostic>
+pub bpmn_lite_authoring::PublishResult::program: bpmn_lite_types::types::CompiledProgram
+pub bpmn_lite_authoring::PublishResult::template: bpmn_lite_authoring::WorkflowTemplate
+pub struct bpmn_lite_authoring::RaceArm
+pub bpmn_lite_authoring::RaceArm::arm_id: alloc::string::String
+pub bpmn_lite_authoring::RaceArm::kind: bpmn_lite_authoring::RaceArmKind
+pub struct bpmn_lite_authoring::TemplateMeta
+pub bpmn_lite_authoring::TemplateMeta::description: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::TemplateMeta::name: alloc::string::String
+pub bpmn_lite_authoring::TemplateMeta::version: core::option::Option<alloc::string::String>
+pub struct bpmn_lite_authoring::WorkflowGraphDto
+pub bpmn_lite_authoring::WorkflowGraphDto::default_guard_budget: core::option::Option<u32>
+pub bpmn_lite_authoring::WorkflowGraphDto::default_retry_policy: core::option::Option<bpmn_lite_compiler::ir::RetryPolicyDecl>
+pub bpmn_lite_authoring::WorkflowGraphDto::edges: alloc::vec::Vec<bpmn_lite_authoring::EdgeDto>
+pub bpmn_lite_authoring::WorkflowGraphDto::id: alloc::string::String
+pub bpmn_lite_authoring::WorkflowGraphDto::meta: core::option::Option<bpmn_lite_authoring::TemplateMeta>
+pub bpmn_lite_authoring::WorkflowGraphDto::nodes: alloc::vec::Vec<bpmn_lite_authoring::NodeDto>
+pub struct bpmn_lite_authoring::WorkflowTemplate
+pub bpmn_lite_authoring::WorkflowTemplate::bpmn_xml: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::WorkflowTemplate::bytecode_version: alloc::string::String
+pub bpmn_lite_authoring::WorkflowTemplate::created_at: i64
+pub bpmn_lite_authoring::WorkflowTemplate::dto_snapshot: bpmn_lite_authoring::WorkflowGraphDto
+pub bpmn_lite_authoring::WorkflowTemplate::parameter_manifest: bpmn_lite_authoring::ParameterManifest
+pub bpmn_lite_authoring::WorkflowTemplate::process_key: alloc::string::String
+pub bpmn_lite_authoring::WorkflowTemplate::published_at: core::option::Option<i64>
+pub bpmn_lite_authoring::WorkflowTemplate::session_id: core::option::Option<uuid::Uuid>
+pub bpmn_lite_authoring::WorkflowTemplate::source_format: bpmn_lite_authoring::SourceFormat
+pub bpmn_lite_authoring::WorkflowTemplate::state: bpmn_lite_authoring::TemplateState
+pub bpmn_lite_authoring::WorkflowTemplate::summary_md: core::option::Option<alloc::string::String>
+pub bpmn_lite_authoring::WorkflowTemplate::task_manifest: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_authoring::WorkflowTemplate::template_key: alloc::string::String
+pub bpmn_lite_authoring::WorkflowTemplate::template_version: u32
+pub bpmn_lite_authoring::WorkflowTemplate::verb_registry_hash: core::option::Option<alloc::string::String>
+pub trait bpmn_lite_authoring::TemplateStore: core::marker::Send + core::marker::Sync
+pub fn bpmn_lite_authoring::TemplateStore::list<'life0, 'life1, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, core::option::Option<bpmn_lite_authoring::TemplateState>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<alloc::vec::Vec<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::TemplateStore::load<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::TemplateStore::load_latest_published<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::TemplateStore::save<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_authoring::WorkflowTemplate) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::TemplateStore::set_state<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32, bpmn_lite_authoring::TemplateState) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl bpmn_lite_authoring::TemplateStore for bpmn_lite_authoring::MemoryTemplateStore
+pub fn bpmn_lite_authoring::MemoryTemplateStore::list<'life0, 'life1, 'async_trait>(&'life0 self, core::option::Option<&'life1 str>, core::option::Option<bpmn_lite_authoring::TemplateState>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<alloc::vec::Vec<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::load<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::load_latest_published<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<bpmn_lite_authoring::WorkflowTemplate>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::save<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_authoring::WorkflowTemplate) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn bpmn_lite_authoring::MemoryTemplateStore::set_state<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, u32, bpmn_lite_authoring::TemplateState) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub async fn bpmn_lite_authoring::compile_and_publish(&str, bpmn_lite_authoring::PublishOptions, &dyn bpmn_lite_authoring::TemplateStore, &dyn bpmn_lite_store::store::WorkflowStore) -> anyhow::Result<bpmn_lite_authoring::PublishResult>
+pub async fn bpmn_lite_authoring::compile_and_publish_from_dto(bpmn_lite_authoring::WorkflowGraphDto, bpmn_lite_authoring::PublishOptions, &dyn bpmn_lite_authoring::TemplateStore, &dyn bpmn_lite_store::store::WorkflowStore) -> anyhow::Result<bpmn_lite_authoring::PublishResult>
+pub fn bpmn_lite_authoring::compile_program_from_dto(&bpmn_lite_authoring::WorkflowGraphDto) -> anyhow::Result<bpmn_lite_types::types::CompiledProgram>
+pub fn bpmn_lite_authoring::dto_to_ir(&bpmn_lite_authoring::WorkflowGraphDto) -> anyhow::Result<bpmn_lite_compiler::ir::IRGraph>
+pub fn bpmn_lite_authoring::execute_autofix(&str, &bpmn_lite_authoring::FixAction, &std::path::Path) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn bpmn_lite_authoring::import_zeebe_bpmn(&str, &str, bool) -> anyhow::Result<bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan>
+pub fn bpmn_lite_authoring::ir_to_dto(&bpmn_lite_compiler::ir::IRGraph, &str) -> anyhow::Result<bpmn_lite_authoring::WorkflowGraphDto>
+pub fn bpmn_lite_authoring::parse_workflow_yaml(&str) -> anyhow::Result<bpmn_lite_authoring::WorkflowGraphDto>

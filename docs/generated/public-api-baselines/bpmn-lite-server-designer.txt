@@ -1,0 +1,12 @@
+# package: bpmn-lite-server-designer
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-server-designer -sss
+
+pub mod bpmn_lite_server_designer
+pub mod bpmn_lite_server_designer::rest
+pub struct bpmn_lite_server_designer::rest::DesignerState
+impl bpmn_lite_server_designer::rest::DesignerState
+pub fn bpmn_lite_server_designer::rest::DesignerState::assemble(alloc::sync::Arc<dyn bpmn_lite_store::store::WorkflowStore>, alloc::sync::Arc<dyn bpmn_lite_authoring::registry::TemplateStore>) -> core::result::Result<alloc::sync::Arc<Self>, anyhow::Error>
+pub fn bpmn_lite_server_designer::rest::DesignerState::try_new() -> core::result::Result<alloc::sync::Arc<Self>, anyhow::Error>
+pub async fn bpmn_lite_server_designer::rest::DesignerState::try_new_from_env() -> core::result::Result<alloc::sync::Arc<Self>, anyhow::Error>
+pub fn bpmn_lite_server_designer::rest::designer_router(alloc::sync::Arc<bpmn_lite_server_designer::rest::DesignerState>) -> axum::routing::Router

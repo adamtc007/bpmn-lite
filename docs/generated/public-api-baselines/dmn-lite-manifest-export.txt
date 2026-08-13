@@ -1,0 +1,18 @@
+# package: dmn-lite-manifest-export
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-manifest-export -sss
+
+pub mod dmn_lite_manifest_export
+pub struct dmn_lite_manifest_export::Allowlist
+pub dmn_lite_manifest_export::Allowlist::public_decisions: alloc::vec::Vec<alloc::string::String>
+pub dmn_lite_manifest_export::Allowlist::public_verbs: alloc::vec::Vec<alloc::string::String>
+pub struct dmn_lite_manifest_export::ExporterConfig
+pub dmn_lite_manifest_export::ExporterConfig::catalogue_version: alloc::string::String
+pub dmn_lite_manifest_export::ExporterConfig::domain: alloc::string::String
+pub dmn_lite_manifest_export::ExporterConfig::generated_at: alloc::string::String
+pub dmn_lite_manifest_export::ExporterConfig::imported_pins: alloc::vec::Vec<dsl_manifest::ExternalReferencePin>
+pub dmn_lite_manifest_export::ExporterConfig::manifest_version: alloc::string::String
+impl dmn_lite_manifest_export::ExporterConfig
+pub fn dmn_lite_manifest_export::ExporterConfig::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn dmn_lite_manifest_export::export_to_path(&std::path::Path, &std::path::Path, &std::path::Path, &str, &str) -> anyhow::Result<std::path::PathBuf>
+pub fn dmn_lite_manifest_export::export_to_yaml(&std::path::Path, &dmn_lite_manifest_export::Allowlist, &dmn_lite_manifest_export::ExporterConfig) -> anyhow::Result<alloc::string::String>

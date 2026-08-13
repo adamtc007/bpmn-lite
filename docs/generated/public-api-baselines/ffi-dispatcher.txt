@@ -1,0 +1,20 @@
+# package: ffi-dispatcher
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p ffi-dispatcher -sss
+
+pub mod ffi_dispatcher
+pub enum ffi_dispatcher::GapReason
+pub ffi_dispatcher::GapReason::NoOwnerRegistered
+pub ffi_dispatcher::GapReason::OwnerRejectsTemplate
+pub struct ffi_dispatcher::CoverageGap
+pub ffi_dispatcher::CoverageGap::owner_type: alloc::string::String
+pub ffi_dispatcher::CoverageGap::reason: ffi_dispatcher::GapReason
+pub ffi_dispatcher::CoverageGap::template_id: [u8; 32]
+pub struct ffi_dispatcher::FfiDispatcher
+impl ffi_dispatcher::FfiDispatcher
+pub async fn ffi_dispatcher::FfiDispatcher::dispatch(&self, ffi_types::wire::FfiCall) -> anyhow::Result<ffi_types::wire::FfiResult>
+pub async fn ffi_dispatcher::FfiDispatcher::idempotency_for(&self, &[u8; 32]) -> core::option::Option<ffi_types::idempotency::Idempotency>
+pub fn ffi_dispatcher::FfiDispatcher::new(alloc::sync::Arc<ffi_catalogue::catalogue::FfiCatalogue>) -> Self
+pub async fn ffi_dispatcher::FfiDispatcher::owner_type_for(&self, &[u8; 32]) -> alloc::string::String
+pub fn ffi_dispatcher::FfiDispatcher::register_owner(&mut self, alloc::sync::Arc<dyn ffi_types::owner::FfiExecutionOwner>) -> anyhow::Result<()>
+pub async fn ffi_dispatcher::FfiDispatcher::validate_coverage(&self) -> alloc::vec::Vec<ffi_dispatcher::CoverageGap>

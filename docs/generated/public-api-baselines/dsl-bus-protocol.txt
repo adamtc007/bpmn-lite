@@ -1,0 +1,606 @@
+# package: dsl-bus-protocol
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dsl-bus-protocol -sss
+
+pub mod dsl_bus_protocol
+pub mod dsl_bus_protocol::v1
+pub mod dsl_bus_protocol::v1::entity_query
+pub enum dsl_bus_protocol::v1::entity_query::LookupBy
+pub dsl_bus_protocol::v1::entity_query::LookupBy::NaturalKey(alloc::string::String)
+pub dsl_bus_protocol::v1::entity_query::LookupBy::Uuid(alloc::vec::Vec<u8>)
+impl dsl_bus_protocol::v1::entity_query::LookupBy
+pub fn dsl_bus_protocol::v1::entity_query::LookupBy::encode(&self, &mut impl bytes::buf::buf_mut::BufMut)
+pub fn dsl_bus_protocol::v1::entity_query::LookupBy::encoded_len(&self) -> usize
+pub fn dsl_bus_protocol::v1::entity_query::LookupBy::merge(&mut core::option::Option<dsl_bus_protocol::v1::entity_query::LookupBy>, u32, prost::encoding::wire_type::WireType, &mut impl bytes::buf::buf_impl::Buf, prost::encoding::DecodeContext) -> core::result::Result<(), prost::error::DecodeError>
+impl core::fmt::Debug for dsl_bus_protocol::v1::entity_query::LookupBy
+pub fn dsl_bus_protocol::v1::entity_query::LookupBy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod dsl_bus_protocol::v1::entity_service_client
+pub struct dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>
+impl dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<tonic::transport::channel::Channel>
+pub async fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::new(T) -> Self
+pub async fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::resolve(&mut self, impl tonic::request::IntoRequest<dsl_bus_protocol::v1::EntityResolutionRequest>) -> core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::EntityResolutionResult>, tonic::status::Status>
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::with_interceptor<F>(T, F) -> dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn dsl_bus_protocol::v1::entity_service_client::EntityServiceClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod dsl_bus_protocol::v1::entity_service_server
+pub struct dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>
+impl<T> dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T> where T: dsl_bus_protocol::v1::entity_service_server::EntityService, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::Error = core::convert::Infallible
+pub type dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>
+pub const dsl_bus_protocol::v1::entity_service_server::EntityServiceServer<T>::NAME: &'static str
+pub const dsl_bus_protocol::v1::entity_service_server::SERVICE_NAME: &str
+pub trait dsl_bus_protocol::v1::entity_service_server::EntityService: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_protocol::v1::entity_service_server::EntityService::resolve<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::EntityResolutionRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::EntityResolutionResult>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub mod dsl_bus_protocol::v1::invocation_service_client
+pub struct dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>
+impl dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<tonic::transport::channel::Channel>
+pub async fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::submit(&mut self, impl tonic::request::IntoRequest<dsl_bus_protocol::v1::InvocationRequest>) -> core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::SubmissionAck>, tonic::status::Status>
+pub async fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::validate(&mut self, impl tonic::request::IntoRequest<dsl_bus_protocol::v1::InvocationRequest>) -> core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::ValidationResult>, tonic::status::Status>
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::with_interceptor<F>(T, F) -> dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn dsl_bus_protocol::v1::invocation_service_client::InvocationServiceClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod dsl_bus_protocol::v1::invocation_service_server
+pub struct dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>
+impl<T> dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T> where T: dsl_bus_protocol::v1::invocation_service_server::InvocationService, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::Error = core::convert::Infallible
+pub type dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>
+pub const dsl_bus_protocol::v1::invocation_service_server::InvocationServiceServer<T>::NAME: &'static str
+pub const dsl_bus_protocol::v1::invocation_service_server::SERVICE_NAME: &str
+pub trait dsl_bus_protocol::v1::invocation_service_server::InvocationService: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationService::submit<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::InvocationRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::SubmissionAck>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn dsl_bus_protocol::v1::invocation_service_server::InvocationService::validate<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::InvocationRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::ValidationResult>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub mod dsl_bus_protocol::v1::result_service_client
+pub struct dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>
+impl dsl_bus_protocol::v1::result_service_client::ResultServiceClient<tonic::transport::channel::Channel>
+pub async fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::deliver_result(&mut self, impl tonic::request::IntoRequest<dsl_bus_protocol::v1::InvocationResult>) -> core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::ResultAck>, tonic::status::Status>
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::with_interceptor<F>(T, F) -> dsl_bus_protocol::v1::result_service_client::ResultServiceClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn dsl_bus_protocol::v1::result_service_client::ResultServiceClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod dsl_bus_protocol::v1::result_service_server
+pub struct dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>
+impl<T> dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T> where T: dsl_bus_protocol::v1::result_service_server::ResultService, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::Error = core::convert::Infallible
+pub type dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>
+pub fn dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>
+pub const dsl_bus_protocol::v1::result_service_server::ResultServiceServer<T>::NAME: &'static str
+pub const dsl_bus_protocol::v1::result_service_server::SERVICE_NAME: &str
+pub trait dsl_bus_protocol::v1::result_service_server::ResultService: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_protocol::v1::result_service_server::ResultService::deliver_result<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::InvocationResult>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::ResultAck>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub mod dsl_bus_protocol::v1::sem_os_service_client
+pub struct dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>
+impl dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<tonic::transport::channel::Channel>
+pub async fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::fetch_dag_packs(&mut self, impl tonic::request::IntoRequest<dsl_bus_protocol::v1::DagPackRequest>) -> core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::DagPackResponse>, tonic::status::Status>
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::with_interceptor<F>(T, F) -> dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn dsl_bus_protocol::v1::sem_os_service_client::SemOsServiceClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod dsl_bus_protocol::v1::sem_os_service_server
+pub struct dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>
+impl<T> dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::new(T) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T> where T: dsl_bus_protocol::v1::sem_os_service_server::SemOsService, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::Error = core::convert::Infallible
+pub type dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>
+pub const dsl_bus_protocol::v1::sem_os_service_server::SemOsServiceServer<T>::NAME: &'static str
+pub const dsl_bus_protocol::v1::sem_os_service_server::SERVICE_NAME: &str
+pub trait dsl_bus_protocol::v1::sem_os_service_server::SemOsService: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_protocol::v1::sem_os_service_server::SemOsService::fetch_dag_packs<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::DagPackRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::DagPackResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub mod dsl_bus_protocol::v1::typed_value
+pub enum dsl_bus_protocol::v1::typed_value::Value
+pub dsl_bus_protocol::v1::typed_value::Value::BlobValue(alloc::vec::Vec<u8>)
+pub dsl_bus_protocol::v1::typed_value::Value::BoolValue(bool)
+pub dsl_bus_protocol::v1::typed_value::Value::DoubleValue(f64)
+pub dsl_bus_protocol::v1::typed_value::Value::IntValue(i64)
+pub dsl_bus_protocol::v1::typed_value::Value::NullValue(bool)
+pub dsl_bus_protocol::v1::typed_value::Value::StringValue(alloc::string::String)
+pub dsl_bus_protocol::v1::typed_value::Value::UuidValue(dsl_bus_protocol::v1::Uuid)
+impl dsl_bus_protocol::v1::typed_value::Value
+pub fn dsl_bus_protocol::v1::typed_value::Value::encode(&self, &mut impl bytes::buf::buf_mut::BufMut)
+pub fn dsl_bus_protocol::v1::typed_value::Value::encoded_len(&self) -> usize
+pub fn dsl_bus_protocol::v1::typed_value::Value::merge(&mut core::option::Option<dsl_bus_protocol::v1::typed_value::Value>, u32, prost::encoding::wire_type::WireType, &mut impl bytes::buf::buf_impl::Buf, prost::encoding::DecodeContext) -> core::result::Result<(), prost::error::DecodeError>
+impl core::fmt::Debug for dsl_bus_protocol::v1::typed_value::Value
+pub fn dsl_bus_protocol::v1::typed_value::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod dsl_bus_protocol::v1::validation_issue
+pub enum dsl_bus_protocol::v1::validation_issue::Specific
+pub dsl_bus_protocol::v1::validation_issue::Specific::Authority(dsl_bus_protocol::v1::AuthorityDetail)
+pub dsl_bus_protocol::v1::validation_issue::Specific::FsmPrecondition(dsl_bus_protocol::v1::FsmPreconditionDetail)
+pub dsl_bus_protocol::v1::validation_issue::Specific::UnknownReference(dsl_bus_protocol::v1::UnknownReferenceDetail)
+impl dsl_bus_protocol::v1::validation_issue::Specific
+pub fn dsl_bus_protocol::v1::validation_issue::Specific::encode(&self, &mut impl bytes::buf::buf_mut::BufMut)
+pub fn dsl_bus_protocol::v1::validation_issue::Specific::encoded_len(&self) -> usize
+pub fn dsl_bus_protocol::v1::validation_issue::Specific::merge(&mut core::option::Option<dsl_bus_protocol::v1::validation_issue::Specific>, u32, prost::encoding::wire_type::WireType, &mut impl bytes::buf::buf_impl::Buf, prost::encoding::DecodeContext) -> core::result::Result<(), prost::error::DecodeError>
+impl core::fmt::Debug for dsl_bus_protocol::v1::validation_issue::Specific
+pub fn dsl_bus_protocol::v1::validation_issue::Specific::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[repr(i32)] pub enum dsl_bus_protocol::v1::DagPackOutcome
+pub dsl_bus_protocol::v1::DagPackOutcome::Available = 1
+pub dsl_bus_protocol::v1::DagPackOutcome::DagPackAuthorityDenied = 3
+pub dsl_bus_protocol::v1::DagPackOutcome::DagPackNotFound = 2
+pub dsl_bus_protocol::v1::DagPackOutcome::DagPackNotImplemented = 4
+pub dsl_bus_protocol::v1::DagPackOutcome::DagPackUnspecified = 0
+impl dsl_bus_protocol::v1::DagPackOutcome
+pub fn dsl_bus_protocol::v1::DagPackOutcome::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::DagPackOutcome::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::DagPackOutcome
+pub fn dsl_bus_protocol::v1::DagPackOutcome::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::DagPackOutcome>
+pub fn dsl_bus_protocol::v1::DagPackOutcome::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::DagPackOutcome> for i32
+pub fn i32::from(dsl_bus_protocol::v1::DagPackOutcome) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::DagPackOutcome
+pub type dsl_bus_protocol::v1::DagPackOutcome::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::DagPackOutcome::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::DagPackOutcome, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::DagPackOutcome
+pub fn dsl_bus_protocol::v1::DagPackOutcome::default() -> dsl_bus_protocol::v1::DagPackOutcome
+#[repr(i32)] pub enum dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::AuthorityDenied = 6
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::Cancelled = 7
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::Committed = 1
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::IdempotentReplayReturned = 2
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::LockTimeout = 4
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::OptimisticConflict = 3
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::OutcomeUnspecified = 0
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::PanicRecovered = 9
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::RejectedByAdmission = 10
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::TimedOut = 8
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::VerbFailed = 5
+pub dsl_bus_protocol::v1::ExecutionOutcomeKind::VersionMismatch = 11
+impl dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::ExecutionOutcomeKind>
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::ExecutionOutcomeKind> for i32
+pub fn i32::from(dsl_bus_protocol::v1::ExecutionOutcomeKind) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub type dsl_bus_protocol::v1::ExecutionOutcomeKind::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::ExecutionOutcomeKind, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub fn dsl_bus_protocol::v1::ExecutionOutcomeKind::default() -> dsl_bus_protocol::v1::ExecutionOutcomeKind
+#[repr(i32)] pub enum dsl_bus_protocol::v1::ReceiptStatus
+pub dsl_bus_protocol::v1::ReceiptStatus::DuplicateIgnored = 2
+pub dsl_bus_protocol::v1::ReceiptStatus::ReceiptUnspecified = 0
+pub dsl_bus_protocol::v1::ReceiptStatus::Received = 1
+pub dsl_bus_protocol::v1::ReceiptStatus::RejectedUnknownExecution = 3
+impl dsl_bus_protocol::v1::ReceiptStatus
+pub fn dsl_bus_protocol::v1::ReceiptStatus::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::ReceiptStatus::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::ReceiptStatus
+pub fn dsl_bus_protocol::v1::ReceiptStatus::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::ReceiptStatus>
+pub fn dsl_bus_protocol::v1::ReceiptStatus::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::ReceiptStatus> for i32
+pub fn i32::from(dsl_bus_protocol::v1::ReceiptStatus) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::ReceiptStatus
+pub type dsl_bus_protocol::v1::ReceiptStatus::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::ReceiptStatus::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::ReceiptStatus, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::ReceiptStatus
+pub fn dsl_bus_protocol::v1::ReceiptStatus::default() -> dsl_bus_protocol::v1::ReceiptStatus
+#[repr(i32)] pub enum dsl_bus_protocol::v1::ResolutionOutcome
+pub dsl_bus_protocol::v1::ResolutionOutcome::Ambiguous = 3
+pub dsl_bus_protocol::v1::ResolutionOutcome::NotFound = 2
+pub dsl_bus_protocol::v1::ResolutionOutcome::ResolutionAuthorityDenied = 4
+pub dsl_bus_protocol::v1::ResolutionOutcome::ResolutionNotImplemented = 5
+pub dsl_bus_protocol::v1::ResolutionOutcome::ResolutionUnspecified = 0
+pub dsl_bus_protocol::v1::ResolutionOutcome::Resolved = 1
+impl dsl_bus_protocol::v1::ResolutionOutcome
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::ResolutionOutcome
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::ResolutionOutcome>
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::ResolutionOutcome> for i32
+pub fn i32::from(dsl_bus_protocol::v1::ResolutionOutcome) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::ResolutionOutcome
+pub type dsl_bus_protocol::v1::ResolutionOutcome::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::ResolutionOutcome, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::ResolutionOutcome
+pub fn dsl_bus_protocol::v1::ResolutionOutcome::default() -> dsl_bus_protocol::v1::ResolutionOutcome
+#[repr(i32)] pub enum dsl_bus_protocol::v1::SubmissionStatus
+pub dsl_bus_protocol::v1::SubmissionStatus::Accepted = 1
+pub dsl_bus_protocol::v1::SubmissionStatus::Duplicate = 2
+pub dsl_bus_protocol::v1::SubmissionStatus::RejectedAuthority = 5
+pub dsl_bus_protocol::v1::SubmissionStatus::RejectedMalformed = 6
+pub dsl_bus_protocol::v1::SubmissionStatus::RejectedVerbUnknown = 3
+pub dsl_bus_protocol::v1::SubmissionStatus::RejectedVersionIncompatible = 4
+pub dsl_bus_protocol::v1::SubmissionStatus::SubmissionUnspecified = 0
+impl dsl_bus_protocol::v1::SubmissionStatus
+pub fn dsl_bus_protocol::v1::SubmissionStatus::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::SubmissionStatus::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::SubmissionStatus
+pub fn dsl_bus_protocol::v1::SubmissionStatus::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::SubmissionStatus>
+pub fn dsl_bus_protocol::v1::SubmissionStatus::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::SubmissionStatus> for i32
+pub fn i32::from(dsl_bus_protocol::v1::SubmissionStatus) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::SubmissionStatus
+pub type dsl_bus_protocol::v1::SubmissionStatus::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::SubmissionStatus::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::SubmissionStatus, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::SubmissionStatus
+pub fn dsl_bus_protocol::v1::SubmissionStatus::default() -> dsl_bus_protocol::v1::SubmissionStatus
+#[repr(i32)] pub enum dsl_bus_protocol::v1::ValidationOutcome
+pub dsl_bus_protocol::v1::ValidationOutcome::NotImplemented = 3
+pub dsl_bus_protocol::v1::ValidationOutcome::ValidationUnspecified = 0
+pub dsl_bus_protocol::v1::ValidationOutcome::WouldFail = 2
+pub dsl_bus_protocol::v1::ValidationOutcome::WouldSucceed = 1
+impl dsl_bus_protocol::v1::ValidationOutcome
+pub fn dsl_bus_protocol::v1::ValidationOutcome::as_str_name(&self) -> &'static str
+pub fn dsl_bus_protocol::v1::ValidationOutcome::from_str_name(&str) -> core::option::Option<Self>
+impl dsl_bus_protocol::v1::ValidationOutcome
+pub fn dsl_bus_protocol::v1::ValidationOutcome::from_i32(i32) -> core::option::Option<dsl_bus_protocol::v1::ValidationOutcome>
+pub fn dsl_bus_protocol::v1::ValidationOutcome::is_valid(i32) -> bool
+impl core::convert::From<dsl_bus_protocol::v1::ValidationOutcome> for i32
+pub fn i32::from(dsl_bus_protocol::v1::ValidationOutcome) -> i32
+impl core::convert::TryFrom<i32> for dsl_bus_protocol::v1::ValidationOutcome
+pub type dsl_bus_protocol::v1::ValidationOutcome::Error = prost::error::UnknownEnumValue
+pub fn dsl_bus_protocol::v1::ValidationOutcome::try_from(i32) -> core::result::Result<dsl_bus_protocol::v1::ValidationOutcome, prost::error::UnknownEnumValue>
+impl core::default::Default for dsl_bus_protocol::v1::ValidationOutcome
+pub fn dsl_bus_protocol::v1::ValidationOutcome::default() -> dsl_bus_protocol::v1::ValidationOutcome
+pub struct dsl_bus_protocol::v1::AuthorityContext
+pub dsl_bus_protocol::v1::AuthorityContext::roles: alloc::vec::Vec<alloc::string::String>
+pub dsl_bus_protocol::v1::AuthorityContext::service_identity: alloc::string::String
+pub dsl_bus_protocol::v1::AuthorityContext::signed_token: alloc::vec::Vec<u8>
+pub dsl_bus_protocol::v1::AuthorityContext::user_identity: alloc::string::String
+impl core::default::Default for dsl_bus_protocol::v1::AuthorityContext
+pub fn dsl_bus_protocol::v1::AuthorityContext::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::AuthorityContext
+pub fn dsl_bus_protocol::v1::AuthorityContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::AuthorityContext
+pub fn dsl_bus_protocol::v1::AuthorityContext::clear(&mut self)
+pub fn dsl_bus_protocol::v1::AuthorityContext::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::AuthorityDetail
+pub dsl_bus_protocol::v1::AuthorityDetail::provided_scopes: alloc::vec::Vec<alloc::string::String>
+pub dsl_bus_protocol::v1::AuthorityDetail::required_scope: alloc::string::String
+impl core::default::Default for dsl_bus_protocol::v1::AuthorityDetail
+pub fn dsl_bus_protocol::v1::AuthorityDetail::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::AuthorityDetail
+pub fn dsl_bus_protocol::v1::AuthorityDetail::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::AuthorityDetail
+pub fn dsl_bus_protocol::v1::AuthorityDetail::clear(&mut self)
+pub fn dsl_bus_protocol::v1::AuthorityDetail::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ConstellationMapRef
+pub dsl_bus_protocol::v1::ConstellationMapRef::map_id: alloc::string::String
+pub dsl_bus_protocol::v1::ConstellationMapRef::map_payload: alloc::vec::Vec<u8>
+impl core::default::Default for dsl_bus_protocol::v1::ConstellationMapRef
+pub fn dsl_bus_protocol::v1::ConstellationMapRef::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ConstellationMapRef
+pub fn dsl_bus_protocol::v1::ConstellationMapRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ConstellationMapRef
+pub fn dsl_bus_protocol::v1::ConstellationMapRef::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ConstellationMapRef::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::DagPack
+pub dsl_bus_protocol::v1::DagPack::constellation_maps: alloc::vec::Vec<dsl_bus_protocol::v1::ConstellationMapRef>
+pub dsl_bus_protocol::v1::DagPack::derivation_chains: alloc::vec::Vec<dsl_bus_protocol::v1::DerivationChainRef>
+pub dsl_bus_protocol::v1::DagPack::detail: alloc::string::String
+pub dsl_bus_protocol::v1::DagPack::domain: alloc::string::String
+pub dsl_bus_protocol::v1::DagPack::fsm_applicability: core::option::Option<dsl_bus_protocol::v1::FsmApplicabilityMatrix>
+pub dsl_bus_protocol::v1::DagPack::outcome: i32
+pub dsl_bus_protocol::v1::DagPack::pack_id: alloc::string::String
+pub dsl_bus_protocol::v1::DagPack::semantic_graph: alloc::vec::Vec<u8>
+pub dsl_bus_protocol::v1::DagPack::version: alloc::string::String
+impl dsl_bus_protocol::v1::DagPack
+pub fn dsl_bus_protocol::v1::DagPack::outcome(&self) -> dsl_bus_protocol::v1::DagPackOutcome
+pub fn dsl_bus_protocol::v1::DagPack::set_outcome(&mut self, dsl_bus_protocol::v1::DagPackOutcome)
+impl core::default::Default for dsl_bus_protocol::v1::DagPack
+pub fn dsl_bus_protocol::v1::DagPack::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::DagPack
+pub fn dsl_bus_protocol::v1::DagPack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::DagPack
+pub fn dsl_bus_protocol::v1::DagPack::clear(&mut self)
+pub fn dsl_bus_protocol::v1::DagPack::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::DagPackRequest
+pub dsl_bus_protocol::v1::DagPackRequest::authority: core::option::Option<dsl_bus_protocol::v1::AuthorityContext>
+pub dsl_bus_protocol::v1::DagPackRequest::catalogue_version: alloc::string::String
+pub dsl_bus_protocol::v1::DagPackRequest::dag_pack_ids: alloc::vec::Vec<alloc::string::String>
+pub dsl_bus_protocol::v1::DagPackRequest::include_constellation_maps: bool
+pub dsl_bus_protocol::v1::DagPackRequest::include_derivation_chains: bool
+pub dsl_bus_protocol::v1::DagPackRequest::include_fsm_applicability: bool
+pub dsl_bus_protocol::v1::DagPackRequest::verb_ids: alloc::vec::Vec<alloc::string::String>
+impl core::default::Default for dsl_bus_protocol::v1::DagPackRequest
+pub fn dsl_bus_protocol::v1::DagPackRequest::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::DagPackRequest
+pub fn dsl_bus_protocol::v1::DagPackRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::DagPackRequest
+pub fn dsl_bus_protocol::v1::DagPackRequest::clear(&mut self)
+pub fn dsl_bus_protocol::v1::DagPackRequest::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::DagPackResponse
+pub dsl_bus_protocol::v1::DagPackResponse::packs: alloc::vec::Vec<dsl_bus_protocol::v1::DagPack>
+pub dsl_bus_protocol::v1::DagPackResponse::response_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+impl core::default::Default for dsl_bus_protocol::v1::DagPackResponse
+pub fn dsl_bus_protocol::v1::DagPackResponse::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::DagPackResponse
+pub fn dsl_bus_protocol::v1::DagPackResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::DagPackResponse
+pub fn dsl_bus_protocol::v1::DagPackResponse::clear(&mut self)
+pub fn dsl_bus_protocol::v1::DagPackResponse::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::DerivationChainRef
+pub dsl_bus_protocol::v1::DerivationChainRef::chain_id: alloc::string::String
+pub dsl_bus_protocol::v1::DerivationChainRef::chain_payload: alloc::vec::Vec<u8>
+impl core::default::Default for dsl_bus_protocol::v1::DerivationChainRef
+pub fn dsl_bus_protocol::v1::DerivationChainRef::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::DerivationChainRef
+pub fn dsl_bus_protocol::v1::DerivationChainRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::DerivationChainRef
+pub fn dsl_bus_protocol::v1::DerivationChainRef::clear(&mut self)
+pub fn dsl_bus_protocol::v1::DerivationChainRef::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::EntityQuery
+pub dsl_bus_protocol::v1::EntityQuery::entity_type: alloc::string::String
+pub dsl_bus_protocol::v1::EntityQuery::include_audit_pointer: bool
+pub dsl_bus_protocol::v1::EntityQuery::include_state: bool
+pub dsl_bus_protocol::v1::EntityQuery::lookup_by: core::option::Option<dsl_bus_protocol::v1::entity_query::LookupBy>
+impl core::default::Default for dsl_bus_protocol::v1::EntityQuery
+pub fn dsl_bus_protocol::v1::EntityQuery::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::EntityQuery
+pub fn dsl_bus_protocol::v1::EntityQuery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::EntityQuery
+pub fn dsl_bus_protocol::v1::EntityQuery::clear(&mut self)
+pub fn dsl_bus_protocol::v1::EntityQuery::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::EntityResolution
+pub dsl_bus_protocol::v1::EntityResolution::audit_reference: alloc::string::String
+pub dsl_bus_protocol::v1::EntityResolution::current_state: alloc::string::String
+pub dsl_bus_protocol::v1::EntityResolution::detail: alloc::string::String
+pub dsl_bus_protocol::v1::EntityResolution::entity_type: alloc::string::String
+pub dsl_bus_protocol::v1::EntityResolution::outcome: i32
+pub dsl_bus_protocol::v1::EntityResolution::resolved_uuid: alloc::vec::Vec<u8>
+impl dsl_bus_protocol::v1::EntityResolution
+pub fn dsl_bus_protocol::v1::EntityResolution::outcome(&self) -> dsl_bus_protocol::v1::ResolutionOutcome
+pub fn dsl_bus_protocol::v1::EntityResolution::set_outcome(&mut self, dsl_bus_protocol::v1::ResolutionOutcome)
+impl core::default::Default for dsl_bus_protocol::v1::EntityResolution
+pub fn dsl_bus_protocol::v1::EntityResolution::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::EntityResolution
+pub fn dsl_bus_protocol::v1::EntityResolution::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::EntityResolution
+pub fn dsl_bus_protocol::v1::EntityResolution::clear(&mut self)
+pub fn dsl_bus_protocol::v1::EntityResolution::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::EntityResolutionRequest
+pub dsl_bus_protocol::v1::EntityResolutionRequest::authority: core::option::Option<dsl_bus_protocol::v1::AuthorityContext>
+pub dsl_bus_protocol::v1::EntityResolutionRequest::catalogue_version: alloc::string::String
+pub dsl_bus_protocol::v1::EntityResolutionRequest::queries: alloc::vec::Vec<dsl_bus_protocol::v1::EntityQuery>
+impl core::default::Default for dsl_bus_protocol::v1::EntityResolutionRequest
+pub fn dsl_bus_protocol::v1::EntityResolutionRequest::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::EntityResolutionRequest
+pub fn dsl_bus_protocol::v1::EntityResolutionRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::EntityResolutionRequest
+pub fn dsl_bus_protocol::v1::EntityResolutionRequest::clear(&mut self)
+pub fn dsl_bus_protocol::v1::EntityResolutionRequest::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::EntityResolutionResult
+pub dsl_bus_protocol::v1::EntityResolutionResult::resolution_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::EntityResolutionResult::resolutions: alloc::vec::Vec<dsl_bus_protocol::v1::EntityResolution>
+impl core::default::Default for dsl_bus_protocol::v1::EntityResolutionResult
+pub fn dsl_bus_protocol::v1::EntityResolutionResult::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::EntityResolutionResult
+pub fn dsl_bus_protocol::v1::EntityResolutionResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::EntityResolutionResult
+pub fn dsl_bus_protocol::v1::EntityResolutionResult::clear(&mut self)
+pub fn dsl_bus_protocol::v1::EntityResolutionResult::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ExecutionOutcome
+pub dsl_bus_protocol::v1::ExecutionOutcome::bindings: alloc::vec::Vec<dsl_bus_protocol::v1::ResolvedBinding>
+pub dsl_bus_protocol::v1::ExecutionOutcome::detail: alloc::string::String
+pub dsl_bus_protocol::v1::ExecutionOutcome::kind: i32
+impl dsl_bus_protocol::v1::ExecutionOutcome
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::kind(&self) -> dsl_bus_protocol::v1::ExecutionOutcomeKind
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::set_kind(&mut self, dsl_bus_protocol::v1::ExecutionOutcomeKind)
+impl core::default::Default for dsl_bus_protocol::v1::ExecutionOutcome
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ExecutionOutcome
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ExecutionOutcome
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ExecutionOutcome::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::FsmApplicabilityMatrix
+pub dsl_bus_protocol::v1::FsmApplicabilityMatrix::matrix_payload: alloc::vec::Vec<u8>
+impl core::default::Default for dsl_bus_protocol::v1::FsmApplicabilityMatrix
+pub fn dsl_bus_protocol::v1::FsmApplicabilityMatrix::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::FsmApplicabilityMatrix
+pub fn dsl_bus_protocol::v1::FsmApplicabilityMatrix::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::FsmApplicabilityMatrix
+pub fn dsl_bus_protocol::v1::FsmApplicabilityMatrix::clear(&mut self)
+pub fn dsl_bus_protocol::v1::FsmApplicabilityMatrix::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::FsmPreconditionDetail
+pub dsl_bus_protocol::v1::FsmPreconditionDetail::allowed_states: alloc::vec::Vec<alloc::string::String>
+pub dsl_bus_protocol::v1::FsmPreconditionDetail::current_state: alloc::string::String
+pub dsl_bus_protocol::v1::FsmPreconditionDetail::entity_uuid: alloc::string::String
+impl core::default::Default for dsl_bus_protocol::v1::FsmPreconditionDetail
+pub fn dsl_bus_protocol::v1::FsmPreconditionDetail::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::FsmPreconditionDetail
+pub fn dsl_bus_protocol::v1::FsmPreconditionDetail::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::FsmPreconditionDetail
+pub fn dsl_bus_protocol::v1::FsmPreconditionDetail::clear(&mut self)
+pub fn dsl_bus_protocol::v1::FsmPreconditionDetail::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::InvocationRequest
+pub dsl_bus_protocol::v1::InvocationRequest::authority: core::option::Option<dsl_bus_protocol::v1::AuthorityContext>
+pub dsl_bus_protocol::v1::InvocationRequest::catalogue_version: alloc::string::String
+pub dsl_bus_protocol::v1::InvocationRequest::idempotency_key: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::InvocationRequest::inputs: alloc::vec::Vec<dsl_bus_protocol::v1::ResolvedBinding>
+pub dsl_bus_protocol::v1::InvocationRequest::result_callback_endpoint: alloc::string::String
+pub dsl_bus_protocol::v1::InvocationRequest::snapshot_pin: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::InvocationRequest::source_domain: alloc::string::String
+pub dsl_bus_protocol::v1::InvocationRequest::timeout_at: core::option::Option<prost_types::protobuf::Timestamp>
+pub dsl_bus_protocol::v1::InvocationRequest::verb_id: alloc::string::String
+impl core::default::Default for dsl_bus_protocol::v1::InvocationRequest
+pub fn dsl_bus_protocol::v1::InvocationRequest::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::InvocationRequest
+pub fn dsl_bus_protocol::v1::InvocationRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::InvocationRequest
+pub fn dsl_bus_protocol::v1::InvocationRequest::clear(&mut self)
+pub fn dsl_bus_protocol::v1::InvocationRequest::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::InvocationResult
+pub dsl_bus_protocol::v1::InvocationResult::audit_reference: alloc::string::String
+pub dsl_bus_protocol::v1::InvocationResult::executed_at: core::option::Option<prost_types::protobuf::Timestamp>
+pub dsl_bus_protocol::v1::InvocationResult::execution_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::InvocationResult::idempotency_key: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::InvocationResult::outcome: core::option::Option<dsl_bus_protocol::v1::ExecutionOutcome>
+pub dsl_bus_protocol::v1::InvocationResult::plan_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::InvocationResult::source_domain: alloc::string::String
+impl core::default::Default for dsl_bus_protocol::v1::InvocationResult
+pub fn dsl_bus_protocol::v1::InvocationResult::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::InvocationResult
+pub fn dsl_bus_protocol::v1::InvocationResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::InvocationResult
+pub fn dsl_bus_protocol::v1::InvocationResult::clear(&mut self)
+pub fn dsl_bus_protocol::v1::InvocationResult::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ResolvedBinding
+pub dsl_bus_protocol::v1::ResolvedBinding::name: alloc::string::String
+pub dsl_bus_protocol::v1::ResolvedBinding::value: core::option::Option<dsl_bus_protocol::v1::TypedValue>
+impl core::default::Default for dsl_bus_protocol::v1::ResolvedBinding
+pub fn dsl_bus_protocol::v1::ResolvedBinding::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ResolvedBinding
+pub fn dsl_bus_protocol::v1::ResolvedBinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ResolvedBinding
+pub fn dsl_bus_protocol::v1::ResolvedBinding::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ResolvedBinding::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ResultAck
+pub dsl_bus_protocol::v1::ResultAck::detail: alloc::string::String
+pub dsl_bus_protocol::v1::ResultAck::status: i32
+impl dsl_bus_protocol::v1::ResultAck
+pub fn dsl_bus_protocol::v1::ResultAck::set_status(&mut self, dsl_bus_protocol::v1::ReceiptStatus)
+pub fn dsl_bus_protocol::v1::ResultAck::status(&self) -> dsl_bus_protocol::v1::ReceiptStatus
+impl core::default::Default for dsl_bus_protocol::v1::ResultAck
+pub fn dsl_bus_protocol::v1::ResultAck::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ResultAck
+pub fn dsl_bus_protocol::v1::ResultAck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ResultAck
+pub fn dsl_bus_protocol::v1::ResultAck::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ResultAck::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::SubmissionAck
+pub dsl_bus_protocol::v1::SubmissionAck::detail: alloc::string::String
+pub dsl_bus_protocol::v1::SubmissionAck::execution_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+pub dsl_bus_protocol::v1::SubmissionAck::status: i32
+impl dsl_bus_protocol::v1::SubmissionAck
+pub fn dsl_bus_protocol::v1::SubmissionAck::set_status(&mut self, dsl_bus_protocol::v1::SubmissionStatus)
+pub fn dsl_bus_protocol::v1::SubmissionAck::status(&self) -> dsl_bus_protocol::v1::SubmissionStatus
+impl core::default::Default for dsl_bus_protocol::v1::SubmissionAck
+pub fn dsl_bus_protocol::v1::SubmissionAck::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::SubmissionAck
+pub fn dsl_bus_protocol::v1::SubmissionAck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::SubmissionAck
+pub fn dsl_bus_protocol::v1::SubmissionAck::clear(&mut self)
+pub fn dsl_bus_protocol::v1::SubmissionAck::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::TypedValue
+pub dsl_bus_protocol::v1::TypedValue::type_name: alloc::string::String
+pub dsl_bus_protocol::v1::TypedValue::value: core::option::Option<dsl_bus_protocol::v1::typed_value::Value>
+impl core::default::Default for dsl_bus_protocol::v1::TypedValue
+pub fn dsl_bus_protocol::v1::TypedValue::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::TypedValue
+pub fn dsl_bus_protocol::v1::TypedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::TypedValue
+pub fn dsl_bus_protocol::v1::TypedValue::clear(&mut self)
+pub fn dsl_bus_protocol::v1::TypedValue::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::UnknownReferenceDetail
+pub dsl_bus_protocol::v1::UnknownReferenceDetail::expected_type: alloc::string::String
+pub dsl_bus_protocol::v1::UnknownReferenceDetail::provided_natural_key: alloc::string::String
+pub dsl_bus_protocol::v1::UnknownReferenceDetail::provided_uuid: alloc::vec::Vec<u8>
+impl core::default::Default for dsl_bus_protocol::v1::UnknownReferenceDetail
+pub fn dsl_bus_protocol::v1::UnknownReferenceDetail::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::UnknownReferenceDetail
+pub fn dsl_bus_protocol::v1::UnknownReferenceDetail::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::UnknownReferenceDetail
+pub fn dsl_bus_protocol::v1::UnknownReferenceDetail::clear(&mut self)
+pub fn dsl_bus_protocol::v1::UnknownReferenceDetail::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::Uuid
+pub dsl_bus_protocol::v1::Uuid::value: alloc::vec::Vec<u8>
+impl core::default::Default for dsl_bus_protocol::v1::Uuid
+pub fn dsl_bus_protocol::v1::Uuid::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::Uuid
+pub fn dsl_bus_protocol::v1::Uuid::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::Uuid
+pub fn dsl_bus_protocol::v1::Uuid::clear(&mut self)
+pub fn dsl_bus_protocol::v1::Uuid::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ValidationIssue
+pub dsl_bus_protocol::v1::ValidationIssue::detail: alloc::string::String
+pub dsl_bus_protocol::v1::ValidationIssue::field_name: alloc::string::String
+pub dsl_bus_protocol::v1::ValidationIssue::issue_kind: alloc::string::String
+pub dsl_bus_protocol::v1::ValidationIssue::specific: core::option::Option<dsl_bus_protocol::v1::validation_issue::Specific>
+impl core::default::Default for dsl_bus_protocol::v1::ValidationIssue
+pub fn dsl_bus_protocol::v1::ValidationIssue::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ValidationIssue
+pub fn dsl_bus_protocol::v1::ValidationIssue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ValidationIssue
+pub fn dsl_bus_protocol::v1::ValidationIssue::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ValidationIssue::encoded_len(&self) -> usize
+pub struct dsl_bus_protocol::v1::ValidationResult
+pub dsl_bus_protocol::v1::ValidationResult::issues: alloc::vec::Vec<dsl_bus_protocol::v1::ValidationIssue>
+pub dsl_bus_protocol::v1::ValidationResult::outcome: i32
+pub dsl_bus_protocol::v1::ValidationResult::validation_id: core::option::Option<dsl_bus_protocol::v1::Uuid>
+impl dsl_bus_protocol::v1::ValidationResult
+pub fn dsl_bus_protocol::v1::ValidationResult::outcome(&self) -> dsl_bus_protocol::v1::ValidationOutcome
+pub fn dsl_bus_protocol::v1::ValidationResult::set_outcome(&mut self, dsl_bus_protocol::v1::ValidationOutcome)
+impl core::default::Default for dsl_bus_protocol::v1::ValidationResult
+pub fn dsl_bus_protocol::v1::ValidationResult::default() -> Self
+impl core::fmt::Debug for dsl_bus_protocol::v1::ValidationResult
+pub fn dsl_bus_protocol::v1::ValidationResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for dsl_bus_protocol::v1::ValidationResult
+pub fn dsl_bus_protocol::v1::ValidationResult::clear(&mut self)
+pub fn dsl_bus_protocol::v1::ValidationResult::encoded_len(&self) -> usize

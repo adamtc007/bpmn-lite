@@ -1,0 +1,53 @@
+# package: dsl-bus-client
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dsl-bus-client -sss
+
+pub mod dsl_bus_client
+pub enum dsl_bus_client::BusClientError
+pub dsl_bus_client::BusClientError::MalformedUuid
+pub dsl_bus_client::BusClientError::MalformedUuid::actual_len: usize
+pub dsl_bus_client::BusClientError::MissingIdempotencyKey
+pub dsl_bus_client::BusClientError::MissingLocalDomain
+pub dsl_bus_client::BusClientError::MissingPool
+pub dsl_bus_client::BusClientError::MissingResultIdempotencyKey
+pub dsl_bus_client::BusClientError::Sqlx(sqlx_core::error::Error)
+pub dsl_bus_client::BusClientError::Storage(dsl_bus_storage::types::BusStorageError)
+pub dsl_bus_client::BusClientError::Transport(tonic::transport::error::Error)
+pub dsl_bus_client::BusClientError::UnknownPeer(alloc::string::String)
+pub struct dsl_bus_client::BusClient
+impl dsl_bus_client::BusClient
+pub fn dsl_bus_client::BusClient::builder() -> dsl_bus_client::BusClientBuilder
+pub fn dsl_bus_client::BusClient::outbox_notifier(&self) -> dsl_bus_client::OutboxNotifier
+pub fn dsl_bus_client::BusClient::pool(&self) -> &sqlx_postgres::PgPool
+pub async fn dsl_bus_client::BusClient::send_result(&self, &str, dsl_bus_protocol::v1::InvocationResult, alloc::string::String) -> core::result::Result<(uuid::Uuid, dsl_bus_storage::types::InsertOutcome), dsl_bus_client::BusClientError>
+pub fn dsl_bus_client::BusClient::start_sender(&self) -> dsl_bus_client::SenderHandle
+pub async fn dsl_bus_client::BusClient::submit_invocation(&self, &str, dsl_bus_protocol::v1::InvocationRequest, alloc::string::String) -> core::result::Result<(uuid::Uuid, dsl_bus_storage::types::InsertOutcome), dsl_bus_client::BusClientError>
+pub struct dsl_bus_client::BusClientBuilder
+impl dsl_bus_client::BusClientBuilder
+pub fn dsl_bus_client::BusClientBuilder::add_peer(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub async fn dsl_bus_client::BusClientBuilder::build(self) -> core::result::Result<dsl_bus_client::BusClient, dsl_bus_client::BusClientError>
+pub fn dsl_bus_client::BusClientBuilder::local_domain(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn dsl_bus_client::BusClientBuilder::max_backoff_secs(self, i64) -> Self
+pub fn dsl_bus_client::BusClientBuilder::pool(self, sqlx_postgres::PgPool) -> Self
+pub fn dsl_bus_client::BusClientBuilder::sender_batch_size(self, i64) -> Self
+pub fn dsl_bus_client::BusClientBuilder::submission_ack_handler(self, alloc::sync::Arc<dyn dsl_bus_client::SubmissionAckHandler>) -> Self
+pub struct dsl_bus_client::BusClientConfig
+pub dsl_bus_client::BusClientConfig::max_backoff_secs: i64
+pub dsl_bus_client::BusClientConfig::sender_batch_size: i64
+impl core::default::Default for dsl_bus_client::BusClientConfig
+pub fn dsl_bus_client::BusClientConfig::default() -> Self
+pub struct dsl_bus_client::OutboxNotifier
+impl dsl_bus_client::OutboxNotifier
+pub fn dsl_bus_client::OutboxNotifier::notify(&self)
+pub struct dsl_bus_client::SenderHandle
+impl dsl_bus_client::SenderHandle
+pub async fn dsl_bus_client::SenderHandle::shutdown(self) -> core::result::Result<(), tokio::runtime::task::error::JoinError>
+pub fn dsl_bus_client::SenderHandle::stats(&self) -> dsl_bus_client::SenderStats
+pub struct dsl_bus_client::SenderStats
+impl dsl_bus_client::SenderStats
+pub fn dsl_bus_client::SenderStats::retried(&self) -> u64
+pub fn dsl_bus_client::SenderStats::snapshot(&self) -> Self
+pub fn dsl_bus_client::SenderStats::submitted(&self) -> u64
+pub trait dsl_bus_client::SubmissionAckHandler: core::marker::Send + core::marker::Sync
+pub fn dsl_bus_client::SubmissionAckHandler::accepted<'a>(&'a self, &'a dsl_bus_storage::types::OutboxEntry, uuid::Uuid) -> dsl_bus_client::SubmissionAckFuture<'a>
+pub type dsl_bus_client::SubmissionAckFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), alloc::string::String>> + core::marker::Send + 'a)>>

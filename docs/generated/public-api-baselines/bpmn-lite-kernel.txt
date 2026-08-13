@@ -1,0 +1,54 @@
+# package: bpmn-lite-kernel
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-kernel -sss
+
+pub mod bpmn_lite_kernel
+pub enum bpmn_lite_kernel::ReplayError
+pub bpmn_lite_kernel::ReplayError::ArtifactAbiMismatch
+pub bpmn_lite_kernel::ReplayError::ArtifactAbiMismatch::actual: u32
+pub bpmn_lite_kernel::ReplayError::ArtifactAbiMismatch::expected: u32
+pub bpmn_lite_kernel::ReplayError::ArtifactMismatch
+pub bpmn_lite_kernel::ReplayError::Envelope(alloc::string::String)
+pub bpmn_lite_kernel::ReplayError::NonReplayableCommand(&'static str)
+pub bpmn_lite_kernel::ReplayError::RevisionChain
+pub bpmn_lite_kernel::ReplayError::RevisionChain::actual: i64
+pub bpmn_lite_kernel::ReplayError::RevisionChain::expected: i64
+pub bpmn_lite_kernel::ReplayError::StateDivergence
+pub bpmn_lite_kernel::ReplayError::StateDivergence::revision: u64
+pub bpmn_lite_kernel::ReplayError::Transition(bpmn_lite_kernel::TransitionError)
+impl core::error::Error for bpmn_lite_kernel::ReplayError
+impl core::fmt::Display for bpmn_lite_kernel::ReplayError
+pub fn bpmn_lite_kernel::ReplayError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum bpmn_lite_kernel::TransitionError
+pub bpmn_lite_kernel::TransitionError::Integrity(bpmn_lite_types::integrity_rings::IntegrityError)
+pub bpmn_lite_kernel::TransitionError::InvalidCommand(&'static str)
+pub bpmn_lite_kernel::TransitionError::MissingFiber(uuid::Uuid)
+pub bpmn_lite_kernel::TransitionError::MissingMetadata(&'static str)
+pub bpmn_lite_kernel::TransitionError::MultiInstanceElementUnavailable
+pub bpmn_lite_kernel::TransitionError::MultiInstanceElementUnavailable::flag: bpmn_lite_types::types::FlagKey
+pub bpmn_lite_kernel::TransitionError::MultiInstanceElementUnavailable::index: u32
+pub bpmn_lite_kernel::TransitionError::NumericOverflow(&'static str)
+pub bpmn_lite_kernel::TransitionError::OptimisticConflict
+pub bpmn_lite_kernel::TransitionError::ProgramCounterOutOfBounds(u32)
+pub bpmn_lite_kernel::TransitionError::ResourceLimitExceeded
+pub bpmn_lite_kernel::TransitionError::ResourceLimitExceeded::actual: usize
+pub bpmn_lite_kernel::TransitionError::ResourceLimitExceeded::limit: u64
+pub bpmn_lite_kernel::TransitionError::ResourceLimitExceeded::resource: &'static str
+pub bpmn_lite_kernel::TransitionError::RouteNotMatched(alloc::string::String)
+pub bpmn_lite_kernel::TransitionError::StackUnderflow(&'static str)
+pub bpmn_lite_kernel::TransitionError::StepLimitExceeded(u64)
+pub bpmn_lite_kernel::TransitionError::UnsupportedCommand(&'static str)
+impl core::error::Error for bpmn_lite_kernel::TransitionError
+impl core::fmt::Display for bpmn_lite_kernel::TransitionError
+pub fn bpmn_lite_kernel::TransitionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct bpmn_lite_kernel::DeterministicContext
+impl bpmn_lite_kernel::DeterministicContext
+pub fn bpmn_lite_kernel::DeterministicContext::command_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_kernel::DeterministicContext::effect_id(&self, uuid::Uuid, u32) -> bpmn_lite_types::transition::EffectId
+pub fn bpmn_lite_kernel::DeterministicContext::logical_time(&self) -> u64
+pub fn bpmn_lite_kernel::DeterministicContext::new(u64, uuid::Uuid, u64) -> Self
+pub fn bpmn_lite_kernel::apply(&bpmn_lite_types::artifact::ExecutableWorkflow, &bpmn_lite_types::transition::Snapshot, &bpmn_lite_types::transition::Command, &bpmn_lite_kernel::DeterministicContext) -> core::result::Result<bpmn_lite_types::transition::Transition, bpmn_lite_kernel::TransitionError>
+pub fn bpmn_lite_kernel::check_k_invariants(&alloc::collections::btree::map::BTreeMap<uuid::Uuid, bpmn_lite_types::types::Fiber>, &bpmn_lite_types::concurrency::ConcurrencyTable) -> core::result::Result<(), alloc::string::String>
+pub fn bpmn_lite_kernel::effective_control_stack(&bpmn_lite_types::types::Fiber) -> alloc::vec::Vec<bpmn_lite_types::concurrency::RecordId>
+pub fn bpmn_lite_kernel::materialize_snapshot(&bpmn_lite_types::persistence::PersistedSnapshotState, &bpmn_lite_types::transition::Transition, u32, u64) -> bpmn_lite_types::persistence::SnapshotEnvelope
+pub fn bpmn_lite_kernel::replay(&bpmn_lite_types::artifact::ExecutableWorkflow, &bpmn_lite_types::persistence::SnapshotEnvelope, &[bpmn_lite_types::persistence::JournalRecord]) -> core::result::Result<bpmn_lite_types::persistence::SnapshotEnvelope, bpmn_lite_kernel::ReplayError>

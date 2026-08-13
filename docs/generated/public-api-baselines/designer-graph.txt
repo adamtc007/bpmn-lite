@@ -1,0 +1,238 @@
+# package: designer-graph
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p designer-graph -sss
+
+pub mod designer_graph
+pub mod designer_graph::board_candidate
+pub enum designer_graph::board_candidate::CandidateId
+pub designer_graph::board_candidate::CandidateId::Abstain
+pub designer_graph::board_candidate::CandidateId::Operation(designer_graph::board_candidate::OperationKind)
+pub designer_graph::board_candidate::CandidateId::Production(designer_graph::board_candidate::ProductionId)
+impl designer_graph::board_candidate::CandidateId
+pub fn designer_graph::board_candidate::CandidateId::canonical_id(self) -> &'static str
+pub enum designer_graph::board_candidate::OperationKind
+pub designer_graph::board_candidate::OperationKind::AppendNode
+pub designer_graph::board_candidate::OperationKind::AttachGuard
+pub designer_graph::board_candidate::OperationKind::AttachRearmingGuard
+pub designer_graph::board_candidate::OperationKind::CloseParallelRegion
+pub designer_graph::board_candidate::OperationKind::Connect
+pub designer_graph::board_candidate::OperationKind::CreateBranch
+pub designer_graph::board_candidate::OperationKind::CreateDataObject
+pub designer_graph::board_candidate::OperationKind::CreateInclusiveRegion
+pub designer_graph::board_candidate::OperationKind::CreateMultiInstanceRegion
+pub designer_graph::board_candidate::OperationKind::CreateParallelRegion
+pub designer_graph::board_candidate::OperationKind::DeleteSubgraph
+pub designer_graph::board_candidate::OperationKind::InsertAfter
+pub designer_graph::board_candidate::OperationKind::InsertBefore
+pub designer_graph::board_candidate::OperationKind::ReplaceNode
+pub designer_graph::board_candidate::OperationKind::SetCorrelationSource
+pub designer_graph::board_candidate::OperationKind::SetGuardBudget
+pub designer_graph::board_candidate::OperationKind::SetGuardTrigger
+impl designer_graph::board_candidate::OperationKind
+pub const designer_graph::board_candidate::OperationKind::ALL: [designer_graph::board_candidate::OperationKind; 17]
+pub fn designer_graph::board_candidate::OperationKind::canonical_id(self) -> &'static str
+pub fn designer_graph::board_candidate::OperationKind::description(self) -> &'static str
+pub enum designer_graph::board_candidate::ProductionId
+pub designer_graph::board_candidate::ProductionId::HumanReviewWithRework
+pub designer_graph::board_candidate::ProductionId::InterruptingTimeout
+pub designer_graph::board_candidate::ProductionId::NonInterruptingNotification
+pub designer_graph::board_candidate::ProductionId::ReminderThenEscalate
+pub designer_graph::board_candidate::ProductionId::RequestAndWait
+impl designer_graph::board_candidate::ProductionId
+pub const designer_graph::board_candidate::ProductionId::ALL: [designer_graph::board_candidate::ProductionId; 5]
+pub fn designer_graph::board_candidate::ProductionId::canonical_id(self) -> &'static str
+pub fn designer_graph::board_candidate::ProductionId::description(self) -> &'static str
+pub struct designer_graph::board_candidate::BoardCandidate
+pub designer_graph::board_candidate::BoardCandidate::canonical_id: alloc::string::String
+pub designer_graph::board_candidate::BoardCandidate::description: alloc::string::String
+pub designer_graph::board_candidate::BoardCandidate::id: designer_graph::board_candidate::CandidateId
+pub designer_graph::board_candidate::BoardCandidate::schema_version: u32
+impl designer_graph::board_candidate::BoardCandidate
+pub fn designer_graph::board_candidate::BoardCandidate::new(designer_graph::board_candidate::CandidateId) -> Self
+pub trait designer_graph::board_candidate::LegalityOracle
+pub type designer_graph::board_candidate::LegalityOracle::NodeKey
+pub fn designer_graph::board_candidate::LegalityOracle::legal_candidates(&self, core::option::Option<&Self::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn designer_graph::board_candidate::LegalityOracle::legal_operations(&self, core::option::Option<&Self::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::OperationKind>
+pub fn designer_graph::board_candidate::LegalityOracle::legal_productions(&self, core::option::Option<&Self::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::ProductionId>
+impl<'a> designer_graph::board_candidate::LegalityOracle for designer_graph::positional::PositionalLegality<'a>
+pub type designer_graph::positional::PositionalLegality<'a>::NodeKey = designer_graph::schema::NodeKey
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_candidates(&self, core::option::Option<&Self::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_operations(&self, core::option::Option<&designer_graph::schema::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::OperationKind>
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_productions(&self, core::option::Option<&designer_graph::schema::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::ProductionId>
+pub mod designer_graph::ops
+pub enum designer_graph::ops::GuardTrigger
+pub designer_graph::ops::GuardTrigger::Error
+pub designer_graph::ops::GuardTrigger::Error::error_code: core::option::Option<alloc::string::String>
+pub designer_graph::ops::GuardTrigger::Timer(bpmn_lite_compiler::ir::TimerSpec)
+pub enum designer_graph::ops::Operation
+pub designer_graph::ops::Operation::AppendNode
+pub designer_graph::ops::Operation::AppendNode::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AppendNode::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::AppendNode::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AppendNode::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::Operation::AttachGuard
+pub designer_graph::ops::Operation::AttachGuard::guard_id: alloc::string::String
+pub designer_graph::ops::Operation::AttachGuard::host: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AttachGuard::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AttachGuard::trigger: designer_graph::ops::GuardTrigger
+pub designer_graph::ops::Operation::AttachRearmingGuard
+pub designer_graph::ops::Operation::AttachRearmingGuard::guard_id: alloc::string::String
+pub designer_graph::ops::Operation::AttachRearmingGuard::host: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AttachRearmingGuard::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::AttachRearmingGuard::trigger: designer_graph::ops::GuardTrigger
+pub designer_graph::ops::Operation::Connect
+pub designer_graph::ops::Operation::Connect::condition: core::option::Option<bpmn_lite_compiler::ir::ConditionExpr>
+pub designer_graph::ops::Operation::Connect::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::Connect::from: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::Connect::to: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateBranch
+pub designer_graph::ops::Operation::CreateBranch::condition: core::option::Option<bpmn_lite_compiler::ir::ConditionExpr>
+pub designer_graph::ops::Operation::CreateBranch::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateBranch::gateway: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateBranch::target: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateDataObject
+pub designer_graph::ops::Operation::CreateDataObject::id: alloc::string::String
+pub designer_graph::ops::Operation::CreateDataObject::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateDataObject::name: alloc::string::String
+pub designer_graph::ops::Operation::CreateDataObject::role: bpmn_lite_types::ffi_bindings::DataObjectRole
+pub designer_graph::ops::Operation::CreateDataObject::type_decl: bpmn_lite_types::ffi_bindings::DataObjectType
+pub designer_graph::ops::Operation::CreateInclusiveRegion
+pub designer_graph::ops::Operation::CreateInclusiveRegion::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateInclusiveRegion::branches: alloc::vec::Vec<designer_graph::ops::RegionBranch>
+pub designer_graph::ops::Operation::CreateInclusiveRegion::entry_edge_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateInclusiveRegion::fork_key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateInclusiveRegion::fork_node_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateInclusiveRegion::join_key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateInclusiveRegion::join_node_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateMultiInstanceRegion
+pub designer_graph::ops::Operation::CreateMultiInstanceRegion::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateMultiInstanceRegion::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateMultiInstanceRegion::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateMultiInstanceRegion::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::Operation::CreateParallelRegion
+pub designer_graph::ops::Operation::CreateParallelRegion::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateParallelRegion::branches: alloc::vec::Vec<designer_graph::ops::RegionBranch>
+pub designer_graph::ops::Operation::CreateParallelRegion::entry_edge_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateParallelRegion::fork_key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateParallelRegion::fork_node_id: alloc::string::String
+pub designer_graph::ops::Operation::CreateParallelRegion::join_key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::CreateParallelRegion::join_node_id: alloc::string::String
+pub designer_graph::ops::Operation::DeleteNode
+pub designer_graph::ops::Operation::DeleteNode::target: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::InsertAfter
+pub designer_graph::ops::Operation::InsertAfter::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::InsertAfter::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::InsertAfter::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::InsertAfter::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::Operation::InsertBefore
+pub designer_graph::ops::Operation::InsertBefore::anchor: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::InsertBefore::edge_id: alloc::string::String
+pub designer_graph::ops::Operation::InsertBefore::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::InsertBefore::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::Operation::ReplaceNode
+pub designer_graph::ops::Operation::ReplaceNode::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::ReplaceNode::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::Operation::ReplaceNode::target: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::SetCorrelationSource
+pub designer_graph::ops::Operation::SetCorrelationSource::corr_key_source: alloc::string::String
+pub designer_graph::ops::Operation::SetCorrelationSource::node: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::SetDefaultGuardBudget
+pub designer_graph::ops::Operation::SetDefaultGuardBudget::failure_budget: core::option::Option<u32>
+pub designer_graph::ops::Operation::SetDefaultRetryPolicy
+pub designer_graph::ops::Operation::SetDefaultRetryPolicy::policy: core::option::Option<bpmn_lite_compiler::ir::RetryPolicyDecl>
+pub designer_graph::ops::Operation::SetGuardBudget
+pub designer_graph::ops::Operation::SetGuardBudget::failure_budget: core::option::Option<u32>
+pub designer_graph::ops::Operation::SetGuardBudget::guard: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::SetGuardTrigger
+pub designer_graph::ops::Operation::SetGuardTrigger::guard: designer_graph::schema::NodeKey
+pub designer_graph::ops::Operation::SetGuardTrigger::trigger: designer_graph::ops::GuardTrigger
+pub struct designer_graph::ops::RegionBranch
+pub designer_graph::ops::RegionBranch::condition: core::option::Option<bpmn_lite_compiler::ir::ConditionExpr>
+pub designer_graph::ops::RegionBranch::in_edge_id: alloc::string::String
+pub designer_graph::ops::RegionBranch::key: designer_graph::schema::NodeKey
+pub designer_graph::ops::RegionBranch::node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::ops::RegionBranch::out_edge_id: alloc::string::String
+pub struct designer_graph::ops::StagedCandidate
+pub designer_graph::ops::StagedCandidate::applied: designer_graph::ops::Operation
+pub designer_graph::ops::StagedCandidate::candidate: designer_graph::schema::DesignerDag
+pub designer_graph::ops::StagedCandidate::provenance: designer_graph::schema::Provenance
+pub fn designer_graph::ops::apply(&designer_graph::schema::DesignerDag, designer_graph::ops::Operation, designer_graph::schema::Provenance) -> anyhow::Result<designer_graph::ops::StagedCandidate>
+pub mod designer_graph::positional
+pub struct designer_graph::positional::PositionalLegality<'a>
+pub designer_graph::positional::PositionalLegality::dag: &'a designer_graph::schema::DesignerDag
+impl<'a> designer_graph::board_candidate::LegalityOracle for designer_graph::positional::PositionalLegality<'a>
+pub type designer_graph::positional::PositionalLegality<'a>::NodeKey = designer_graph::schema::NodeKey
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_candidates(&self, core::option::Option<&Self::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_operations(&self, core::option::Option<&designer_graph::schema::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::OperationKind>
+pub fn designer_graph::positional::PositionalLegality<'a>::legal_productions(&self, core::option::Option<&designer_graph::schema::NodeKey>) -> alloc::vec::Vec<designer_graph::board_candidate::ProductionId>
+pub mod designer_graph::productions
+pub struct designer_graph::productions::InterruptingTimeoutBindings
+pub designer_graph::productions::InterruptingTimeoutBindings::anchor: designer_graph::schema::NodeKey
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_edge_id: alloc::string::String
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_end_edge_id: alloc::string::String
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_end_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_end_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::InterruptingTimeoutBindings::continuation_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::InterruptingTimeoutBindings::duration_ms: u64
+pub designer_graph::productions::InterruptingTimeoutBindings::guard_id: alloc::string::String
+pub designer_graph::productions::InterruptingTimeoutBindings::guard_key: designer_graph::schema::NodeKey
+pub struct designer_graph::productions::NonInterruptingNotificationBindings
+pub designer_graph::productions::NonInterruptingNotificationBindings::anchor: designer_graph::schema::NodeKey
+pub designer_graph::productions::NonInterruptingNotificationBindings::guard_id: alloc::string::String
+pub designer_graph::productions::NonInterruptingNotificationBindings::guard_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::NonInterruptingNotificationBindings::interval_ms: u64
+pub designer_graph::productions::NonInterruptingNotificationBindings::max_fires: u32
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_edge_id: alloc::string::String
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_end_edge_id: alloc::string::String
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_end_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_end_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::NonInterruptingNotificationBindings::notification_node: bpmn_lite_compiler::ir::IRNode
+pub struct designer_graph::productions::ReminderThenEscalateBindings
+pub designer_graph::productions::ReminderThenEscalateBindings::anchor: designer_graph::schema::NodeKey
+pub designer_graph::productions::ReminderThenEscalateBindings::cycle: bpmn_lite_compiler::ir::TimerSpec
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_edge_id: alloc::string::String
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_end_edge_id: alloc::string::String
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_end_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_end_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::ReminderThenEscalateBindings::escalation_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::ReminderThenEscalateBindings::guard_id: alloc::string::String
+pub designer_graph::productions::ReminderThenEscalateBindings::guard_key: designer_graph::schema::NodeKey
+pub struct designer_graph::productions::RequestAndWaitBindings
+pub designer_graph::productions::RequestAndWaitBindings::anchor: designer_graph::schema::NodeKey
+pub designer_graph::productions::RequestAndWaitBindings::send_edge_id: alloc::string::String
+pub designer_graph::productions::RequestAndWaitBindings::send_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::RequestAndWaitBindings::send_node: bpmn_lite_compiler::ir::IRNode
+pub designer_graph::productions::RequestAndWaitBindings::wait_edge_id: alloc::string::String
+pub designer_graph::productions::RequestAndWaitBindings::wait_key: designer_graph::schema::NodeKey
+pub designer_graph::productions::RequestAndWaitBindings::wait_node: bpmn_lite_compiler::ir::IRNode
+pub fn designer_graph::productions::apply_production(&designer_graph::schema::DesignerDag, alloc::vec::Vec<designer_graph::ops::Operation>, designer_graph::schema::Provenance) -> anyhow::Result<designer_graph::ops::StagedCandidate>
+pub fn designer_graph::productions::interrupting_timeout(designer_graph::productions::InterruptingTimeoutBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
+pub fn designer_graph::productions::non_interrupting_notification(designer_graph::productions::NonInterruptingNotificationBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
+pub fn designer_graph::productions::reminder_then_escalate(designer_graph::productions::ReminderThenEscalateBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
+pub fn designer_graph::productions::request_and_wait(designer_graph::productions::RequestAndWaitBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
+pub mod designer_graph::runbook
+pub fn designer_graph::runbook::render_operation(&designer_graph::ops::Operation) -> alloc::string::String
+pub fn designer_graph::runbook::render_runbook<'a>(impl core::iter::traits::collect::IntoIterator<Item = &'a designer_graph::ops::Operation>) -> alloc::string::String
+pub mod designer_graph::schema
+pub struct designer_graph::schema::DesignerDag
+pub designer_graph::schema::DesignerDag::name: alloc::string::String
+impl designer_graph::schema::DesignerDag
+pub fn designer_graph::schema::DesignerDag::admit(&self) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, alloc::vec::Vec<bpmn_lite_compiler::verifier::VerifyError>>
+pub fn designer_graph::schema::DesignerDag::graph_state_hash(&bpmn_lite_compiler::ir::IRGraph) -> alloc::string::String
+pub fn designer_graph::schema::DesignerDag::ir_graphs_equivalent(&bpmn_lite_compiler::ir::IRGraph, &bpmn_lite_compiler::ir::IRGraph) -> bool
+pub fn designer_graph::schema::DesignerDag::key_for_bpmn_id(&self, &str) -> core::option::Option<designer_graph::schema::NodeKey>
+pub fn designer_graph::schema::DesignerDag::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn designer_graph::schema::DesignerDag::node_count(&self) -> usize
+pub fn designer_graph::schema::DesignerDag::seed(&mut self, designer_graph::schema::NodeKey, bpmn_lite_compiler::ir::IRNode, designer_graph::schema::Provenance) -> anyhow::Result<designer_graph::schema::NodeKey>
+pub fn designer_graph::schema::DesignerDag::to_ir(&self) -> anyhow::Result<bpmn_lite_compiler::ir::IRGraph>
+impl designer_graph::schema::DesignerDag
+pub fn designer_graph::schema::DesignerDag::default_guard_budget(&self) -> core::option::Option<u32>
+pub fn designer_graph::schema::DesignerDag::default_retry_policy(&self) -> core::option::Option<bpmn_lite_compiler::ir::RetryPolicyDecl>
+pub struct designer_graph::schema::NodeKey(pub uuid::Uuid)
+pub struct designer_graph::schema::Provenance
+pub designer_graph::schema::Provenance::board_hash: core::option::Option<alloc::string::String>
+pub designer_graph::schema::Provenance::production: core::option::Option<(alloc::string::String, u32)>
+pub designer_graph::schema::Provenance::source_utterance: core::option::Option<alloc::string::String>

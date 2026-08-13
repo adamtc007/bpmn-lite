@@ -1,0 +1,560 @@
+# package: bpmn-lite-server-runner
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-server-runner -sss
+
+pub mod bpmn_lite_server_runner
+pub mod bpmn_lite_server_runner::event_fanout
+pub struct bpmn_lite_server_runner::event_fanout::EventFanout
+impl bpmn_lite_server_runner::event_fanout::EventFanout
+pub fn bpmn_lite_server_runner::event_fanout::EventFanout::new(alloc::sync::Arc<bpmn_lite_engine::engine::BpmnLiteEngine>, core::time::Duration) -> Self
+pub async fn bpmn_lite_server_runner::event_fanout::EventFanout::notify(&self, uuid::Uuid)
+pub async fn bpmn_lite_server_runner::event_fanout::EventFanout::start_postgres_listener(&alloc::sync::Arc<Self>, alloc::string::String) -> anyhow::Result<()>
+pub async fn bpmn_lite_server_runner::event_fanout::EventFanout::subscribe(&self, uuid::Uuid) -> core::result::Result<tokio::sync::mpsc::bounded::Receiver<core::result::Result<bpmn_lite_server_runner::grpc::proto::LifecycleEvent, tonic::status::Status>>, tonic::status::Status>
+pub const bpmn_lite_server_runner::event_fanout::EVENT_NOTIFY_CHANNEL: &str
+pub mod bpmn_lite_server_runner::grpc
+pub mod bpmn_lite_server_runner::grpc::proto
+pub mod bpmn_lite_server_runner::grpc::proto::bpmn_lite_client
+pub struct bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>
+impl bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<tonic::transport::channel::Channel>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<tonic::transport::channel::Channel>::connect<D>(D) -> core::result::Result<Self, tonic::transport::error::Error> where D: core::convert::TryInto<tonic::transport::channel::endpoint::Endpoint>, <D as core::convert::TryInto>::Error: core::convert::Into<tonic::codegen::StdError>
+impl<T> bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T> where T: tonic::client::service::GrpcService<tonic::body::BoxBody>, <T as tonic::client::service::GrpcService>::Error: core::convert::Into<tonic::codegen::StdError>, <T as tonic::client::service::GrpcService>::ResponseBody: http_body::Body<Data = bytes::bytes::Bytes> + core::marker::Send + 'static, <<T as tonic::client::service::GrpcService>::ResponseBody as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::activate_jobs(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest>) -> core::result::Result<tonic::response::Response<tonic::codec::decode::Streaming<bpmn_lite_server_runner::grpc::proto::JobActivationMsg>>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::cancel(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::CancelRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CancelResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::compile(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::CompileRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompileResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::complete_job(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::CompleteJobRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompleteJobResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::fail_job(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::FailJobRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::FailJobResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::health(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::HealthRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::HealthResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::inspect(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::InspectRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::InspectResponse>, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::max_decoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::max_encoding_message_size(self, usize) -> Self
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::metrics(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::MetricsRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::MetricsResponse>, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::new(T) -> Self
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::register_dmn_decision(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::register_grpc_template(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::register_http_template(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse>, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::signal(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::SignalRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::SignalResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::start_process(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::StartRequest>) -> core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::StartResponse>, tonic::status::Status>
+pub async fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::subscribe_events(&mut self, impl tonic::request::IntoRequest<bpmn_lite_server_runner::grpc::proto::SubscribeRequest>) -> core::result::Result<tonic::response::Response<tonic::codec::decode::Streaming<bpmn_lite_server_runner::grpc::proto::LifecycleEvent>>, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::with_interceptor<F>(T, F) -> bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<tonic::service::interceptor::InterceptedService<T, F>> where F: tonic::service::interceptor::Interceptor, <T as tonic::client::service::GrpcService>::ResponseBody: core::default::Default, T: tower_service::Service<http::request::Request<tonic::body::BoxBody>, Response = http::response::Response<<T as tonic::client::service::GrpcService<tonic::body::BoxBody>>::ResponseBody>>, <T as tower_service::Service<http::request::Request<tonic::body::BoxBody>>>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + core::marker::Sync
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_client::BpmnLiteClient<T>::with_origin(T, http::uri::Uri) -> Self
+pub mod bpmn_lite_server_runner::grpc::proto::bpmn_lite_server
+pub struct bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>
+impl<T> bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::accept_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::from_arc(alloc::sync::Arc<T>) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::max_decoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::max_encoding_message_size(self, usize) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::new(T) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::send_compressed(self, tonic::codec::compression::CompressionEncoding) -> Self
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::with_interceptor<F>(T, F) -> tonic::service::interceptor::InterceptedService<Self, F> where F: tonic::service::interceptor::Interceptor
+impl<T, B> tower_service::Service<http::request::Request<B>> for bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T> where T: bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite, B: http_body::Body + core::marker::Send + 'static, <B as http_body::Body>::Error: core::convert::Into<tonic::codegen::StdError> + core::marker::Send + 'static
+pub type bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::Error = core::convert::Infallible
+pub type bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::Future = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<<bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T> as tower_service::Service<http::request::Request<B>>>::Response, <bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T> as tower_service::Service<http::request::Request<B>>>::Error>> + core::marker::Send)>>
+pub type bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::Response = http::response::Response<http_body_util::combinators::box_body::UnsyncBoxBody<bytes::bytes::Bytes, tonic::status::Status>>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::call(&mut self, http::request::Request<B>) -> Self::Future
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::poll_ready(&mut self, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::result::Result<(), Self::Error>>
+impl<T> core::clone::Clone for bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::clone(&self) -> Self
+impl<T> tonic::server::NamedService for bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>
+pub const bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLiteServer<T>::NAME: &'static str
+pub const bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::SERVICE_NAME: &str
+pub trait bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite: core::marker::Send + core::marker::Sync + 'static
+pub type bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::ActivateJobsStream: futures_core::stream::Stream<Item = core::result::Result<bpmn_lite_server_runner::grpc::proto::JobActivationMsg, tonic::status::Status>> + core::marker::Send + 'static
+pub type bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::SubscribeEventsStream: futures_core::stream::Stream<Item = core::result::Result<bpmn_lite_server_runner::grpc::proto::LifecycleEvent, tonic::status::Status>> + core::marker::Send + 'static
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::activate_jobs<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::ActivateJobsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::cancel<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CancelRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CancelResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::compile<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompileRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompileResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::complete_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompleteJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompleteJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::fail_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::FailJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::FailJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::health<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::HealthRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::HealthResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::inspect<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::InspectRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::InspectResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::metrics<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::MetricsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::MetricsResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::register_dmn_decision<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::register_grpc_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::register_http_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::signal<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SignalRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::SignalResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::start_process<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::StartRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::StartResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite::subscribe_events<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SubscribeRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::SubscribeEventsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite for bpmn_lite_server_runner::grpc::BpmnLiteService
+pub type bpmn_lite_server_runner::grpc::BpmnLiteService::ActivateJobsStream = tokio_stream::wrappers::mpsc_bounded::ReceiverStream<core::result::Result<bpmn_lite_server_runner::grpc::proto::JobActivationMsg, tonic::status::Status>>
+pub type bpmn_lite_server_runner::grpc::BpmnLiteService::SubscribeEventsStream = tokio_stream::wrappers::mpsc_bounded::ReceiverStream<core::result::Result<bpmn_lite_server_runner::grpc::proto::LifecycleEvent, tonic::status::Status>>
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::activate_jobs<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::ActivateJobsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::cancel<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CancelRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CancelResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::compile<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompileRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompileResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::complete_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompleteJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompleteJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::fail_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::FailJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::FailJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::health<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::HealthRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::HealthResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::inspect<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::InspectRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::InspectResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::metrics<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::MetricsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::MetricsResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_dmn_decision<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_grpc_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_http_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::signal<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SignalRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::SignalResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::start_process<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::StartRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::StartResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::subscribe_events<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SubscribeRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::SubscribeEventsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub mod bpmn_lite_server_runner::grpc::proto::proto_value
+pub enum bpmn_lite_server_runner::grpc::proto::proto_value::Kind
+pub bpmn_lite_server_runner::grpc::proto::proto_value::Kind::ArrayValue(bpmn_lite_server_runner::grpc::proto::ProtoValueArray)
+pub bpmn_lite_server_runner::grpc::proto::proto_value::Kind::BoolValue(bool)
+pub bpmn_lite_server_runner::grpc::proto::proto_value::Kind::I64Value(i64)
+pub bpmn_lite_server_runner::grpc::proto::proto_value::Kind::StrValue(alloc::string::String)
+impl bpmn_lite_server_runner::grpc::proto::proto_value::Kind
+pub fn bpmn_lite_server_runner::grpc::proto::proto_value::Kind::encode(&self, &mut impl bytes::buf::buf_mut::BufMut)
+pub fn bpmn_lite_server_runner::grpc::proto::proto_value::Kind::encoded_len(&self) -> usize
+pub fn bpmn_lite_server_runner::grpc::proto::proto_value::Kind::merge(&mut core::option::Option<bpmn_lite_server_runner::grpc::proto::proto_value::Kind>, u32, prost::encoding::wire_type::WireType, &mut impl bytes::buf::buf_impl::Buf, prost::encoding::DecodeContext) -> core::result::Result<(), prost::error::DecodeError>
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::proto_value::Kind
+pub fn bpmn_lite_server_runner::grpc::proto::proto_value::Kind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest
+pub bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::max_jobs: i32
+pub bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::task_types: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::timeout_ms: i64
+pub bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::worker_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CancelRequest
+pub bpmn_lite_server_runner::grpc::proto::CancelRequest::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CancelRequest::reason: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CancelRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CancelRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CancelRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CancelRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CancelRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CancelRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CancelRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CancelRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CancelResponse
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CancelResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CancelResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CancelResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CancelResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CancelResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CancelResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CancelResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CompileRequest
+pub bpmn_lite_server_runner::grpc::proto::CompileRequest::bpmn_xml: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CompileRequest::validate_only: bool
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CompileRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompileRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CompileRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompileRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CompileRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompileRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CompileRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CompileResponse
+pub bpmn_lite_server_runner::grpc::proto::CompileResponse::bytecode_version: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::CompileResponse::diagnostics: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::Diagnostic>
+pub bpmn_lite_server_runner::grpc::proto::CompileResponse::flag_symbol_table: std::collections::hash::map::HashMap<u32, alloc::string::String>
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CompileResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompileResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CompileResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompileResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CompileResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompileResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CompileResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CompleteJobRequest
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::claim_token: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::domain_payload: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::domain_payload_hash: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::job_key: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::orch_flags: std::collections::hash::map::HashMap<alloc::string::String, bpmn_lite_server_runner::grpc::proto::ProtoValue>
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::worker_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CompleteJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CompleteJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CompleteJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::CompleteJobResponse
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::CompleteJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::CompleteJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::CompleteJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::CompleteJobResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::Diagnostic
+pub bpmn_lite_server_runner::grpc::proto::Diagnostic::element_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::Diagnostic::message: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::Diagnostic::severity: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::Diagnostic
+pub fn bpmn_lite_server_runner::grpc::proto::Diagnostic::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::Diagnostic
+pub fn bpmn_lite_server_runner::grpc::proto::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::Diagnostic
+pub fn bpmn_lite_server_runner::grpc::proto::Diagnostic::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::Diagnostic::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::FailJobRequest
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::claim_token: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::error_class: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::job_key: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::message: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::retry_hint_ms: i64
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FailJobRequest::worker_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::FailJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::FailJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::FailJobRequest
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::FailJobResponse
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::FailJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::FailJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::FailJobResponse
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::FailJobResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto
+pub bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::kind: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::name: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::required: bool
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto
+pub fn bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto
+pub fn bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto
+pub fn bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::FiberInfo
+pub bpmn_lite_server_runner::grpc::proto::FiberInfo::fiber_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::FiberInfo::pc: u32
+pub bpmn_lite_server_runner::grpc::proto::FiberInfo::wait_state: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::FiberInfo
+pub fn bpmn_lite_server_runner::grpc::proto::FiberInfo::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::FiberInfo
+pub fn bpmn_lite_server_runner::grpc::proto::FiberInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::FiberInfo
+pub fn bpmn_lite_server_runner::grpc::proto::FiberInfo::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::FiberInfo::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::HealthRequest
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::HealthRequest
+pub fn bpmn_lite_server_runner::grpc::proto::HealthRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::HealthRequest
+pub fn bpmn_lite_server_runner::grpc::proto::HealthRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::HealthRequest
+pub fn bpmn_lite_server_runner::grpc::proto::HealthRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::HealthRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::HealthResponse
+pub bpmn_lite_server_runner::grpc::proto::HealthResponse::ready: bool
+pub bpmn_lite_server_runner::grpc::proto::HealthResponse::status: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::HealthResponse
+pub fn bpmn_lite_server_runner::grpc::proto::HealthResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::HealthResponse
+pub fn bpmn_lite_server_runner::grpc::proto::HealthResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::HealthResponse
+pub fn bpmn_lite_server_runner::grpc::proto::HealthResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::HealthResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::InspectRequest
+pub bpmn_lite_server_runner::grpc::proto::InspectRequest::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::InspectRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::InspectRequest
+pub fn bpmn_lite_server_runner::grpc::proto::InspectRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::InspectRequest
+pub fn bpmn_lite_server_runner::grpc::proto::InspectRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::InspectRequest
+pub fn bpmn_lite_server_runner::grpc::proto::InspectRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::InspectRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::InspectResponse
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::bytecode_version: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::domain_payload_hash: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::fibers: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FiberInfo>
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::state: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::InspectResponse::waits: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::WaitInfo>
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::InspectResponse
+pub fn bpmn_lite_server_runner::grpc::proto::InspectResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::InspectResponse
+pub fn bpmn_lite_server_runner::grpc::proto::InspectResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::InspectResponse
+pub fn bpmn_lite_server_runner::grpc::proto::InspectResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::InspectResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::JobActivationMsg
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::claim_token: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::domain_payload: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::domain_payload_hash: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::entry_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::job_key: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::orch_flags: std::collections::hash::map::HashMap<alloc::string::String, bpmn_lite_server_runner::grpc::proto::ProtoValue>
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::retries_remaining: i32
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::runbook_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::service_task_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::session_stack_json: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::task_type: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::JobActivationMsg::worker_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::JobActivationMsg
+pub fn bpmn_lite_server_runner::grpc::proto::JobActivationMsg::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::JobActivationMsg
+pub fn bpmn_lite_server_runner::grpc::proto::JobActivationMsg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::JobActivationMsg
+pub fn bpmn_lite_server_runner::grpc::proto::JobActivationMsg::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::JobActivationMsg::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::LifecycleEvent
+pub bpmn_lite_server_runner::grpc::proto::LifecycleEvent::event_type: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::LifecycleEvent::payload_json: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::LifecycleEvent::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::LifecycleEvent::sequence: u64
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::LifecycleEvent
+pub fn bpmn_lite_server_runner::grpc::proto::LifecycleEvent::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::LifecycleEvent
+pub fn bpmn_lite_server_runner::grpc::proto::LifecycleEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::LifecycleEvent
+pub fn bpmn_lite_server_runner::grpc::proto::LifecycleEvent::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::LifecycleEvent::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::MetricsRequest
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::MetricsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::MetricsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::MetricsRequest
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::MetricsResponse
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::activations_claimed_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::activations_consumed_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::activations_released_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::active_subscriptions: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::job_activations_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::job_completions_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::job_failures_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::request_rejections_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::requests_total: u64
+pub bpmn_lite_server_runner::grpc::proto::MetricsResponse::subscription_rejections_total: u64
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::MetricsResponse
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::MetricsResponse
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::MetricsResponse
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::MetricsResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::ProtoValue
+pub bpmn_lite_server_runner::grpc::proto::ProtoValue::kind: core::option::Option<bpmn_lite_server_runner::grpc::proto::proto_value::Kind>
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::ProtoValue
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValue::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::ProtoValue
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::ProtoValue
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValue::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValue::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::ProtoValueArray
+pub bpmn_lite_server_runner::grpc::proto::ProtoValueArray::items: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::ProtoValue>
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::ProtoValueArray
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValueArray::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::ProtoValueArray
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValueArray::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::ProtoValueArray
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValueArray::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::ProtoValueArray::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::catalogue_toml: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::dmn_source: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::input_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::output_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::publisher: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse
+pub bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse::template_id_hex: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::endpoint: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::idempotency: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::input_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::output_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::publisher: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::timeout_ms: u64
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse
+pub bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse::template_id_hex: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::idempotency: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::input_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::method: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::output_fields: alloc::vec::Vec<bpmn_lite_server_runner::grpc::proto::FfiFieldSchemaProto>
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::path_params: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::publisher: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::static_headers: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::success_status_codes: alloc::vec::Vec<u32>
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::tenant_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::timeout_ms: u64
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::url: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse
+pub bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse::template_id_hex: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::SignalRequest
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::correlation_key: core::option::Option<bpmn_lite_server_runner::grpc::proto::ProtoValue>
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::message_name: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::msg_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::payload: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::SignalRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::SignalRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SignalRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::SignalRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SignalRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::SignalRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SignalRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::SignalRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::SignalResponse
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::SignalResponse
+pub fn bpmn_lite_server_runner::grpc::proto::SignalResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::SignalResponse
+pub fn bpmn_lite_server_runner::grpc::proto::SignalResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::SignalResponse
+pub fn bpmn_lite_server_runner::grpc::proto::SignalResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::SignalResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::StartRequest
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::bytecode_version: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::correlation_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::domain_payload: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::domain_payload_hash: alloc::vec::Vec<u8>
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::entry_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::orch_flags: std::collections::hash::map::HashMap<alloc::string::String, bpmn_lite_server_runner::grpc::proto::ProtoValue>
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::process_key: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::runbook_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::session_stack_json: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::StartRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::StartRequest
+pub fn bpmn_lite_server_runner::grpc::proto::StartRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::StartRequest
+pub fn bpmn_lite_server_runner::grpc::proto::StartRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::StartRequest
+pub fn bpmn_lite_server_runner::grpc::proto::StartRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::StartRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::StartResponse
+pub bpmn_lite_server_runner::grpc::proto::StartResponse::process_instance_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::StartResponse
+pub fn bpmn_lite_server_runner::grpc::proto::StartResponse::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::StartResponse
+pub fn bpmn_lite_server_runner::grpc::proto::StartResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::StartResponse
+pub fn bpmn_lite_server_runner::grpc::proto::StartResponse::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::StartResponse::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::SubscribeRequest
+pub bpmn_lite_server_runner::grpc::proto::SubscribeRequest::process_instance_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::SubscribeRequest::tenant_id: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::SubscribeRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SubscribeRequest::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::SubscribeRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SubscribeRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::SubscribeRequest
+pub fn bpmn_lite_server_runner::grpc::proto::SubscribeRequest::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::SubscribeRequest::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::proto::WaitInfo
+pub bpmn_lite_server_runner::grpc::proto::WaitInfo::detail: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::WaitInfo::fiber_id: alloc::string::String
+pub bpmn_lite_server_runner::grpc::proto::WaitInfo::wait_type: alloc::string::String
+impl core::default::Default for bpmn_lite_server_runner::grpc::proto::WaitInfo
+pub fn bpmn_lite_server_runner::grpc::proto::WaitInfo::default() -> Self
+impl core::fmt::Debug for bpmn_lite_server_runner::grpc::proto::WaitInfo
+pub fn bpmn_lite_server_runner::grpc::proto::WaitInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl prost::message::Message for bpmn_lite_server_runner::grpc::proto::WaitInfo
+pub fn bpmn_lite_server_runner::grpc::proto::WaitInfo::clear(&mut self)
+pub fn bpmn_lite_server_runner::grpc::proto::WaitInfo::encoded_len(&self) -> usize
+pub struct bpmn_lite_server_runner::grpc::BpmnLiteService
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::engine: alloc::sync::Arc<bpmn_lite_engine::engine::BpmnLiteEngine>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::event_fanout: alloc::sync::Arc<bpmn_lite_server_runner::event_fanout::EventFanout>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::ffi_catalogue: alloc::sync::Arc<ffi_catalogue::catalogue::FfiCatalogue>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::ffi_owner: alloc::sync::Arc<dmn_lite_bridge::owner::DmnLiteOwner>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::ffi_store: alloc::sync::Arc<dyn ffi_catalogue::store::FfiTemplateStore>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::grpc_ffi_owner: alloc::sync::Arc<bpmn_lite_ffi_grpc::owner::GrpcFfiOwner>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::http_ffi_owner: alloc::sync::Arc<bpmn_lite_ffi_http::owner::HttpFfiOwner>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::limits: bpmn_lite_server_runner::grpc::RequestLimits
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::metrics: alloc::sync::Arc<bpmn_lite_server_runner::grpc::ServerMetrics>
+pub bpmn_lite_server_runner::grpc::BpmnLiteService::subscription_limiter: alloc::sync::Arc<tokio::sync::semaphore::Semaphore>
+impl bpmn_lite_server_runner::grpc::proto::bpmn_lite_server::BpmnLite for bpmn_lite_server_runner::grpc::BpmnLiteService
+pub type bpmn_lite_server_runner::grpc::BpmnLiteService::ActivateJobsStream = tokio_stream::wrappers::mpsc_bounded::ReceiverStream<core::result::Result<bpmn_lite_server_runner::grpc::proto::JobActivationMsg, tonic::status::Status>>
+pub type bpmn_lite_server_runner::grpc::BpmnLiteService::SubscribeEventsStream = tokio_stream::wrappers::mpsc_bounded::ReceiverStream<core::result::Result<bpmn_lite_server_runner::grpc::proto::LifecycleEvent, tonic::status::Status>>
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::activate_jobs<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::ActivateJobsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::ActivateJobsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::cancel<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CancelRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CancelResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::compile<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompileRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompileResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::complete_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::CompleteJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::CompleteJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::fail_job<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::FailJobRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::FailJobResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::health<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::HealthRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::HealthResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::inspect<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::InspectRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::InspectResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::metrics<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::MetricsRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::MetricsResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_dmn_decision<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterDmnDecisionResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_grpc_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterGrpcTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::register_http_template<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::RegisterHttpTemplateResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::signal<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SignalRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::SignalResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::start_process<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::StartRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<bpmn_lite_server_runner::grpc::proto::StartResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn bpmn_lite_server_runner::grpc::BpmnLiteService::subscribe_events<'life0, 'async_trait>(&'life0 self, tonic::request::Request<bpmn_lite_server_runner::grpc::proto::SubscribeRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<Self::SubscribeEventsStream>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct bpmn_lite_server_runner::grpc::RequestLimits
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_activate_jobs: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_bpmn_xml_bytes: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_event_subscriptions: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_orch_flags: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_payload_bytes: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_session_stack_bytes: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_string_bytes: usize
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_subscription_secs: u64
+pub bpmn_lite_server_runner::grpc::RequestLimits::max_task_types: usize
+impl bpmn_lite_server_runner::grpc::RequestLimits
+pub fn bpmn_lite_server_runner::grpc::RequestLimits::check_orch_flags(&self, &std::collections::hash::map::HashMap<alloc::string::String, bpmn_lite_server_runner::grpc::proto::ProtoValue>) -> core::result::Result<(), tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::RequestLimits::from_env() -> Self
+impl core::default::Default for bpmn_lite_server_runner::grpc::RequestLimits
+pub fn bpmn_lite_server_runner::grpc::RequestLimits::default() -> Self
+pub struct bpmn_lite_server_runner::grpc::ServerMetrics
+pub fn bpmn_lite_server_runner::grpc::check_proto_value_array_limits(&bpmn_lite_server_runner::grpc::proto::ProtoValue) -> core::result::Result<(), bpmn_lite_types::types::ValueLimitError>
+pub fn bpmn_lite_server_runner::grpc::parse_bytecode_version(&[u8]) -> core::result::Result<[u8; 32], tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::parse_hash(&[u8]) -> core::result::Result<[u8; 32], tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::parse_uuid(&str) -> core::result::Result<uuid::Uuid, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto_to_correlation_value(&core::option::Option<bpmn_lite_server_runner::grpc::proto::ProtoValue>) -> core::result::Result<alloc::string::String, tonic::status::Status>
+pub fn bpmn_lite_server_runner::grpc::proto_to_value(&bpmn_lite_server_runner::grpc::proto::ProtoValue) -> bpmn_lite_types::types::Value
+pub mod bpmn_lite_server_runner::rest
+pub struct bpmn_lite_server_runner::rest::RunnerState
+impl bpmn_lite_server_runner::rest::RunnerState
+pub fn bpmn_lite_server_runner::rest::RunnerState::try_new() -> core::result::Result<alloc::sync::Arc<Self>, anyhow::Error>
+pub fn bpmn_lite_server_runner::rest::runner_router(alloc::sync::Arc<bpmn_lite_server_runner::rest::RunnerState>) -> axum::routing::Router

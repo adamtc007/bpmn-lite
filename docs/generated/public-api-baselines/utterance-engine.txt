@@ -1,0 +1,560 @@
+# package: utterance-engine
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p utterance-engine -sss
+
+pub mod utterance_engine
+pub mod utterance_engine::board
+pub struct utterance_engine::board::Board
+pub utterance_engine::board::Board::board_hash: alloc::string::String
+pub utterance_engine::board::Board::candidates: alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub utterance_engine::board::Board::context: utterance_engine::board::BoardContext
+impl utterance_engine::board::Board
+pub fn utterance_engine::board::Board::contains(&self, &str) -> bool
+impl utterance_engine::board::InferenceBoard for utterance_engine::board::Board
+pub fn utterance_engine::board::Board::anchor(&self) -> core::option::Option<&str>
+pub fn utterance_engine::board::Board::board_hash(&self) -> &str
+pub fn utterance_engine::board::Board::candidate_description(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn utterance_engine::board::Board::contains(&self, &str) -> bool
+pub fn utterance_engine::board::Board::graph_identity(&self) -> &str
+pub fn utterance_engine::board::Board::inference_candidates(&self) -> alloc::vec::Vec<utterance_engine::board::InferenceCandidate>
+pub fn utterance_engine::board::Board::pack_identity(&self) -> &str
+pub fn utterance_engine::board::Board::schema_label(&self) -> &'static str
+pub fn utterance_engine::board::Board::semantic_board(&self) -> core::option::Option<&semantic_decision_contracts::SemanticDecisionBoard>
+pub struct utterance_engine::board::BoardContext
+pub utterance_engine::board::BoardContext::anchor: core::option::Option<alloc::string::String>
+pub utterance_engine::board::BoardContext::graph_identity: core::option::Option<alloc::string::String>
+pub utterance_engine::board::BoardContext::pack_identity: alloc::string::String
+pub struct utterance_engine::board::EmptyUniverse
+impl utterance_engine::board::BoardUniverseProvider for utterance_engine::board::EmptyUniverse
+pub fn utterance_engine::board::EmptyUniverse::candidates(&self) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn utterance_engine::board::EmptyUniverse::pack_identity(&self) -> alloc::string::String
+pub struct utterance_engine::board::InferenceCandidate
+pub utterance_engine::board::InferenceCandidate::canonical_id: alloc::string::String
+pub utterance_engine::board::InferenceCandidate::description: alloc::string::String
+pub utterance_engine::board::InferenceCandidate::schema_version: u32
+pub struct utterance_engine::board::PolicyFilter
+pub utterance_engine::board::PolicyFilter::denied: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub trait utterance_engine::board::BoardUniverseProvider
+pub fn utterance_engine::board::BoardUniverseProvider::candidates(&self) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn utterance_engine::board::BoardUniverseProvider::pack_identity(&self) -> alloc::string::String
+impl utterance_engine::board::BoardUniverseProvider for utterance_engine::board::EmptyUniverse
+pub fn utterance_engine::board::EmptyUniverse::candidates(&self) -> alloc::vec::Vec<designer_graph::board_candidate::BoardCandidate>
+pub fn utterance_engine::board::EmptyUniverse::pack_identity(&self) -> alloc::string::String
+pub trait utterance_engine::board::InferenceBoard: core::marker::Send + core::marker::Sync
+pub fn utterance_engine::board::InferenceBoard::anchor(&self) -> core::option::Option<&str>
+pub fn utterance_engine::board::InferenceBoard::board_hash(&self) -> &str
+pub fn utterance_engine::board::InferenceBoard::candidate_description(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn utterance_engine::board::InferenceBoard::contains(&self, &str) -> bool
+pub fn utterance_engine::board::InferenceBoard::graph_identity(&self) -> &str
+pub fn utterance_engine::board::InferenceBoard::inference_candidates(&self) -> alloc::vec::Vec<utterance_engine::board::InferenceCandidate>
+pub fn utterance_engine::board::InferenceBoard::pack_identity(&self) -> &str
+pub fn utterance_engine::board::InferenceBoard::schema_label(&self) -> &'static str
+pub fn utterance_engine::board::InferenceBoard::semantic_board(&self) -> core::option::Option<&semantic_decision_contracts::SemanticDecisionBoard>
+impl utterance_engine::board::InferenceBoard for semantic_decision_contracts::SemanticDecisionBoard
+pub fn semantic_decision_contracts::SemanticDecisionBoard::anchor(&self) -> core::option::Option<&str>
+pub fn semantic_decision_contracts::SemanticDecisionBoard::board_hash(&self) -> &str
+pub fn semantic_decision_contracts::SemanticDecisionBoard::candidate_description(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn semantic_decision_contracts::SemanticDecisionBoard::contains(&self, &str) -> bool
+pub fn semantic_decision_contracts::SemanticDecisionBoard::graph_identity(&self) -> &str
+pub fn semantic_decision_contracts::SemanticDecisionBoard::inference_candidates(&self) -> alloc::vec::Vec<utterance_engine::board::InferenceCandidate>
+pub fn semantic_decision_contracts::SemanticDecisionBoard::pack_identity(&self) -> &str
+pub fn semantic_decision_contracts::SemanticDecisionBoard::schema_label(&self) -> &'static str
+pub fn semantic_decision_contracts::SemanticDecisionBoard::semantic_board(&self) -> core::option::Option<&semantic_decision_contracts::SemanticDecisionBoard>
+impl utterance_engine::board::InferenceBoard for utterance_engine::board::Board
+pub fn utterance_engine::board::Board::anchor(&self) -> core::option::Option<&str>
+pub fn utterance_engine::board::Board::board_hash(&self) -> &str
+pub fn utterance_engine::board::Board::candidate_description(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn utterance_engine::board::Board::contains(&self, &str) -> bool
+pub fn utterance_engine::board::Board::graph_identity(&self) -> &str
+pub fn utterance_engine::board::Board::inference_candidates(&self) -> alloc::vec::Vec<utterance_engine::board::InferenceCandidate>
+pub fn utterance_engine::board::Board::pack_identity(&self) -> &str
+pub fn utterance_engine::board::Board::schema_label(&self) -> &'static str
+pub fn utterance_engine::board::Board::semantic_board(&self) -> core::option::Option<&semantic_decision_contracts::SemanticDecisionBoard>
+pub fn utterance_engine::board::build_board<O: designer_graph::board_candidate::LegalityOracle>(&O, core::option::Option<(&<O as designer_graph::board_candidate::LegalityOracle>::NodeKey, &str)>, core::option::Option<&str>, &dyn utterance_engine::board::BoardUniverseProvider, &utterance_engine::board::PolicyFilter) -> anyhow::Result<utterance_engine::board::Board>
+pub mod utterance_engine::bpmn_board
+pub enum utterance_engine::bpmn_board::BpmnBoardError
+pub utterance_engine::bpmn_board::BpmnBoardError::Binding(alloc::string::String)
+pub utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused
+pub utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused::candidate_id: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::CompilerRefused::diagnostics: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::bpmn_board::BpmnBoardError::Continuity(alloc::string::String)
+pub utterance_engine::bpmn_board::BpmnBoardError::Gameboard(semantic_decision_contracts::gameboard::GameboardContractError)
+pub utterance_engine::bpmn_board::BpmnBoardError::GraphProjection(alloc::string::String)
+pub utterance_engine::bpmn_board::BpmnBoardError::InvalidAnchor
+pub utterance_engine::bpmn_board::BpmnBoardError::InvalidAnchor::bpmn_id: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::MissingMutationImplementation
+pub utterance_engine::bpmn_board::BpmnBoardError::MissingMutationImplementation::canonical_id: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::MissingSemanticContract
+pub utterance_engine::bpmn_board::BpmnBoardError::MissingSemanticContract::canonical_id: &'static str
+pub utterance_engine::bpmn_board::BpmnBoardError::PreviewEncoding(alloc::string::String)
+pub utterance_engine::bpmn_board::BpmnBoardError::ResourceLimit(utterance_engine::bpmn_board::ResourceLimitExceeded)
+pub utterance_engine::bpmn_board::BpmnBoardError::Shared(semantic_decision_contracts::DecisionBoardError)
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleBoardAnchor
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleBoardAnchor::bpmn_id: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleBoardRevision
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleBoardRevision::board_revision: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleBoardRevision::current_revision: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleWorkbook
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleWorkbook::current_revision: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::StaleWorkbook::workbook_revision: alloc::string::String
+pub utterance_engine::bpmn_board::BpmnBoardError::WorkbookNotReady
+pub utterance_engine::bpmn_board::BpmnBoardError::WorkbookNotReady::status: semantic_decision_contracts::ProposalStatus
+pub struct utterance_engine::bpmn_board::BpmnBoundGameTurnProjection
+impl utterance_engine::bpmn_board::BpmnBoundGameTurnProjection
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::belief(&self) -> &semantic_decision_contracts::gameboard::DesignBelief
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::bound_move_id(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::disposition(&self) -> &semantic_decision_contracts::gameboard::GameDisposition
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::evidence(&self) -> &[semantic_decision_contracts::gameboard::MoveEvidence]
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::origin_move_id(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::bpmn_board::BpmnBoundGameTurnProjection::position(&self) -> &semantic_decision_contracts::gameboard::DesignPosition
+pub struct utterance_engine::bpmn_board::BpmnBoundProposal
+impl utterance_engine::bpmn_board::BpmnBoundProposal
+pub fn utterance_engine::bpmn_board::BpmnBoundProposal::description(&self) -> &str
+pub fn utterance_engine::bpmn_board::BpmnBoundProposal::operations(&self) -> &[designer_graph::ops::Operation]
+pub struct utterance_engine::bpmn_board::BpmnMoveGuidance
+impl utterance_engine::bpmn_board::BpmnMoveGuidance
+pub fn utterance_engine::bpmn_board::BpmnMoveGuidance::applicability(&self) -> semantic_decision_contracts::gameboard::ApplicabilityState
+pub fn utterance_engine::bpmn_board::BpmnMoveGuidance::explanation(&self) -> &semantic_decision_contracts::gameboard::RuleExplanation
+pub fn utterance_engine::bpmn_board::BpmnMoveGuidance::recoveries(&self) -> &[semantic_decision_contracts::gameboard::FeedbackOption]
+pub struct utterance_engine::bpmn_board::BpmnWorkbookPreview
+impl utterance_engine::bpmn_board::BpmnWorkbookPreview
+pub fn utterance_engine::bpmn_board::BpmnWorkbookPreview::bound(&self) -> &utterance_engine::bpmn_board::BpmnBoundProposal
+pub fn utterance_engine::bpmn_board::BpmnWorkbookPreview::delta(&self) -> &semantic_decision_contracts::gameboard::GraphDeltaPreview
+pub struct utterance_engine::bpmn_board::ChainStep
+pub utterance_engine::bpmn_board::ChainStep::move_id: semantic_decision_contracts::gameboard::LegalMoveId
+pub utterance_engine::bpmn_board::ChainStep::operations: alloc::vec::Vec<designer_graph::ops::Operation>
+pub struct utterance_engine::bpmn_board::ResourceLimitExceeded
+pub utterance_engine::bpmn_board::ResourceLimitExceeded::actual: usize
+pub utterance_engine::bpmn_board::ResourceLimitExceeded::field: &'static str
+pub utterance_engine::bpmn_board::ResourceLimitExceeded::limit: usize
+pub fn utterance_engine::bpmn_board::bpmn_legal_move_id_for_operation(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::gameboard::DesignPosition, &designer_graph::ops::Operation) -> core::option::Option<semantic_decision_contracts::gameboard::LegalMoveId>
+pub fn utterance_engine::bpmn_board::bpmn_semantic_snapshot_identity() -> alloc::string::String
+pub fn utterance_engine::bpmn_board::build_bpmn_design_position(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::SemanticDecisionBoard, &str, &str, &str, &str, semantic_decision_contracts::gameboard::DesignFocus, core::option::Option<&str>) -> core::result::Result<semantic_decision_contracts::gameboard::DesignPosition, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::build_bpmn_semantic_board(&designer_graph::schema::DesignerDag, core::option::Option<(designer_graph::schema::NodeKey, &str)>, &str, &utterance_engine::board::PolicyFilter) -> core::result::Result<semantic_decision_contracts::SemanticDecisionBoard, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::capture_bpmn_game_turn(semantic_decision_contracts::gameboard::GameSessionId, semantic_decision_contracts::gameboard::DesignTurnId, u64, u64, &semantic_decision_contracts::SemanticDecisionBoard, semantic_decision_contracts::gameboard::DesignPosition, alloc::vec::Vec<semantic_decision_contracts::gameboard::MoveEvidence>, semantic_decision_contracts::gameboard::DesignBelief, semantic_decision_contracts::gameboard::GameDisposition, &str, semantic_decision_contracts::gameboard::GameTurnAnswer, core::option::Option<semantic_decision_contracts::gameboard::LegalMoveId>, core::option::Option<semantic_decision_contracts::gameboard::GraphDeltaPreview>, semantic_decision_contracts::gameboard::GameTurnAttempt, semantic_decision_contracts::gameboard::GameTurnCompilerResult, alloc::vec::Vec<semantic_decision_contracts::gameboard::MoveAttemptReceipt>) -> core::result::Result<semantic_decision_contracts::gameboard::GameTurnRecord, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::decide_bpmn_game_disposition(&semantic_decision_contracts::SemanticDecisionBoard, &semantic_decision_contracts::gameboard::DesignPosition, &[semantic_decision_contracts::gameboard::MoveEvidence], &semantic_decision_contracts::gameboard::DesignBelief, &str, semantic_decision_contracts::gameboard::MoveAttemptId, &[semantic_decision_contracts::gameboard::MoveAttemptReceipt], core::option::Option<&utterance_engine::disposition::ResolvedChain>) -> core::result::Result<semantic_decision_contracts::gameboard::GameDisposition, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::explain_bpmn_candidate(&semantic_decision_contracts::SemanticDecisionBoard, &semantic_decision_contracts::gameboard::DesignPosition, &str, &utterance_engine::board::PolicyFilter) -> core::result::Result<utterance_engine::bpmn_board::BpmnMoveGuidance, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::finalize_bpmn_move_evidence(&semantic_decision_contracts::SemanticDecisionBoard, &semantic_decision_contracts::gameboard::DesignPosition, &str, utterance_engine::contract::SlmResult, semantic_decision_contracts::EvidenceLane, alloc::vec::Vec<alloc::string::String>, &[semantic_decision_contracts::gameboard::MoveAttemptReceipt]) -> anyhow::Result<utterance_engine::contract::SlmResult>
+pub fn utterance_engine::bpmn_board::graph_content_hash_over<'a>(impl core::iter::traits::iterator::Iterator<Item = &'a str>) -> alloc::string::String
+pub fn utterance_engine::bpmn_board::materialize_bpmn_workbook(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::ProposalWorkbook) -> core::result::Result<utterance_engine::bpmn_board::BpmnBoundProposal, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::preview_bpmn_workbook(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::ProposalWorkbook, &str, &str) -> core::result::Result<utterance_engine::bpmn_board::BpmnWorkbookPreview, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::project_bpmn_attempt_history(&[semantic_decision_contracts::gameboard::MoveAttemptReceipt]) -> core::result::Result<(alloc::string::String, alloc::vec::Vec<semantic_decision_contracts::gameboard::MoveAttemptReceipt>), utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::project_bpmn_bound_game_turn(&semantic_decision_contracts::gameboard::DesignPosition, &[semantic_decision_contracts::gameboard::MoveEvidence], &semantic_decision_contracts::gameboard::DesignBelief, &semantic_decision_contracts::ProposalWorkbook, &semantic_decision_contracts::gameboard::GraphDeltaPreview) -> core::result::Result<utterance_engine::bpmn_board::BpmnBoundGameTurnProjection, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::project_design_position(&semantic_decision_contracts::SemanticDecisionBoard, &str, &str, &str, &str, semantic_decision_contracts::gameboard::DesignFocus, core::option::Option<&str>) -> core::result::Result<semantic_decision_contracts::gameboard::DesignPosition, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::record_bpmn_attempt(&semantic_decision_contracts::gameboard::DesignPosition, semantic_decision_contracts::gameboard::MoveAttemptId, core::option::Option<semantic_decision_contracts::gameboard::LegalMoveId>, &str, semantic_decision_contracts::gameboard::MoveAttemptOutcome, core::option::Option<semantic_decision_contracts::gameboard::MoveAttemptId>, core::option::Option<semantic_decision_contracts::gameboard::CorrectionKind>) -> core::result::Result<semantic_decision_contracts::gameboard::MoveAttemptReceipt, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::render_bpmn_game_disposition(&semantic_decision_contracts::gameboard::GameDisposition, &semantic_decision_contracts::SemanticDecisionBoard, &semantic_decision_contracts::gameboard::DesignPosition) -> core::result::Result<alloc::string::String, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::resolve_hypothetical_chain(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::SemanticDecisionBoard, &semantic_decision_contracts::gameboard::DesignPosition, &str, &str, &[&str], semantic_decision_contracts::gameboard::DesignFocus, &[utterance_engine::bpmn_board::ChainStep]) -> core::result::Result<alloc::vec::Vec<semantic_decision_contracts::gameboard::DesignPosition>, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::resolve_hypothetical_position(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::SemanticDecisionBoard, &str, &str, &str, &semantic_decision_contracts::gameboard::DesignPosition, semantic_decision_contracts::gameboard::DesignFocus) -> core::result::Result<semantic_decision_contracts::gameboard::DesignPosition, utterance_engine::bpmn_board::BpmnBoardError>
+pub fn utterance_engine::bpmn_board::update_bpmn_design_belief(&designer_graph::schema::DesignerDag, &semantic_decision_contracts::gameboard::DesignPosition, &[semantic_decision_contracts::gameboard::MoveEvidence], &[semantic_decision_contracts::gameboard::MoveAttemptReceipt], core::option::Option<&semantic_decision_contracts::gameboard::DesignBelief>) -> core::result::Result<semantic_decision_contracts::gameboard::DesignBelief, utterance_engine::bpmn_board::BpmnBoardError>
+pub mod utterance_engine::context
+pub struct utterance_engine::context::AnchorContext
+pub utterance_engine::context::AnchorContext::attached_guards: alloc::vec::Vec<utterance_engine::context::NodeSummary>
+pub utterance_engine::context::AnchorContext::node: utterance_engine::context::NodeSummary
+pub utterance_engine::context::AnchorContext::predecessors: alloc::vec::Vec<utterance_engine::context::NodeSummary>
+pub utterance_engine::context::AnchorContext::successors: alloc::vec::Vec<utterance_engine::context::NodeSummary>
+pub struct utterance_engine::context::ContextProjection
+impl utterance_engine::context::ContextProjection
+pub fn utterance_engine::context::ContextProjection::hash(&self) -> alloc::string::String
+pub fn utterance_engine::context::ContextProjection::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, core::option::Option<utterance_engine::context::AnchorContext>, alloc::vec::Vec<(alloc::string::String, u32)>) -> anyhow::Result<Self>
+pub fn utterance_engine::context::ContextProjection::serialize_canonical(&self) -> alloc::string::String
+pub struct utterance_engine::context::NodeSummary
+pub utterance_engine::context::NodeSummary::id: alloc::string::String
+pub utterance_engine::context::NodeSummary::kind: alloc::string::String
+pub const utterance_engine::context::CONTEXT_PROJECTION_SCHEMA_VERSION: u32
+pub fn utterance_engine::context::ir_kind_str(&bpmn_lite_compiler::ir::IRNode) -> &'static str
+pub fn utterance_engine::context::minimal(&str, &str) -> utterance_engine::context::ContextProjection
+pub fn utterance_engine::context::project_ir(&petgraph::graph_impl::Graph<bpmn_lite_compiler::ir::IRNode, bpmn_lite_compiler::ir::IREdge>, core::option::Option<&str>, &str, &str) -> anyhow::Result<utterance_engine::context::ContextProjection>
+pub mod utterance_engine::contract
+pub struct utterance_engine::contract::EvidenceTrace
+pub utterance_engine::contract::EvidenceTrace::bundle_identities: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::contract::EvidenceTrace::candidate_serializer_hash: alloc::string::String
+pub utterance_engine::contract::EvidenceTrace::exact_collision: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::contract::EvidenceTrace::lanes: alloc::vec::Vec<semantic_decision_contracts::EvidenceLane>
+pub utterance_engine::contract::EvidenceTrace::served_full_board: bool
+pub utterance_engine::contract::EvidenceTrace::turn_serializer_hash: alloc::string::String
+pub struct utterance_engine::contract::FiniteScore(_)
+impl utterance_engine::contract::FiniteScore
+pub fn utterance_engine::contract::FiniteScore::get(self) -> f64
+pub fn utterance_engine::contract::FiniteScore::new(f64) -> anyhow::Result<Self>
+impl core::convert::From<utterance_engine::contract::FiniteScore> for f64
+pub fn f64::from(utterance_engine::contract::FiniteScore) -> f64
+impl core::convert::TryFrom<f64> for utterance_engine::contract::FiniteScore
+pub type utterance_engine::contract::FiniteScore::Error = alloc::string::String
+pub fn utterance_engine::contract::FiniteScore::try_from(f64) -> core::result::Result<Self, alloc::string::String>
+pub struct utterance_engine::contract::RankedCandidate
+pub utterance_engine::contract::RankedCandidate::candidate_id: alloc::string::String
+pub utterance_engine::contract::RankedCandidate::score: utterance_engine::contract::FiniteScore
+pub struct utterance_engine::contract::SlmResult
+pub utterance_engine::contract::SlmResult::board_hash: alloc::string::String
+pub utterance_engine::contract::SlmResult::evidence_trace: core::option::Option<utterance_engine::contract::EvidenceTrace>
+pub utterance_engine::contract::SlmResult::inference_evidence: core::option::Option<semantic_decision_contracts::InferenceEvidence>
+pub utterance_engine::contract::SlmResult::model_bundle_hash: alloc::string::String
+pub utterance_engine::contract::SlmResult::move_evidence: alloc::vec::Vec<semantic_decision_contracts::gameboard::MoveEvidence>
+pub utterance_engine::contract::SlmResult::ranking: alloc::vec::Vec<utterance_engine::contract::RankedCandidate>
+pub utterance_engine::contract::SlmResult::retrieved_subset_hash: alloc::string::String
+pub const utterance_engine::contract::NONE_OF_THE_ABOVE: &str
+pub fn utterance_engine::contract::rank_canonically(&mut [utterance_engine::contract::RankedCandidate])
+pub mod utterance_engine::corpus_schema
+pub struct utterance_engine::corpus_schema::BankEntry
+pub utterance_engine::corpus_schema::BankEntry::class_id: alloc::string::String
+pub utterance_engine::corpus_schema::BankEntry::label: alloc::string::String
+pub utterance_engine::corpus_schema::BankEntry::pair_group: core::option::Option<alloc::string::String>
+pub utterance_engine::corpus_schema::BankEntry::paraphrase_seq: u32
+pub utterance_engine::corpus_schema::BankEntry::regime: alloc::string::String
+pub utterance_engine::corpus_schema::BankEntry::text: alloc::string::String
+pub struct utterance_engine::corpus_schema::BoardDump
+pub utterance_engine::corpus_schema::BoardDump::anchor: core::option::Option<alloc::string::String>
+pub utterance_engine::corpus_schema::BoardDump::candidates: alloc::vec::Vec<utterance_engine::corpus_schema::CandDump>
+pub utterance_engine::corpus_schema::BoardDump::graph_identity: alloc::string::String
+pub utterance_engine::corpus_schema::BoardDump::pack_identity: alloc::string::String
+pub utterance_engine::corpus_schema::BoardDump::policy_denied: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::corpus_schema::BoardDump::schema: alloc::string::String
+pub utterance_engine::corpus_schema::BoardDump::semantic_board: core::option::Option<semantic_decision_contracts::SemanticDecisionBoard>
+impl utterance_engine::corpus_schema::BoardDump
+pub fn utterance_engine::corpus_schema::BoardDump::from_board(&utterance_engine::board::Board) -> Self
+pub fn utterance_engine::corpus_schema::BoardDump::from_inference_board(&dyn utterance_engine::board::InferenceBoard) -> Self
+pub struct utterance_engine::corpus_schema::CandDump
+pub utterance_engine::corpus_schema::CandDump::canonical_id: alloc::string::String
+pub utterance_engine::corpus_schema::CandDump::description: alloc::string::String
+pub utterance_engine::corpus_schema::CandDump::schema_version: u32
+pub struct utterance_engine::corpus_schema::Example
+pub utterance_engine::corpus_schema::Example::board: utterance_engine::corpus_schema::BoardDump
+pub utterance_engine::corpus_schema::Example::board_hash: alloc::string::String
+pub utterance_engine::corpus_schema::Example::context_projection: alloc::string::String
+pub utterance_engine::corpus_schema::Example::context_projection_hash: alloc::string::String
+pub utterance_engine::corpus_schema::Example::example_id: alloc::string::String
+pub utterance_engine::corpus_schema::Example::family_id: alloc::string::String
+pub utterance_engine::corpus_schema::Example::gold_in_tier1: bool
+pub utterance_engine::corpus_schema::Example::label: alloc::string::String
+pub utterance_engine::corpus_schema::Example::pair_group_id: core::option::Option<alloc::string::String>
+pub utterance_engine::corpus_schema::Example::provenance: alloc::string::String
+pub utterance_engine::corpus_schema::Example::retrieved_subset_hash: alloc::string::String
+pub utterance_engine::corpus_schema::Example::semantic_v3: core::option::Option<utterance_engine::corpus_schema::SemanticCorpusClosure>
+pub utterance_engine::corpus_schema::Example::style_regime: alloc::string::String
+pub utterance_engine::corpus_schema::Example::tier1_list: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::corpus_schema::Example::utterance: alloc::string::String
+pub struct utterance_engine::corpus_schema::ScoredCandidatePair
+pub utterance_engine::corpus_schema::ScoredCandidatePair::candidate_id: alloc::string::String
+pub utterance_engine::corpus_schema::ScoredCandidatePair::candidate_semantic_hash: alloc::string::String
+pub utterance_engine::corpus_schema::ScoredCandidatePair::candidate_semantic_text: alloc::string::String
+pub utterance_engine::corpus_schema::ScoredCandidatePair::pair: utterance_engine::pair::SerializedCandidatePair
+pub struct utterance_engine::corpus_schema::SemanticCorpusClosure
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::author_provenance: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::binding_requirements: alloc::vec::Vec<semantic_decision_contracts::ArgumentSpec>
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::board_inclusion_truth: bool
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::candidate_pairs: alloc::vec::Vec<utterance_engine::corpus_schema::ScoredCandidatePair>
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::candidate_serializer_hash: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::candidate_serializer_id: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::corpus_schema_hash: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::corpus_schema_id: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::evidence_lanes: alloc::vec::Vec<semantic_decision_contracts::EvidenceLane>
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::exact_match: utterance_engine::exact::ExactMatchDump
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::full_served_list: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::pair_serializer_hash: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::pair_serializer_id: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::semantic_board_schema_version: u32
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::semantic_family: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::semantic_pack_identity: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::split_group: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::turn_serializer_hash: alloc::string::String
+pub utterance_engine::corpus_schema::SemanticCorpusClosure::turn_serializer_id: alloc::string::String
+impl utterance_engine::corpus_schema::SemanticCorpusClosure
+pub fn utterance_engine::corpus_schema::SemanticCorpusClosure::new(&semantic_decision_contracts::SemanticDecisionBoard, &str, &utterance_engine::context::ContextProjection, &str, alloc::string::String, alloc::string::String, alloc::string::String) -> anyhow::Result<Self>
+pub const utterance_engine::corpus_schema::CORPUS_SCHEMA_ID: &str
+pub fn utterance_engine::corpus_schema::corpus_schema_hash() -> alloc::string::String
+pub mod utterance_engine::dev_capture
+pub enum utterance_engine::dev_capture::DevSessionSubject
+pub utterance_engine::dev_capture::DevSessionSubject::Adam
+pub struct utterance_engine::dev_capture::DevSessionCaptureInput
+pub utterance_engine::dev_capture::DevSessionCaptureInput::action_span_producer_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::board: utterance_engine::corpus_schema::BoardDump
+pub utterance_engine::dev_capture::DevSessionCaptureInput::board_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::context_projection: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::context_projection_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::decision_record_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::disposition: utterance_engine::policy::ProposalDisposition
+pub utterance_engine::dev_capture::DevSessionCaptureInput::disposition_policy_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::evidence_trace: core::option::Option<utterance_engine::contract::EvidenceTrace>
+pub utterance_engine::dev_capture::DevSessionCaptureInput::model_bundle_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::ranking: alloc::vec::Vec<(alloc::string::String, utterance_engine::contract::FiniteScore)>
+pub utterance_engine::dev_capture::DevSessionCaptureInput::raw_utterance: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionCaptureInput::retrieved_subset_hash: alloc::string::String
+pub struct utterance_engine::dev_capture::DevSessionRecord
+pub utterance_engine::dev_capture::DevSessionRecord::action_span_producer_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::board: utterance_engine::corpus_schema::BoardDump
+pub utterance_engine::dev_capture::DevSessionRecord::board_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::consent_statement_timestamp: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::context_projection: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::context_projection_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::decision_record_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::disposition: utterance_engine::policy::ProposalDisposition
+pub utterance_engine::dev_capture::DevSessionRecord::disposition_policy_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::evidence_trace: core::option::Option<utterance_engine::contract::EvidenceTrace>
+pub utterance_engine::dev_capture::DevSessionRecord::model_bundle_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::provenance: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::ranking: alloc::vec::Vec<(alloc::string::String, utterance_engine::contract::FiniteScore)>
+pub utterance_engine::dev_capture::DevSessionRecord::raw_utterance: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::retrieved_subset_hash: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::session_id: alloc::string::String
+pub utterance_engine::dev_capture::DevSessionRecord::subject: utterance_engine::dev_capture::DevSessionSubject
+pub struct utterance_engine::dev_capture::DevSessionStore
+impl utterance_engine::dev_capture::DevSessionStore
+pub fn utterance_engine::dev_capture::DevSessionStore::capture(&self, utterance_engine::dev_capture::DevSessionCaptureInput) -> utterance_engine::dev_capture::DevSessionRecord
+pub fn utterance_engine::dev_capture::DevSessionStore::consent_statement_timestamp(&self) -> &str
+pub fn utterance_engine::dev_capture::DevSessionStore::open(&str, &str) -> anyhow::Result<Self>
+pub fn utterance_engine::dev_capture::DevSessionStore::session_id(&self) -> &str
+pub const utterance_engine::dev_capture::DEV_SESSION_PROVENANCE: &str
+pub mod utterance_engine::disposition
+pub struct utterance_engine::disposition::ActionSpanEvidence
+pub utterance_engine::disposition::ActionSpanEvidence::spans: alloc::vec::Vec<alloc::string::String>
+pub struct utterance_engine::disposition::ResolvedChain
+pub utterance_engine::disposition::ResolvedChain::moves: alloc::vec::Vec<semantic_decision_contracts::gameboard::LegalMoveId>
+pub utterance_engine::disposition::ResolvedChain::spans: alloc::vec::Vec<alloc::string::String>
+pub struct utterance_engine::disposition::StrictCompoundSyntax
+impl utterance_engine::disposition::ActionSpanProducer for utterance_engine::disposition::StrictCompoundSyntax
+pub fn utterance_engine::disposition::StrictCompoundSyntax::detect(&self, &str, &semantic_decision_contracts::SemanticDecisionBoard) -> core::option::Option<utterance_engine::disposition::ActionSpanEvidence>
+pub fn utterance_engine::disposition::StrictCompoundSyntax::producer_id(&self) -> &'static str
+pub const utterance_engine::disposition::NO_ACTION_SPAN_PRODUCER_ID: &str
+pub const utterance_engine::disposition::STRICT_ACTION_SPAN_PRODUCER_ID: &str
+pub trait utterance_engine::disposition::ActionSpanProducer: core::marker::Send + core::marker::Sync
+pub fn utterance_engine::disposition::ActionSpanProducer::detect(&self, &str, &semantic_decision_contracts::SemanticDecisionBoard) -> core::option::Option<utterance_engine::disposition::ActionSpanEvidence>
+pub fn utterance_engine::disposition::ActionSpanProducer::producer_id(&self) -> &'static str
+impl utterance_engine::disposition::ActionSpanProducer for utterance_engine::disposition::StrictCompoundSyntax
+pub fn utterance_engine::disposition::StrictCompoundSyntax::detect(&self, &str, &semantic_decision_contracts::SemanticDecisionBoard) -> core::option::Option<utterance_engine::disposition::ActionSpanEvidence>
+pub fn utterance_engine::disposition::StrictCompoundSyntax::producer_id(&self) -> &'static str
+pub fn utterance_engine::disposition::producer_hash(&str) -> alloc::string::String
+pub mod utterance_engine::exact
+pub use utterance_engine::exact::EvidenceLane
+pub enum utterance_engine::exact::ExactMatch
+pub utterance_engine::exact::ExactMatch::Collision(alloc::vec::Vec<alloc::string::String>)
+pub utterance_engine::exact::ExactMatch::None
+pub utterance_engine::exact::ExactMatch::Unique(alloc::string::String)
+pub const utterance_engine::exact::CANDIDATE_SERIALIZER_ID: &str
+pub const utterance_engine::exact::GOVERNED_EXACT_BUNDLE_ID: &str
+pub fn utterance_engine::exact::candidate_serializer_hash() -> alloc::string::String
+pub fn utterance_engine::exact::finalize_semantic_evidence(&semantic_decision_contracts::SemanticDecisionBoard, &str, utterance_engine::contract::SlmResult, alloc::vec::Vec<semantic_decision_contracts::EvidenceLane>, alloc::vec::Vec<alloc::string::String>) -> anyhow::Result<utterance_engine::contract::SlmResult>
+pub fn utterance_engine::exact::governed_exact(&semantic_decision_contracts::SemanticDecisionBoard, &str) -> utterance_engine::exact::ExactMatch
+pub fn utterance_engine::exact::normalize_phrase(&str) -> alloc::string::String
+pub fn utterance_engine::exact::serialize_candidate(&semantic_decision_contracts::CandidateSemanticSlice) -> alloc::string::String
+pub type utterance_engine::exact::ExactMatchDump = utterance_engine::exact::ExactMatch
+pub mod utterance_engine::fixtures
+pub struct utterance_engine::fixtures::ClassState
+pub utterance_engine::fixtures::ClassState::anchor_id: core::option::Option<&'static str>
+pub utterance_engine::fixtures::ClassState::anchor_key: core::option::Option<designer_graph::schema::NodeKey>
+pub utterance_engine::fixtures::ClassState::class_id: &'static str
+pub utterance_engine::fixtures::ClassState::dag: designer_graph::schema::DesignerDag
+pub fn utterance_engine::fixtures::enumeration_classes() -> anyhow::Result<alloc::vec::Vec<utterance_engine::fixtures::ClassState>>
+pub mod utterance_engine::pair
+pub enum utterance_engine::pair::SerializationError
+pub utterance_engine::pair::SerializationError::BudgetTooSmall
+pub utterance_engine::pair::SerializationError::BudgetTooSmall::minimum: usize
+pub struct utterance_engine::pair::PairTokenBudget
+pub utterance_engine::pair::PairTokenBudget::side_a_tokens: usize
+pub utterance_engine::pair::PairTokenBudget::side_b_tokens: usize
+impl core::default::Default for utterance_engine::pair::PairTokenBudget
+pub fn utterance_engine::pair::PairTokenBudget::default() -> Self
+pub struct utterance_engine::pair::SerializedCandidatePair
+pub utterance_engine::pair::SerializedCandidatePair::budget: utterance_engine::pair::PairTokenBudget
+pub utterance_engine::pair::SerializedCandidatePair::pair_hash: alloc::string::String
+pub utterance_engine::pair::SerializedCandidatePair::serializer_id: alloc::string::String
+pub utterance_engine::pair::SerializedCandidatePair::side_a: alloc::string::String
+pub utterance_engine::pair::SerializedCandidatePair::side_a_hash: alloc::string::String
+pub utterance_engine::pair::SerializedCandidatePair::side_b: alloc::string::String
+pub utterance_engine::pair::SerializedCandidatePair::side_b_hash: alloc::string::String
+pub const utterance_engine::pair::PAIR_SERIALIZER_ID: &str
+pub const utterance_engine::pair::TURN_SERIALIZER_ID: &str
+pub fn utterance_engine::pair::pair_serializer_hash() -> alloc::string::String
+pub fn utterance_engine::pair::serialize_candidate_pair(&str, &utterance_engine::context::ContextProjection, &semantic_decision_contracts::CandidateSemanticSlice, utterance_engine::pair::PairTokenBudget) -> core::result::Result<utterance_engine::pair::SerializedCandidatePair, utterance_engine::pair::SerializationError>
+pub fn utterance_engine::pair::turn_serializer_hash() -> alloc::string::String
+pub mod utterance_engine::policy
+pub enum utterance_engine::policy::ProposalDisposition
+pub utterance_engine::policy::ProposalDisposition::Ambiguous
+pub utterance_engine::policy::ProposalDisposition::Ambiguous::question: alloc::string::String
+pub utterance_engine::policy::ProposalDisposition::Ambiguous::top_candidates: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::policy::ProposalDisposition::Candidate
+pub utterance_engine::policy::ProposalDisposition::Candidate::candidate_id: alloc::string::String
+pub utterance_engine::policy::ProposalDisposition::Compound
+pub utterance_engine::policy::ProposalDisposition::Compound::spans: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::policy::ProposalDisposition::EscalateToSage
+pub utterance_engine::policy::ProposalDisposition::EscalateToSage::reason: alloc::string::String
+pub utterance_engine::policy::ProposalDisposition::MissingArguments
+pub utterance_engine::policy::ProposalDisposition::MissingArguments::candidate_id: alloc::string::String
+pub utterance_engine::policy::ProposalDisposition::MissingArguments::missing: alloc::vec::Vec<alloc::string::String>
+pub utterance_engine::policy::ProposalDisposition::OutOfScope
+pub struct utterance_engine::policy::ConfigRegistry
+impl utterance_engine::policy::ConfigRegistry
+pub fn utterance_engine::policy::ConfigRegistry::register(&mut self, utterance_engine::policy::DispositionConfig) -> alloc::string::String
+pub fn utterance_engine::policy::ConfigRegistry::resolve(&self, &str) -> core::option::Option<&utterance_engine::policy::DispositionConfig>
+pub struct utterance_engine::policy::DecisionRecord
+pub utterance_engine::policy::DecisionRecord::action_span_producer_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::board: core::option::Option<utterance_engine::corpus_schema::BoardDump>
+pub utterance_engine::policy::DecisionRecord::board_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::context_projection_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::decision_record_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::disposition: utterance_engine::policy::ProposalDisposition
+pub utterance_engine::policy::DecisionRecord::disposition_policy_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::evidence_trace: core::option::Option<utterance_engine::contract::EvidenceTrace>
+pub utterance_engine::policy::DecisionRecord::model_bundle_hash: alloc::string::String
+pub utterance_engine::policy::DecisionRecord::ranking: alloc::vec::Vec<(alloc::string::String, utterance_engine::contract::FiniteScore)>
+pub utterance_engine::policy::DecisionRecord::retrieved_subset_hash: alloc::string::String
+pub struct utterance_engine::policy::DispositionConfig
+pub utterance_engine::policy::DispositionConfig::acceptance_floor: f64
+pub utterance_engine::policy::DispositionConfig::policy_version: u32
+pub utterance_engine::policy::DispositionConfig::separation_margin: f64
+impl utterance_engine::policy::DispositionConfig
+pub fn utterance_engine::policy::DispositionConfig::policy_hash(&self) -> alloc::string::String
+pub fn utterance_engine::policy::DispositionConfig::shadow_v1() -> Self
+pub fn utterance_engine::policy::DispositionConfig::shadow_v2() -> Self
+pub fn utterance_engine::policy::decide(&utterance_engine::policy::DispositionConfig, &dyn utterance_engine::board::InferenceBoard, &utterance_engine::contract::SlmResult, &utterance_engine::context::ContextProjection) -> anyhow::Result<(utterance_engine::policy::ProposalDisposition, utterance_engine::policy::DecisionRecord)>
+pub fn utterance_engine::policy::decide_with_action_spans(&utterance_engine::policy::DispositionConfig, &dyn utterance_engine::board::InferenceBoard, &utterance_engine::contract::SlmResult, &utterance_engine::context::ContextProjection, &str, &dyn utterance_engine::disposition::ActionSpanProducer) -> anyhow::Result<(utterance_engine::policy::ProposalDisposition, utterance_engine::policy::DecisionRecord)>
+pub mod utterance_engine::retrieval
+pub struct utterance_engine::retrieval::LexicalTier0
+impl utterance_engine::retrieval::Tier0Retriever for utterance_engine::retrieval::LexicalTier0
+pub fn utterance_engine::retrieval::LexicalTier0::bundle_identity(&self) -> alloc::string::String
+pub fn utterance_engine::retrieval::LexicalTier0::retrieve(&self, &str, &dyn utterance_engine::board::InferenceBoard) -> anyhow::Result<utterance_engine::contract::SlmResult>
+pub const utterance_engine::retrieval::TIER1_K: usize
+pub trait utterance_engine::retrieval::Tier0Retriever
+pub fn utterance_engine::retrieval::Tier0Retriever::bundle_identity(&self) -> alloc::string::String
+pub fn utterance_engine::retrieval::Tier0Retriever::retrieve(&self, &str, &dyn utterance_engine::board::InferenceBoard) -> anyhow::Result<utterance_engine::contract::SlmResult>
+impl utterance_engine::retrieval::Tier0Retriever for utterance_engine::retrieval::LexicalTier0
+pub fn utterance_engine::retrieval::LexicalTier0::bundle_identity(&self) -> alloc::string::String
+pub fn utterance_engine::retrieval::LexicalTier0::retrieve(&self, &str, &dyn utterance_engine::board::InferenceBoard) -> anyhow::Result<utterance_engine::contract::SlmResult>
+pub fn utterance_engine::retrieval::tier1_list(&utterance_engine::contract::SlmResult, usize) -> alloc::vec::Vec<alloc::string::String>
+pub enum utterance_engine::BoardSizeBucket
+pub utterance_engine::BoardSizeBucket::Large
+pub utterance_engine::BoardSizeBucket::Medium
+pub utterance_engine::BoardSizeBucket::Small
+impl utterance_engine::BoardSizeBucket
+pub fn utterance_engine::BoardSizeBucket::for_size(usize) -> anyhow::Result<Self>
+pub enum utterance_engine::ResolverBoundaryRefusal
+pub utterance_engine::ResolverBoundaryRefusal::BoardTooLarge
+pub utterance_engine::ResolverBoundaryRefusal::BundleCardMismatch
+pub utterance_engine::ResolverBoundaryRefusal::DuplicateMove
+pub utterance_engine::ResolverBoundaryRefusal::EmptyBoard
+pub utterance_engine::ResolverBoundaryRefusal::EmptyCandidateText
+pub utterance_engine::ResolverBoundaryRefusal::ForeignMove
+pub utterance_engine::ResolverBoundaryRefusal::IncompleteBoard
+pub utterance_engine::ResolverBoundaryRefusal::ModelRefusal
+pub utterance_engine::ResolverBoundaryRefusal::NonFiniteScore
+pub utterance_engine::ResolverBoundaryRefusal::OversizedCandidateText
+pub utterance_engine::ResolverBoundaryRefusal::OversizedPromptText
+pub utterance_engine::ResolverBoundaryRefusal::ProducerFailure
+pub utterance_engine::ResolverBoundaryRefusal::TokenBudgetExceeded
+pub enum utterance_engine::ResolverVariant
+pub utterance_engine::ResolverVariant::BoundedPromptOffline
+pub utterance_engine::ResolverVariant::DeterministicFusion
+pub utterance_engine::ResolverVariant::DeterministicFusionWithCandle
+pub utterance_engine::ResolverVariant::StructuredChoice
+impl utterance_engine::ResolverVariant
+pub const utterance_engine::ResolverVariant::ALL: [Self; 4]
+pub struct utterance_engine::BoundedOfflineCandidateText
+impl utterance_engine::BoundedOfflineCandidateText
+pub fn utterance_engine::BoundedOfflineCandidateText::move_id(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::BoundedOfflineCandidateText::observed_tokens(&self) -> usize
+pub fn utterance_engine::BoundedOfflineCandidateText::text(&self) -> &str
+pub struct utterance_engine::BoundedOfflineRankerRequest
+impl utterance_engine::BoundedOfflineRankerRequest
+pub fn utterance_engine::BoundedOfflineRankerRequest::candidates(&self) -> &[utterance_engine::BoundedOfflineCandidateText]
+pub fn utterance_engine::BoundedOfflineRankerRequest::model_bundle_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::BoundedOfflineRankerRequest::move_set_hash(&self) -> &semantic_decision_contracts::gameboard::MoveSetHash
+pub fn utterance_engine::BoundedOfflineRankerRequest::new(&semantic_decision_contracts::gameboard::DesignPosition, alloc::string::String, usize, alloc::vec::Vec<(semantic_decision_contracts::gameboard::LegalMoveId, alloc::string::String, usize)>, usize, semantic_decision_contracts::gameboard::GraphContentHash, semantic_decision_contracts::gameboard::GraphContentHash) -> core::result::Result<Self, utterance_engine::ResolverBoundaryRefusal>
+pub fn utterance_engine::BoundedOfflineRankerRequest::position_id(&self) -> &semantic_decision_contracts::gameboard::DesignStateId
+pub fn utterance_engine::BoundedOfflineRankerRequest::prompt_observed_tokens(&self) -> usize
+pub fn utterance_engine::BoundedOfflineRankerRequest::prompt_text(&self) -> &str
+pub fn utterance_engine::BoundedOfflineRankerRequest::request_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::BoundedOfflineRankerRequest::token_budget(&self) -> usize
+pub struct utterance_engine::ProportionInterval
+impl utterance_engine::ProportionInterval
+pub fn utterance_engine::ProportionInterval::estimate(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::ProportionInterval::lower(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::ProportionInterval::upper(&self) -> semantic_decision_contracts::FiniteScore
+pub struct utterance_engine::ResolverBoardPacket
+impl utterance_engine::ResolverBoardPacket
+pub fn utterance_engine::ResolverBoardPacket::board_size(&self) -> usize
+pub fn utterance_engine::ResolverBoardPacket::move_set_hash(&self) -> &semantic_decision_contracts::gameboard::MoveSetHash
+pub fn utterance_engine::ResolverBoardPacket::packet_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::ResolverBoardPacket::position_id(&self) -> &semantic_decision_contracts::gameboard::DesignStateId
+pub fn utterance_engine::ResolverBoardPacket::ranked(&semantic_decision_contracts::gameboard::DesignPosition, utterance_engine::ResolverVariant, alloc::vec::Vec<(semantic_decision_contracts::gameboard::LegalMoveId, f64)>) -> core::result::Result<Self, utterance_engine::ResolverBoundaryRefusal>
+pub fn utterance_engine::ResolverBoardPacket::refusal(&self) -> core::option::Option<utterance_engine::ResolverBoundaryRefusal>
+pub fn utterance_engine::ResolverBoardPacket::refused(&semantic_decision_contracts::gameboard::DesignPosition, utterance_engine::ResolverVariant, utterance_engine::ResolverBoundaryRefusal) -> anyhow::Result<Self>
+pub fn utterance_engine::ResolverBoardPacket::scores(&self) -> &[utterance_engine::ResolverCandidateScore]
+pub fn utterance_engine::ResolverBoardPacket::variant(&self) -> utterance_engine::ResolverVariant
+pub struct utterance_engine::ResolverCandidateScore
+impl utterance_engine::ResolverCandidateScore
+pub fn utterance_engine::ResolverCandidateScore::move_id(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::ResolverCandidateScore::score(&self) -> semantic_decision_contracts::FiniteScore
+pub struct utterance_engine::ResolverComparisonCase
+impl utterance_engine::ResolverComparisonCase
+pub fn utterance_engine::ResolverComparisonCase::new(&semantic_decision_contracts::gameboard::GameTurnRecord, &semantic_decision_contracts::gameboard::GameTurnAdjudication, alloc::vec::Vec<utterance_engine::ResolverBoardPacket>) -> anyhow::Result<Self>
+pub struct utterance_engine::ResolverComparisonReport
+impl utterance_engine::ResolverComparisonReport
+pub fn utterance_engine::ResolverComparisonReport::case_count(&self) -> usize
+pub fn utterance_engine::ResolverComparisonReport::metrics(&self) -> &[utterance_engine::ResolverMetrics]
+pub fn utterance_engine::ResolverComparisonReport::report_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub struct utterance_engine::ResolverMetrics
+impl utterance_engine::ResolverMetrics
+pub fn utterance_engine::ResolverMetrics::labelled_turns(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::mean_negative_log_likelihood(&self) -> core::option::Option<semantic_decision_contracts::FiniteScore>
+pub fn utterance_engine::ResolverMetrics::mean_reciprocal_rank(&self) -> core::option::Option<semantic_decision_contracts::FiniteScore>
+pub fn utterance_engine::ResolverMetrics::ranked_turns(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::refused_turns(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::risk_class(&self) -> core::option::Option<semantic_decision_contracts::HarmClass>
+pub fn utterance_engine::ResolverMetrics::top_one(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::top_one_interval(&self) -> core::option::Option<utterance_engine::ProportionInterval>
+pub fn utterance_engine::ResolverMetrics::top_three(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::top_three_interval(&self) -> core::option::Option<utterance_engine::ProportionInterval>
+pub fn utterance_engine::ResolverMetrics::unlabelled_turns(&self) -> usize
+pub fn utterance_engine::ResolverMetrics::variant(&self) -> utterance_engine::ResolverVariant
+pub struct utterance_engine::StructuredChoiceCalibration
+impl utterance_engine::StructuredChoiceCalibration
+pub fn utterance_engine::StructuredChoiceCalibration::calibrate(&self, &utterance_engine::StructuredChoiceModel, semantic_decision_contracts::HarmClass, &[utterance_engine::StructuredChoiceScore]) -> anyhow::Result<alloc::vec::Vec<utterance_engine::StructuredChoiceScore>>
+pub fn utterance_engine::StructuredChoiceCalibration::calibration_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::StructuredChoiceCalibration::cells(&self) -> &[utterance_engine::StructuredChoiceCalibrationCell]
+pub fn utterance_engine::StructuredChoiceCalibration::fit_validation(&utterance_engine::StructuredChoiceModel, &[utterance_engine::StructuredChoiceCalibrationObservation]) -> anyhow::Result<Self>
+pub fn utterance_engine::StructuredChoiceCalibration::model_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::StructuredChoiceCalibration::validation_data_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub struct utterance_engine::StructuredChoiceCalibrationCell
+impl utterance_engine::StructuredChoiceCalibrationCell
+pub fn utterance_engine::StructuredChoiceCalibrationCell::board_size(&self) -> utterance_engine::BoardSizeBucket
+pub fn utterance_engine::StructuredChoiceCalibrationCell::mean_negative_log_likelihood(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::StructuredChoiceCalibrationCell::observations(&self) -> usize
+pub fn utterance_engine::StructuredChoiceCalibrationCell::risk_class(&self) -> semantic_decision_contracts::HarmClass
+pub fn utterance_engine::StructuredChoiceCalibrationCell::temperature(&self) -> semantic_decision_contracts::FiniteScore
+pub struct utterance_engine::StructuredChoiceCalibrationObservation
+impl utterance_engine::StructuredChoiceCalibrationObservation
+pub fn utterance_engine::StructuredChoiceCalibrationObservation::observation(&self) -> &utterance_engine::StructuredChoiceObservation
+pub fn utterance_engine::StructuredChoiceCalibrationObservation::record_hash(&self) -> &str
+pub struct utterance_engine::StructuredChoiceFitConfig
+impl utterance_engine::StructuredChoiceFitConfig
+pub fn utterance_engine::StructuredChoiceFitConfig::iterations(&self) -> u32
+pub fn utterance_engine::StructuredChoiceFitConfig::l2_penalty(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::StructuredChoiceFitConfig::learning_rate(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::StructuredChoiceFitConfig::maximum_absolute_weight(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::StructuredChoiceFitConfig::new(u32, f64, f64, f64) -> anyhow::Result<Self>
+pub struct utterance_engine::StructuredChoiceModel
+impl utterance_engine::StructuredChoiceModel
+pub fn utterance_engine::StructuredChoiceModel::fit(&[utterance_engine::StructuredChoiceObservation], utterance_engine::StructuredChoiceFitConfig) -> anyhow::Result<Self>
+pub fn utterance_engine::StructuredChoiceModel::fit_config(&self) -> &utterance_engine::StructuredChoiceFitConfig
+pub fn utterance_engine::StructuredChoiceModel::model_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::StructuredChoiceModel::score(&self, &[semantic_decision_contracts::gameboard::MoveEvidence]) -> anyhow::Result<alloc::vec::Vec<utterance_engine::StructuredChoiceScore>>
+pub fn utterance_engine::StructuredChoiceModel::training_data_hash(&self) -> &semantic_decision_contracts::gameboard::GraphContentHash
+pub fn utterance_engine::StructuredChoiceModel::training_observations(&self) -> usize
+pub fn utterance_engine::StructuredChoiceModel::weights(&self) -> &alloc::collections::btree::map::BTreeMap<semantic_decision_contracts::EvidenceLane, semantic_decision_contracts::FiniteScore>
+pub struct utterance_engine::StructuredChoiceObservation
+impl utterance_engine::StructuredChoiceObservation
+pub fn utterance_engine::StructuredChoiceObservation::chosen_move(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::StructuredChoiceObservation::evidence(&self) -> &[semantic_decision_contracts::gameboard::MoveEvidence]
+pub fn utterance_engine::StructuredChoiceObservation::risk_class(&self) -> semantic_decision_contracts::HarmClass
+pub struct utterance_engine::StructuredChoiceScore
+impl utterance_engine::StructuredChoiceScore
+pub fn utterance_engine::StructuredChoiceScore::move_id(&self) -> &semantic_decision_contracts::gameboard::LegalMoveId
+pub fn utterance_engine::StructuredChoiceScore::probability(&self) -> semantic_decision_contracts::FiniteScore
+pub fn utterance_engine::StructuredChoiceScore::utility(&self) -> semantic_decision_contracts::FiniteScore
+pub const utterance_engine::MAX_ENUMERATION_CANDIDATES: usize
+pub const utterance_engine::MAX_HISTORY_ATTEMPTS: usize
+pub const utterance_engine::MAX_HISTORY_BYTES: usize
+pub const utterance_engine::MAX_OFFLINE_CANDIDATE_BYTES: usize
+pub const utterance_engine::MAX_OFFLINE_PROMPT_BYTES: usize
+pub const utterance_engine::MAX_OFFLINE_TOKEN_BUDGET: usize
+pub const utterance_engine::MAX_RESOLVER_BOARD_SIZE: usize
+pub fn utterance_engine::compare_resolvers(&[utterance_engine::ResolverComparisonCase]) -> anyhow::Result<utterance_engine::ResolverComparisonReport>

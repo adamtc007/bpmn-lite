@@ -1,0 +1,1527 @@
+# package: bpmn-lite-types
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-types -sss
+
+pub mod bpmn_lite_types
+pub use bpmn_lite_types::Uuid
+pub mod bpmn_lite_types::integrity
+pub struct bpmn_lite_types::integrity::IntegrityViolation
+pub bpmn_lite_types::integrity::IntegrityViolation::detection_point: alloc::string::String
+pub bpmn_lite_types::integrity::IntegrityViolation::instance_id: uuid::Uuid
+pub bpmn_lite_types::integrity::IntegrityViolation::tenant_id: alloc::string::String
+pub fn bpmn_lite_types::integrity::compute_instance_integrity_hash(&bpmn_lite_types::ProcessInstance) -> [u8; 32]
+pub mod bpmn_lite_types::session_stack
+pub enum bpmn_lite_types::session_stack::SessionWorkspaceKind
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::BookingPrincipal
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Bpmn
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Catalogue
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::InstrumentMatrix
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::LifecycleResources
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::OnBoarding
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::ProductMaintenance
+pub bpmn_lite_types::session_stack::SessionWorkspaceKind::SemOsMaintenance
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::session_stack::SessionScopeState
+pub bpmn_lite_types::session_stack::SessionScopeState::client_group_id: uuid::Uuid
+pub bpmn_lite_types::session_stack::SessionScopeState::client_group_name: core::option::Option<alloc::string::String>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionScopeState
+pub fn bpmn_lite_types::SessionScopeState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionScopeState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::session_stack::SessionStackState
+pub bpmn_lite_types::session_stack::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::SessionWorkspaceKind>
+pub bpmn_lite_types::session_stack::SessionStackState::scope: core::option::Option<bpmn_lite_types::SessionScopeState>
+pub bpmn_lite_types::session_stack::SessionStackState::session_id: uuid::Uuid
+pub bpmn_lite_types::session_stack::SessionStackState::trace_sequence: u64
+pub bpmn_lite_types::session_stack::SessionStackState::workspace_stack: alloc::vec::Vec<serde_json::value::Value>
+impl bpmn_lite_types::SessionStackState
+pub fn bpmn_lite_types::SessionStackState::from_rollback_snapshot(&str) -> core::result::Result<Self, serde_json::error::Error>
+pub fn bpmn_lite_types::SessionStackState::to_rollback_snapshot(&self) -> alloc::boxed::Box<str>
+pub macro bpmn_lite_types::legacy_program!
+pub enum bpmn_lite_types::ArtifactError
+pub bpmn_lite_types::ArtifactError::InvalidInstruction
+pub bpmn_lite_types::ArtifactError::InvalidInstruction::address: bpmn_lite_types::Addr
+pub bpmn_lite_types::ArtifactError::InvalidInstruction::reason: alloc::string::String
+pub bpmn_lite_types::ArtifactError::InvalidMetadata(alloc::string::String)
+pub bpmn_lite_types::ArtifactError::LimitMismatch
+pub bpmn_lite_types::ArtifactError::NonCanonical
+pub bpmn_lite_types::ArtifactError::Serialization(serde_json::error::Error)
+pub bpmn_lite_types::ArtifactError::UnsupportedAbi(u32)
+pub enum bpmn_lite_types::BindingSource
+pub bpmn_lite_types::BindingSource::DomainPayloadRef(alloc::vec::Vec<alloc::string::String>)
+pub bpmn_lite_types::BindingSource::FlagRef(bpmn_lite_types::FlagKey)
+pub bpmn_lite_types::BindingSource::Literal(bpmn_lite_types::Literal)
+pub enum bpmn_lite_types::BindingTarget
+pub bpmn_lite_types::BindingTarget::DomainPayloadWrite(alloc::vec::Vec<alloc::string::String>)
+pub bpmn_lite_types::BindingTarget::FlagWrite(bpmn_lite_types::FlagKey)
+pub enum bpmn_lite_types::BufferMessageResult
+pub bpmn_lite_types::BufferMessageResult::Duplicate
+pub bpmn_lite_types::BufferMessageResult::Inserted
+pub enum bpmn_lite_types::BufferedMessageMutation
+pub bpmn_lite_types::BufferedMessageMutation::Consume(bpmn_lite_types::ClaimedBufferedMessage)
+pub bpmn_lite_types::BufferedMessageMutation::Deliver(bpmn_lite_types::BufferedMessage)
+pub bpmn_lite_types::BufferedMessageMutation::Insert(bpmn_lite_types::BufferedMessage)
+pub bpmn_lite_types::BufferedMessageMutation::Release(bpmn_lite_types::ClaimedBufferedMessage)
+pub enum bpmn_lite_types::CanonicalDecodeError
+pub bpmn_lite_types::CanonicalDecodeError::InvalidUtf8
+pub bpmn_lite_types::CanonicalDecodeError::TrailingBytes(usize)
+pub bpmn_lite_types::CanonicalDecodeError::UnexpectedEof
+pub bpmn_lite_types::CanonicalDecodeError::UnexpectedEof::offset: usize
+pub bpmn_lite_types::CanonicalDecodeError::UnknownTag
+pub bpmn_lite_types::CanonicalDecodeError::UnknownTag::tag: u8
+pub bpmn_lite_types::CanonicalDecodeError::UnknownTag::type_name: &'static str
+pub bpmn_lite_types::CanonicalDecodeError::ValueArrayTooDeep
+pub bpmn_lite_types::CanonicalDecodeError::ValueArrayTooDeep::max: u32
+pub bpmn_lite_types::CanonicalDecodeError::ValueArrayTooLong
+pub bpmn_lite_types::CanonicalDecodeError::ValueArrayTooLong::actual: usize
+pub bpmn_lite_types::CanonicalDecodeError::ValueArrayTooLong::max: usize
+pub enum bpmn_lite_types::Command
+pub bpmn_lite_types::Command::Cancel
+pub bpmn_lite_types::Command::Cancel::reason: alloc::string::String
+pub bpmn_lite_types::Command::EffectCompleted
+pub bpmn_lite_types::Command::EffectCompleted::effect_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::Command::EffectCompleted::output: bpmn_lite_types::EffectOutput
+pub bpmn_lite_types::Command::EffectFailed
+pub bpmn_lite_types::Command::EffectFailed::attempt: u32
+pub bpmn_lite_types::Command::EffectFailed::effect_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::Command::EffectFailed::error_class: bpmn_lite_types::ErrorClass
+pub bpmn_lite_types::Command::EffectFailed::job_key: alloc::string::String
+pub bpmn_lite_types::Command::EffectFailed::message: alloc::string::String
+pub bpmn_lite_types::Command::EffectFailed::retry: core::option::Option<bpmn_lite_types::JobRetry>
+pub bpmn_lite_types::Command::JobClaimed
+pub bpmn_lite_types::Command::JobClaimed::claim_expires_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::Command::JobClaimed::job_key: alloc::string::String
+pub bpmn_lite_types::Command::JobClaimed::worker_id: alloc::string::String
+pub bpmn_lite_types::Command::MessageDelivered
+pub bpmn_lite_types::Command::MessageDelivered::correlation_key: alloc::string::String
+pub bpmn_lite_types::Command::MessageDelivered::expires_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::Command::MessageDelivered::message_id: alloc::string::String
+pub bpmn_lite_types::Command::MessageDelivered::name: alloc::string::String
+pub bpmn_lite_types::Command::MessageDelivered::payload: alloc::vec::Vec<u8>
+pub bpmn_lite_types::Command::MessageDelivered::payload_hash: core::option::Option<[u8; 32]>
+pub bpmn_lite_types::Command::ResolveIncident
+pub bpmn_lite_types::Command::ResolveIncident::incident_id: uuid::Uuid
+pub bpmn_lite_types::Command::ResolveIncident::resolution: alloc::string::String
+pub bpmn_lite_types::Command::StartChildResult
+pub bpmn_lite_types::Command::StartChildResult::accepted: bool
+pub bpmn_lite_types::Command::StartChildResult::child_instance_id: uuid::Uuid
+pub bpmn_lite_types::Command::StartChildResult::idempotency_key: alloc::string::String
+pub bpmn_lite_types::Command::Terminate
+pub bpmn_lite_types::Command::Tick
+pub bpmn_lite_types::Command::Tick::fiber_id: core::option::Option<uuid::Uuid>
+pub bpmn_lite_types::Command::TimerFired
+pub bpmn_lite_types::Command::TimerFired::fired_at: u64
+pub bpmn_lite_types::Command::TimerFired::timer: bpmn_lite_types::ClaimedTimer
+pub bpmn_lite_types::Command::V2TriggerGuard
+pub bpmn_lite_types::Command::V2TriggerGuard::record_id: bpmn_lite_types::RecordId
+pub enum bpmn_lite_types::ConcurrencyMutation
+pub bpmn_lite_types::ConcurrencyMutation::Insert(alloc::boxed::Box<bpmn_lite_types::ConcurrencyRecord>)
+pub bpmn_lite_types::ConcurrencyMutation::Remove(bpmn_lite_types::RecordId)
+pub bpmn_lite_types::ConcurrencyMutation::Retire(bpmn_lite_types::RecordId)
+pub enum bpmn_lite_types::ConcurrencyValidationError
+pub bpmn_lite_types::ConcurrencyValidationError::CompensationUninhabited
+pub bpmn_lite_types::ConcurrencyValidationError::CompensationUninhabited::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::CountersOutOfBounds
+pub bpmn_lite_types::ConcurrencyValidationError::CountersOutOfBounds::arity: u32
+pub bpmn_lite_types::ConcurrencyValidationError::CountersOutOfBounds::count: u32
+pub bpmn_lite_types::ConcurrencyValidationError::CountersOutOfBounds::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::CountersOutOfBounds::kind: bpmn_lite_types::RecordKind
+pub bpmn_lite_types::ConcurrencyValidationError::GuardMissingOpenedAt
+pub bpmn_lite_types::ConcurrencyValidationError::GuardMissingOpenedAt::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::PartialRollbackSnapshot
+pub bpmn_lite_types::ConcurrencyValidationError::PartialRollbackSnapshot::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::RemoveMissing(bpmn_lite_types::RecordId)
+pub bpmn_lite_types::ConcurrencyValidationError::RetireMissing(bpmn_lite_types::RecordId)
+pub bpmn_lite_types::ConcurrencyValidationError::RollbackFieldsOnGuardN
+pub bpmn_lite_types::ConcurrencyValidationError::RollbackFieldsOnGuardN::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::RollbackFieldsOnNonGuard
+pub bpmn_lite_types::ConcurrencyValidationError::RollbackFieldsOnNonGuard::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::RollbackFieldsOnNonGuard::kind: bpmn_lite_types::RecordKind
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedCounters
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedCounters::arity: u32
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedCounters::count: u32
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedCounters::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedCounters::kind: bpmn_lite_types::RecordKind
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedOpenedAt
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedOpenedAt::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyValidationError::UnexpectedOpenedAt::kind: bpmn_lite_types::RecordKind
+pub enum bpmn_lite_types::ControlStackDelta
+pub bpmn_lite_types::ControlStackDelta::Pop
+pub bpmn_lite_types::ControlStackDelta::Pop::fiber_id: uuid::Uuid
+pub bpmn_lite_types::ControlStackDelta::Pop::handle: bpmn_lite_types::Handle
+pub bpmn_lite_types::ControlStackDelta::Push
+pub bpmn_lite_types::ControlStackDelta::Push::fiber_id: uuid::Uuid
+pub bpmn_lite_types::ControlStackDelta::Push::handle: bpmn_lite_types::Handle
+pub enum bpmn_lite_types::ControlStackEffect
+pub bpmn_lite_types::ControlStackEffect::None
+pub bpmn_lite_types::ControlStackEffect::Peek
+pub bpmn_lite_types::ControlStackEffect::Pop
+pub bpmn_lite_types::ControlStackEffect::Push
+pub enum bpmn_lite_types::DataObjectRole
+pub bpmn_lite_types::DataObjectRole::Input
+pub bpmn_lite_types::DataObjectRole::Internal
+pub bpmn_lite_types::DataObjectRole::Output
+pub enum bpmn_lite_types::DataObjectStorage
+pub bpmn_lite_types::DataObjectStorage::DomainPayload(alloc::vec::Vec<alloc::string::String>)
+pub bpmn_lite_types::DataObjectStorage::Flag(bpmn_lite_types::FlagKey)
+pub enum bpmn_lite_types::DataObjectType
+pub bpmn_lite_types::DataObjectType::Primitive(bpmn_lite_types::PrimitiveType)
+pub bpmn_lite_types::DataObjectType::SemOsDomain
+pub bpmn_lite_types::DataObjectType::SemOsDomain::domain_id: uuid::Uuid
+pub bpmn_lite_types::DataObjectType::SemOsDomain::version_hash: [u8; 32]
+pub enum bpmn_lite_types::DurableEffect
+pub bpmn_lite_types::DurableEffect::Invoke
+pub bpmn_lite_types::DurableEffect::Invoke::effect_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::DurableEffect::Invoke::fiber_id: uuid::Uuid
+pub bpmn_lite_types::DurableEffect::Invoke::idempotency_key: alloc::string::String
+pub bpmn_lite_types::DurableEffect::Invoke::input: alloc::vec::Vec<u8>
+pub bpmn_lite_types::DurableEffect::Invoke::operation: alloc::string::String
+pub bpmn_lite_types::DurableEffect::Invoke::pc: u32
+pub bpmn_lite_types::DurableEffect::Invoke::template_id: [u8; 32]
+pub bpmn_lite_types::DurableEffect::ScheduleTimer
+pub bpmn_lite_types::DurableEffect::ScheduleTimer::due_at: u64
+pub bpmn_lite_types::DurableEffect::ScheduleTimer::fiber_id: uuid::Uuid
+pub bpmn_lite_types::DurableEffect::ScheduleTimer::kind: bpmn_lite_types::TimerKind
+pub bpmn_lite_types::DurableEffect::ScheduleTimer::repeat_spec: core::option::Option<bpmn_lite_types::TimerRepeatSpec>
+pub bpmn_lite_types::DurableEffect::ScheduleTimer::timer_id: bpmn_lite_types::EffectId
+impl bpmn_lite_types::DurableEffect
+pub fn bpmn_lite_types::DurableEffect::effect_id(&self) -> bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::DurableEffect::schedule_timer(bpmn_lite_types::EffectId, uuid::Uuid, u64, bpmn_lite_types::TimerKind, core::option::Option<bpmn_lite_types::TimerRepeatSpec>) -> Self
+pub enum bpmn_lite_types::EffectOutput
+pub bpmn_lite_types::EffectOutput::Ffi
+pub bpmn_lite_types::EffectOutput::Ffi::fiber_id: uuid::Uuid
+pub bpmn_lite_types::EffectOutput::Ffi::new_domain_payload: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::EffectOutput::Ffi::no_match: bool
+pub bpmn_lite_types::EffectOutput::Ffi::output_payload: alloc::vec::Vec<u8>
+pub bpmn_lite_types::EffectOutput::Ffi::pc: u32
+pub bpmn_lite_types::EffectOutput::Job(bpmn_lite_types::JobCompletion)
+pub bpmn_lite_types::EffectOutput::Json(serde_json::value::Value)
+pub enum bpmn_lite_types::EffectResponse
+pub bpmn_lite_types::EffectResponse::Failed
+pub bpmn_lite_types::EffectResponse::Failed::attempt: u32
+pub bpmn_lite_types::EffectResponse::Failed::error_class: bpmn_lite_types::ErrorClass
+pub bpmn_lite_types::EffectResponse::Failed::message: alloc::string::String
+pub bpmn_lite_types::EffectResponse::FfiNoMatch
+pub bpmn_lite_types::EffectResponse::FfiSuccess
+pub bpmn_lite_types::EffectResponse::FfiSuccess::new_domain_payload: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::EffectResponse::FfiSuccess::output_payload: alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::EffectTerminalState
+pub bpmn_lite_types::EffectTerminalState::Completed
+pub bpmn_lite_types::EffectTerminalState::Failed
+pub enum bpmn_lite_types::ErrorClass
+pub bpmn_lite_types::ErrorClass::BusinessRejection
+pub bpmn_lite_types::ErrorClass::BusinessRejection::rejection_code: alloc::string::String
+pub bpmn_lite_types::ErrorClass::ContractViolation
+pub bpmn_lite_types::ErrorClass::Transient
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ErrorClass
+pub fn bpmn_lite_types::ErrorClass::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ErrorClass::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ErrorClass::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ErrorClass::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::FfiBindingError
+pub bpmn_lite_types::FfiBindingError::InvalidDomainPayload(alloc::string::String)
+pub bpmn_lite_types::FfiBindingError::InvalidOutput(alloc::string::String)
+pub bpmn_lite_types::FfiBindingError::MissingValue(alloc::string::String)
+pub bpmn_lite_types::FfiBindingError::WrongType(alloc::string::String)
+pub enum bpmn_lite_types::Instr
+pub bpmn_lite_types::Instr::BrCounterLt
+pub bpmn_lite_types::Instr::BrCounterLt::counter_id: u32
+pub bpmn_lite_types::Instr::BrCounterLt::limit: u32
+pub bpmn_lite_types::Instr::BrCounterLt::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::BrIf
+pub bpmn_lite_types::Instr::BrIf::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::BrIfNot
+pub bpmn_lite_types::Instr::BrIfNot::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::CancelWait
+pub bpmn_lite_types::Instr::CancelWait::wait_id: bpmn_lite_types::WaitId
+pub bpmn_lite_types::Instr::End
+pub bpmn_lite_types::Instr::EndTerminate
+pub bpmn_lite_types::Instr::ExecDslTask
+pub bpmn_lite_types::Instr::ExecDslTask::produces_placeholder: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::Instr::ExecDslTask::static_args: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub bpmn_lite_types::Instr::ExecDslTask::task_type: u32
+pub bpmn_lite_types::Instr::ExecFfi
+pub bpmn_lite_types::Instr::ExecFfi::argc: u16
+pub bpmn_lite_types::Instr::ExecFfi::retc: u16
+pub bpmn_lite_types::Instr::ExecFfi::template_id: [u8; 32]
+pub bpmn_lite_types::Instr::ExecNative
+pub bpmn_lite_types::Instr::ExecNative::argc: u16
+pub bpmn_lite_types::Instr::ExecNative::retc: u16
+pub bpmn_lite_types::Instr::ExecNative::task_type: u32
+pub bpmn_lite_types::Instr::Fail
+pub bpmn_lite_types::Instr::Fail::code: u32
+pub bpmn_lite_types::Instr::IncCounter
+pub bpmn_lite_types::Instr::IncCounter::counter_id: u32
+pub bpmn_lite_types::Instr::Jump
+pub bpmn_lite_types::Instr::Jump::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::LoadFlag
+pub bpmn_lite_types::Instr::LoadFlag::key: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::Instr::Pop
+pub bpmn_lite_types::Instr::PublishMessage
+pub bpmn_lite_types::Instr::PublishMessage::name: u32
+pub bpmn_lite_types::Instr::PushBool(bool)
+pub bpmn_lite_types::Instr::PushI64(i64)
+pub bpmn_lite_types::Instr::RoutePayload
+pub bpmn_lite_types::Instr::RoutePayload::branches: alloc::boxed::Box<[bpmn_lite_types::PayloadRouteBranch]>
+pub bpmn_lite_types::Instr::RoutePayload::default_target: core::option::Option<bpmn_lite_types::Addr>
+pub bpmn_lite_types::Instr::StoreFlag
+pub bpmn_lite_types::Instr::StoreFlag::key: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::Instr::V2ArmEffect
+pub bpmn_lite_types::Instr::V2ArmEffect::argc: u16
+pub bpmn_lite_types::Instr::V2ArmEffect::retc: u16
+pub bpmn_lite_types::Instr::V2ArmEffect::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2ArmEffect::template_id: [u8; 32]
+pub bpmn_lite_types::Instr::V2ArmMsg
+pub bpmn_lite_types::Instr::V2ArmMsg::name: u32
+pub bpmn_lite_types::Instr::V2ArmMsg::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2ArmTimer
+pub bpmn_lite_types::Instr::V2ArmTimer::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2AwaitEffect
+pub bpmn_lite_types::Instr::V2AwaitEffect::argc: u16
+pub bpmn_lite_types::Instr::V2AwaitEffect::retc: u16
+pub bpmn_lite_types::Instr::V2AwaitEffect::template_id: [u8; 32]
+pub bpmn_lite_types::Instr::V2CancelScope
+pub bpmn_lite_types::Instr::V2Fork
+pub bpmn_lite_types::Instr::V2Fork::pairing: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2Fork::targets: alloc::boxed::Box<[bpmn_lite_types::Addr]>
+pub bpmn_lite_types::Instr::V2Guard
+pub bpmn_lite_types::Instr::V2Guard::handler: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2GuardArmError
+pub bpmn_lite_types::Instr::V2GuardArmError::error_code: core::option::Option<alloc::boxed::Box<str>>
+pub bpmn_lite_types::Instr::V2GuardArmError::handler: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2GuardArmTimer
+pub bpmn_lite_types::Instr::V2GuardEnd
+pub bpmn_lite_types::Instr::V2GuardN
+pub bpmn_lite_types::Instr::V2GuardN::handler: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2GuardNEnd
+pub bpmn_lite_types::Instr::V2GuardR
+pub bpmn_lite_types::Instr::V2GuardREnd
+pub bpmn_lite_types::Instr::V2GuardTimerCycle
+pub bpmn_lite_types::Instr::V2GuardTimerCycle::max_fires: u32
+pub bpmn_lite_types::Instr::V2Join
+pub bpmn_lite_types::Instr::V2Join::pairing: bpmn_lite_types::Addr
+pub bpmn_lite_types::Instr::V2LoadPlaceholderMatch
+pub bpmn_lite_types::Instr::V2LoadPlaceholderMatch::expected_value: alloc::string::String
+pub bpmn_lite_types::Instr::V2LoadPlaceholderMatch::placeholder: alloc::string::String
+pub bpmn_lite_types::Instr::V2MiArityCheck
+pub bpmn_lite_types::Instr::V2MiArityCheck::collection_flag: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::Instr::V2MiArityCheck::max: u32
+pub bpmn_lite_types::Instr::V2MiIndexLive
+pub bpmn_lite_types::Instr::V2MiIndexLive::collection_flag: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::Instr::V2MiIndexLive::index: u32
+pub bpmn_lite_types::Instr::V2MiLoadElement
+pub bpmn_lite_types::Instr::V2MiLoadElement::collection_flag: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::Instr::V2MiLoadElement::index: u32
+pub bpmn_lite_types::Instr::V2RaceClose
+pub bpmn_lite_types::Instr::V2RaceOpen
+pub bpmn_lite_types::Instr::V2RaceOpen::arm_count: u16
+pub bpmn_lite_types::Instr::V2RouteZeroMatch
+pub bpmn_lite_types::Instr::V2WaitFor
+pub bpmn_lite_types::Instr::V2WaitMsg
+pub bpmn_lite_types::Instr::V2WaitMsg::name: u32
+pub bpmn_lite_types::Instr::V2WaitUntil
+pub enum bpmn_lite_types::IntegrityError
+pub bpmn_lite_types::IntegrityError::Ring1Physical(alloc::string::String)
+pub bpmn_lite_types::IntegrityError::Ring2Frame(alloc::string::String)
+pub bpmn_lite_types::IntegrityError::Ring3Runtime(alloc::string::String)
+pub bpmn_lite_types::IntegrityError::Tripwire
+pub bpmn_lite_types::IntegrityError::Tripwire::actual: u32
+pub bpmn_lite_types::IntegrityError::Tripwire::expected: u32
+pub bpmn_lite_types::IntegrityError::Tripwire::surface: bpmn_lite_types::TripwireSurface
+pub enum bpmn_lite_types::JobMutation
+pub bpmn_lite_types::JobMutation::AckClaimed
+pub bpmn_lite_types::JobMutation::AckClaimed::claim_token: alloc::string::String
+pub bpmn_lite_types::JobMutation::AckClaimed::job_key: alloc::string::String
+pub bpmn_lite_types::JobMutation::AckClaimed::worker_id: alloc::string::String
+pub bpmn_lite_types::JobMutation::Cancel
+pub bpmn_lite_types::JobMutation::Cancel::job_key: alloc::string::String
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::claim_token: alloc::string::String
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::error_class: alloc::string::String
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::error_message: alloc::string::String
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::incident_id: uuid::Uuid
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::job_key: alloc::string::String
+pub bpmn_lite_types::JobMutation::DeadLetterClaimed::worker_id: alloc::string::String
+pub bpmn_lite_types::JobMutation::RetryClaimed
+pub bpmn_lite_types::JobMutation::RetryClaimed::claim_token: alloc::string::String
+pub bpmn_lite_types::JobMutation::RetryClaimed::error_class: alloc::string::String
+pub bpmn_lite_types::JobMutation::RetryClaimed::error_message: alloc::string::String
+pub bpmn_lite_types::JobMutation::RetryClaimed::job_key: alloc::string::String
+pub bpmn_lite_types::JobMutation::RetryClaimed::not_before_ms: i64
+pub bpmn_lite_types::JobMutation::RetryClaimed::worker_id: alloc::string::String
+pub enum bpmn_lite_types::JoinMutation
+pub bpmn_lite_types::JoinMutation::Arrive(bpmn_lite_types::JoinId)
+pub bpmn_lite_types::JoinMutation::Reset(bpmn_lite_types::JoinId)
+pub enum bpmn_lite_types::JournalCommand
+pub bpmn_lite_types::JournalCommand::Administrative
+pub bpmn_lite_types::JournalCommand::Administrative::kind: alloc::string::String
+pub bpmn_lite_types::JournalCommand::Kernel(bpmn_lite_types::Command)
+pub bpmn_lite_types::JournalCommand::Start(bpmn_lite_types::StartCommand)
+impl bpmn_lite_types::JournalCommand
+pub fn bpmn_lite_types::JournalCommand::command_type(&self) -> &'static str
+pub enum bpmn_lite_types::Literal
+pub bpmn_lite_types::Literal::Bool(bool)
+pub bpmn_lite_types::Literal::F64(f64)
+pub bpmn_lite_types::Literal::I64(i64)
+pub bpmn_lite_types::Literal::String(alloc::string::String)
+pub enum bpmn_lite_types::PersistenceEnvelopeError
+pub bpmn_lite_types::PersistenceEnvelopeError::Serialization(alloc::string::String)
+pub bpmn_lite_types::PersistenceEnvelopeError::UnsupportedVersion
+pub bpmn_lite_types::PersistenceEnvelopeError::UnsupportedVersion::envelope: &'static str
+pub bpmn_lite_types::PersistenceEnvelopeError::UnsupportedVersion::version: u16
+pub enum bpmn_lite_types::PrimitiveType
+pub bpmn_lite_types::PrimitiveType::Bool
+pub bpmn_lite_types::PrimitiveType::F64
+pub bpmn_lite_types::PrimitiveType::I64
+pub bpmn_lite_types::PrimitiveType::String
+pub enum bpmn_lite_types::ProcessState
+pub bpmn_lite_types::ProcessState::Cancelled
+pub bpmn_lite_types::ProcessState::Cancelled::at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::ProcessState::Cancelled::reason: alloc::string::String
+pub bpmn_lite_types::ProcessState::Completed
+pub bpmn_lite_types::ProcessState::Completed::at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::ProcessState::Failed
+pub bpmn_lite_types::ProcessState::Failed::incident_id: uuid::Uuid
+pub bpmn_lite_types::ProcessState::Incidented
+pub bpmn_lite_types::ProcessState::Incidented::incident_id: uuid::Uuid
+pub bpmn_lite_types::ProcessState::Running
+pub bpmn_lite_types::ProcessState::Terminated
+pub bpmn_lite_types::ProcessState::Terminated::at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::ProcessState::WaitingOnInvocation
+pub bpmn_lite_types::ProcessState::WaitingOnInvocation::execution_id: uuid::Uuid
+pub bpmn_lite_types::ProcessState::WaitingOnInvocation::node_id: alloc::string::String
+pub bpmn_lite_types::ProcessState::WaitingOnSubmission
+pub bpmn_lite_types::ProcessState::WaitingOnSubmission::callout_id: uuid::Uuid
+pub bpmn_lite_types::ProcessState::WaitingOnSubmission::node_id: alloc::string::String
+impl bpmn_lite_types::ProcessState
+pub fn bpmn_lite_types::ProcessState::is_schedulable(&self) -> bool
+pub fn bpmn_lite_types::ProcessState::is_terminal(&self) -> bool
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ProcessState
+pub fn bpmn_lite_types::ProcessState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ProcessState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ProcessState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ProcessState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::RecordKind
+pub bpmn_lite_types::RecordKind::Barrier
+pub bpmn_lite_types::RecordKind::Compensation
+pub bpmn_lite_types::RecordKind::Guard
+pub bpmn_lite_types::RecordKind::Guard::interrupting: bool
+pub bpmn_lite_types::RecordKind::Race
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordKind
+pub fn bpmn_lite_types::RecordKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::RecordState
+pub bpmn_lite_types::RecordState::Armed
+pub bpmn_lite_types::RecordState::Retired
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordState
+pub fn bpmn_lite_types::RecordState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::RetryDecision
+pub bpmn_lite_types::RetryDecision::At
+pub bpmn_lite_types::RetryDecision::At::attempt: u32
+pub bpmn_lite_types::RetryDecision::At::due_at: u64
+pub bpmn_lite_types::RetryDecision::Exhausted
+pub bpmn_lite_types::RetryDecision::Terminal
+pub enum bpmn_lite_types::RuntimeEvent
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageConsumed
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageConsumed::correlation_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageConsumed::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageConsumed::message_name: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageConsumed::msg_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageExpired
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageExpired::correlation_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageExpired::message_name: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::BufferedMessageExpired::msg_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::Cancelled
+pub bpmn_lite_types::RuntimeEvent::Cancelled::reason: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ChildStartAccepted
+pub bpmn_lite_types::RuntimeEvent::ChildStartAccepted::child_instance_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::ChildStartAccepted::idempotency_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ChildStartRejected
+pub bpmn_lite_types::RuntimeEvent::ChildStartRejected::child_instance_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::ChildStartRejected::idempotency_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ChildStartRejected::incident_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::Completed
+pub bpmn_lite_types::RuntimeEvent::Completed::at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::RuntimeEvent::CounterIncremented
+pub bpmn_lite_types::RuntimeEvent::CounterIncremented::counter_id: u32
+pub bpmn_lite_types::RuntimeEvent::CounterIncremented::loop_epoch: u32
+pub bpmn_lite_types::RuntimeEvent::CounterIncremented::new_value: u32
+pub bpmn_lite_types::RuntimeEvent::ErrorRouted
+pub bpmn_lite_types::RuntimeEvent::ErrorRouted::boundary_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ErrorRouted::error_code: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ErrorRouted::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::ErrorRouted::resume_at: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationCompleted
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationCompleted::error_message: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationCompleted::invocation_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationCompleted::outcome_kind: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending::caller_pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending::caller_task_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending::invocation_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending::owner_type: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::FfiInvocationPending::template_id_hex: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::FiberSpawned
+pub bpmn_lite_types::RuntimeEvent::FiberSpawned::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::FiberSpawned::parent: core::option::Option<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::FiberSpawned::pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::FlagSet
+pub bpmn_lite_types::RuntimeEvent::FlagSet::key: bpmn_lite_types::FlagKey
+pub bpmn_lite_types::RuntimeEvent::FlagSet::value: bpmn_lite_types::Value
+pub bpmn_lite_types::RuntimeEvent::Forked
+pub bpmn_lite_types::RuntimeEvent::Forked::child_fibers: alloc::vec::Vec<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::Forked::fork_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::Forked::targets: alloc::vec::Vec<bpmn_lite_types::Addr>
+pub bpmn_lite_types::RuntimeEvent::GatewayTaken
+pub bpmn_lite_types::RuntimeEvent::GatewayTaken::branch_taken: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::GatewayTaken::condition_value: bpmn_lite_types::Value
+pub bpmn_lite_types::RuntimeEvent::GatewayTaken::gateway_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::IncidentCreated
+pub bpmn_lite_types::RuntimeEvent::IncidentCreated::incident_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::IncidentCreated::job_key: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::RuntimeEvent::IncidentCreated::service_task_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::IncidentResolved
+pub bpmn_lite_types::RuntimeEvent::IncidentResolved::incident_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::IncidentResolved::resolution: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::InclusiveForkTaken
+pub bpmn_lite_types::RuntimeEvent::InclusiveForkTaken::branches_taken: alloc::vec::Vec<bpmn_lite_types::Addr>
+pub bpmn_lite_types::RuntimeEvent::InclusiveForkTaken::expected: u16
+pub bpmn_lite_types::RuntimeEvent::InclusiveForkTaken::gateway_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::InclusiveForkTaken::join_id: bpmn_lite_types::JoinId
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined::detected_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined::detection_point: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined::failure_reason: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined::instance_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::InstanceQuarantined::tenant_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::InstanceStarted
+pub bpmn_lite_types::RuntimeEvent::InstanceStarted::bytecode_version: [u8; 32]
+pub bpmn_lite_types::RuntimeEvent::InstanceStarted::instance_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::JobActivated
+pub bpmn_lite_types::RuntimeEvent::JobActivated::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobActivated::pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::JobActivated::service_task_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobActivated::task_type: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobClaimed
+pub bpmn_lite_types::RuntimeEvent::JobClaimed::claim_expires_at: i64
+pub bpmn_lite_types::RuntimeEvent::JobClaimed::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobClaimed::worker_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobCompleted
+pub bpmn_lite_types::RuntimeEvent::JobCompleted::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobCompleted::orch_flags_out: alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::Value>
+pub bpmn_lite_types::RuntimeEvent::JobCompleted::payload_hash_after: [u8; 32]
+pub bpmn_lite_types::RuntimeEvent::JobCompleted::payload_hash_before: [u8; 32]
+pub bpmn_lite_types::RuntimeEvent::JobCompleted::pc_next: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::JobDeadLettered
+pub bpmn_lite_types::RuntimeEvent::JobDeadLettered::incident_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::JobDeadLettered::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobReclaimed
+pub bpmn_lite_types::RuntimeEvent::JobReclaimed::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobReclaimed::previous_worker_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::RuntimeEvent::JobRetryScheduled
+pub bpmn_lite_types::RuntimeEvent::JobRetryScheduled::job_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::JobRetryScheduled::retries_remaining: u32
+pub bpmn_lite_types::RuntimeEvent::JobRetryScheduled::retry_at: i64
+pub bpmn_lite_types::RuntimeEvent::JoinArrived
+pub bpmn_lite_types::RuntimeEvent::JoinArrived::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::JoinArrived::join_id: bpmn_lite_types::JoinId
+pub bpmn_lite_types::RuntimeEvent::JoinReleased
+pub bpmn_lite_types::RuntimeEvent::JoinReleased::join_id: bpmn_lite_types::JoinId
+pub bpmn_lite_types::RuntimeEvent::JoinReleased::next_pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::JoinReleased::released_fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::MessageBuffered
+pub bpmn_lite_types::RuntimeEvent::MessageBuffered::correlation_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::MessageBuffered::expires_at: i64
+pub bpmn_lite_types::RuntimeEvent::MessageBuffered::message_name: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::MessageBuffered::msg_id: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::MsgReceived
+pub bpmn_lite_types::RuntimeEvent::MsgReceived::corr_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::MsgReceived::msg_ref: core::option::Option<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::MsgReceived::name: u32
+pub bpmn_lite_types::RuntimeEvent::SignalIgnored
+pub bpmn_lite_types::RuntimeEvent::SignalIgnored::signal_desc: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::Terminated
+pub bpmn_lite_types::RuntimeEvent::Terminated::at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::RuntimeEvent::Terminated::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::TimerFired
+pub bpmn_lite_types::RuntimeEvent::TimerFired::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::TimerFired::fired_at: u64
+pub bpmn_lite_types::RuntimeEvent::TimerFired::timer_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::RuntimeEvent::V2Forked
+pub bpmn_lite_types::RuntimeEvent::V2Forked::child_fibers: alloc::vec::Vec<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::V2Forked::fork_fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2Forked::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2Forked::targets: alloc::vec::Vec<bpmn_lite_types::Addr>
+pub bpmn_lite_types::RuntimeEvent::V2GuardNTriggered
+pub bpmn_lite_types::RuntimeEvent::V2GuardNTriggered::handler_fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2GuardNTriggered::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2GuardOpened
+pub bpmn_lite_types::RuntimeEvent::V2GuardOpened::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2GuardOpened::handler: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::V2GuardOpened::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2GuardROpened
+pub bpmn_lite_types::RuntimeEvent::V2GuardROpened::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2GuardROpened::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2GuardRetired
+pub bpmn_lite_types::RuntimeEvent::V2GuardRetired::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2GuardRetired::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2GuardTriggered
+pub bpmn_lite_types::RuntimeEvent::V2GuardTriggered::cancelled_fibers: alloc::vec::Vec<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::V2GuardTriggered::cancelled_records: alloc::vec::Vec<bpmn_lite_types::RecordId>
+pub bpmn_lite_types::RuntimeEvent::V2GuardTriggered::handler_fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2GuardTriggered::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2JoinArrived
+pub bpmn_lite_types::RuntimeEvent::V2JoinArrived::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2JoinArrived::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2JoinReleased
+pub bpmn_lite_types::RuntimeEvent::V2JoinReleased::cancelled_fibers: alloc::vec::Vec<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::V2JoinReleased::next_pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::RuntimeEvent::V2JoinReleased::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2JoinReleased::survivor_fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2RaceClosed
+pub bpmn_lite_types::RuntimeEvent::V2RaceClosed::arm_count: u16
+pub bpmn_lite_types::RuntimeEvent::V2RaceClosed::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2RaceClosed::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2RaceOpened
+pub bpmn_lite_types::RuntimeEvent::V2RaceOpened::arm_count: u16
+pub bpmn_lite_types::RuntimeEvent::V2RaceOpened::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2RaceOpened::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2RaceWon
+pub bpmn_lite_types::RuntimeEvent::V2RaceWon::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2RaceWon::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::V2ScopeCancelled
+pub bpmn_lite_types::RuntimeEvent::V2ScopeCancelled::cancelled_fibers: alloc::vec::Vec<uuid::Uuid>
+pub bpmn_lite_types::RuntimeEvent::V2ScopeCancelled::cancelled_records: alloc::vec::Vec<bpmn_lite_types::RecordId>
+pub bpmn_lite_types::RuntimeEvent::V2ScopeCancelled::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::V2ScopeCancelled::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::RuntimeEvent::WaitCancelled
+pub bpmn_lite_types::RuntimeEvent::WaitCancelled::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::WaitCancelled::reason: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::WaitCancelled::wait_desc: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::WaitMsgSubscribed
+pub bpmn_lite_types::RuntimeEvent::WaitMsgSubscribed::corr_key: alloc::string::String
+pub bpmn_lite_types::RuntimeEvent::WaitMsgSubscribed::fiber_id: uuid::Uuid
+pub bpmn_lite_types::RuntimeEvent::WaitMsgSubscribed::name: u32
+pub bpmn_lite_types::RuntimeEvent::WaitTimerSet
+pub bpmn_lite_types::RuntimeEvent::WaitTimerSet::deadline_ms: u64
+pub bpmn_lite_types::RuntimeEvent::WaitTimerSet::fiber_id: uuid::Uuid
+pub enum bpmn_lite_types::ScopeFailureDecision
+pub bpmn_lite_types::ScopeFailureDecision::Continue(u32)
+pub bpmn_lite_types::ScopeFailureDecision::Exhausted(u32)
+pub enum bpmn_lite_types::SessionWorkspaceKind
+pub bpmn_lite_types::SessionWorkspaceKind::BookingPrincipal
+pub bpmn_lite_types::SessionWorkspaceKind::Bpmn
+pub bpmn_lite_types::SessionWorkspaceKind::Catalogue
+pub bpmn_lite_types::SessionWorkspaceKind::Cbu
+pub bpmn_lite_types::SessionWorkspaceKind::Deal
+pub bpmn_lite_types::SessionWorkspaceKind::InstrumentMatrix
+pub bpmn_lite_types::SessionWorkspaceKind::Kyc
+pub bpmn_lite_types::SessionWorkspaceKind::LifecycleResources
+pub bpmn_lite_types::SessionWorkspaceKind::OnBoarding
+pub bpmn_lite_types::SessionWorkspaceKind::ProductMaintenance
+pub bpmn_lite_types::SessionWorkspaceKind::SemOsMaintenance
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::StartCommandBuildError
+pub bpmn_lite_types::StartCommandBuildError::Missing(&'static str)
+pub enum bpmn_lite_types::TenantIdError
+pub bpmn_lite_types::TenantIdError::Empty
+pub enum bpmn_lite_types::TimerFireOutcome
+pub bpmn_lite_types::TimerFireOutcome::AlreadyConsumed
+pub bpmn_lite_types::TimerFireOutcome::Applied
+pub bpmn_lite_types::TimerFireOutcome::Stale
+pub enum bpmn_lite_types::TimerKind
+pub bpmn_lite_types::TimerKind::Race
+pub bpmn_lite_types::TimerKind::Race::arm_count: usize
+pub bpmn_lite_types::TimerKind::Race::arm_index: usize
+pub bpmn_lite_types::TimerKind::Race::boundary_element_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::TimerKind::Race::interrupting: bool
+pub bpmn_lite_types::TimerKind::Race::job_key: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::TimerKind::Race::race_id: u32
+pub bpmn_lite_types::TimerKind::Race::resume_at: u32
+pub bpmn_lite_types::TimerKind::V2GuardTimer
+pub bpmn_lite_types::TimerKind::V2GuardTimer::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::TimerKind::V2Race
+pub bpmn_lite_types::TimerKind::V2Race::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::TimerKind::V2Race::resume_at: u32
+pub bpmn_lite_types::TimerKind::Wait
+pub enum bpmn_lite_types::TimerMutation
+pub bpmn_lite_types::TimerMutation::CancelRace
+pub bpmn_lite_types::TimerMutation::CancelRace::except: bpmn_lite_types::EffectId
+pub bpmn_lite_types::TimerMutation::CancelRace::fiber_id: uuid::Uuid
+pub bpmn_lite_types::TimerMutation::CancelRace::race_id: u32
+pub bpmn_lite_types::TimerMutation::Consume
+pub bpmn_lite_types::TimerMutation::Consume::claim_token: uuid::Uuid
+pub bpmn_lite_types::TimerMutation::Consume::timer_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::TimerMutation::Rearm
+pub bpmn_lite_types::TimerMutation::Rearm::claim_token: uuid::Uuid
+pub bpmn_lite_types::TimerMutation::Rearm::due_at: u64
+pub bpmn_lite_types::TimerMutation::Rearm::repeat_spec: bpmn_lite_types::TimerRepeatSpec
+pub bpmn_lite_types::TimerMutation::Rearm::timer_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::TimerMutation::V2CancelRace
+pub bpmn_lite_types::TimerMutation::V2CancelRace::except: bpmn_lite_types::EffectId
+pub bpmn_lite_types::TimerMutation::V2CancelRace::fiber_id: uuid::Uuid
+pub bpmn_lite_types::TimerMutation::V2CancelRace::record_id: bpmn_lite_types::RecordId
+pub enum bpmn_lite_types::TripwireSurface
+pub bpmn_lite_types::TripwireSurface::ArtifactAbi
+pub bpmn_lite_types::TripwireSurface::JournalSchema
+pub bpmn_lite_types::TripwireSurface::SnapshotSchema
+impl core::fmt::Display for bpmn_lite_types::TripwireSurface
+pub fn bpmn_lite_types::TripwireSurface::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum bpmn_lite_types::V2RaceArm
+pub bpmn_lite_types::V2RaceArm::Effect
+pub bpmn_lite_types::V2RaceArm::Effect::effect_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::V2RaceArm::Effect::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::V2RaceArm::Effect::template_id: [u8; 32]
+pub bpmn_lite_types::V2RaceArm::Msg
+pub bpmn_lite_types::V2RaceArm::Msg::corr_key: alloc::string::String
+pub bpmn_lite_types::V2RaceArm::Msg::name: u32
+pub bpmn_lite_types::V2RaceArm::Msg::target: bpmn_lite_types::Addr
+pub bpmn_lite_types::V2RaceArm::Timer
+pub bpmn_lite_types::V2RaceArm::Timer::target: bpmn_lite_types::Addr
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::V2RaceArm
+pub fn bpmn_lite_types::V2RaceArm::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::V2RaceArm::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::V2RaceArm::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::V2RaceArm::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::Value
+pub bpmn_lite_types::Value::Array(alloc::vec::Vec<bpmn_lite_types::Value>)
+pub bpmn_lite_types::Value::Bool(bool)
+pub bpmn_lite_types::Value::I64(i64)
+pub bpmn_lite_types::Value::Ref(u32)
+pub bpmn_lite_types::Value::Str(u32)
+impl bpmn_lite_types::Value
+pub fn bpmn_lite_types::Value::check_array_limits(&self) -> core::result::Result<(), bpmn_lite_types::ValueLimitError>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Value
+pub fn bpmn_lite_types::Value::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Value::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Value::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Value::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::ValueLimitError
+pub bpmn_lite_types::ValueLimitError::TooDeep
+pub bpmn_lite_types::ValueLimitError::TooDeep::max: u32
+pub bpmn_lite_types::ValueLimitError::TooLong
+pub bpmn_lite_types::ValueLimitError::TooLong::actual: usize
+pub bpmn_lite_types::ValueLimitError::TooLong::max: usize
+impl core::fmt::Display for bpmn_lite_types::ValueLimitError
+pub fn bpmn_lite_types::ValueLimitError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum bpmn_lite_types::WaitState
+pub bpmn_lite_types::WaitState::Effect
+pub bpmn_lite_types::WaitState::Effect::effect_id: bpmn_lite_types::EffectId
+pub bpmn_lite_types::WaitState::Incident
+pub bpmn_lite_types::WaitState::Incident::incident_id: uuid::Uuid
+pub bpmn_lite_types::WaitState::Job
+pub bpmn_lite_types::WaitState::Job::job_key: alloc::string::String
+pub bpmn_lite_types::WaitState::Join
+pub bpmn_lite_types::WaitState::Join::join_id: bpmn_lite_types::JoinId
+pub bpmn_lite_types::WaitState::Msg
+pub bpmn_lite_types::WaitState::Msg::corr_key: alloc::string::String
+pub bpmn_lite_types::WaitState::Msg::name: u32
+pub bpmn_lite_types::WaitState::Msg::wait_id: bpmn_lite_types::WaitId
+pub bpmn_lite_types::WaitState::Running
+pub bpmn_lite_types::WaitState::Timer
+pub bpmn_lite_types::WaitState::Timer::deadline_ms: u64
+pub bpmn_lite_types::WaitState::V2Barrier
+pub bpmn_lite_types::WaitState::V2Barrier::record_id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::WaitState::V2Race
+pub bpmn_lite_types::WaitState::V2Race::arms: alloc::vec::Vec<bpmn_lite_types::V2RaceArm>
+pub bpmn_lite_types::WaitState::V2Race::record_id: bpmn_lite_types::RecordId
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::WaitState
+pub fn bpmn_lite_types::WaitState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::WaitState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::WaitState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::WaitState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub enum bpmn_lite_types::WaitType
+pub bpmn_lite_types::WaitType::Human
+pub bpmn_lite_types::WaitType::Msg
+pub bpmn_lite_types::WaitType::Timer
+pub struct bpmn_lite_types::Addr(_)
+impl bpmn_lite_types::Addr
+pub const fn bpmn_lite_types::Addr::get(self) -> u32
+pub const fn bpmn_lite_types::Addr::index(self) -> usize
+pub const fn bpmn_lite_types::Addr::new(u32) -> Self
+pub const fn bpmn_lite_types::Addr::saturating_add(self, u32) -> Self
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Addr::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Addr::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Addr::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl core::convert::From<bpmn_lite_types::Addr> for u32
+pub fn u32::from(bpmn_lite_types::Addr) -> Self
+impl core::convert::From<u32> for bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::from(u32) -> Self
+impl core::fmt::Display for bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::arith::Add<u32> for bpmn_lite_types::Addr
+pub type bpmn_lite_types::Addr::Output = bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::add(self, u32) -> bpmn_lite_types::Addr
+impl core::ops::arith::AddAssign<u32> for bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::add_assign(&mut self, u32)
+pub struct bpmn_lite_types::ArtifactEnvelope
+impl bpmn_lite_types::ArtifactEnvelope
+pub fn bpmn_lite_types::ArtifactEnvelope::abi_version(&self) -> u32
+pub fn bpmn_lite_types::ArtifactEnvelope::canonical_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::ArtifactError>
+pub fn bpmn_lite_types::ArtifactEnvelope::compiler_version(&self) -> &str
+pub fn bpmn_lite_types::ArtifactEnvelope::instructions(&self) -> &[bpmn_lite_types::Instr]
+pub fn bpmn_lite_types::ArtifactEnvelope::limits(&self) -> &bpmn_lite_types::VerifiedLimits
+pub fn bpmn_lite_types::ArtifactEnvelope::metadata(&self) -> &bpmn_lite_types::ArtifactMetadata
+pub struct bpmn_lite_types::ArtifactHash(_)
+impl bpmn_lite_types::ArtifactHash
+pub fn bpmn_lite_types::ArtifactHash::as_bytes(&self) -> &[u8; 32]
+pub fn bpmn_lite_types::ArtifactHash::from_bytes([u8; 32]) -> Self
+pub fn bpmn_lite_types::ArtifactHash::into_bytes(self) -> [u8; 32]
+pub struct bpmn_lite_types::ArtifactMetadata
+impl bpmn_lite_types::ArtifactMetadata
+pub fn bpmn_lite_types::ArtifactMetadata::data_objects(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::DataObjectDecl>
+pub fn bpmn_lite_types::ArtifactMetadata::debug_map(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, alloc::string::String>
+pub fn bpmn_lite_types::ArtifactMetadata::default_guard_budget(&self) -> bpmn_lite_types::ScopeFailureBudget
+pub fn bpmn_lite_types::ArtifactMetadata::default_retry_policy(&self) -> bpmn_lite_types::RetryPolicy
+pub fn bpmn_lite_types::ArtifactMetadata::ffi_task_decls(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::FfiTaskDecl>
+pub fn bpmn_lite_types::ArtifactMetadata::flag_symbol_table(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::FlagKey, alloc::string::String>
+pub fn bpmn_lite_types::ArtifactMetadata::join_plan(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, bpmn_lite_types::JoinPlanEntry>
+pub fn bpmn_lite_types::ArtifactMetadata::message_name_map(&self) -> &alloc::collections::btree::map::BTreeMap<u32, alloc::string::String>
+pub fn bpmn_lite_types::ArtifactMetadata::task_manifest(&self) -> &[alloc::string::String]
+pub fn bpmn_lite_types::ArtifactMetadata::v2_corr_sources(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::BindingSource>
+pub fn bpmn_lite_types::ArtifactMetadata::v2_ffi_task_decls(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::FfiTaskDecl>
+pub fn bpmn_lite_types::ArtifactMetadata::v2_guard_budgets(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::ScopeFailureBudget>
+pub fn bpmn_lite_types::ArtifactMetadata::wait_plan(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::WaitId, bpmn_lite_types::WaitPlanEntry>
+pub fn bpmn_lite_types::ArtifactMetadata::write_set(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::collections::btree::set::BTreeSet<bpmn_lite_types::FlagKey>>
+pub struct bpmn_lite_types::BufferedMessage
+pub bpmn_lite_types::BufferedMessage::correlation_key: alloc::string::String
+pub bpmn_lite_types::BufferedMessage::expires_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::BufferedMessage::message_name: alloc::string::String
+pub bpmn_lite_types::BufferedMessage::msg_id: alloc::string::String
+pub bpmn_lite_types::BufferedMessage::payload: alloc::vec::Vec<u8>
+pub bpmn_lite_types::BufferedMessage::payload_hash: core::option::Option<[u8; 32]>
+pub bpmn_lite_types::BufferedMessage::process_instance_id: core::option::Option<uuid::Uuid>
+pub bpmn_lite_types::BufferedMessage::received_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::BufferedMessage::tenant_id: alloc::string::String
+pub struct bpmn_lite_types::BusSubmissionAckMutation
+impl bpmn_lite_types::BusSubmissionAckMutation
+pub fn bpmn_lite_types::BusSubmissionAckMutation::callout_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::BusSubmissionAckMutation::dispatch_claim_token(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::BusSubmissionAckMutation::execution_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::BusSubmissionAckMutation::new(uuid::Uuid, uuid::Uuid, uuid::Uuid, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::BusSubmissionAckMutation::outbox_id(&self) -> uuid::Uuid
+pub struct bpmn_lite_types::CanonicalReader<'a>
+impl<'a> bpmn_lite_types::CanonicalReader<'a>
+pub fn bpmn_lite_types::CanonicalReader<'a>::finish(self) -> core::result::Result<(), bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::new(&'a [u8]) -> Self
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_bool(&mut self) -> core::result::Result<bool, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_bytes(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_bytes_fixed<const N: usize>(&mut self) -> core::result::Result<[u8; N], bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_option<T>(&mut self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, bpmn_lite_types::CanonicalDecodeError>) -> core::result::Result<core::option::Option<T>, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_seq<T>(&mut self, impl core::ops::function::FnMut(&mut Self) -> core::result::Result<T, bpmn_lite_types::CanonicalDecodeError>) -> core::result::Result<alloc::vec::Vec<T>, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_str(&mut self) -> core::result::Result<alloc::string::String, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_u16(&mut self) -> core::result::Result<u16, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_u32(&mut self) -> core::result::Result<u32, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_u64(&mut self) -> core::result::Result<u64, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalReader<'a>::read_u8(&mut self) -> core::result::Result<u8, bpmn_lite_types::CanonicalDecodeError>
+pub struct bpmn_lite_types::CanonicalWriter(_)
+impl bpmn_lite_types::CanonicalWriter
+pub fn bpmn_lite_types::CanonicalWriter::into_bytes(self) -> alloc::vec::Vec<u8>
+pub fn bpmn_lite_types::CanonicalWriter::new() -> Self
+pub fn bpmn_lite_types::CanonicalWriter::write_bool(&mut self, bool)
+pub fn bpmn_lite_types::CanonicalWriter::write_bytes(&mut self, &[u8])
+pub fn bpmn_lite_types::CanonicalWriter::write_bytes_fixed(&mut self, &[u8])
+pub fn bpmn_lite_types::CanonicalWriter::write_option<T>(&mut self, &core::option::Option<T>, impl core::ops::function::FnOnce(&mut Self, &T))
+pub fn bpmn_lite_types::CanonicalWriter::write_seq<T>(&mut self, impl core::iter::traits::exact_size::ExactSizeIterator<Item = T>, impl core::ops::function::FnMut(&mut Self, T))
+pub fn bpmn_lite_types::CanonicalWriter::write_str(&mut self, &str)
+pub fn bpmn_lite_types::CanonicalWriter::write_u16(&mut self, u16)
+pub fn bpmn_lite_types::CanonicalWriter::write_u32(&mut self, u32)
+pub fn bpmn_lite_types::CanonicalWriter::write_u64(&mut self, u64)
+pub fn bpmn_lite_types::CanonicalWriter::write_u8(&mut self, u8)
+pub struct bpmn_lite_types::ChildStart
+impl bpmn_lite_types::ChildStart
+pub fn bpmn_lite_types::ChildStart::idempotency_key(&self) -> &str
+pub fn bpmn_lite_types::ChildStart::instance(&self) -> &bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::ChildStart::new(bpmn_lite_types::ProcessInstance, bpmn_lite_types::Fiber, bpmn_lite_types::RuntimeEvent, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::ChildStart::root_fiber(&self) -> &bpmn_lite_types::Fiber
+pub fn bpmn_lite_types::ChildStart::start_event(&self) -> &bpmn_lite_types::RuntimeEvent
+pub struct bpmn_lite_types::Claim
+impl bpmn_lite_types::Claim
+pub fn bpmn_lite_types::Claim::expected_revision(&self) -> u64
+pub fn bpmn_lite_types::Claim::fence(&self) -> u64
+pub fn bpmn_lite_types::Claim::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::Claim::lease_token(&self) -> &str
+pub fn bpmn_lite_types::Claim::new(bpmn_lite_types::TenantId, uuid::Uuid, u64, u64, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::Claim::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub struct bpmn_lite_types::ClaimedActivation
+impl bpmn_lite_types::ClaimedActivation
+pub fn bpmn_lite_types::ClaimedActivation::activation_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedActivation::attempt_count(&self) -> u32
+pub fn bpmn_lite_types::ClaimedActivation::claim_token(&self) -> &str
+pub fn bpmn_lite_types::ClaimedActivation::command(&self) -> &bpmn_lite_types::Command
+pub fn bpmn_lite_types::ClaimedActivation::command_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedActivation::command_kind(&self) -> &str
+pub fn bpmn_lite_types::ClaimedActivation::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedActivation::new(bpmn_lite_types::TenantId, uuid::Uuid, uuid::Uuid, uuid::Uuid, impl core::convert::Into<alloc::string::String>, bpmn_lite_types::Command, u32, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::ClaimedActivation::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub struct bpmn_lite_types::ClaimedBufferedMessage
+pub bpmn_lite_types::ClaimedBufferedMessage::claim_token: alloc::string::String
+pub bpmn_lite_types::ClaimedBufferedMessage::claim_until: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::ClaimedBufferedMessage::message: bpmn_lite_types::BufferedMessage
+pub struct bpmn_lite_types::ClaimedEffect
+impl bpmn_lite_types::ClaimedEffect
+pub fn bpmn_lite_types::ClaimedEffect::attempt(&self) -> u32
+pub fn bpmn_lite_types::ClaimedEffect::claim_token(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedEffect::effect(&self) -> &bpmn_lite_types::DurableEffect
+pub fn bpmn_lite_types::ClaimedEffect::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedEffect::new(bpmn_lite_types::TenantId, uuid::Uuid, bpmn_lite_types::DurableEffect, uuid::Uuid, u32, u32) -> Self
+pub fn bpmn_lite_types::ClaimedEffect::policy_version(&self) -> u32
+pub fn bpmn_lite_types::ClaimedEffect::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub struct bpmn_lite_types::ClaimedTimer
+impl bpmn_lite_types::ClaimedTimer
+pub fn bpmn_lite_types::ClaimedTimer::claim_token(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedTimer::due_at(&self) -> u64
+pub fn bpmn_lite_types::ClaimedTimer::fiber_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedTimer::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::ClaimedTimer::kind(&self) -> &bpmn_lite_types::TimerKind
+pub fn bpmn_lite_types::ClaimedTimer::new(bpmn_lite_types::ClaimedTimerIdentity, u64, bpmn_lite_types::TimerKind, core::option::Option<bpmn_lite_types::TimerRepeatSpec>, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::ClaimedTimer::repeat_spec(&self) -> core::option::Option<&bpmn_lite_types::TimerRepeatSpec>
+pub fn bpmn_lite_types::ClaimedTimer::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub fn bpmn_lite_types::ClaimedTimer::timer_id(&self) -> bpmn_lite_types::EffectId
+pub struct bpmn_lite_types::ClaimedTimerIdentity
+impl bpmn_lite_types::ClaimedTimerIdentity
+pub fn bpmn_lite_types::ClaimedTimerIdentity::new(bpmn_lite_types::TenantId, bpmn_lite_types::EffectId, uuid::Uuid, uuid::Uuid) -> Self
+pub struct bpmn_lite_types::ClaimedWork
+impl bpmn_lite_types::ClaimedWork
+pub fn bpmn_lite_types::ClaimedWork::claim(&self) -> &bpmn_lite_types::Claim
+pub fn bpmn_lite_types::ClaimedWork::command(&self) -> &bpmn_lite_types::Command
+pub fn bpmn_lite_types::ClaimedWork::into_parts(self) -> (bpmn_lite_types::Claim, bpmn_lite_types::Snapshot, bpmn_lite_types::Command)
+pub fn bpmn_lite_types::ClaimedWork::new(bpmn_lite_types::Claim, bpmn_lite_types::Snapshot, bpmn_lite_types::Command) -> Self
+pub fn bpmn_lite_types::ClaimedWork::snapshot(&self) -> &bpmn_lite_types::Snapshot
+pub struct bpmn_lite_types::CommandEnvelope
+impl bpmn_lite_types::CommandEnvelope
+pub fn bpmn_lite_types::CommandEnvelope::command(&self) -> &bpmn_lite_types::JournalCommand
+pub fn bpmn_lite_types::CommandEnvelope::command_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::CommandEnvelope::command_type(&self) -> &'static str
+pub fn bpmn_lite_types::CommandEnvelope::logical_time(&self) -> bpmn_lite_types::Timestamp
+pub fn bpmn_lite_types::CommandEnvelope::new(uuid::Uuid, bpmn_lite_types::Timestamp, bpmn_lite_types::JournalCommand) -> Self
+pub fn bpmn_lite_types::CommandEnvelope::schema_version(&self) -> u16
+pub struct bpmn_lite_types::CompiledFfiInputBinding
+pub bpmn_lite_types::CompiledFfiInputBinding::source: bpmn_lite_types::BindingSource
+pub bpmn_lite_types::CompiledFfiInputBinding::target_field: alloc::string::String
+pub struct bpmn_lite_types::CompiledFfiOutputBinding
+pub bpmn_lite_types::CompiledFfiOutputBinding::source_field: alloc::string::String
+pub bpmn_lite_types::CompiledFfiOutputBinding::target: bpmn_lite_types::BindingTarget
+pub struct bpmn_lite_types::CompiledProgram
+impl bpmn_lite_types::CompiledProgram
+pub fn bpmn_lite_types::CompiledProgram::bytecode_version(&self) -> [u8; 32]
+pub fn bpmn_lite_types::CompiledProgram::data_objects(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::DataObjectDecl>
+pub fn bpmn_lite_types::CompiledProgram::debug_map(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, alloc::string::String>
+pub fn bpmn_lite_types::CompiledProgram::default_guard_budget(&self) -> bpmn_lite_types::ScopeFailureBudget
+pub fn bpmn_lite_types::CompiledProgram::default_retry_policy(&self) -> bpmn_lite_types::RetryPolicy
+pub fn bpmn_lite_types::CompiledProgram::ffi_task_decls(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::FfiTaskDecl>
+pub fn bpmn_lite_types::CompiledProgram::flag_symbol_table(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::FlagKey, alloc::string::String>
+pub fn bpmn_lite_types::CompiledProgram::join_plan(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, bpmn_lite_types::JoinPlanEntry>
+pub fn bpmn_lite_types::CompiledProgram::message_name_map(&self) -> &alloc::collections::btree::map::BTreeMap<u32, alloc::string::String>
+pub fn bpmn_lite_types::CompiledProgram::program(&self) -> &alloc::vec::Vec<bpmn_lite_types::Instr>
+pub fn bpmn_lite_types::CompiledProgram::task_manifest(&self) -> &alloc::vec::Vec<alloc::string::String>
+pub fn bpmn_lite_types::CompiledProgram::v2_corr_sources(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::BindingSource>
+pub fn bpmn_lite_types::CompiledProgram::v2_ffi_task_decls(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::FfiTaskDecl>
+pub fn bpmn_lite_types::CompiledProgram::v2_guard_budgets(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::Addr, bpmn_lite_types::ScopeFailureBudget>
+pub fn bpmn_lite_types::CompiledProgram::wait_plan(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::WaitId, bpmn_lite_types::WaitPlanEntry>
+pub fn bpmn_lite_types::CompiledProgram::write_set(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, std::collections::hash::set::HashSet<bpmn_lite_types::FlagKey>>
+pub struct bpmn_lite_types::ConcurrencyRecord
+pub bpmn_lite_types::ConcurrencyRecord::counters: bpmn_lite_types::RecordCounters
+pub bpmn_lite_types::ConcurrencyRecord::error_routes: alloc::vec::Vec<(core::option::Option<alloc::boxed::Box<str>>, bpmn_lite_types::Addr)>
+pub bpmn_lite_types::ConcurrencyRecord::handler: core::option::Option<bpmn_lite_types::Addr>
+pub bpmn_lite_types::ConcurrencyRecord::id: bpmn_lite_types::RecordId
+pub bpmn_lite_types::ConcurrencyRecord::kind: bpmn_lite_types::RecordKind
+pub bpmn_lite_types::ConcurrencyRecord::members: alloc::collections::btree::set::BTreeSet<uuid::Uuid>
+pub bpmn_lite_types::ConcurrencyRecord::opened_at: core::option::Option<bpmn_lite_types::Addr>
+pub bpmn_lite_types::ConcurrencyRecord::rollback_domain_payload: core::option::Option<alloc::boxed::Box<str>>
+pub bpmn_lite_types::ConcurrencyRecord::rollback_domain_payload_hash: core::option::Option<[u8; 32]>
+pub bpmn_lite_types::ConcurrencyRecord::rollback_flags: core::option::Option<alloc::collections::btree::map::BTreeMap<bpmn_lite_types::FlagKey, bpmn_lite_types::Value>>
+pub bpmn_lite_types::ConcurrencyRecord::rollback_join_expected: core::option::Option<alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, u16>>
+pub bpmn_lite_types::ConcurrencyRecord::rollback_session_stack: core::option::Option<alloc::boxed::Box<str>>
+pub bpmn_lite_types::ConcurrencyRecord::state: bpmn_lite_types::RecordState
+impl bpmn_lite_types::ConcurrencyRecord
+pub fn bpmn_lite_types::ConcurrencyRecord::new(bpmn_lite_types::RecordId, bpmn_lite_types::RecordKind) -> Self
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ConcurrencyRecord
+pub fn bpmn_lite_types::ConcurrencyRecord::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyRecord::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ConcurrencyRecord::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyRecord::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::ConcurrencyTable(_)
+impl bpmn_lite_types::ConcurrencyTable
+pub fn bpmn_lite_types::ConcurrencyTable::get(&self, bpmn_lite_types::RecordId) -> core::option::Option<&bpmn_lite_types::ConcurrencyRecord>
+pub fn bpmn_lite_types::ConcurrencyTable::get_mut(&mut self, bpmn_lite_types::RecordId) -> core::option::Option<&mut bpmn_lite_types::ConcurrencyRecord>
+pub fn bpmn_lite_types::ConcurrencyTable::insert(&mut self, bpmn_lite_types::ConcurrencyRecord)
+pub fn bpmn_lite_types::ConcurrencyTable::is_empty(&self) -> bool
+pub fn bpmn_lite_types::ConcurrencyTable::iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = (&bpmn_lite_types::RecordId, &bpmn_lite_types::ConcurrencyRecord)>
+pub fn bpmn_lite_types::ConcurrencyTable::len(&self) -> usize
+pub fn bpmn_lite_types::ConcurrencyTable::new() -> Self
+pub fn bpmn_lite_types::ConcurrencyTable::remove(&mut self, bpmn_lite_types::RecordId) -> core::option::Option<bpmn_lite_types::ConcurrencyRecord>
+pub fn bpmn_lite_types::ConcurrencyTable::validate_mutations(&self, &[bpmn_lite_types::ConcurrencyMutation]) -> core::result::Result<(), bpmn_lite_types::ConcurrencyValidationError>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ConcurrencyTable
+pub fn bpmn_lite_types::ConcurrencyTable::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyTable::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ConcurrencyTable::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyTable::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::DataObjectDecl
+pub bpmn_lite_types::DataObjectDecl::id: alloc::string::String
+pub bpmn_lite_types::DataObjectDecl::role: bpmn_lite_types::DataObjectRole
+pub bpmn_lite_types::DataObjectDecl::storage: bpmn_lite_types::DataObjectStorage
+pub bpmn_lite_types::DataObjectDecl::type_decl: bpmn_lite_types::DataObjectType
+pub struct bpmn_lite_types::DedupeWrite
+impl bpmn_lite_types::DedupeWrite
+pub fn bpmn_lite_types::DedupeWrite::completion(&self) -> &bpmn_lite_types::JobCompletion
+pub fn bpmn_lite_types::DedupeWrite::key(&self) -> &str
+pub fn bpmn_lite_types::DedupeWrite::new(impl core::convert::Into<alloc::string::String>, bpmn_lite_types::JobCompletion) -> Self
+pub struct bpmn_lite_types::EffectId(_)
+impl bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::EffectId::as_uuid(self) -> uuid::Uuid
+pub fn bpmn_lite_types::EffectId::content_hash(&[u8]) -> [u8; 32]
+pub fn bpmn_lite_types::EffectId::for_command(uuid::Uuid, u64, u32) -> Self
+pub fn bpmn_lite_types::EffectId::for_instruction(uuid::Uuid, uuid::Uuid, u32) -> Self
+pub fn bpmn_lite_types::EffectId::for_instruction_ordinal(uuid::Uuid, uuid::Uuid, u32, u32) -> Self
+pub fn bpmn_lite_types::EffectId::for_timer_fire(bpmn_lite_types::EffectId, u32) -> Self
+pub fn bpmn_lite_types::EffectId::for_transition(uuid::Uuid, u64, u32) -> Self
+pub fn bpmn_lite_types::EffectId::from_uuid(uuid::Uuid) -> Self
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::EffectId::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::EffectId::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::EffectId::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::EffectId::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::EffectMutation
+impl bpmn_lite_types::EffectMutation
+pub fn bpmn_lite_types::EffectMutation::effect_id(&self) -> bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::EffectMutation::terminal(bpmn_lite_types::EffectId, bpmn_lite_types::EffectTerminalState) -> Self
+pub fn bpmn_lite_types::EffectMutation::terminal_state(&self) -> bpmn_lite_types::EffectTerminalState
+pub struct bpmn_lite_types::EventEnvelope
+impl bpmn_lite_types::EventEnvelope
+pub fn bpmn_lite_types::EventEnvelope::event(&self) -> &bpmn_lite_types::RuntimeEvent
+pub fn bpmn_lite_types::EventEnvelope::new(bpmn_lite_types::RuntimeEvent) -> Self
+pub struct bpmn_lite_types::ExecutableWorkflow
+impl bpmn_lite_types::ExecutableWorkflow
+pub fn bpmn_lite_types::ExecutableWorkflow::canonical_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::ArtifactError>
+pub fn bpmn_lite_types::ExecutableWorkflow::envelope(&self) -> &bpmn_lite_types::ArtifactEnvelope
+pub fn bpmn_lite_types::ExecutableWorkflow::hash(&self) -> bpmn_lite_types::ArtifactHash
+pub fn bpmn_lite_types::ExecutableWorkflow::to_legacy_program(&self) -> bpmn_lite_types::CompiledProgram
+pub fn bpmn_lite_types::ExecutableWorkflow::verify(&[u8]) -> core::result::Result<Self, bpmn_lite_types::ArtifactError>
+pub struct bpmn_lite_types::FfiTaskDecl
+pub bpmn_lite_types::FfiTaskDecl::inputs: alloc::vec::Vec<bpmn_lite_types::CompiledFfiInputBinding>
+pub bpmn_lite_types::FfiTaskDecl::outputs: alloc::vec::Vec<bpmn_lite_types::CompiledFfiOutputBinding>
+pub bpmn_lite_types::FfiTaskDecl::template_id: [u8; 32]
+pub struct bpmn_lite_types::Fiber
+pub bpmn_lite_types::Fiber::control_stack: alloc::vec::Vec<bpmn_lite_types::Handle>
+pub bpmn_lite_types::Fiber::fiber_id: uuid::Uuid
+pub bpmn_lite_types::Fiber::loop_epoch: u32
+pub bpmn_lite_types::Fiber::pc: bpmn_lite_types::Addr
+pub bpmn_lite_types::Fiber::stack: alloc::vec::Vec<bpmn_lite_types::Value>
+pub bpmn_lite_types::Fiber::wait: bpmn_lite_types::WaitState
+impl bpmn_lite_types::Fiber
+pub fn bpmn_lite_types::Fiber::new(uuid::Uuid, impl core::convert::Into<bpmn_lite_types::Addr>) -> Self
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Fiber
+pub fn bpmn_lite_types::Fiber::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Fiber::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Fiber::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Fiber::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::Incident
+pub bpmn_lite_types::Incident::bytecode_addr: bpmn_lite_types::Addr
+pub bpmn_lite_types::Incident::created_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::Incident::error_class: bpmn_lite_types::ErrorClass
+pub bpmn_lite_types::Incident::fiber_id: uuid::Uuid
+pub bpmn_lite_types::Incident::incident_id: uuid::Uuid
+pub bpmn_lite_types::Incident::message: alloc::string::String
+pub bpmn_lite_types::Incident::process_instance_id: uuid::Uuid
+pub bpmn_lite_types::Incident::resolution: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::Incident::resolved_at: core::option::Option<bpmn_lite_types::Timestamp>
+pub bpmn_lite_types::Incident::retry_count: u32
+pub bpmn_lite_types::Incident::service_task_id: alloc::string::String
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Incident
+pub fn bpmn_lite_types::Incident::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Incident::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Incident::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Incident::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::IntegrityViolation
+pub bpmn_lite_types::IntegrityViolation::detection_point: alloc::string::String
+pub bpmn_lite_types::IntegrityViolation::instance_id: uuid::Uuid
+pub bpmn_lite_types::IntegrityViolation::tenant_id: alloc::string::String
+pub struct bpmn_lite_types::JobActivation
+pub bpmn_lite_types::JobActivation::attempt_count: u32
+pub bpmn_lite_types::JobActivation::claim_expires_at: core::option::Option<bpmn_lite_types::Timestamp>
+pub bpmn_lite_types::JobActivation::claim_token: alloc::string::String
+pub bpmn_lite_types::JobActivation::domain_payload: alloc::string::String
+pub bpmn_lite_types::JobActivation::domain_payload_hash: [u8; 32]
+pub bpmn_lite_types::JobActivation::entry_id: uuid::Uuid
+pub bpmn_lite_types::JobActivation::failure_count: u32
+pub bpmn_lite_types::JobActivation::job_key: alloc::string::String
+pub bpmn_lite_types::JobActivation::not_before: core::option::Option<bpmn_lite_types::Timestamp>
+pub bpmn_lite_types::JobActivation::orch_flags: alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::Value>
+pub bpmn_lite_types::JobActivation::process_instance_id: uuid::Uuid
+pub bpmn_lite_types::JobActivation::retries_remaining: u32
+pub bpmn_lite_types::JobActivation::runbook_id: uuid::Uuid
+pub bpmn_lite_types::JobActivation::service_task_id: alloc::string::String
+pub bpmn_lite_types::JobActivation::session_stack: bpmn_lite_types::SessionStackState
+pub bpmn_lite_types::JobActivation::task_type: alloc::string::String
+pub bpmn_lite_types::JobActivation::tenant_id: alloc::string::String
+pub bpmn_lite_types::JobActivation::worker_id: alloc::string::String
+pub struct bpmn_lite_types::JobCompletion
+pub bpmn_lite_types::JobCompletion::claim_token: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::JobCompletion::domain_payload: alloc::string::String
+pub bpmn_lite_types::JobCompletion::expected_instance_payload_hash: [u8; 32]
+pub bpmn_lite_types::JobCompletion::job_key: alloc::string::String
+pub bpmn_lite_types::JobCompletion::orch_flags: alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::Value>
+pub bpmn_lite_types::JobCompletion::worker_id: core::option::Option<alloc::string::String>
+pub struct bpmn_lite_types::JobFailure
+pub bpmn_lite_types::JobFailure::error_class: bpmn_lite_types::ErrorClass
+pub bpmn_lite_types::JobFailure::job_key: alloc::string::String
+pub bpmn_lite_types::JobFailure::message: alloc::string::String
+pub bpmn_lite_types::JobFailure::retry_hint_ms: core::option::Option<u64>
+pub struct bpmn_lite_types::JobRetry
+impl bpmn_lite_types::JobRetry
+pub fn bpmn_lite_types::JobRetry::claim_token(&self) -> &str
+pub fn bpmn_lite_types::JobRetry::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, i64) -> Self
+pub fn bpmn_lite_types::JobRetry::not_before_ms(&self) -> i64
+pub fn bpmn_lite_types::JobRetry::worker_id(&self) -> &str
+pub struct bpmn_lite_types::JoinPlanEntry
+pub bpmn_lite_types::JoinPlanEntry::expected: u16
+pub bpmn_lite_types::JoinPlanEntry::next: bpmn_lite_types::Addr
+pub bpmn_lite_types::JoinPlanEntry::reg_template: [bpmn_lite_types::Value; 8]
+pub struct bpmn_lite_types::JournalRecord
+impl bpmn_lite_types::JournalRecord
+pub fn bpmn_lite_types::JournalRecord::artifact_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::JournalRecord::canonical_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::PersistenceEnvelopeError>
+pub fn bpmn_lite_types::JournalRecord::command(&self) -> &bpmn_lite_types::CommandEnvelope
+pub fn bpmn_lite_types::JournalRecord::decode(&[u8]) -> core::result::Result<Self, bpmn_lite_types::PersistenceEnvelopeError>
+pub fn bpmn_lite_types::JournalRecord::effect_ids(&self) -> &[bpmn_lite_types::EffectId]
+pub fn bpmn_lite_types::JournalRecord::event_envelopes(&self) -> &[bpmn_lite_types::EventEnvelope]
+pub fn bpmn_lite_types::JournalRecord::new(bpmn_lite_types::CommandEnvelope, i64, u64, [u8; 32], [u8; 32], [u8; 32], &[bpmn_lite_types::RuntimeEvent], &[bpmn_lite_types::DurableEffect]) -> Self
+pub fn bpmn_lite_types::JournalRecord::new_revision(&self) -> u64
+pub fn bpmn_lite_types::JournalRecord::new_state_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::JournalRecord::prior_revision(&self) -> i64
+pub fn bpmn_lite_types::JournalRecord::prior_state_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::JournalRecord::schema_version(&self) -> u16
+pub fn bpmn_lite_types::JournalRecord::state_hash(&self) -> [u8; 32]
+pub struct bpmn_lite_types::OutboxWrite
+impl bpmn_lite_types::OutboxWrite
+pub fn bpmn_lite_types::OutboxWrite::callout_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::OutboxWrite::id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::OutboxWrite::idempotency_key(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::OutboxWrite::new(uuid::Uuid, alloc::string::String, alloc::string::String, alloc::vec::Vec<u8>, uuid::Uuid, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::OutboxWrite::payload(&self) -> &[u8]
+pub fn bpmn_lite_types::OutboxWrite::target_domain(&self) -> &str
+pub fn bpmn_lite_types::OutboxWrite::target_endpoint(&self) -> &str
+pub struct bpmn_lite_types::PayloadRouteBranch
+pub bpmn_lite_types::PayloadRouteBranch::expected_value: alloc::string::String
+pub bpmn_lite_types::PayloadRouteBranch::placeholder: alloc::string::String
+pub bpmn_lite_types::PayloadRouteBranch::target: bpmn_lite_types::Addr
+pub struct bpmn_lite_types::PayloadUpdate
+pub bpmn_lite_types::PayloadUpdate::payload: alloc::string::String
+pub bpmn_lite_types::PayloadUpdate::payload_hash: [u8; 32]
+pub struct bpmn_lite_types::PendingEffectResponse
+impl bpmn_lite_types::PendingEffectResponse
+pub fn bpmn_lite_types::PendingEffectResponse::effect(&self) -> &bpmn_lite_types::DurableEffect
+pub fn bpmn_lite_types::PendingEffectResponse::effect_id(&self) -> bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::PendingEffectResponse::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::PendingEffectResponse::new(bpmn_lite_types::TenantId, uuid::Uuid, bpmn_lite_types::DurableEffect, bpmn_lite_types::EffectResponse) -> Self
+pub fn bpmn_lite_types::PendingEffectResponse::response(&self) -> &bpmn_lite_types::EffectResponse
+pub fn bpmn_lite_types::PendingEffectResponse::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub struct bpmn_lite_types::PendingInvocationIdentity
+pub bpmn_lite_types::PendingInvocationIdentity::callout_id: uuid::Uuid
+pub bpmn_lite_types::PendingInvocationIdentity::idempotency_key: uuid::Uuid
+pub bpmn_lite_types::PendingInvocationIdentity::node_id: alloc::string::String
+pub bpmn_lite_types::PendingInvocationIdentity::process_instance_id: uuid::Uuid
+pub bpmn_lite_types::PendingInvocationIdentity::target_domain: alloc::string::String
+pub bpmn_lite_types::PendingInvocationIdentity::verb_id: alloc::string::String
+pub struct bpmn_lite_types::PendingInvocationTiming
+pub bpmn_lite_types::PendingInvocationTiming::ack_received_at: core::option::Option<bpmn_lite_types::Timestamp>
+pub bpmn_lite_types::PendingInvocationTiming::execution_id: core::option::Option<uuid::Uuid>
+pub bpmn_lite_types::PendingInvocationTiming::submitted_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::PendingInvocationTiming::timeout_at: core::option::Option<bpmn_lite_types::Timestamp>
+pub struct bpmn_lite_types::PendingInvocationWrite
+impl bpmn_lite_types::PendingInvocationWrite
+pub fn bpmn_lite_types::PendingInvocationWrite::ack_received_at(&self) -> core::option::Option<bpmn_lite_types::Timestamp>
+pub fn bpmn_lite_types::PendingInvocationWrite::callout_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::PendingInvocationWrite::execution_id(&self) -> core::option::Option<uuid::Uuid>
+pub fn bpmn_lite_types::PendingInvocationWrite::idempotency_key(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::PendingInvocationWrite::new(bpmn_lite_types::PendingInvocationIdentity, bpmn_lite_types::PendingInvocationTiming) -> Self
+pub fn bpmn_lite_types::PendingInvocationWrite::node_id(&self) -> &str
+pub fn bpmn_lite_types::PendingInvocationWrite::process_instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::PendingInvocationWrite::submitted_at(&self) -> bpmn_lite_types::Timestamp
+pub fn bpmn_lite_types::PendingInvocationWrite::target_domain(&self) -> &str
+pub fn bpmn_lite_types::PendingInvocationWrite::timeout_at(&self) -> core::option::Option<bpmn_lite_types::Timestamp>
+pub fn bpmn_lite_types::PendingInvocationWrite::verb_id(&self) -> &str
+pub struct bpmn_lite_types::PersistedSnapshotState
+impl bpmn_lite_types::PersistedSnapshotState
+pub fn bpmn_lite_types::PersistedSnapshotState::concurrency_table(&self) -> &bpmn_lite_types::ConcurrencyTable
+pub fn bpmn_lite_types::PersistedSnapshotState::fibers(&self) -> &alloc::collections::btree::map::BTreeMap<uuid::Uuid, bpmn_lite_types::Fiber>
+pub fn bpmn_lite_types::PersistedSnapshotState::incidents(&self) -> &alloc::collections::btree::map::BTreeMap<uuid::Uuid, bpmn_lite_types::Incident>
+pub fn bpmn_lite_types::PersistedSnapshotState::instance(&self) -> &bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::PersistedSnapshotState::join_counts(&self) -> &alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, u16>
+pub fn bpmn_lite_types::PersistedSnapshotState::new(bpmn_lite_types::ProcessInstance, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::Fiber>, alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, u16>, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::Incident>, bpmn_lite_types::ConcurrencyTable, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::EffectId>) -> Self
+pub fn bpmn_lite_types::PersistedSnapshotState::pending_effects(&self) -> &alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>
+pub fn bpmn_lite_types::PersistedSnapshotState::to_runtime_snapshot(&self) -> bpmn_lite_types::Snapshot
+pub fn bpmn_lite_types::PersistedSnapshotState::try_canonical_hash_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::PersistenceEnvelopeError>
+pub struct bpmn_lite_types::ProcessInstance
+pub bpmn_lite_types::ProcessInstance::bytecode_version: [u8; 32]
+pub bpmn_lite_types::ProcessInstance::correlation_id: alloc::string::String
+pub bpmn_lite_types::ProcessInstance::counters: alloc::collections::btree::map::BTreeMap<u32, u32>
+pub bpmn_lite_types::ProcessInstance::created_at: bpmn_lite_types::Timestamp
+pub bpmn_lite_types::ProcessInstance::current_node_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::ProcessInstance::domain_payload: alloc::sync::Arc<str>
+pub bpmn_lite_types::ProcessInstance::domain_payload_hash: [u8; 32]
+pub bpmn_lite_types::ProcessInstance::entry_id: uuid::Uuid
+pub bpmn_lite_types::ProcessInstance::flags: alloc::collections::btree::map::BTreeMap<bpmn_lite_types::FlagKey, bpmn_lite_types::Value>
+pub bpmn_lite_types::ProcessInstance::instance_id: uuid::Uuid
+pub bpmn_lite_types::ProcessInstance::integrity_hash: core::option::Option<[u8; 32]>
+pub bpmn_lite_types::ProcessInstance::join_expected: alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, u16>
+pub bpmn_lite_types::ProcessInstance::placeholder_values: core::option::Option<serde_json::value::Value>
+pub bpmn_lite_types::ProcessInstance::plan_hash: core::option::Option<[u8; 32]>
+pub bpmn_lite_types::ProcessInstance::process_key: alloc::string::String
+pub bpmn_lite_types::ProcessInstance::quarantine_state: core::option::Option<alloc::string::String>
+pub bpmn_lite_types::ProcessInstance::runbook_id: uuid::Uuid
+pub bpmn_lite_types::ProcessInstance::session_stack: bpmn_lite_types::SessionStackState
+pub bpmn_lite_types::ProcessInstance::state: bpmn_lite_types::ProcessState
+pub bpmn_lite_types::ProcessInstance::tenant_id: alloc::string::String
+impl bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::ProcessInstance::bind_placeholder_from_payload(&mut self, &str) -> core::result::Result<(), &'static str>
+pub fn bpmn_lite_types::ProcessInstance::placeholder_matches(&self, &str, &str) -> bool
+impl bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::ProcessInstance::try_canonical_hash_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::canonical::CanonicalJsonError>
+pub struct bpmn_lite_types::RecordCounters
+pub bpmn_lite_types::RecordCounters::arity: u32
+pub bpmn_lite_types::RecordCounters::count: u32
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordCounters
+pub fn bpmn_lite_types::RecordCounters::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordCounters::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordCounters::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordCounters::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::RecordId(_)
+impl bpmn_lite_types::RecordId
+pub const fn bpmn_lite_types::RecordId::as_uuid(&self) -> uuid::Uuid
+pub const fn bpmn_lite_types::RecordId::new(uuid::Uuid) -> Self
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordId
+pub fn bpmn_lite_types::RecordId::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordId::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordId::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordId::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl core::fmt::Display for bpmn_lite_types::RecordId
+pub fn bpmn_lite_types::RecordId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct bpmn_lite_types::RetryPolicy
+impl bpmn_lite_types::RetryPolicy
+pub const fn bpmn_lite_types::RetryPolicy::conservative_default() -> Self
+pub fn bpmn_lite_types::RetryPolicy::decision(&self, u32, core::option::Option<u64>, &bpmn_lite_types::ErrorClass, u64, uuid::Uuid) -> bpmn_lite_types::RetryDecision
+pub fn bpmn_lite_types::RetryPolicy::new(u32, u32, u64, u64) -> core::result::Result<Self, &'static str>
+pub fn bpmn_lite_types::RetryPolicy::version(&self) -> u32
+pub struct bpmn_lite_types::ScopeFailureBudget
+impl bpmn_lite_types::ScopeFailureBudget
+pub const fn bpmn_lite_types::ScopeFailureBudget::conservative_default() -> Self
+pub fn bpmn_lite_types::ScopeFailureBudget::decision(&self, u32) -> bpmn_lite_types::ScopeFailureDecision
+pub fn bpmn_lite_types::ScopeFailureBudget::max_failures(&self) -> u32
+pub fn bpmn_lite_types::ScopeFailureBudget::new(u32, u32) -> core::result::Result<Self, &'static str>
+pub fn bpmn_lite_types::ScopeFailureBudget::version(&self) -> u32
+pub struct bpmn_lite_types::SessionScopeState
+pub bpmn_lite_types::SessionScopeState::client_group_id: uuid::Uuid
+pub bpmn_lite_types::SessionScopeState::client_group_name: core::option::Option<alloc::string::String>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionScopeState
+pub fn bpmn_lite_types::SessionScopeState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionScopeState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub struct bpmn_lite_types::SessionStackState
+pub bpmn_lite_types::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::SessionWorkspaceKind>
+pub bpmn_lite_types::SessionStackState::scope: core::option::Option<bpmn_lite_types::SessionScopeState>
+pub bpmn_lite_types::SessionStackState::session_id: uuid::Uuid
+pub bpmn_lite_types::SessionStackState::trace_sequence: u64
+pub bpmn_lite_types::SessionStackState::workspace_stack: alloc::vec::Vec<serde_json::value::Value>
+impl bpmn_lite_types::SessionStackState
+pub fn bpmn_lite_types::SessionStackState::from_rollback_snapshot(&str) -> core::result::Result<Self, serde_json::error::Error>
+pub fn bpmn_lite_types::SessionStackState::to_rollback_snapshot(&self) -> alloc::boxed::Box<str>
+pub struct bpmn_lite_types::Snapshot
+impl bpmn_lite_types::Snapshot
+pub fn bpmn_lite_types::Snapshot::buffered_messages(&self) -> &[bpmn_lite_types::ClaimedBufferedMessage]
+pub fn bpmn_lite_types::Snapshot::concurrency_table(&self) -> &bpmn_lite_types::ConcurrencyTable
+pub fn bpmn_lite_types::Snapshot::dedupe_completion(&self, &str) -> core::option::Option<&bpmn_lite_types::JobCompletion>
+pub fn bpmn_lite_types::Snapshot::fiber(&self, uuid::Uuid) -> core::option::Option<&bpmn_lite_types::Fiber>
+pub fn bpmn_lite_types::Snapshot::fibers(&self) -> &alloc::collections::btree::map::BTreeMap<uuid::Uuid, bpmn_lite_types::Fiber>
+pub fn bpmn_lite_types::Snapshot::incident(&self, uuid::Uuid) -> core::option::Option<&bpmn_lite_types::Incident>
+pub fn bpmn_lite_types::Snapshot::instance(&self) -> &bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::Snapshot::join_count(&self, bpmn_lite_types::JoinId) -> u16
+pub fn bpmn_lite_types::Snapshot::new(bpmn_lite_types::ProcessInstance, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::Fiber>) -> Self
+pub fn bpmn_lite_types::Snapshot::pending_effects(&self) -> &alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>
+pub fn bpmn_lite_types::Snapshot::with_buffered_messages(self, alloc::vec::Vec<bpmn_lite_types::ClaimedBufferedMessage>) -> Self
+pub fn bpmn_lite_types::Snapshot::with_concurrency_table(self, bpmn_lite_types::ConcurrencyTable) -> Self
+pub fn bpmn_lite_types::Snapshot::with_dedupe(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::JobCompletion>) -> Self
+pub fn bpmn_lite_types::Snapshot::with_incidents(self, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::Incident>) -> Self
+pub fn bpmn_lite_types::Snapshot::with_join_counts(self, alloc::collections::btree::map::BTreeMap<bpmn_lite_types::JoinId, u16>) -> Self
+pub fn bpmn_lite_types::Snapshot::with_pending_effects(self, impl core::iter::traits::collect::IntoIterator<Item = bpmn_lite_types::EffectId>) -> Self
+pub struct bpmn_lite_types::SnapshotEnvelope
+impl bpmn_lite_types::SnapshotEnvelope
+pub fn bpmn_lite_types::SnapshotEnvelope::artifact_abi(&self) -> u32
+pub fn bpmn_lite_types::SnapshotEnvelope::artifact_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::SnapshotEnvelope::canonical_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::PersistenceEnvelopeError>
+pub fn bpmn_lite_types::SnapshotEnvelope::decode(&[u8]) -> core::result::Result<Self, bpmn_lite_types::PersistenceEnvelopeError>
+pub fn bpmn_lite_types::SnapshotEnvelope::new(u32, [u8; 32], u64, bpmn_lite_types::PersistedSnapshotState) -> Self
+pub fn bpmn_lite_types::SnapshotEnvelope::revision(&self) -> u64
+pub fn bpmn_lite_types::SnapshotEnvelope::schema_version(&self) -> u16
+pub fn bpmn_lite_types::SnapshotEnvelope::state(&self) -> &bpmn_lite_types::PersistedSnapshotState
+pub fn bpmn_lite_types::SnapshotEnvelope::state_hash(&self) -> core::result::Result<[u8; 32], bpmn_lite_types::PersistenceEnvelopeError>
+pub struct bpmn_lite_types::SourceSpan
+pub bpmn_lite_types::SourceSpan::end: u32
+pub bpmn_lite_types::SourceSpan::start: u32
+impl bpmn_lite_types::SourceSpan
+pub fn bpmn_lite_types::SourceSpan::new(u32, u32) -> Self
+pub struct bpmn_lite_types::StartCommand
+impl bpmn_lite_types::StartCommand
+pub fn bpmn_lite_types::StartCommand::artifact_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::StartCommand::builder(bpmn_lite_types::TenantId, uuid::Uuid, [u8; 32]) -> bpmn_lite_types::StartCommandBuilder
+pub fn bpmn_lite_types::StartCommand::correlation_id(&self) -> &str
+pub fn bpmn_lite_types::StartCommand::entry_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::StartCommand::idempotency_key(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::StartCommand::initial_payload(&self) -> &str
+pub fn bpmn_lite_types::StartCommand::initial_payload_hash(&self) -> [u8; 32]
+pub fn bpmn_lite_types::StartCommand::instance_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::StartCommand::logical_time(&self) -> bpmn_lite_types::Timestamp
+pub fn bpmn_lite_types::StartCommand::process_key(&self) -> &str
+pub fn bpmn_lite_types::StartCommand::runbook_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_types::StartCommand::schema_version(&self) -> u16
+pub fn bpmn_lite_types::StartCommand::session_stack(&self) -> &bpmn_lite_types::SessionStackState
+pub fn bpmn_lite_types::StartCommand::tenant_id(&self) -> &bpmn_lite_types::TenantId
+pub struct bpmn_lite_types::StartCommandBuilder
+impl bpmn_lite_types::StartCommandBuilder
+pub fn bpmn_lite_types::StartCommandBuilder::build(self) -> core::result::Result<bpmn_lite_types::StartCommand, bpmn_lite_types::StartCommandBuildError>
+pub fn bpmn_lite_types::StartCommandBuilder::correlation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::idempotency_key(self, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::initial_payload(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::lineage(self, uuid::Uuid, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::logical_time(self, bpmn_lite_types::Timestamp) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::process_key(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::StartCommandBuilder::session_stack(self, bpmn_lite_types::SessionStackState) -> Self
+pub struct bpmn_lite_types::StartDedupe
+impl bpmn_lite_types::StartDedupe
+pub fn bpmn_lite_types::StartDedupe::command(&self) -> &bpmn_lite_types::StartCommand
+pub fn bpmn_lite_types::StartDedupe::new(bpmn_lite_types::StartCommand) -> Self
+pub struct bpmn_lite_types::TenantId(_)
+impl bpmn_lite_types::TenantId
+pub fn bpmn_lite_types::TenantId::as_str(&self) -> &str
+pub fn bpmn_lite_types::TenantId::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, bpmn_lite_types::TenantIdError>
+impl core::convert::AsRef<str> for bpmn_lite_types::TenantId
+pub fn bpmn_lite_types::TenantId::as_ref(&self) -> &str
+impl core::default::Default for bpmn_lite_types::TenantId
+pub fn bpmn_lite_types::TenantId::default() -> Self
+impl core::fmt::Display for bpmn_lite_types::TenantId
+pub fn bpmn_lite_types::TenantId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct bpmn_lite_types::TerminalCleanup
+impl bpmn_lite_types::TerminalCleanup
+pub fn bpmn_lite_types::TerminalCleanup::cancel_jobs(&self) -> bool
+pub fn bpmn_lite_types::TerminalCleanup::delete_all_fibers(&self) -> bool
+pub fn bpmn_lite_types::TerminalCleanup::delete_all_joins(&self) -> bool
+pub fn bpmn_lite_types::TerminalCleanup::new(bool, bool, bool) -> Self
+pub struct bpmn_lite_types::TimerRepeatSpec
+impl bpmn_lite_types::TimerRepeatSpec
+pub fn bpmn_lite_types::TimerRepeatSpec::fired_count(&self) -> u32
+pub fn bpmn_lite_types::TimerRepeatSpec::interval_ms(&self) -> u64
+pub fn bpmn_lite_types::TimerRepeatSpec::new(u64, u32, u32) -> Self
+pub fn bpmn_lite_types::TimerRepeatSpec::remaining(&self) -> u32
+pub struct bpmn_lite_types::Transition
+impl bpmn_lite_types::Transition
+pub fn bpmn_lite_types::Transition::buffered_messages(&self) -> &[bpmn_lite_types::BufferedMessageMutation]
+pub fn bpmn_lite_types::Transition::bus_submission_acks(&self) -> &[bpmn_lite_types::BusSubmissionAckMutation]
+pub fn bpmn_lite_types::Transition::child_starts(&self) -> &[bpmn_lite_types::ChildStart]
+pub fn bpmn_lite_types::Transition::command_envelope(&self) -> core::option::Option<&bpmn_lite_types::CommandEnvelope>
+pub fn bpmn_lite_types::Transition::concurrency_mutations(&self) -> &[bpmn_lite_types::ConcurrencyMutation]
+pub fn bpmn_lite_types::Transition::control_stack_deltas(&self) -> &[bpmn_lite_types::ControlStackDelta]
+pub fn bpmn_lite_types::Transition::dedupe(&self) -> &[bpmn_lite_types::DedupeWrite]
+pub fn bpmn_lite_types::Transition::effect_mutations(&self) -> &[bpmn_lite_types::EffectMutation]
+pub fn bpmn_lite_types::Transition::effects(&self) -> &[bpmn_lite_types::DurableEffect]
+pub fn bpmn_lite_types::Transition::events(&self) -> &[bpmn_lite_types::RuntimeEvent]
+pub fn bpmn_lite_types::Transition::fibers_delete(&self) -> &[uuid::Uuid]
+pub fn bpmn_lite_types::Transition::fibers_upsert(&self) -> &[bpmn_lite_types::Fiber]
+pub fn bpmn_lite_types::Transition::incidents(&self) -> &[bpmn_lite_types::Incident]
+pub fn bpmn_lite_types::Transition::job_mutations(&self) -> &[bpmn_lite_types::JobMutation]
+pub fn bpmn_lite_types::Transition::jobs_ack(&self) -> &[alloc::string::String]
+pub fn bpmn_lite_types::Transition::jobs_enqueue(&self) -> &[bpmn_lite_types::JobActivation]
+pub fn bpmn_lite_types::Transition::join_mutations(&self) -> &[bpmn_lite_types::JoinMutation]
+pub fn bpmn_lite_types::Transition::next_snapshot(&self) -> &bpmn_lite_types::ProcessInstance
+pub fn bpmn_lite_types::Transition::outbox(&self) -> &[bpmn_lite_types::OutboxWrite]
+pub fn bpmn_lite_types::Transition::parity_bytes(&self) -> core::result::Result<alloc::vec::Vec<u8>, serde_json::error::Error>
+pub fn bpmn_lite_types::Transition::pending_invocations(&self) -> &[bpmn_lite_types::PendingInvocationWrite]
+pub fn bpmn_lite_types::Transition::pending_take(&self) -> &[uuid::Uuid]
+pub fn bpmn_lite_types::Transition::start_dedupe(&self) -> core::option::Option<&bpmn_lite_types::StartDedupe>
+pub fn bpmn_lite_types::Transition::state_override(&self) -> core::option::Option<&bpmn_lite_types::ProcessState>
+pub fn bpmn_lite_types::Transition::terminal_cleanup(&self) -> &bpmn_lite_types::TerminalCleanup
+pub fn bpmn_lite_types::Transition::timer_mutations(&self) -> &[bpmn_lite_types::TimerMutation]
+pub fn bpmn_lite_types::Transition::with_command_envelope(self, bpmn_lite_types::CommandEnvelope) -> Self
+pub struct bpmn_lite_types::TransitionBuilder
+impl bpmn_lite_types::TransitionBuilder
+pub fn bpmn_lite_types::TransitionBuilder::ack_job(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::buffered_message(self, bpmn_lite_types::BufferedMessageMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::build(self) -> bpmn_lite_types::Transition
+pub fn bpmn_lite_types::TransitionBuilder::bus_submission_ack(self, bpmn_lite_types::BusSubmissionAckMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::child_start(self, bpmn_lite_types::ChildStart) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::command_envelope(self, bpmn_lite_types::CommandEnvelope) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::concurrency_mutation(self, bpmn_lite_types::ConcurrencyMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::control_stack_delta(self, bpmn_lite_types::ControlStackDelta) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::dedupe(self, bpmn_lite_types::DedupeWrite) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::delete_fiber(self, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::effect(self, bpmn_lite_types::DurableEffect) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::effect_mutation(self, bpmn_lite_types::EffectMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::enqueue_job(self, bpmn_lite_types::JobActivation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::event(self, bpmn_lite_types::RuntimeEvent) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::incident(self, bpmn_lite_types::Incident) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::job_mutation(self, bpmn_lite_types::JobMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::join_mutation(self, bpmn_lite_types::JoinMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::new(bpmn_lite_types::ProcessInstance) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::outbox(self, bpmn_lite_types::OutboxWrite) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::pending_invocation(self, bpmn_lite_types::PendingInvocationWrite) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::start_dedupe(self, bpmn_lite_types::StartDedupe) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::state(self, bpmn_lite_types::ProcessState) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::take_pending(self, uuid::Uuid) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::terminal_cleanup(self, bpmn_lite_types::TerminalCleanup) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::timer_mutation(self, bpmn_lite_types::TimerMutation) -> Self
+pub fn bpmn_lite_types::TransitionBuilder::upsert_fiber(self, bpmn_lite_types::Fiber) -> Self
+pub struct bpmn_lite_types::VerifiedLimits
+impl bpmn_lite_types::VerifiedLimits
+pub fn bpmn_lite_types::VerifiedLimits::max_barriers(&self) -> u32
+pub fn bpmn_lite_types::VerifiedLimits::max_control_depth(&self) -> u32
+pub fn bpmn_lite_types::VerifiedLimits::max_fibers(&self) -> u32
+pub fn bpmn_lite_types::VerifiedLimits::max_records(&self) -> u32
+pub fn bpmn_lite_types::VerifiedLimits::max_stack(&self) -> u32
+pub fn bpmn_lite_types::VerifiedLimits::max_steps(&self) -> u64
+pub struct bpmn_lite_types::WaitPlanEntry
+pub bpmn_lite_types::WaitPlanEntry::corr_source: core::option::Option<u8>
+pub bpmn_lite_types::WaitPlanEntry::name: core::option::Option<u32>
+pub bpmn_lite_types::WaitPlanEntry::wait_type: bpmn_lite_types::WaitType
+pub const bpmn_lite_types::COMMAND_SCHEMA_VERSION: u16
+pub const bpmn_lite_types::CURRENT_ARTIFACT_ABI: u32
+pub const bpmn_lite_types::EFFECT_SCHEMA_VERSION: u16
+pub const bpmn_lite_types::EVENT_SCHEMA_VERSION: u16
+pub const bpmn_lite_types::JOURNAL_SCHEMA_VERSION: u16
+pub const bpmn_lite_types::MAX_VALUE_ARRAY_DEPTH: u32
+pub const bpmn_lite_types::MAX_VALUE_ARRAY_LEN: usize
+pub const bpmn_lite_types::SNAPSHOT_SCHEMA_VERSION: u16
+pub const bpmn_lite_types::START_COMMAND_SCHEMA_VERSION: u16
+pub trait bpmn_lite_types::CanonicalEncode: core::marker::Sized
+pub fn bpmn_lite_types::CanonicalEncode::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalEncode::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::CanonicalEncode::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::CanonicalEncode::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>
+pub fn alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn alloc::collections::btree::set::BTreeSet<bpmn_lite_types::EffectId>::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Addr
+pub fn bpmn_lite_types::Addr::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Addr::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Addr::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Addr::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ConcurrencyRecord
+pub fn bpmn_lite_types::ConcurrencyRecord::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyRecord::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ConcurrencyRecord::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyRecord::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ConcurrencyTable
+pub fn bpmn_lite_types::ConcurrencyTable::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyTable::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ConcurrencyTable::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ConcurrencyTable::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::EffectId
+pub fn bpmn_lite_types::EffectId::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::EffectId::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::EffectId::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::EffectId::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ErrorClass
+pub fn bpmn_lite_types::ErrorClass::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ErrorClass::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ErrorClass::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ErrorClass::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Fiber
+pub fn bpmn_lite_types::Fiber::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Fiber::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Fiber::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Fiber::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Incident
+pub fn bpmn_lite_types::Incident::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Incident::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Incident::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Incident::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::ProcessState
+pub fn bpmn_lite_types::ProcessState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ProcessState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::ProcessState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::ProcessState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordCounters
+pub fn bpmn_lite_types::RecordCounters::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordCounters::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordCounters::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordCounters::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordId
+pub fn bpmn_lite_types::RecordId::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordId::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordId::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordId::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordKind
+pub fn bpmn_lite_types::RecordKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::RecordState
+pub fn bpmn_lite_types::RecordState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::RecordState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::RecordState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionScopeState
+pub fn bpmn_lite_types::SessionScopeState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionScopeState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionScopeState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::V2RaceArm
+pub fn bpmn_lite_types::V2RaceArm::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::V2RaceArm::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::V2RaceArm::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::V2RaceArm::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::Value
+pub fn bpmn_lite_types::Value::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Value::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::Value::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::Value::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::WaitState
+pub fn bpmn_lite_types::WaitState::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::WaitState::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn bpmn_lite_types::WaitState::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn bpmn_lite_types::WaitState::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+impl bpmn_lite_types::CanonicalEncode for uuid::Uuid
+pub fn uuid::Uuid::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn uuid::Uuid::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+pub fn uuid::Uuid::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+pub fn uuid::Uuid::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+pub fn bpmn_lite_types::activation_command_id_for_runnable(uuid::Uuid, u64) -> uuid::Uuid
+pub fn bpmn_lite_types::apply_ffi_outputs(&mut bpmn_lite_types::ProcessInstance, &bpmn_lite_types::FfiTaskDecl, &[u8]) -> core::result::Result<(), bpmn_lite_types::FfiBindingError>
+pub fn bpmn_lite_types::compute_instance_integrity_hash(&bpmn_lite_types::ProcessInstance) -> [u8; 32]
+pub fn bpmn_lite_types::correlation_key_string(&serde_json::value::Value) -> core::result::Result<alloc::string::String, bpmn_lite_types::FfiBindingError>
+pub fn bpmn_lite_types::encode_ffi_inputs(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::FfiTaskDecl) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::FfiBindingError>
+pub fn bpmn_lite_types::resolve_binding_scalar(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::BindingSource, &str) -> core::result::Result<serde_json::value::Value, bpmn_lite_types::FfiBindingError>
+pub fn bpmn_lite_types::resolve_correlation_key(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::BindingSource) -> core::result::Result<alloc::string::String, bpmn_lite_types::FfiBindingError>
+pub fn bpmn_lite_types::v2_control_stack_effect(&bpmn_lite_types::Instr) -> bpmn_lite_types::ControlStackEffect
+pub fn bpmn_lite_types::validate_concurrency_record_shape(&bpmn_lite_types::ConcurrencyRecord) -> core::result::Result<(), bpmn_lite_types::ConcurrencyValidationError>
+pub type bpmn_lite_types::FlagKey = u32
+pub type bpmn_lite_types::Handle = bpmn_lite_types::RecordId
+pub type bpmn_lite_types::JoinId = u32
+pub type bpmn_lite_types::Timestamp = i64
+pub type bpmn_lite_types::WaitId = u32

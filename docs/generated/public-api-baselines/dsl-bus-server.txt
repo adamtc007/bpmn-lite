@@ -1,0 +1,63 @@
+# package: dsl-bus-server
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dsl-bus-server -sss
+
+pub mod dsl_bus_server
+pub enum dsl_bus_server::BusServerError
+pub dsl_bus_server::BusServerError::AuthorityDenied(alloc::string::String)
+pub dsl_bus_server::BusServerError::Internal(alloc::string::String)
+pub dsl_bus_server::BusServerError::Malformed(alloc::string::String)
+pub dsl_bus_server::BusServerError::MalformedUuid
+pub dsl_bus_server::BusServerError::MalformedUuid::actual_len: usize
+pub dsl_bus_server::BusServerError::Sqlx(sqlx_core::error::Error)
+pub dsl_bus_server::BusServerError::Storage(dsl_bus_storage::types::BusStorageError)
+pub dsl_bus_server::BusServerError::Transport(tonic::transport::error::Error)
+pub dsl_bus_server::BusServerError::UnknownVerb(alloc::string::String)
+pub dsl_bus_server::BusServerError::VersionIncompatible(alloc::string::String)
+pub struct dsl_bus_server::BusServer
+impl dsl_bus_server::BusServer
+pub fn dsl_bus_server::BusServer::builder() -> dsl_bus_server::BusServerBuilder
+pub async fn dsl_bus_server::BusServer::serve(self) -> core::result::Result<dsl_bus_server::ServerHandle, dsl_bus_server::BusServerError>
+pub struct dsl_bus_server::BusServerBuilder
+impl dsl_bus_server::BusServerBuilder
+pub fn dsl_bus_server::BusServerBuilder::bind(self, core::net::socket_addr::SocketAddr) -> Self
+pub fn dsl_bus_server::BusServerBuilder::build(self) -> dsl_bus_server::BusServer
+pub fn dsl_bus_server::BusServerBuilder::enable_entity_service(self) -> Self
+pub fn dsl_bus_server::BusServerBuilder::enable_sem_os_service(self) -> Self
+pub fn dsl_bus_server::BusServerBuilder::invocation_dispatcher<D: dsl_bus_server::InvocationDispatcher>(self, D) -> Self
+pub fn dsl_bus_server::BusServerBuilder::local_domain(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn dsl_bus_server::BusServerBuilder::outbox_notifier(self, dsl_bus_client::client::OutboxNotifier) -> Self
+pub fn dsl_bus_server::BusServerBuilder::pool(self, sqlx_postgres::PgPool) -> Self
+pub fn dsl_bus_server::BusServerBuilder::result_dispatcher<D: dsl_bus_server::ResultDispatcher>(self, D) -> Self
+pub struct dsl_bus_server::InvocationContext
+pub dsl_bus_server::InvocationContext::authority: core::option::Option<dsl_bus_protocol::v1::AuthorityContext>
+pub dsl_bus_server::InvocationContext::catalogue_version: alloc::string::String
+pub dsl_bus_server::InvocationContext::idempotency_key: uuid::Uuid
+pub dsl_bus_server::InvocationContext::local_verb_id: alloc::string::String
+pub dsl_bus_server::InvocationContext::result_callback_endpoint: alloc::string::String
+pub dsl_bus_server::InvocationContext::snapshot_pin: core::option::Option<uuid::Uuid>
+pub dsl_bus_server::InvocationContext::source_domain: alloc::string::String
+pub dsl_bus_server::InvocationContext::tenant_id: alloc::string::String
+pub struct dsl_bus_server::InvocationOutcome
+pub dsl_bus_server::InvocationOutcome::execution_id: uuid::Uuid
+pub dsl_bus_server::InvocationOutcome::outcome: dsl_bus_protocol::v1::ExecutionOutcome
+pub struct dsl_bus_server::ResultContext
+pub dsl_bus_server::ResultContext::audit_reference: alloc::string::String
+pub dsl_bus_server::ResultContext::execution_id: uuid::Uuid
+pub dsl_bus_server::ResultContext::idempotency_key: uuid::Uuid
+pub dsl_bus_server::ResultContext::source_domain: alloc::string::String
+pub dsl_bus_server::ResultContext::tenant_id: alloc::string::String
+pub struct dsl_bus_server::ServerHandle
+impl dsl_bus_server::ServerHandle
+pub fn dsl_bus_server::ServerHandle::local_addr(&self) -> core::net::socket_addr::SocketAddr
+pub async fn dsl_bus_server::ServerHandle::shutdown(self) -> core::result::Result<(), tokio::runtime::task::error::JoinError>
+pub struct dsl_bus_server::StubEntityService
+impl dsl_bus_protocol::v1::entity_service_server::EntityService for dsl_bus_server::StubEntityService
+pub fn dsl_bus_server::StubEntityService::resolve<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::EntityResolutionRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::EntityResolutionResult>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct dsl_bus_server::StubSemOsService
+impl dsl_bus_protocol::v1::sem_os_service_server::SemOsService for dsl_bus_server::StubSemOsService
+pub fn dsl_bus_server::StubSemOsService::fetch_dag_packs<'life0, 'async_trait>(&'life0 self, tonic::request::Request<dsl_bus_protocol::v1::DagPackRequest>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<tonic::response::Response<dsl_bus_protocol::v1::DagPackResponse>, tonic::status::Status>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait dsl_bus_server::InvocationDispatcher: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_server::InvocationDispatcher::dispatch<'life0, 'async_trait>(&'life0 self, dsl_bus_server::InvocationContext, alloc::vec::Vec<dsl_bus_protocol::v1::ResolvedBinding>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<dsl_bus_server::InvocationOutcome, dsl_bus_server::BusServerError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait dsl_bus_server::ResultDispatcher: core::marker::Send + core::marker::Sync + 'static
+pub fn dsl_bus_server::ResultDispatcher::dispatch<'life0, 'async_trait>(&'life0 self, dsl_bus_server::ResultContext, dsl_bus_protocol::v1::ExecutionOutcome) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), dsl_bus_server::BusServerError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait

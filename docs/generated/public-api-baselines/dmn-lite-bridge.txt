@@ -1,0 +1,18 @@
+# package: dmn-lite-bridge
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-bridge -sss
+
+pub mod dmn_lite_bridge
+pub struct dmn_lite_bridge::DmnLiteOwner
+impl dmn_lite_bridge::DmnLiteOwner
+pub fn dmn_lite_bridge::DmnLiteOwner::new() -> Self
+pub fn dmn_lite_bridge::DmnLiteOwner::register_decision(&self, dmn_lite_types::compiled::VerifiedDecision, alloc::vec::Vec<ffi_types::schema::FieldSchema>, alloc::vec::Vec<ffi_types::schema::FieldSchema>, ffi_types::idempotency::Idempotency, alloc::string::String, alloc::string::String) -> ffi_types::template::FfiTemplate
+pub fn dmn_lite_bridge::DmnLiteOwner::with_resolver(self, alloc::sync::Arc<dyn dmn_lite_bridge::ValueResolver>) -> Self
+impl core::default::Default for dmn_lite_bridge::DmnLiteOwner
+pub fn dmn_lite_bridge::DmnLiteOwner::default() -> Self
+impl ffi_types::owner::FfiExecutionOwner for dmn_lite_bridge::DmnLiteOwner
+pub fn dmn_lite_bridge::DmnLiteOwner::invoke<'life0, 'async_trait>(&'life0 self, ffi_types::wire::FfiCall) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<ffi_types::wire::FfiResult>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn dmn_lite_bridge::DmnLiteOwner::owner_type(&self) -> &str
+pub fn dmn_lite_bridge::DmnLiteOwner::supports_template(&self, &[u8; 32]) -> bool
+pub trait dmn_lite_bridge::ValueResolver: core::marker::Send + core::marker::Sync
+pub fn dmn_lite_bridge::ValueResolver::resolve(&self, &dmn_lite_types::ids::DomainId, &str) -> core::option::Option<dmn_lite_types::ir::TypedValue>

@@ -1,0 +1,33 @@
+# package: dmn-lite-compiler
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p dmn-lite-compiler -sss
+
+pub mod dmn_lite_compiler
+pub use dmn_lite_compiler::ArtifactHash
+pub use dmn_lite_compiler::Catalogue
+pub use dmn_lite_compiler::CatalogueError
+pub use dmn_lite_compiler::CompileError
+pub use dmn_lite_compiler::CompileWarning
+pub use dmn_lite_compiler::CompiledDecision
+pub use dmn_lite_compiler::TypedDecision
+pub use dmn_lite_compiler::VerifiedDecision
+pub use dmn_lite_compiler::VerifierError
+pub use dmn_lite_compiler::verify
+pub enum dmn_lite_compiler::CompileAndVerifyError
+pub dmn_lite_compiler::CompileAndVerifyError::Compile(dmn_lite_compiler::CompileErrors)
+pub dmn_lite_compiler::CompileAndVerifyError::Verify(dmn_lite_types::verify::VerifierError)
+pub struct dmn_lite_compiler::CompileErrors
+pub dmn_lite_compiler::CompileErrors::errors: alloc::vec::Vec<dmn_lite_types::errors::CompileError>
+pub dmn_lite_compiler::CompileErrors::partial_decision: core::option::Option<dmn_lite_types::ir::TypedDecision>
+pub dmn_lite_compiler::CompileErrors::warnings: alloc::vec::Vec<dmn_lite_types::errors::CompileWarning>
+impl core::error::Error for dmn_lite_compiler::CompileErrors
+impl core::fmt::Debug for dmn_lite_compiler::CompileErrors
+pub fn dmn_lite_compiler::CompileErrors::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dmn_lite_compiler::CompileErrors
+pub fn dmn_lite_compiler::CompileErrors::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn dmn_lite_compiler::compile(dmn_lite_types::ast::Source, &dmn_lite_types::catalogue::Catalogue, &str) -> core::result::Result<dmn_lite_types::compiled::CompiledDecision, dmn_lite_compiler::CompileErrors>
+pub fn dmn_lite_compiler::compile_and_verify(dmn_lite_types::ast::Source, &dmn_lite_types::catalogue::Catalogue, &str) -> core::result::Result<dmn_lite_types::compiled::VerifiedDecision, dmn_lite_compiler::CompileAndVerifyError>
+pub fn dmn_lite_compiler::compile_to_ir(dmn_lite_types::ast::Source, &dmn_lite_types::catalogue::Catalogue) -> core::result::Result<dmn_lite_types::ir::TypedDecision, dmn_lite_compiler::CompileErrors>
+pub fn dmn_lite_compiler::load_catalogue_from_path(&std::path::Path) -> core::result::Result<dmn_lite_types::catalogue::Catalogue, dmn_lite_types::errors::CatalogueError>
+pub fn dmn_lite_compiler::load_catalogue_from_str(&str) -> core::result::Result<dmn_lite_types::catalogue::Catalogue, dmn_lite_types::errors::CatalogueError>
+pub fn dmn_lite_compiler::lower_to_ir_with_warnings(dmn_lite_types::ast::Source, &dmn_lite_types::catalogue::Catalogue) -> dmn_lite_compiler::CompileErrors

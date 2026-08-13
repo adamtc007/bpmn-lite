@@ -1,0 +1,117 @@
+# package: bpmn-lite-engine
+# baseline_revision: 89ae3e6
+# command: cargo public-api -p bpmn-lite-engine -sss
+
+pub mod bpmn_lite_engine
+pub enum bpmn_lite_engine::RuntimeContextError
+pub bpmn_lite_engine::RuntimeContextError::BeforeUnixEpoch
+pub bpmn_lite_engine::RuntimeContextError::TimestampOverflow
+pub struct bpmn_lite_engine::ActivationMetrics
+pub struct bpmn_lite_engine::ActivationMetricsSnapshot
+pub bpmn_lite_engine::ActivationMetricsSnapshot::claimed_total: u64
+pub bpmn_lite_engine::ActivationMetricsSnapshot::consumed_total: u64
+pub bpmn_lite_engine::ActivationMetricsSnapshot::released_total: u64
+pub struct bpmn_lite_engine::BpmnLiteEngine
+impl bpmn_lite_engine::BpmnLiteEngine
+pub async fn bpmn_lite_engine::BpmnLiteEngine::activate_jobs(&self, &[alloc::string::String], usize) -> anyhow::Result<alloc::vec::Vec<bpmn_lite_types::types::JobActivation>>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::activate_jobs_for_worker(&self, &[alloc::string::String], usize, &str) -> anyhow::Result<alloc::vec::Vec<bpmn_lite_types::types::JobActivation>>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::activate_jobs_for_worker_with_lease(&self, &[alloc::string::String], usize, &str, u64) -> anyhow::Result<alloc::vec::Vec<bpmn_lite_types::types::JobActivation>>
+pub fn bpmn_lite_engine::BpmnLiteEngine::activation_metrics(&self) -> bpmn_lite_engine::ActivationMetricsSnapshot
+pub async fn bpmn_lite_engine::BpmnLiteEngine::apply_timer_command(&self, bpmn_lite_types::transition::Command, &str) -> anyhow::Result<bpmn_lite_types::transition::TimerFireOutcome>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::cancel(&self, uuid::Uuid, &str) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::compile(&self, &str) -> anyhow::Result<bpmn_lite_engine::CompileResult>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::compile_dsl(&self, &bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan) -> anyhow::Result<bpmn_lite_engine::CompileResult>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::complete_job(&self, &str, &str, [u8; 32], alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::types::Value>) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::complete_job_with_claim(&self, &str, &str, [u8; 32], alloc::collections::btree::map::BTreeMap<alloc::string::String, bpmn_lite_types::types::Value>, &str, &str) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::detect_interrupted_ffi_calls(&self, &bpmn_lite_types::transition::TenantId) -> anyhow::Result<usize>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::dispatch_pending_effects(&self, &str, usize, u64) -> anyhow::Result<usize>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::fail_job(&self, &str, bpmn_lite_types::types::ErrorClass, &str) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::fail_job_with_claim(&self, &str, bpmn_lite_types::types::ErrorClass, &str, &str, &str) -> anyhow::Result<()>
+pub fn bpmn_lite_engine::BpmnLiteEngine::for_tenant(&self, bpmn_lite_types::transition::TenantId) -> Self
+pub async fn bpmn_lite_engine::BpmnLiteEngine::health_check(&self) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::inspect(&self, uuid::Uuid) -> anyhow::Result<bpmn_lite_engine::ProcessInspection>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::load_program(&self, [u8; 32]) -> anyhow::Result<core::option::Option<bpmn_lite_types::types::CompiledProgram>>
+pub fn bpmn_lite_engine::BpmnLiteEngine::new(alloc::sync::Arc<dyn bpmn_lite_store::store::WorkflowStore>) -> Self
+pub fn bpmn_lite_engine::BpmnLiteEngine::new_with_runtime_context(alloc::sync::Arc<dyn bpmn_lite_store::store::WorkflowStore>, bpmn_lite_types::transition::TenantId, alloc::sync::Arc<dyn bpmn_lite_engine::RuntimeContext>) -> Self
+pub fn bpmn_lite_engine::BpmnLiteEngine::new_with_tenant(alloc::sync::Arc<dyn bpmn_lite_store::store::WorkflowStore>, bpmn_lite_types::transition::TenantId) -> Self
+pub async fn bpmn_lite_engine::BpmnLiteEngine::read_events(&self, uuid::Uuid, u64) -> anyhow::Result<alloc::vec::Vec<(u64, bpmn_lite_types::events::RuntimeEvent)>>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::recover_all_tenants(&self, &str, usize, u64) -> anyhow::Result<bpmn_lite_engine::RecoveryReport>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::run_instance(&self, uuid::Uuid) -> anyhow::Result<alloc::vec::Vec<bpmn_lite_types::types::JobActivation>>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::scan_recoverable_inconsistencies(&self, &std::collections::hash::set::HashSet<uuid::Uuid>) -> anyhow::Result<alloc::vec::Vec<bpmn_lite_engine::RecoveryIssue>>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::signal(&self, uuid::Uuid, &str, &str, core::option::Option<&str>, core::option::Option<[u8; 32]>, core::option::Option<&str>) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::signal_with_value(&self, uuid::Uuid, &str, alloc::string::String, core::option::Option<&str>, core::option::Option<[u8; 32]>, core::option::Option<&str>) -> anyhow::Result<()>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::start(&self, &str, [u8; 32], &str, [u8; 32], &str) -> anyhow::Result<uuid::Uuid>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::start_command(&self, bpmn_lite_types::transition::StartCommand) -> anyhow::Result<uuid::Uuid>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::start_with_params(&self, bpmn_lite_engine::StartParams) -> anyhow::Result<uuid::Uuid>
+pub fn bpmn_lite_engine::BpmnLiteEngine::store(&self) -> alloc::sync::Arc<dyn bpmn_lite_store::store::WorkflowStore>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::store_compiled_program(&self, bpmn_lite_types::types::CompiledProgram) -> anyhow::Result<bpmn_lite_engine::CompileResult>
+pub fn bpmn_lite_engine::BpmnLiteEngine::tenant_id(&self) -> &bpmn_lite_types::transition::TenantId
+pub async fn bpmn_lite_engine::BpmnLiteEngine::tick_activated_batch(&self, &str, usize, u64) -> anyhow::Result<u32>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::tick_all(&self) -> anyhow::Result<u32>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::tick_claimed_batch(&self, &str, usize, u64) -> anyhow::Result<u32>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::tick_due_timers(&self, &str, u64, usize, u64) -> anyhow::Result<u32>
+pub async fn bpmn_lite_engine::BpmnLiteEngine::tick_instance(&self, uuid::Uuid) -> anyhow::Result<()>
+pub fn bpmn_lite_engine::BpmnLiteEngine::with_ffi_dispatcher(self, alloc::sync::Arc<ffi_dispatcher::FfiDispatcher>) -> Self
+pub struct bpmn_lite_engine::CompileResult
+pub bpmn_lite_engine::CompileResult::bytecode_version: [u8; 32]
+pub bpmn_lite_engine::CompileResult::diagnostics: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_engine::CompileResult::flag_symbol_table: alloc::collections::btree::map::BTreeMap<u32, alloc::string::String>
+pub bpmn_lite_engine::CompileResult::task_types: alloc::vec::Vec<alloc::string::String>
+pub struct bpmn_lite_engine::DeterministicRuntimeContext
+impl bpmn_lite_engine::DeterministicRuntimeContext
+pub fn bpmn_lite_engine::DeterministicRuntimeContext::new(bpmn_lite_types::types::Timestamp, uuid::Uuid) -> Self
+impl bpmn_lite_engine::RuntimeContext for bpmn_lite_engine::DeterministicRuntimeContext
+pub fn bpmn_lite_engine::DeterministicRuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
+pub fn bpmn_lite_engine::DeterministicRuntimeContext::new_id(&self) -> uuid::Uuid
+pub struct bpmn_lite_engine::FiberInspection
+pub bpmn_lite_engine::FiberInspection::fiber_id: uuid::Uuid
+pub bpmn_lite_engine::FiberInspection::pc: bpmn_lite_types::types::Addr
+pub bpmn_lite_engine::FiberInspection::stack_depth: usize
+pub bpmn_lite_engine::FiberInspection::wait_state: bpmn_lite_types::types::WaitState
+pub struct bpmn_lite_engine::ProcessInspection
+pub bpmn_lite_engine::ProcessInspection::bytecode_version: [u8; 32]
+pub bpmn_lite_engine::ProcessInspection::current_node_id: core::option::Option<alloc::string::String>
+pub bpmn_lite_engine::ProcessInspection::domain_payload_hash: [u8; 32]
+pub bpmn_lite_engine::ProcessInspection::fibers: alloc::vec::Vec<bpmn_lite_engine::FiberInspection>
+pub bpmn_lite_engine::ProcessInspection::incidents: alloc::vec::Vec<bpmn_lite_types::types::Incident>
+pub bpmn_lite_engine::ProcessInspection::instance_id: uuid::Uuid
+pub bpmn_lite_engine::ProcessInspection::placeholder_values: core::option::Option<serde_json::value::Value>
+pub bpmn_lite_engine::ProcessInspection::process_key: alloc::string::String
+pub bpmn_lite_engine::ProcessInspection::state: bpmn_lite_types::types::ProcessState
+pub bpmn_lite_engine::ProcessInspection::tenant_id: alloc::string::String
+pub struct bpmn_lite_engine::RecoveryIssue
+pub bpmn_lite_engine::RecoveryIssue::detail: alloc::string::String
+pub bpmn_lite_engine::RecoveryIssue::instance_id: uuid::Uuid
+pub bpmn_lite_engine::RecoveryIssue::kind: alloc::string::String
+pub struct bpmn_lite_engine::RecoveryReport
+pub bpmn_lite_engine::RecoveryReport::instances_busy_skipped: usize
+pub bpmn_lite_engine::RecoveryReport::instances_verified: usize
+pub bpmn_lite_engine::RecoveryReport::interrupted_effects: usize
+pub bpmn_lite_engine::RecoveryReport::stale_jobs_reclaimed: u32
+pub bpmn_lite_engine::RecoveryReport::tenants_scanned: usize
+pub bpmn_lite_engine::RecoveryReport::timers_applied: u32
+pub struct bpmn_lite_engine::StartParams
+pub bpmn_lite_engine::StartParams::bytecode_version: [u8; 32]
+pub bpmn_lite_engine::StartParams::correlation_id: alloc::string::String
+pub bpmn_lite_engine::StartParams::domain_payload: alloc::string::String
+pub bpmn_lite_engine::StartParams::domain_payload_hash: [u8; 32]
+pub bpmn_lite_engine::StartParams::entry_id: uuid::Uuid
+pub bpmn_lite_engine::StartParams::expected_preconditions: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub bpmn_lite_engine::StartParams::process_key: alloc::string::String
+pub bpmn_lite_engine::StartParams::runbook_id: uuid::Uuid
+pub bpmn_lite_engine::StartParams::session_stack: bpmn_lite_types::session_stack::SessionStackState
+pub struct bpmn_lite_engine::SystemRuntimeContext
+impl bpmn_lite_engine::RuntimeContext for bpmn_lite_engine::SystemRuntimeContext
+pub fn bpmn_lite_engine::SystemRuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
+pub fn bpmn_lite_engine::SystemRuntimeContext::new_id(&self) -> uuid::Uuid
+pub trait bpmn_lite_engine::RuntimeContext: core::marker::Send + core::marker::Sync
+pub fn bpmn_lite_engine::RuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
+pub fn bpmn_lite_engine::RuntimeContext::new_id(&self) -> uuid::Uuid
+impl bpmn_lite_engine::RuntimeContext for bpmn_lite_engine::DeterministicRuntimeContext
+pub fn bpmn_lite_engine::DeterministicRuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
+pub fn bpmn_lite_engine::DeterministicRuntimeContext::new_id(&self) -> uuid::Uuid
+impl bpmn_lite_engine::RuntimeContext for bpmn_lite_engine::SystemRuntimeContext
+pub fn bpmn_lite_engine::SystemRuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
+pub fn bpmn_lite_engine::SystemRuntimeContext::new_id(&self) -> uuid::Uuid
+pub fn bpmn_lite_engine::build_demo_plan() -> core::result::Result<bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan, bpmn_lite_compiler::dsl::CompileError>
+pub fn bpmn_lite_engine::demo_initial_vars(&str, &str) -> std::collections::hash::map::HashMap<alloc::string::String, serde_json::value::Value>
