@@ -18,9 +18,11 @@ pub mod store_memory;
 pub use error::{
     ArtifactStoreError, ClaimError, CommitError, CommitOutcome, StoreError, StoreResult,
 };
-pub use pending::{
-    InsertOutcome as PendingInsertOutcome, MemoryPendingInvocationStore, PendingInvocation,
-    PendingInvocationStore,
-};
+// H3 (EOP-PLAN-CRATE-HYGIENE-001): the flat root re-export of `pending`'s
+// items (`PendingInvocation`, `MemoryPendingInvocationStore`,
+// `InsertOutcome`, `PendingInvocationStore`) was dead — every real
+// cross-crate caller already used the module-qualified
+// `bpmn_lite_store::pending::*` path exclusively (grep-confirmed). Removed;
+// `pub mod pending;` above is the one canonical access path.
 pub use store::*;
 pub use store_memory::*;

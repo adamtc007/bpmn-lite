@@ -3919,7 +3919,7 @@ async fn terminal_proposal_receipt(
         return Ok(None);
     };
     let proposal_id = proposal_id.to_string();
-    for event in session.events.iter().rev() {
+    for event in session.events().iter().rev() {
         let DesignSessionEventKind::ProposalAudit {
             workbook_json,
             outcome,
@@ -5199,7 +5199,7 @@ async fn session_utterance_endpoint(
                 &body.text,
                 semantic_decision_contracts::MoveAttemptId::new(format!(
                     "session-{id}-turn-{}",
-                    record_session.events.len()
+                    record_session.events().len()
                 ))?,
                 &attempts,
                 resolved_chain.as_ref(),
@@ -5826,7 +5826,7 @@ async fn session_utterance_endpoint(
                     },
                     match semantic_decision_contracts::DesignTurnId::new(format!(
                         "session-{id}-turn-{}",
-                        record_session.events.len()
+                        record_session.events().len()
                     )) {
                         Ok(value) => value,
                         Err(error) => {
@@ -5840,7 +5840,7 @@ async fn session_utterance_endpoint(
                                 .into_response();
                         }
                     },
-                    record_session.events.len() as u64,
+                    record_session.events().len() as u64,
                     observed_at_epoch_ms,
                     semantic_board,
                     capture_position.clone(),
@@ -6763,7 +6763,7 @@ async fn sage_session_audit_endpoint(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"session audit unavailable"}))).into_response(),
     };
     let mut entries = Vec::new();
-    for event in session.events.iter().rev().filter_map(|event| match &event.kind {
+    for event in session.events().iter().rev().filter_map(|event| match &event.kind {
         DesignSessionEventKind::ProposalAudit { workbook_json, outcome, gameboard_attempt_receipt_json, related_event_seq, .. } => {
             Some((event.seq, workbook_json, outcome, gameboard_attempt_receipt_json, *related_event_seq))
         }

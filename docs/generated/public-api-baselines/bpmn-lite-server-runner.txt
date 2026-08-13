@@ -1,11 +1,10 @@
 # package: bpmn-lite-server-runner
-# baseline_revision: 496ddb5 (updated H2, EOP-PLAN-CRATE-HYGIENE-001 — see H2 receipt for the diff that produced this)
+# baseline_revision: updated H3, EOP-PLAN-CRATE-HYGIENE-001 — see H3 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-server-runner -sss
 
 pub mod bpmn_lite_server_runner
 pub mod bpmn_lite_server_runner::demo
 pub fn bpmn_lite_server_runner::demo::build_demo_plan() -> core::result::Result<bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan, bpmn_lite_compiler::dsl::CompileError>
-pub fn bpmn_lite_server_runner::demo::demo_initial_vars(&str, &str) -> std::collections::hash::map::HashMap<alloc::string::String, serde_json::value::Value>
 pub mod bpmn_lite_server_runner::event_fanout
 pub struct bpmn_lite_server_runner::event_fanout::EventFanout
 impl bpmn_lite_server_runner::event_fanout::EventFanout

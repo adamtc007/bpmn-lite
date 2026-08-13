@@ -4560,15 +4560,15 @@ impl AdminProjectionStore for PostgresWorkflowStore {
                 at,
             });
         }
-        Ok(Some(DesignSessionRecord {
+        Ok(Some(DesignSessionRecord::new(
             id,
-            tenant_id: tenant_id.to_string(),
+            tenant_id.to_string(),
             name,
             status,
             template_ref,
             events,
             created_at,
-        }))
+        )))
     }
 
     async fn list_design_sessions(
@@ -11519,7 +11519,7 @@ mod tests {
             .await
             .unwrap()
             .expect("session must exist before restart");
-        assert_eq!(before_restart.events.len(), 3);
+        assert_eq!(before_restart.events().len(), 3);
 
         // Simulate a process restart: drop this store/pool entirely and
         // build a completely independent connection from scratch, exactly
@@ -11556,7 +11556,7 @@ mod tests {
         );
         assert_eq!(
             after_restart
-                .events
+                .events()
                 .iter()
                 .map(|event| event.seq)
                 .collect::<Vec<_>>(),
@@ -11694,13 +11694,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            record.events.len(),
+            record.events().len(),
             2,
             "exactly the seed event plus one append - no duplicate, no loss"
         );
         assert_eq!(
             record
-                .events
+                .events()
                 .iter()
                 .map(|event| event.seq)
                 .collect::<Vec<_>>(),
@@ -11783,6 +11783,6 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(final_a.events.len(), 1 + WRITERS);
+        assert_eq!(final_a.events().len(), 1 + WRITERS);
     }
 }

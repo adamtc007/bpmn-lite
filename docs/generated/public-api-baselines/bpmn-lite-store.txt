@@ -1,5 +1,5 @@
 # package: bpmn-lite-store
-# baseline_revision: 89ae3e6
+# baseline_revision: updated H3, EOP-PLAN-CRATE-HYGIENE-001 — see H3 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-store -sss
 
 pub mod bpmn_lite_store
@@ -129,7 +129,6 @@ pub bpmn_lite_store::store::DesignSessionEvent::kind: bpmn_lite_store::DesignSes
 pub bpmn_lite_store::store::DesignSessionEvent::seq: u64
 pub struct bpmn_lite_store::store::DesignSessionRecord
 pub bpmn_lite_store::store::DesignSessionRecord::created_at: alloc::string::String
-pub bpmn_lite_store::store::DesignSessionRecord::events: alloc::vec::Vec<bpmn_lite_store::DesignSessionEvent>
 pub bpmn_lite_store::store::DesignSessionRecord::id: uuid::Uuid
 pub bpmn_lite_store::store::DesignSessionRecord::name: alloc::string::String
 pub bpmn_lite_store::store::DesignSessionRecord::status: bpmn_lite_store::DesignSessionStatus
@@ -138,9 +137,11 @@ pub bpmn_lite_store::store::DesignSessionRecord::tenant_id: alloc::string::Strin
 impl bpmn_lite_store::DesignSessionRecord
 pub fn bpmn_lite_store::DesignSessionRecord::current_source(&self) -> core::option::Option<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::current_source_as_of(&self, core::option::Option<u64>) -> core::option::Option<&str>
+pub fn bpmn_lite_store::DesignSessionRecord::events(&self) -> &[bpmn_lite_store::DesignSessionEvent]
 pub fn bpmn_lite_store::DesignSessionRecord::graph_edit_payloads(&self) -> alloc::vec::Vec<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::graph_edit_payloads_as_of(&self, core::option::Option<u64>) -> alloc::vec::Vec<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::is_graph_backed(&self) -> bool
+pub fn bpmn_lite_store::DesignSessionRecord::new(uuid::Uuid, alloc::string::String, alloc::string::String, bpmn_lite_store::DesignSessionStatus, core::option::Option<(alloc::string::String, u32, [u8; 32])>, alloc::vec::Vec<bpmn_lite_store::DesignSessionEvent>, alloc::string::String) -> Self
 pub fn bpmn_lite_store::DesignSessionRecord::related_event_is_visible(&self, u64, core::option::Option<u64>) -> bool
 pub fn bpmn_lite_store::DesignSessionRecord::visible_events(&self, core::option::Option<u64>) -> alloc::vec::Vec<&bpmn_lite_store::DesignSessionEvent>
 pub struct bpmn_lite_store::store::DesignSessionSummary
@@ -161,7 +162,6 @@ pub bpmn_lite_store::store::TemplateSummary::name: alloc::string::String
 pub bpmn_lite_store::store::TemplateSummary::plan_hash: [u8; 32]
 pub struct bpmn_lite_store::store::TransactionContext
 pub bpmn_lite_store::store::TransactionContext::instance_id: uuid::Uuid
-pub bpmn_lite_store::store::TransactionContext::ops: alloc::vec::Vec<bpmn_lite_store::TickOperation>
 pub bpmn_lite_store::store::TransactionContext::tenant_id: alloc::string::String
 impl bpmn_lite_store::TransactionContext
 pub fn bpmn_lite_store::TransactionContext::add_op(&mut self, bpmn_lite_store::TickOperation)
@@ -424,11 +424,6 @@ pub bpmn_lite_store::DesignSessionEventKind::Utterance::text: alloc::string::Str
 pub enum bpmn_lite_store::DesignSessionStatus
 pub bpmn_lite_store::DesignSessionStatus::Draft
 pub bpmn_lite_store::DesignSessionStatus::Saved
-pub enum bpmn_lite_store::PendingInsertOutcome
-pub bpmn_lite_store::PendingInsertOutcome::Duplicate
-pub bpmn_lite_store::PendingInsertOutcome::Inserted
-impl bpmn_lite_store::pending::InsertOutcome
-pub const fn bpmn_lite_store::pending::InsertOutcome::was_inserted(self) -> bool
 pub enum bpmn_lite_store::StoreError
 pub bpmn_lite_store::StoreError::Integrity(alloc::string::String)
 pub bpmn_lite_store::StoreError::Invalid(alloc::string::String)
@@ -489,7 +484,6 @@ pub bpmn_lite_store::DesignSessionEvent::kind: bpmn_lite_store::DesignSessionEve
 pub bpmn_lite_store::DesignSessionEvent::seq: u64
 pub struct bpmn_lite_store::DesignSessionRecord
 pub bpmn_lite_store::DesignSessionRecord::created_at: alloc::string::String
-pub bpmn_lite_store::DesignSessionRecord::events: alloc::vec::Vec<bpmn_lite_store::DesignSessionEvent>
 pub bpmn_lite_store::DesignSessionRecord::id: uuid::Uuid
 pub bpmn_lite_store::DesignSessionRecord::name: alloc::string::String
 pub bpmn_lite_store::DesignSessionRecord::status: bpmn_lite_store::DesignSessionStatus
@@ -498,9 +492,11 @@ pub bpmn_lite_store::DesignSessionRecord::tenant_id: alloc::string::String
 impl bpmn_lite_store::DesignSessionRecord
 pub fn bpmn_lite_store::DesignSessionRecord::current_source(&self) -> core::option::Option<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::current_source_as_of(&self, core::option::Option<u64>) -> core::option::Option<&str>
+pub fn bpmn_lite_store::DesignSessionRecord::events(&self) -> &[bpmn_lite_store::DesignSessionEvent]
 pub fn bpmn_lite_store::DesignSessionRecord::graph_edit_payloads(&self) -> alloc::vec::Vec<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::graph_edit_payloads_as_of(&self, core::option::Option<u64>) -> alloc::vec::Vec<&str>
 pub fn bpmn_lite_store::DesignSessionRecord::is_graph_backed(&self) -> bool
+pub fn bpmn_lite_store::DesignSessionRecord::new(uuid::Uuid, alloc::string::String, alloc::string::String, bpmn_lite_store::DesignSessionStatus, core::option::Option<(alloc::string::String, u32, [u8; 32])>, alloc::vec::Vec<bpmn_lite_store::DesignSessionEvent>, alloc::string::String) -> Self
 pub fn bpmn_lite_store::DesignSessionRecord::related_event_is_visible(&self, u64, core::option::Option<u64>) -> bool
 pub fn bpmn_lite_store::DesignSessionRecord::visible_events(&self, core::option::Option<u64>) -> alloc::vec::Vec<&bpmn_lite_store::DesignSessionEvent>
 pub struct bpmn_lite_store::DesignSessionSummary
@@ -514,16 +510,6 @@ pub bpmn_lite_store::DevCaptureSessionRecord::consent_statement_timestamp: alloc
 pub bpmn_lite_store::DevCaptureSessionRecord::created_at: alloc::string::String
 pub bpmn_lite_store::DevCaptureSessionRecord::records_json: alloc::vec::Vec<alloc::string::String>
 pub bpmn_lite_store::DevCaptureSessionRecord::session_id: alloc::string::String
-pub struct bpmn_lite_store::MemoryPendingInvocationStore
-impl bpmn_lite_store::pending::MemoryPendingInvocationStore
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::new() -> Self
-impl bpmn_lite_store::pending::PendingInvocationStore for bpmn_lite_store::pending::MemoryPendingInvocationStore
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::insert<'life0, 'async_trait>(&'life0 self, bpmn_lite_store::pending::PendingInvocation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<bpmn_lite_store::pending::InsertOutcome>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::list_for_process<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::lookup_by_callout_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::lookup_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::record_ack<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, uuid::Uuid, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::take_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct bpmn_lite_store::MemoryStore
 impl bpmn_lite_store::MemoryStore
 pub fn bpmn_lite_store::MemoryStore::new() -> Self
@@ -596,20 +582,6 @@ pub fn bpmn_lite_store::MemoryStore::schedule_effect_retry<'life0, 'life1, 'life
 pub fn bpmn_lite_store::MemoryStore::validate_job_claim<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, &'life2 str, &'life3 str, &'life4 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
 impl core::default::Default for bpmn_lite_store::MemoryStore
 pub fn bpmn_lite_store::MemoryStore::default() -> Self
-pub struct bpmn_lite_store::PendingInvocation
-pub bpmn_lite_store::PendingInvocation::ack_received_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
-pub bpmn_lite_store::PendingInvocation::callout_id: uuid::Uuid
-pub bpmn_lite_store::PendingInvocation::execution_id: core::option::Option<uuid::Uuid>
-pub bpmn_lite_store::PendingInvocation::idempotency_key: uuid::Uuid
-pub bpmn_lite_store::PendingInvocation::node_id: alloc::string::String
-pub bpmn_lite_store::PendingInvocation::process_instance_id: uuid::Uuid
-pub bpmn_lite_store::PendingInvocation::submitted_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
-pub bpmn_lite_store::PendingInvocation::target_domain: alloc::string::String
-pub bpmn_lite_store::PendingInvocation::tenant_id: bpmn_lite_types::transition::TenantId
-pub bpmn_lite_store::PendingInvocation::timeout_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
-pub bpmn_lite_store::PendingInvocation::verb_id: alloc::string::String
-impl bpmn_lite_store::pending::PendingInvocation
-pub fn bpmn_lite_store::pending::PendingInvocation::new(bpmn_lite_types::transition::TenantId, uuid::Uuid, uuid::Uuid, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, uuid::Uuid) -> Self
 pub struct bpmn_lite_store::TemplateSummary
 pub bpmn_lite_store::TemplateSummary::created_at: alloc::string::String
 pub bpmn_lite_store::TemplateSummary::latest_version: u32
@@ -617,7 +589,6 @@ pub bpmn_lite_store::TemplateSummary::name: alloc::string::String
 pub bpmn_lite_store::TemplateSummary::plan_hash: [u8; 32]
 pub struct bpmn_lite_store::TransactionContext
 pub bpmn_lite_store::TransactionContext::instance_id: uuid::Uuid
-pub bpmn_lite_store::TransactionContext::ops: alloc::vec::Vec<bpmn_lite_store::TickOperation>
 pub bpmn_lite_store::TransactionContext::tenant_id: alloc::string::String
 impl bpmn_lite_store::TransactionContext
 pub fn bpmn_lite_store::TransactionContext::add_op(&mut self, bpmn_lite_store::TickOperation)
@@ -681,20 +652,6 @@ pub fn bpmn_lite_store::MemoryStore::load_payload_version<'life0, 'life1, 'life2
 pub fn bpmn_lite_store::MemoryStore::load_snapshot_envelope<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_types::persistence::SnapshotEnvelope>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn bpmn_lite_store::MemoryStore::read_events<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<(u64, bpmn_lite_types::events::RuntimeEvent)>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn bpmn_lite_store::MemoryStore::read_journal<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, core::option::Option<u64>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<bpmn_lite_types::persistence::JournalRecord>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub trait bpmn_lite_store::PendingInvocationStore: core::marker::Send + core::marker::Sync
-pub fn bpmn_lite_store::PendingInvocationStore::insert<'life0, 'async_trait>(&'life0 self, bpmn_lite_store::pending::PendingInvocation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<bpmn_lite_store::pending::InsertOutcome>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn bpmn_lite_store::PendingInvocationStore::list_for_process<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::PendingInvocationStore::lookup_by_callout_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::PendingInvocationStore::lookup_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::PendingInvocationStore::record_ack<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, uuid::Uuid, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::PendingInvocationStore::take_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-impl bpmn_lite_store::pending::PendingInvocationStore for bpmn_lite_store::pending::MemoryPendingInvocationStore
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::insert<'life0, 'async_trait>(&'life0 self, bpmn_lite_store::pending::PendingInvocation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<bpmn_lite_store::pending::InsertOutcome>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::list_for_process<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::lookup_by_callout_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::lookup_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::record_ack<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid, uuid::Uuid, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn bpmn_lite_store::pending::MemoryPendingInvocationStore::take_by_execution_id<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, uuid::Uuid) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_store::pending::PendingInvocation>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait bpmn_lite_store::RuntimeStore: core::marker::Send + core::marker::Sync + bpmn_lite_store::JournalReader
 pub fn bpmn_lite_store::RuntimeStore::claim_buffered_message<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, &'life2 str, &'life3 str, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<core::option::Option<bpmn_lite_types::types::ClaimedBufferedMessage>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn bpmn_lite_store::RuntimeStore::claim_due_timers<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 bpmn_lite_types::transition::TenantId, &'life2 str, u64, usize, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bpmn_lite_store::StoreResult<alloc::vec::Vec<bpmn_lite_types::transition::ClaimedTimer>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait

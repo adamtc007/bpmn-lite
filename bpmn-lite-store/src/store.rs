@@ -131,11 +131,50 @@ pub struct DesignSessionRecord {
     pub status: DesignSessionStatus,
     /// (template_name, version, plan_hash) once saved-as-template.
     pub template_ref: Option<(String, u32, [u8; 32])>,
-    pub events: Vec<DesignSessionEvent>,
+    // H3 (EOP-PLAN-CRATE-HYGIENE-001, R5): pub(crate) — `visible_events`/
+    // `graph_edit_payloads_as_of` exist to preserve the undo-jump-chain
+    // invariant over this collection; a public field let external code
+    // bypass it via direct mutation. Cross-crate reads go through
+    // `events()` below; cross-crate construction goes through `new()`
+    // below (`bpmn-lite-store-postgres` reconstructs a record from
+    // persisted rows). `store_memory.rs` (same crate, sibling module)
+    // still appends directly via this field.
+    pub(crate) events: Vec<DesignSessionEvent>,
     pub created_at: String,
 }
 
 impl DesignSessionRecord {
+    /// Reconstruct a record from its persisted parts (e.g. a store
+    /// backend replaying rows into the aggregate). Not a query-time
+    /// mutation path — `events` here is meant to already be the full,
+    /// ordered log as persisted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: Uuid,
+        tenant_id: String,
+        name: String,
+        status: DesignSessionStatus,
+        template_ref: Option<(String, u32, [u8; 32])>,
+        events: Vec<DesignSessionEvent>,
+        created_at: String,
+    ) -> Self {
+        Self {
+            id,
+            tenant_id,
+            name,
+            status,
+            template_ref,
+            events,
+            created_at,
+        }
+    }
+
+    /// Read-only view — see the field's own doc comment for why direct
+    /// mutation isn't exposed.
+    pub fn events(&self) -> &[DesignSessionEvent] {
+        &self.events
+    }
+
     /// G6.1: the events visible under truncated replay, given an optional
     /// `as_of_seq` bound. This is a JUMP CHAIN, not a static union of
     /// excluded ranges (an earlier flat-range formulation was wrong: it let
@@ -1084,7 +1123,14 @@ pub enum TickOperation {
 pub struct TransactionContext {
     pub instance_id: Uuid,
     pub tenant_id: String,
-    pub ops: Vec<TickOperation>,
+    // H3 (EOP-PLAN-CRATE-HYGIENE-001, R5): `add_op`/`get_join_count` exist
+    // to be the mutation/query surface for this collection; a public field
+    // let external code bypass `add_op`. Note: this struct itself has zero
+    // callers anywhere in the workspace as of H3 (grep-confirmed) — kept,
+    // not deleted, since dead-code removal is out of this tranche's
+    // module-export-review scope; flagged in the H3 receipt for the H6
+    // final inventory to rule on.
+    ops: Vec<TickOperation>,
 }
 
 impl TransactionContext {

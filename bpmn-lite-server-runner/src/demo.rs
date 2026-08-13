@@ -73,7 +73,11 @@ pub fn build_demo_plan() -> Result<WorkflowExecutionPlan, CompileError> {
 ///
 /// `client_type` should be one of `"FUND_MANDATE"`, `"CORPORATE"`, `"TRUST"`.
 /// These match the input values expected by the `cbu_type_routing` DMN decision.
-pub fn demo_initial_vars(
+// H3 (EOP-PLAN-CRATE-HYGIENE-001): pub(crate), not pub — `rest.rs` (same
+// crate) is the only caller; unlike `build_demo_plan`, no cross-crate
+// consumer (grep-confirmed against the whole workspace, including
+// xtask/tests/).
+pub(crate) fn demo_initial_vars(
     client_name: &str,
     client_type: &str,
 ) -> HashMap<String, serde_json::Value> {
