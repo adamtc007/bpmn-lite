@@ -46,14 +46,16 @@ impl std::error::Error for UnrollError {}
 /// entirely. Post-G3, this cap is the sole enforcement point for
 /// loop-driven artifact size, so it must reject with a typed error, not
 /// merely exist as an assumption.
-pub const MAX_UNROLLED_NODES: usize = 2_048;
+// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): pub(super) — zero external consumers;
+// `compile()` (dsl::mod) still calls `unroll_loops` via a private `use`.
+pub(super) const MAX_UNROLLED_NODES: usize = 2_048;
 
 /// Expand every `NodeAst::Loop` in `nodes` into forward-chained copies.
 /// Nested loops are unrolled innermost-correct by construction: a nested
 /// loop's `id` is already iteration-qualified by the time its own
 /// `unroll_loop` call runs, so its body's qualified ids nest hierarchically
 /// and can never collide across outer iterations.
-pub fn unroll_loops(nodes: Vec<NodeAst>) -> Result<Vec<NodeAst>, UnrollError> {
+pub(super) fn unroll_loops(nodes: Vec<NodeAst>) -> Result<Vec<NodeAst>, UnrollError> {
     let mut budget = MAX_UNROLLED_NODES;
     unroll_nodes(nodes, &mut budget)
 }

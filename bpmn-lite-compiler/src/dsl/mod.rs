@@ -21,28 +21,40 @@ mod repeat;
 mod rpst;
 mod unroll;
 
-pub use ast::{
-    ConditionAst, EndAst, JoinAst, JoinModeAst, LoopAst, NodeAst, SplitAst, SplitFlowAst,
-    MessageWaitAst, SplitModeAst, StartAst, TaskAst, WorkflowSource,
-};
+// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): this block used to flatten all 15 dsl
+// submodules onto `dsl::*` regardless of real usage. Trimmed to genuinely
+// cross-crate-consumed symbols (grep-confirmed against the whole workspace,
+// including fuzz targets and xtask, which are real separate-crate
+// consumers) plus anything structurally required by a retained public
+// item's own signature (e.g. `WorkflowSource` is `lint`/`repeat_n_times`'s
+// parameter type; `UnrollError`/`LintError`/`DagError` are `CompileError`
+// variant payloads). `JoinAst`/`JoinModeAst`/`NodeAst`/`WorkflowSource` are
+// the only 4 of 13 `ast` types with a real external consumer
+// (`bpmn-lite-authoring`); the other 9 AST node types, `frontend`'s
+// `DslFrontend`/`WorkflowFrontend`, `linter`'s `SymbolResolution`,
+// `parser`'s `parse_node_str`, `unroll`'s `unroll_loops`/
+// `MAX_UNROLLED_NODES`, and `macros`'s `create_bounded_retry_macro` (with
+// its otherwise-unused `LoopAst`/`TaskAst`/... AST return/param types) had
+// zero consumers anywhere in the workspace — moved out of this re-export;
+// the underlying items are untouched in their already-private submodules,
+// still fully usable intra-crate.
+pub use ast::{JoinAst, JoinModeAst, NodeAst, WorkflowSource};
 pub use closure::{validate_path_family, Diagnostic};
 pub use dag::{validate_dag, DagError};
-pub use frontend::{lower_plan, DslFrontend, FrontendError, WorkflowFrontend};
+pub use frontend::{lower_plan, FrontendError};
 pub use ir_plan::{project_ir, IrPlanError};
-pub use linter::{
-    lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry, SymbolResolution,
-};
+pub use linter::{lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry};
 pub use macros::{
-    create_bounded_retry_macro, create_parallel_split_join, create_xor_split_join,
-    CustomMacroConfig, MacroConfigList, XorBranchConfig,
+    create_parallel_split_join, create_xor_split_join, CustomMacroConfig, MacroConfigList,
+    XorBranchConfig,
 };
 pub use manifest_registry::ManifestPlaceholderRegistry;
 pub use pack_build::{
     derive_version, generate_closure, generate_manifest, validate_pack, PackClosureManifest,
     WorkflowPackDAG,
 };
-pub use parser::{parse_node_str, parse_workflow_str};
-pub use unroll::{unroll_loops, UnrollError, MAX_UNROLLED_NODES};
+pub use parser::parse_workflow_str;
+pub use unroll::UnrollError;
 pub use plan::{
     DeliveryMode, EndExecNode, ExecutionNode, JoinExecNode, JoinMode,
     MessageWaitExecNode, PlaceholderSchema, PlaceholderSlot, SplitExecFlow, SplitExecNode,
@@ -55,6 +67,7 @@ pub use rpst::verify_sese_nesting;
 
 use lexer::lex;
 use parser::Parser;
+use unroll::unroll_loops;
 
 mod parser;
 

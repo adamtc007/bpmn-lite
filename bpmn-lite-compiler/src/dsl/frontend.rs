@@ -51,13 +51,17 @@ impl std::fmt::Display for FrontendError {
 impl std::error::Error for FrontendError {}
 
 /// A source language which lowers into the one verifier-admitted runtime form.
-pub trait WorkflowFrontend {
+// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): pub(super) — zero consumers anywhere
+// in the workspace, not even internally (confirmed dead_code); `lower_plan`
+// is the real, consumed entry point. Not deleted — flagged in the H4
+// receipt, same discipline as H3's `TransactionContext` finding.
+pub(super) trait WorkflowFrontend {
     type Source: ?Sized;
 
     fn lower(source: &Self::Source) -> Result<VerifiedWorkflow, FrontendError>;
 }
 
-pub struct DslFrontend;
+pub(super) struct DslFrontend;
 
 impl WorkflowFrontend for DslFrontend {
     type Source = WorkflowExecutionPlan;

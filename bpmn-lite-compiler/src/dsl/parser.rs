@@ -542,7 +542,9 @@ pub fn parse_workflow_str(source: &str) -> Result<WorkflowSource, String> {
     ast.ok_or_else(|| "Empty workflow".to_string())
 }
 
-pub fn parse_node_str(source: &str) -> Result<NodeAst, String> {
+// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): pub(super) — zero external consumers
+// (bpmn-lite-authoring uses `parse_workflow_str`, not this).
+pub(super) fn parse_node_str(source: &str) -> Result<NodeAst, String> {
     let (tokens, lex_errors) = crate::dsl::lexer::lex(source);
     if !lex_errors.is_empty() {
         return Err(format!("Lex errors: {}", lex_errors[0].message));

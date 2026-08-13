@@ -1,5 +1,5 @@
 # package: bpmn-lite-compiler
-# baseline_revision: 89ae3e6
+# baseline_revision: updated H4.1, EOP-PLAN-CRATE-HYGIENE-001 — see H4 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-compiler -sss
 
 pub mod bpmn_lite_compiler
@@ -12,10 +12,6 @@ pub bpmn_lite_compiler::dsl::CompileError::Unroll(bpmn_lite_compiler::dsl::Unrol
 impl core::error::Error for bpmn_lite_compiler::dsl::CompileError
 impl core::fmt::Display for bpmn_lite_compiler::dsl::CompileError
 pub fn bpmn_lite_compiler::dsl::CompileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum bpmn_lite_compiler::dsl::ConditionAst
-pub bpmn_lite_compiler::dsl::ConditionAst::Eq
-pub bpmn_lite_compiler::dsl::ConditionAst::Eq::placeholder: alloc::string::String
-pub bpmn_lite_compiler::dsl::ConditionAst::Eq::value: alloc::string::String
 pub enum bpmn_lite_compiler::dsl::DeliveryMode
 pub bpmn_lite_compiler::dsl::DeliveryMode::BestEffort
 pub bpmn_lite_compiler::dsl::DeliveryMode::Blocking
@@ -79,13 +75,13 @@ pub bpmn_lite_compiler::dsl::JoinModeAst::And
 pub bpmn_lite_compiler::dsl::JoinModeAst::Or
 pub bpmn_lite_compiler::dsl::JoinModeAst::Xor
 pub enum bpmn_lite_compiler::dsl::NodeAst
-pub bpmn_lite_compiler::dsl::NodeAst::End(bpmn_lite_compiler::dsl::EndAst)
+pub bpmn_lite_compiler::dsl::NodeAst::End(bpmn_lite_compiler::dsl::ast::EndAst)
 pub bpmn_lite_compiler::dsl::NodeAst::Join(bpmn_lite_compiler::dsl::JoinAst)
-pub bpmn_lite_compiler::dsl::NodeAst::Loop(bpmn_lite_compiler::dsl::LoopAst)
-pub bpmn_lite_compiler::dsl::NodeAst::MessageWait(bpmn_lite_compiler::dsl::MessageWaitAst)
-pub bpmn_lite_compiler::dsl::NodeAst::Split(bpmn_lite_compiler::dsl::SplitAst)
-pub bpmn_lite_compiler::dsl::NodeAst::Start(bpmn_lite_compiler::dsl::StartAst)
-pub bpmn_lite_compiler::dsl::NodeAst::Task(bpmn_lite_compiler::dsl::TaskAst)
+pub bpmn_lite_compiler::dsl::NodeAst::Loop(bpmn_lite_compiler::dsl::ast::LoopAst)
+pub bpmn_lite_compiler::dsl::NodeAst::MessageWait(bpmn_lite_compiler::dsl::ast::MessageWaitAst)
+pub bpmn_lite_compiler::dsl::NodeAst::Split(bpmn_lite_compiler::dsl::ast::SplitAst)
+pub bpmn_lite_compiler::dsl::NodeAst::Start(bpmn_lite_compiler::dsl::ast::StartAst)
+pub bpmn_lite_compiler::dsl::NodeAst::Task(bpmn_lite_compiler::dsl::ast::TaskAst)
 impl bpmn_lite_compiler::dsl::NodeAst
 pub fn bpmn_lite_compiler::dsl::NodeAst::id(&self) -> &str
 pub fn bpmn_lite_compiler::dsl::NodeAst::span(&self) -> bpmn_lite_types::types::SourceSpan
@@ -95,18 +91,6 @@ pub enum bpmn_lite_compiler::dsl::SplitMode
 pub bpmn_lite_compiler::dsl::SplitMode::Exclusive
 pub bpmn_lite_compiler::dsl::SplitMode::Inclusive
 pub bpmn_lite_compiler::dsl::SplitMode::Parallel
-pub enum bpmn_lite_compiler::dsl::SplitModeAst
-pub bpmn_lite_compiler::dsl::SplitModeAst::And
-pub bpmn_lite_compiler::dsl::SplitModeAst::Or
-pub bpmn_lite_compiler::dsl::SplitModeAst::Xor
-pub enum bpmn_lite_compiler::dsl::SymbolResolution
-pub bpmn_lite_compiler::dsl::SymbolResolution::Known
-pub bpmn_lite_compiler::dsl::SymbolResolution::UnknownDomain
-pub bpmn_lite_compiler::dsl::SymbolResolution::UnknownDomain::domain: alloc::string::String
-pub bpmn_lite_compiler::dsl::SymbolResolution::UnknownInDomain
-pub bpmn_lite_compiler::dsl::SymbolResolution::UnknownInDomain::domain: alloc::string::String
-pub bpmn_lite_compiler::dsl::SymbolResolution::UnknownInDomain::known_count: usize
-pub bpmn_lite_compiler::dsl::SymbolResolution::Unresolved
 pub struct bpmn_lite_compiler::dsl::AstMutator<'a>
 pub bpmn_lite_compiler::dsl::AstMutator::workflow: &'a mut bpmn_lite_compiler::dsl::WorkflowSource
 impl<'a> bpmn_lite_compiler::dsl::AstMutator<'a>
@@ -134,16 +118,6 @@ pub struct bpmn_lite_compiler::dsl::Diagnostic
 pub bpmn_lite_compiler::dsl::Diagnostic::message: alloc::string::String
 pub bpmn_lite_compiler::dsl::Diagnostic::missing_placeholder: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::dsl::Diagnostic::node_id: alloc::string::String
-pub struct bpmn_lite_compiler::dsl::DslFrontend
-impl bpmn_lite_compiler::dsl::WorkflowFrontend for bpmn_lite_compiler::dsl::DslFrontend
-pub type bpmn_lite_compiler::dsl::DslFrontend::Source = bpmn_lite_compiler::dsl::WorkflowExecutionPlan
-pub fn bpmn_lite_compiler::dsl::DslFrontend::lower(&bpmn_lite_compiler::dsl::WorkflowExecutionPlan) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, bpmn_lite_compiler::dsl::FrontendError>
-pub struct bpmn_lite_compiler::dsl::EndAst
-pub bpmn_lite_compiler::dsl::EndAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::EndAst::span: bpmn_lite_types::types::SourceSpan
-pub bpmn_lite_compiler::dsl::EndAst::status: alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::EndAst
-pub fn bpmn_lite_compiler::dsl::EndAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::EndExecNode
 pub bpmn_lite_compiler::dsl::EndExecNode::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::EndExecNode::span: core::option::Option<bpmn_lite_types::types::SourceSpan>
@@ -167,14 +141,6 @@ pub bpmn_lite_compiler::dsl::LintError::message: alloc::string::String
 pub bpmn_lite_compiler::dsl::LintError::node_id: alloc::string::String
 impl core::fmt::Display for bpmn_lite_compiler::dsl::LintError
 pub fn bpmn_lite_compiler::dsl::LintError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct bpmn_lite_compiler::dsl::LoopAst
-pub bpmn_lite_compiler::dsl::LoopAst::body: alloc::vec::Vec<bpmn_lite_compiler::dsl::NodeAst>
-pub bpmn_lite_compiler::dsl::LoopAst::ceiling: u32
-pub bpmn_lite_compiler::dsl::LoopAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::LoopAst::next: alloc::string::String
-pub bpmn_lite_compiler::dsl::LoopAst::span: bpmn_lite_types::types::SourceSpan
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::LoopAst
-pub fn bpmn_lite_compiler::dsl::LoopAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::MacroConfigList
 pub bpmn_lite_compiler::dsl::MacroConfigList::macros: alloc::vec::Vec<bpmn_lite_compiler::dsl::CustomMacroConfig>
 impl bpmn_lite_compiler::dsl::MacroConfigList
@@ -190,20 +156,12 @@ pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_decision_enu
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_decision_output_type_info(&self, &str) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_workflow_child_calls(&self, &str) -> alloc::vec::Vec<alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_workflow_signature(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
-pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
-pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::verb_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::verb_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::workflow_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::workflow_satisfies_l2(&self, &str) -> bool
-pub struct bpmn_lite_compiler::dsl::MessageWaitAst
-pub bpmn_lite_compiler::dsl::MessageWaitAst::correlation_source: alloc::string::String
-pub bpmn_lite_compiler::dsl::MessageWaitAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::MessageWaitAst::name: alloc::string::String
-pub bpmn_lite_compiler::dsl::MessageWaitAst::next: alloc::string::String
-pub bpmn_lite_compiler::dsl::MessageWaitAst::span: bpmn_lite_types::types::SourceSpan
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::MessageWaitAst
-pub fn bpmn_lite_compiler::dsl::MessageWaitAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::MessageWaitExecNode
 pub bpmn_lite_compiler::dsl::MessageWaitExecNode::correlation_key_source: alloc::string::String
 pub bpmn_lite_compiler::dsl::MessageWaitExecNode::id: alloc::string::String
@@ -226,15 +184,6 @@ pub fn bpmn_lite_compiler::dsl::RepeatNTimesError::from(alloc::string::String) -
 impl core::error::Error for bpmn_lite_compiler::dsl::RepeatNTimesError
 impl core::fmt::Display for bpmn_lite_compiler::dsl::RepeatNTimesError
 pub fn bpmn_lite_compiler::dsl::RepeatNTimesError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct bpmn_lite_compiler::dsl::SplitAst
-pub bpmn_lite_compiler::dsl::SplitAst::flows: alloc::vec::Vec<bpmn_lite_compiler::dsl::SplitFlowAst>
-pub bpmn_lite_compiler::dsl::SplitAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::SplitAst::join: alloc::string::String
-pub bpmn_lite_compiler::dsl::SplitAst::mode: bpmn_lite_compiler::dsl::SplitModeAst
-pub bpmn_lite_compiler::dsl::SplitAst::plug: core::option::Option<alloc::string::String>
-pub bpmn_lite_compiler::dsl::SplitAst::span: bpmn_lite_types::types::SourceSpan
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::SplitAst
-pub fn bpmn_lite_compiler::dsl::SplitAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::SplitExecFlow
 pub bpmn_lite_compiler::dsl::SplitExecFlow::expected_value: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::dsl::SplitExecFlow::next: alloc::string::String
@@ -247,15 +196,6 @@ pub bpmn_lite_compiler::dsl::SplitExecNode::mode: bpmn_lite_compiler::dsl::Split
 pub bpmn_lite_compiler::dsl::SplitExecNode::produces_placeholder: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::dsl::SplitExecNode::routing_socket: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::dsl::SplitExecNode::span: core::option::Option<bpmn_lite_types::types::SourceSpan>
-pub struct bpmn_lite_compiler::dsl::SplitFlowAst
-pub bpmn_lite_compiler::dsl::SplitFlowAst::condition: core::option::Option<bpmn_lite_compiler::dsl::ConditionAst>
-pub bpmn_lite_compiler::dsl::SplitFlowAst::next: alloc::string::String
-pub struct bpmn_lite_compiler::dsl::StartAst
-pub bpmn_lite_compiler::dsl::StartAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::StartAst::next: alloc::string::String
-pub bpmn_lite_compiler::dsl::StartAst::span: bpmn_lite_types::types::SourceSpan
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::StartAst
-pub fn bpmn_lite_compiler::dsl::StartAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::StartExecNode
 pub bpmn_lite_compiler::dsl::StartExecNode::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::StartExecNode::next: alloc::string::String
@@ -277,22 +217,12 @@ pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_decision_enum_value
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_decision_output_type_info(&self, &str) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_workflow_child_calls(&self, &str) -> alloc::vec::Vec<alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_workflow_signature(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
-pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
-pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::verb_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::verb_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::workflow_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::workflow_satisfies_l2(&self, &str) -> bool
-pub struct bpmn_lite_compiler::dsl::TaskAst
-pub bpmn_lite_compiler::dsl::TaskAst::args: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
-pub bpmn_lite_compiler::dsl::TaskAst::delivery_mode: core::option::Option<alloc::string::String>
-pub bpmn_lite_compiler::dsl::TaskAst::id: alloc::string::String
-pub bpmn_lite_compiler::dsl::TaskAst::loop_origin: core::option::Option<alloc::string::String>
-pub bpmn_lite_compiler::dsl::TaskAst::next: alloc::string::String
-pub bpmn_lite_compiler::dsl::TaskAst::plug: alloc::string::String
-pub bpmn_lite_compiler::dsl::TaskAst::span: bpmn_lite_types::types::SourceSpan
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::TaskAst
-pub fn bpmn_lite_compiler::dsl::TaskAst::to_sexpr(&self, usize) -> alloc::string::String
 pub struct bpmn_lite_compiler::dsl::TaskExecNode
 pub bpmn_lite_compiler::dsl::TaskExecNode::consumes_placeholders: alloc::vec::Vec<alloc::string::String>
 pub bpmn_lite_compiler::dsl::TaskExecNode::delivery_mode: bpmn_lite_compiler::dsl::DeliveryMode
@@ -344,7 +274,6 @@ pub fn bpmn_lite_compiler::dsl::WorkflowSource::to_sexpr(&self, usize) -> alloc:
 pub struct bpmn_lite_compiler::dsl::XorBranchConfig
 pub bpmn_lite_compiler::dsl::XorBranchConfig::condition_value: alloc::string::String
 pub bpmn_lite_compiler::dsl::XorBranchConfig::target_next: alloc::string::String
-pub const bpmn_lite_compiler::dsl::MAX_UNROLLED_NODES: usize
 pub trait bpmn_lite_compiler::dsl::PlaceholderRegistry: core::marker::Send + core::marker::Sync
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::decision_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::decision_exists(&self, &str) -> bool
@@ -352,8 +281,8 @@ pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::get_decision_enum_values(&s
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::get_decision_output_type_info(&self, &str) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::get_workflow_child_calls(&self, &str) -> alloc::vec::Vec<alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::get_workflow_signature(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
-pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
-pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::verb_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::verb_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::PlaceholderRegistry::workflow_exists(&self, &str) -> bool
@@ -365,8 +294,8 @@ pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_decision_enum_value
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_decision_output_type_info(&self, &str) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_workflow_child_calls(&self, &str) -> alloc::vec::Vec<alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::get_workflow_signature(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
-pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
-pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::verb_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::verb_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::StubPlaceholderRegistry::workflow_exists(&self, &str) -> bool
@@ -378,53 +307,32 @@ pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_decision_enu
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_decision_output_type_info(&self, &str) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_workflow_child_calls(&self, &str) -> alloc::vec::Vec<alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::get_workflow_signature(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
-pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
-pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_decision(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
+pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::resolve_verb(&self, &str) -> bpmn_lite_compiler::dsl::linter::SymbolResolution
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::verb_bindings(&self, &str) -> core::option::Option<bpmn_lite_compiler::dsl::BindingDecl>
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::verb_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::workflow_exists(&self, &str) -> bool
 pub fn bpmn_lite_compiler::dsl::ManifestPlaceholderRegistry<R>::workflow_satisfies_l2(&self, &str) -> bool
 pub trait bpmn_lite_compiler::dsl::ToSexpr
 pub fn bpmn_lite_compiler::dsl::ToSexpr::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::EndAst
-pub fn bpmn_lite_compiler::dsl::EndAst::to_sexpr(&self, usize) -> alloc::string::String
 impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::JoinAst
 pub fn bpmn_lite_compiler::dsl::JoinAst::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::LoopAst
-pub fn bpmn_lite_compiler::dsl::LoopAst::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::MessageWaitAst
-pub fn bpmn_lite_compiler::dsl::MessageWaitAst::to_sexpr(&self, usize) -> alloc::string::String
 impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::NodeAst
 pub fn bpmn_lite_compiler::dsl::NodeAst::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::SplitAst
-pub fn bpmn_lite_compiler::dsl::SplitAst::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::StartAst
-pub fn bpmn_lite_compiler::dsl::StartAst::to_sexpr(&self, usize) -> alloc::string::String
-impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::TaskAst
-pub fn bpmn_lite_compiler::dsl::TaskAst::to_sexpr(&self, usize) -> alloc::string::String
 impl bpmn_lite_compiler::dsl::ToSexpr for bpmn_lite_compiler::dsl::WorkflowSource
 pub fn bpmn_lite_compiler::dsl::WorkflowSource::to_sexpr(&self, usize) -> alloc::string::String
-pub trait bpmn_lite_compiler::dsl::WorkflowFrontend
-pub type bpmn_lite_compiler::dsl::WorkflowFrontend::Source: ?core::marker::Sized
-pub fn bpmn_lite_compiler::dsl::WorkflowFrontend::lower(&Self::Source) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, bpmn_lite_compiler::dsl::FrontendError>
-impl bpmn_lite_compiler::dsl::WorkflowFrontend for bpmn_lite_compiler::dsl::DslFrontend
-pub type bpmn_lite_compiler::dsl::DslFrontend::Source = bpmn_lite_compiler::dsl::WorkflowExecutionPlan
-pub fn bpmn_lite_compiler::dsl::DslFrontend::lower(&bpmn_lite_compiler::dsl::WorkflowExecutionPlan) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, bpmn_lite_compiler::dsl::FrontendError>
 pub fn bpmn_lite_compiler::dsl::compile(&str, &dyn bpmn_lite_compiler::dsl::PlaceholderRegistry) -> core::result::Result<bpmn_lite_compiler::dsl::WorkflowExecutionPlan, bpmn_lite_compiler::dsl::CompileError>
-pub fn bpmn_lite_compiler::dsl::create_bounded_retry_macro(bpmn_lite_compiler::dsl::TaskAst, u32, &str, &str) -> bpmn_lite_compiler::dsl::LoopAst
-pub fn bpmn_lite_compiler::dsl::create_parallel_split_join(&str, alloc::vec::Vec<alloc::string::String>, &str, &str) -> (bpmn_lite_compiler::dsl::SplitAst, bpmn_lite_compiler::dsl::JoinAst)
-pub fn bpmn_lite_compiler::dsl::create_xor_split_join(&str, &str, alloc::vec::Vec<bpmn_lite_compiler::dsl::XorBranchConfig>, &str, &str) -> (bpmn_lite_compiler::dsl::SplitAst, bpmn_lite_compiler::dsl::JoinAst)
+pub fn bpmn_lite_compiler::dsl::create_parallel_split_join(&str, alloc::vec::Vec<alloc::string::String>, &str, &str) -> (bpmn_lite_compiler::dsl::ast::SplitAst, bpmn_lite_compiler::dsl::JoinAst)
+pub fn bpmn_lite_compiler::dsl::create_xor_split_join(&str, &str, alloc::vec::Vec<bpmn_lite_compiler::dsl::XorBranchConfig>, &str, &str) -> (bpmn_lite_compiler::dsl::ast::SplitAst, bpmn_lite_compiler::dsl::JoinAst)
 pub fn bpmn_lite_compiler::dsl::derive_delivery_mode(core::option::Option<bpmn_lite_compiler::dsl::DeliveryMode>, bool, bool) -> bpmn_lite_compiler::dsl::DeliveryMode
 pub fn bpmn_lite_compiler::dsl::derive_version(&dsl_manifest::Manifest, &bpmn_lite_compiler::dsl::WorkflowPackDAG) -> alloc::string::String
 pub fn bpmn_lite_compiler::dsl::generate_closure(&dsl_manifest::Manifest, &bpmn_lite_compiler::dsl::WorkflowPackDAG) -> bpmn_lite_compiler::dsl::PackClosureManifest
 pub fn bpmn_lite_compiler::dsl::generate_manifest(&bpmn_lite_compiler::dsl::WorkflowPackDAG) -> core::result::Result<dsl_manifest::Manifest, alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::lint(&bpmn_lite_compiler::dsl::WorkflowSource, &dyn bpmn_lite_compiler::dsl::PlaceholderRegistry) -> core::result::Result<bpmn_lite_compiler::dsl::WorkflowExecutionPlan, alloc::vec::Vec<bpmn_lite_compiler::dsl::LintError>>
 pub fn bpmn_lite_compiler::dsl::lower_plan(&bpmn_lite_compiler::dsl::WorkflowExecutionPlan) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, bpmn_lite_compiler::dsl::FrontendError>
-pub fn bpmn_lite_compiler::dsl::parse_node_str(&str) -> core::result::Result<bpmn_lite_compiler::dsl::NodeAst, alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::parse_workflow_str(&str) -> core::result::Result<bpmn_lite_compiler::dsl::WorkflowSource, alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::project_ir(&bpmn_lite_compiler::IRGraph, alloc::string::String) -> core::result::Result<bpmn_lite_compiler::dsl::WorkflowExecutionPlan, bpmn_lite_compiler::dsl::IrPlanError>
 pub fn bpmn_lite_compiler::dsl::repeat_n_times(&mut bpmn_lite_compiler::dsl::WorkflowSource, &str, u32, core::option::Option<&str>) -> core::result::Result<(), bpmn_lite_compiler::dsl::RepeatNTimesError>
-pub fn bpmn_lite_compiler::dsl::unroll_loops(alloc::vec::Vec<bpmn_lite_compiler::dsl::NodeAst>) -> core::result::Result<alloc::vec::Vec<bpmn_lite_compiler::dsl::NodeAst>, bpmn_lite_compiler::dsl::UnrollError>
 pub fn bpmn_lite_compiler::dsl::validate_dag(&bpmn_lite_compiler::dsl::WorkflowExecutionPlan) -> core::result::Result<(), alloc::vec::Vec<bpmn_lite_compiler::dsl::DagError>>
 pub fn bpmn_lite_compiler::dsl::validate_pack(&bpmn_lite_compiler::dsl::WorkflowPackDAG, &dsl_manifest::Manifest) -> core::result::Result<(), alloc::vec::Vec<alloc::string::String>>
 pub fn bpmn_lite_compiler::dsl::validate_path_family(&bpmn_lite_compiler::dsl::WorkflowExecutionPlan, &dyn bpmn_lite_compiler::dsl::PlaceholderRegistry) -> alloc::vec::Vec<bpmn_lite_compiler::dsl::Diagnostic>

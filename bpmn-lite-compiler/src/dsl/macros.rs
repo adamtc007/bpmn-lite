@@ -8,7 +8,9 @@ pub struct XorBranchConfig {
 }
 
 /// Generates a LoopAst wrapping a task as its SESE body block.
-pub fn create_bounded_retry_macro(
+// H4.1 (EOP-PLAN-CRATE-HYGIENE-001): pub(super) — zero consumers anywhere
+// in the workspace, grep-confirmed; no longer re-exported from dsl::mod.
+pub(super) fn create_bounded_retry_macro(
     target_task: TaskAst,
     retry_ceiling: u32,
     loop_id: &str,
