@@ -129,14 +129,22 @@ Baseline: Gate U0 accepted, `c236272`/`ae3f2b7` (branch
   - `cargo run -p xtask -- fuzz regress` (plan's named neighboring-target
     regression replays: `phrase_index`, `evidence_fusion`,
     `game_turn_replay`, `disposition_workbook_state`,
-    `preview_compilation`): `preview_compilation` and `model_boundary`
-    are the only two targets in the whole fuzz suite with committed
-    regression inputs (1 each, from before this session) — both replayed
-    `ok`. The other named targets, and `history_belief_state` itself,
-    have zero committed regression inputs, so there was nothing to
-    replay for them (not a gap this tranche introduced — `xtask fuzz
-    regress` has no `--target` filter despite accepting the flag; it
-    always sweeps every discovered target with regression inputs).
+    `preview_compilation`): **correction** — the original version of this
+    line said `preview_compilation` and `model_boundary` were "the only
+    two targets in the whole fuzz suite" with committed regression
+    inputs; a direct filesystem check
+    (`find . -path "*/fuzz/regressions/*" -type f`) shows four across the
+    workspace: those two, plus `bpmn-lite-engine::xml_compile`
+    (`f8-compiler-001-mi-no-successor.xml`) and
+    `dmn-lite-parser::dmn_lite_parse`
+    (`dmn-lexer-001-invalid-escape-multibyte-boundary.bin`). Within
+    `utterance-engine` specifically, `preview_compilation` and
+    `model_boundary` are indeed the only two — both replayed `ok`. The
+    other named targets, and `history_belief_state` itself, have zero
+    committed regression inputs, so there was nothing to replay for them
+    (not a gap this tranche introduced — `xtask fuzz regress` has no
+    `--target` filter despite accepting the flag; it always sweeps every
+    discovered target with regression inputs).
   - `cargo fmt --check` on the touched file specifically produced no
     diff attributable to `history_belief_state.rs` — the same pre-existing,
     repo-wide `rustfmt` version-drift pattern H6's receipt already
