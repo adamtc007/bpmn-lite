@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **DRAFT — for peer review. No implementation approved.** |
+| Status | **Forks A/B/E ruled (Adam, 2026-08-13 — see §5); C/D/F/G recommendations pending explicit ratification at B0. No implementation approved yet.** |
 | Baseline researched | `1b3d390` (2026-08-13), branch `codex/bpmn-gameboard-refactor` |
 | Purpose | Satisfy the U4 precondition of `EOP-PLAN-UTTERANCE-DETERMINISTIC-FUZZ-001` and §8.1/§27-item-10 of `EOP-VS-BPMN-CAPABILITY-FABRIC-004`: define the requirement, the ground truth, and the forks a bridge implementation plan must rule before it can be written. |
 | Decides | Nothing. Every fork in §5 is surfaced with a recommendation; peer review rules them. |
@@ -207,12 +207,25 @@ reviewable tranche extending a proven frame rather than a big-bang grammar
 change. Fabric-V&S criterion 19 is met *incrementally with a visible gap
 list*, not claimed early.
 
+**RULED (Adam, 2026-08-13): full parity is the required end state — "it's
+simply not done otherwise"; a narrow bridge alone does not discharge the
+fabric-V&S criterion. The DSL-parity surface (new AST variants + grammar +
+printer + `project_ir` alignment) is to be scheduled as its own separate
+planning phase/document, not folded into this bridge plan's tranches. The
+narrow v1 bridge proceeds only as the staging skeleton whose refusal
+catalogue feeds that parity plan; the capability is not "done" until the
+parity plan closes.**
+
 **B. `GatewayXor` policy.**
 Options: (1) refuse XOR in v1 (consistent with `project_ir`, which also
 refuses it — the two projections stay aligned); (2) build the XOR
 join-pairing oracle now (new compiler capability, benefits `project_ir` too).
 *Recommendation: refuse in v1; raise the oracle as its own follow-up
 capability since it unblocks two projections at once.*
+
+**RULED (Adam, 2026-08-13, "see my answer to fork A"): the XOR
+join-pairing oracle belongs to the separate parity planning phase ruled
+under fork A. v1 refuses XOR; the parity plan owns the oracle.**
 
 **C. Canonicalisation rules.**
 Emission order must be deterministic and content-derived: proposed —
@@ -251,6 +264,10 @@ per G3); only the sugar is lost, and the equivalence relation (fork D) is
 unaffected. Peer review may rule (2) if authoring-intent loss is deemed
 release-blocking now.
 
+**RULED (Adam, 2026-08-13): option (1) — v1 emits unrolled copies as plain
+tasks. IR-side provenance carriage joins the parity planning phase's
+candidate list.**
+
 **F. Owner crate and entry point.**
 Options: (1) `bpmn-lite-compiler::dsl` (owns the AST, the printer, and
 `project_ir` — the bridge is a third projection alongside them);
@@ -279,14 +296,19 @@ grammar extension into v1.
 ## 6. Sketch tranche map (illustrative — final map belongs to the implementation plan, written only after §5 is ruled)
 
 ```text
+Bridge plan (this document's successor — the staging skeleton):
 B0  Contract & representability catalogue    frozen fork rulings → spec doc; no code
-B1  emit_dsl skeleton + refusal catalogue    typed DslEmitError for every IRNode kind; core-5 emission
+B1  emit_dsl skeleton + refusal catalogue    typed DslEmitError for all 15 IRNode kinds; core-5 emission
 B2  Round-trip proof harness                 emit → compile → plan-equality gate; red fixtures (must-refuse)
                                              and green fixtures (must-admit-equivalent), CI-wired
 B3  Canonical receipt integration            server-side "DSL source receipt" surface (read-only endpoint
                                              or artifact), public-api reviewed
-B4+ Parity tranches (one per AST variant)    each: grammar + parser + ToSexpr + emit + project_ir alignment
-                                             + fixtures; separately gated
+
+DSL-parity plan (SEPARATE planning phase, per fork-A ruling — its own V&S/
+plan document, own gates; owns the new AST variants, the XOR join oracle
+(fork B), IR-side loop provenance (fork E follow-up), and process-level
+guard/retry syntax (fork G)). The capability is not "done" until it closes.
+
 U4  (fuzz plan)                              opens per its own precondition once B2's gate is green
 ```
 
