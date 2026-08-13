@@ -268,6 +268,10 @@ fn canonical_scan(
         for edge in ir.edges_directed(idx, Direction::Outgoing) {
             let tgt = edge.target();
             let d = in_degree.get_mut(&tgt).expect("target tracked");
+            // Each source emits exactly once, so a zero here would mean a
+            // double-decrement — keep that failure loud rather than letting
+            // saturation mask a wrong-yet-total order past the totality check.
+            debug_assert!(*d > 0, "in-degree double-decrement at '{}'", ir[tgt].id());
             *d = d.saturating_sub(1);
             if *d == 0 && !guard_set.contains(&tgt) {
                 ready.insert(ir[tgt].id().to_owned(), tgt);

@@ -645,10 +645,12 @@ mod tests {
             &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :interrupting maybe :next esc)"),
             "not a boolean",
         );
-        // R30 missing :interrupting / double timer shape (parse)
+        // R30 missing :interrupting / double timer shape (parse).
+        // Discriminating needle: the exact expected-keyword parse error,
+        // not any message that happens to mention "interrupting".
         expect_err(
             &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :next esc)"),
-            "interrupting",
+            "expected ':interrupting'",
         );
         expect_err(
             &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :deadline-ms 5 :interrupting true :next esc)"),
@@ -658,6 +660,28 @@ mod tests {
         expect_err(
             &wrap("  (boundary-error :id t1 :host t1 :next esc)"),
             "duplicate node id",
+        );
+        // R29 duplicate guard id vs OTHER guard id (lint pass 2 — the
+        // second half of the freeze's collision rule, cemented per the
+        // D1 blind review)
+        expect_err(
+            &wrap("  (boundary-error :id g1 :host t1 :next esc)\n  (boundary-error :id g1 :host t1 :next esc)"),
+            "duplicate node id",
+        );
+        // Guard as a `:next` target — guards are in the AST id set but
+        // never plan nodes, so lint must refuse or the escape/flow edge
+        // dangles (validate_dag has no dangling-target check; found by
+        // the D1 blind review, which compiled both shapes GREEN before
+        // this fix). Escape-into-guard:
+        expect_err(
+            &wrap("  (boundary-error :id g1 :host t1 :next g2)\n  (boundary-error :id g2 :host t1 :next esc)"),
+            "targets a boundary guard",
+        );
+        // ...and ordinary sequence flow into a guard (mirror of emit's
+        // FlowIntoGuard on the DSL path):
+        expect_err(
+            "(workflow red\n  (start-event :id start :next t1)\n  (service-task :id t1 :verb cbu.host :next g1)\n  (boundary-error :id g1 :host t1 :next esc)\n  (end-event :id esc :status \"done\")\n  (end-event :id end :status \"completed\"))",
+            "targets a boundary guard",
         );
         // unknown host / non-task host (lint)
         expect_err(

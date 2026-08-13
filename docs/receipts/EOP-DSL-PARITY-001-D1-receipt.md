@@ -85,18 +85,33 @@ recompiles via the derived registry, and the graph is not mutated.
    `UnrepresentableToken` (field `"error_code"`) because the printer cannot escape them
    — an unescaped quote would emit source that re-parses differently. Escaping support
    is out of D1 scope; refusal is the fail-closed choice.
-3. **`:next <guard-id>` defers to validate_dag.** `node_ids` includes guard ids, so a
-   guard escaping to another guard is not caught at parse; it is caught by the
-   `FlowIntoGuard` check on the emit side and by validate_dag's dangling/edge rules on
-   the DSL side. No trap door: both paths refuse, just at different stages.
+3. **`:next <guard-id>` is refused by LINT — corrected after blind review.** The
+   original claim here ("caught by validate_dag's dangling/edge rules") was FALSE:
+   validate_dag has no dangling-target check at all (its header assumes lint owns ref
+   integrity), and because `node_ids` includes guard ids, `check_next_ref` accepted a
+   guard as a `:next` target while guards never become plan nodes — the reviewer
+   compiled both `boundary-error :next <other-guard>` and `service-task :next <guard>`
+   GREEN through the full pipeline, a fail-open hole this tranche itself introduced.
+   Fixed in `check_next_ref`: any `:next` (flow or escape) resolving to a guard id
+   refuses with "targets a boundary guard — guards are not flow targets" (the DSL-path
+   mirror of emit's `FlowIntoGuard`). Two red fixtures cement both shapes; a third
+   cements guard-vs-guard duplicate ids (R29's second half).
+4. **Timer-shape double-declaration named error is positional.** The "more than one
+   timer shape" error fires only when the extra shape attribute follows in canonical
+   position (immediately after the first shape); other orders refuse via the generic
+   expected-keyword parse error. Fail-closed on every order, but the freeze's "naming
+   both attributes" holds only for the canonical order — recorded as a deviation, not
+   silently.
 
 ## Public-API baseline
 
 The boundary gate (`scripts/check-semantic-gameboard-boundaries.py`) flagged drift in
 `bpmn-lite-compiler`; baseline regenerated at
 `docs/generated/public-api-baselines/bpmn-lite-compiler.txt` (header names this receipt).
-Diff: **+13 lines, −0 removals** — the two `NodeAst` variants, `BoundaryTimerAst`/
-`BoundaryErrorAst` structs+fields, and the four `DslEmitError` variants.
+Diff: **+13 lines, −0 removals** — 11 `DslEmitError` variant/field lines and the two
+`NodeAst` variant lines. (The `BoundaryTimerAst`/`BoundaryErrorAst` structs do NOT
+appear in the baseline: `mod ast` is private, so they are pub-in-private-module,
+reachable only through variant pattern-matching — itemization corrected after review.)
 - **Consumer:** `designer-graph` (B2 harness), `bpmn-lite-server-designer` (session
   receipt endpoint), `bpmn-lite-authoring` (diagnostics executor).
 - **Owning facade:** `bpmn_lite_compiler::dsl` (ast/parser/emit), same facade as the
@@ -119,6 +134,25 @@ Diff: **+13 lines, −0 removals** — the two `NodeAst` variants, `BoundaryTime
 
 - `parse_loop` silent-zero ceiling (pre-existing trap door, surfaced in D1.0) — awaiting separate ruling.
 - P2 kinds (`HumanWait`, `SendTask`, `FfiServiceTask`) + `DataObject` — future programme per parity V&S Fork rulings.
+
+## Blind-review disposition
+
+The authorship-blind review of the initial commit (`6c68a11`) returned **REJECT** with
+one BLOCKER and six lesser findings. Disposition (all corrections in the follow-up
+commit; all verified personally, none accepted on the reviewer's word alone):
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | BLOCKER | DSL path fail-open on `:next <guard-id>` — reviewer compiled escape-into-guard AND flow-into-guard GREEN; validate_dag has no dangling check; amendment 3's "both paths refuse" was false | **Fixed**: `check_next_ref` refuses guard targets (lint owns it); 2 red fixtures; amendment 3 rewritten above |
+| 2 | MINOR | Baseline itemization wrong (Ast structs not in baseline — `mod ast` private) | **Fixed** in receipt text; +13/−0 count was accurate |
+| 3 | MINOR | Timer double-shape named error is positional; deviation unrecorded | **Recorded** as amendment 4 (fail-closed on every order) |
+| 4 | MINOR | Weak needle: missing-`:interrupting` test matched any message containing "interrupting" | **Fixed**: needle is now `expected ':interrupting'` |
+| 5 | NOTE | `saturating_sub` silences a would-be-loud double-decrement | **Fixed**: `debug_assert!(*d > 0)` added |
+| 6 | NOTE | Degenerate `CyclicGraph` witness (`id: ""`) if leftover set empty | **Accepted as-is**: reachable only if `order.len() > node_count`, itself impossible while the debug_assert of #5 holds; fail-closed either way |
+| 7 | NOTE | Guard-vs-guard duplicate-id half of R29 unproven | **Fixed**: red fixture added |
+
+Post-correction sweep re-run green: compiler 206/0, designer-graph 87/0,
+server-designer 97/0+1, workspace check clean, boundary gate pass, test-only-pub pass.
 
 ## STOP
 

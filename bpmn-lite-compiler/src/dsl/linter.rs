@@ -268,6 +268,9 @@ pub fn lint(
 struct Linter<'a> {
     registry: &'a dyn PlaceholderRegistry,
     errors: Vec<LintError>,
+    /// Ids of boundary-guard AST nodes — in `node_ids` (they are AST nodes)
+    /// but never plan nodes, so they are illegal `:next` targets (D1).
+    guard_ids: std::collections::HashSet<String>,
 }
 
 impl<'a> Linter<'a> {
@@ -275,6 +278,7 @@ impl<'a> Linter<'a> {
         Self {
             registry,
             errors: Vec::new(),
+            guard_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -294,6 +298,13 @@ impl<'a> Linter<'a> {
         let node_ids: HashMap<String, ()> = flat_ast_nodes
             .iter()
             .map(|n| (n.id().to_owned(), ()))
+            .collect();
+        self.guard_ids = flat_ast_nodes
+            .iter()
+            .filter(|n| {
+                matches!(n, NodeAst::BoundaryTimer(_) | NodeAst::BoundaryError(_))
+            })
+            .map(|n| n.id().to_owned())
             .collect();
 
         // ── Pass 2: check for duplicate ids ───────────────────────────────────
@@ -880,6 +891,19 @@ impl<'a> Linter<'a> {
     fn check_next_ref(&mut self, node_id: &str, next: &str, known: &HashMap<String, ()>) {
         if !known.contains_key(next) {
             self.err(node_id, format!("':next {next}' references unknown node"));
+        } else if self.guard_ids.contains(next) {
+            // D1 (EOP-PLAN-DSL-PARITY-001): guards are AST nodes (so they live
+            // in `known`) but NEVER become plan nodes — a `:next` targeting one
+            // would dangle. validate_dag has no dangling-target check (its
+            // header assumes lint owns ref integrity), so lint must refuse
+            // here or the DSL path is fail-open. Mirrors emit's FlowIntoGuard.
+            self.err(
+                node_id,
+                format!(
+                    "':next {next}' targets a boundary guard — guards are not \
+                     flow targets; flow and escape edges must target plan nodes"
+                ),
+            );
         }
     }
 }
