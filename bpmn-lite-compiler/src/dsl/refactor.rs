@@ -104,10 +104,23 @@ impl ToSexpr for SplitAst {
         let pad = " ".repeat(indent);
         let inner_pad = " ".repeat(indent + 2);
 
+        // Head keywords must be ones `parser.rs`'s node-kind match actually
+        // accepts for this attribute shape (`parse_split`: :id [:plug] :join
+        // then (flow ...) children). The gateway-style names this printer
+        // used before ("exclusive-gateway"/"inclusive-gateway"/
+        // "parallel-gateway") either aren't parseable heads at all (And/Or)
+        // or route to the legacy parse fn with a different attribute shape
+        // (Xor: no :join, join id synthesized) — so printed splits never
+        // re-parsed. Found and fixed under EOP-PLAN-GRAPH-DSL-BRIDGE-001 B0;
+        // round-trip cement tests below. Note the grammar still cannot
+        // express a plug-less Xor/Or split or a conditioned And flow — an
+        // AST in one of those states prints to source the parser rejects;
+        // that is a parser/AST asymmetry owned by the DSL-parity programme,
+        // not paperable here.
         let mode_str = match self.mode {
-            SplitModeAst::Xor => "exclusive-gateway",
-            SplitModeAst::Or => "inclusive-gateway",
-            SplitModeAst::And => "parallel-gateway",
+            SplitModeAst::Xor => "split-xor",
+            SplitModeAst::Or => "split-or",
+            SplitModeAst::And => "split-and",
         };
 
         let plug_str = self
@@ -398,5 +411,97 @@ mod tests {
         let plan = compile(&final_dsl, &registry).expect("Compilation failed");
         assert!(plan.mathematically_proved);
         assert!(plan.unsafe_breeches.is_empty());
+    }
+
+    /// Print → re-parse → print must be a fixpoint, and the printed source
+    /// must re-parse without a single parser error. Cement for the split
+    /// head-keyword desync found under EOP-PLAN-GRAPH-DSL-BRIDGE-001 B0:
+    /// the printer used to emit "parallel-gateway"/"inclusive-gateway"
+    /// heads no parser arm accepts (and "exclusive-gateway", whose legacy
+    /// parse fn takes a different attribute shape), so printed splits never
+    /// re-parsed — breaking AstMutator's regenerate-and-recompile path for
+    /// any workflow containing a split.
+    fn assert_print_reparse_fixpoint(source: &str) -> String {
+        let wf1 = parse_sexpr(source);
+        let p1 = wf1.to_sexpr(0);
+        let (tokens, lex_errs) = crate::dsl::lexer::lex(&p1);
+        assert!(lex_errs.is_empty(), "lex errors on printed source:\n{p1}");
+        let mut parser = crate::dsl::parser::Parser::new(tokens);
+        let wf2 = parser.parse_workflow();
+        let errs = parser.into_errors();
+        assert!(
+            errs.is_empty(),
+            "printed source does not re-parse: {errs:?}\nprinted:\n{p1}"
+        );
+        let p2 = wf2.expect("printed source parsed to no workflow").to_sexpr(0);
+        assert_eq!(p1, p2, "print→parse→print is not a fixpoint");
+        p1
+    }
+
+    #[test]
+    fn split_and_print_reparse_roundtrip_and_recompiles() {
+        let source = r#"(workflow test-and-roundtrip
+  (start-event :id start :next split-gateway)
+  (split-and :id split-gateway :join join-gateway
+    (flow :next prod-1)
+    (flow :next prod-2))
+  (service-task :id prod-1 :verb cbu.produce-part1 :next join-gateway)
+  (service-task :id prod-2 :verb cbu.produce-part2 :next join-gateway)
+  (join-and :id join-gateway :split split-gateway :next end)
+  (end-event :id end :status "done"))"#;
+        let printed = assert_print_reparse_fixpoint(source);
+
+        let mut registry = StubPlaceholderRegistry::new();
+        registry.register_verb(
+            "cbu.produce-part1",
+            crate::dsl::linter::BindingDecl::default(),
+        );
+        registry.register_verb(
+            "cbu.produce-part2",
+            crate::dsl::linter::BindingDecl::default(),
+        );
+        compile(&printed, &registry).expect("printed split-and source must recompile");
+    }
+
+    #[test]
+    fn split_xor_print_reparse_roundtrip() {
+        // :plug and per-flow :condition are grammatically REQUIRED for
+        // non-And splits (parse_split/parse_split_flow), so the fixture
+        // carries both — a plug-less Xor/Or AST is unprintable-as-parseable
+        // today (parser/AST asymmetry owned by the DSL-parity programme).
+        let source = r#"(workflow test-xor-roundtrip
+  (start-event :id start :next type-gateway)
+  (split-xor :id type-gateway :plug cbu_type_routing :join type-gateway-join
+    (flow :condition (= @cbu-type "fund") :next type-gateway-join)
+    (flow :condition (= @cbu-type "corporate") :next type-gateway-join))
+  (join-xor :id type-gateway-join :split type-gateway :next end)
+  (end-event :id end :status "done"))"#;
+        assert_print_reparse_fixpoint(source);
+    }
+
+    #[test]
+    fn split_or_print_reparse_roundtrip() {
+        let source = r#"(workflow test-or-roundtrip
+  (start-event :id start :next type-gateway)
+  (split-or :id type-gateway :plug cbu_type_routing :join type-gateway-join
+    (flow :condition (= @cbu-type "fund") :next type-gateway-join)
+    (flow :condition (= @cbu-type "corporate") :next type-gateway-join))
+  (join-or :id type-gateway-join :split type-gateway :next end)
+  (end-event :id end :status "done"))"#;
+        assert_print_reparse_fixpoint(source);
+    }
+
+    #[test]
+    fn linear_core_shapes_print_reparse_roundtrip() {
+        // Start / Task / MessageWait / End — the linear members of the
+        // graph→DSL bridge's core emission set, fixpoint-proven per
+        // variant (the pre-existing tests only asserted substring
+        // presence for task shapes).
+        let source = r#"(workflow test-linear-roundtrip
+  (start-event :id start :next fetch)
+  (service-task :id fetch :verb cbu.create :next wait-reply)
+  (message-wait :id wait-reply :name "reply-received" :correlation-source "@case-id" :next end)
+  (end-event :id end :status "terminated"))"#;
+        assert_print_reparse_fixpoint(source);
     }
 }
