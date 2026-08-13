@@ -300,7 +300,7 @@ direct proof about `resolve_compound_chain`'s own internals.
   claimed. Verdict: accept-with-caveats, all caveats now disposed by the
   corrections above, not by argument.
 
-- **STOP-gate decision: blocked — awaiting peer review of this receipt.**
+- **STOP-gate decision: accepted (Adam, "ok next").**
 
 Per Gate U3's own text: "Peer review accepts either the bounded black-box
 target with evidence of useful throughput, or the explicit deferred

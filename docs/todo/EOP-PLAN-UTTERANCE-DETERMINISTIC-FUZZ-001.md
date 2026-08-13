@@ -2,8 +2,8 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **U0 accepted — U1 in progress** |
-| Baseline reviewed | `efda5ad` (2026-08-13); U0 closed against `be9a86f` (2026-08-13), see `docs/receipts/EOP-UTTERANCE-DETERMINISTIC-FUZZ-001-U0-receipt.md` |
+| Status | **U0/U1/U2/U3 accepted — plan complete except U4 (blocked by design, no production graph-to-DSL bridge exists)** |
+| Baseline reviewed | `efda5ad` (2026-08-13); U0 closed against `be9a86f` (2026-08-13), see `docs/receipts/EOP-UTTERANCE-DETERMINISTIC-FUZZ-001-U0-receipt.md`; U1 `996bb68`/`3d7431d`; U2 `c57341f`; U3 `982c49b`/`d604241`, accepted "ok next" (2026-08-13) |
 | Scope | Model-free, deterministic path from an utterance-derived evidence packet to governed DSL/graph proposal preview. |
 | Execution | One tranche per change set; STOP for review at every tranche gate. |
 | Does not authorise | Live-model fuzzing, raw HTTP fuzzing, capture changes, public test helpers, or automatic proposal application. |
