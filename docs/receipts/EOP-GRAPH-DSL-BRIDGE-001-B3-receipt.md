@@ -95,8 +95,33 @@ projection, the ids must be aligned first (flagged, not fixed).
     note for the DSL-parity programme, not a defect: the frozen Stage-0
     ordering is behaving exactly as ratified.
 
-- **Blind peer-review findings and dispositions:** pending — dispatched
-  at this receipt's close.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context) re-derived every claim: read-only proven by
+  inspection down through both store impls (memory read-lock+clone;
+  postgres single SELECT), `reconstruct_designer_dag`/`admit`/`emit_dsl`
+  all side-effect-free (`&self`, no interior mutability in schema.rs);
+  the 500-only-on-store-error claim traced through every path including
+  a panic audit of the emitter's one guarded `expect`; the UUID
+  workflow-id always lexes (dash is legal as both start and continue
+  char — `UnrepresentableToken` on it is unreachable); the
+  `session.name` inconsistency in the sibling graph endpoint confirmed
+  at its exact line; and — the item most worth attacking — the
+  UnreachableNode-before-UnsupportedNode explanation verified at the
+  source: `AttachGuard` inserts NO edge (ops.rs — `attached_to_key` is a
+  node field; `to_ir` synthesizes no host→boundary edge), so the guard
+  node genuinely has no incoming flow edge and Stage-0 refuses it first.
+  Gates re-run independently (boundary gate pass, 8 items, identical
+  hashes; test-only-pub ok). All test counts reproduced. Verdict: **all
+  six review items verified, no blocking findings.** Two scruples:
+  1. The guard test's `contains("'timeout'")` was weaker than the
+     property (satisfiable by `'timeout_end'` too) — disposed by
+     tightening to an exact-prefix match on the full diagnostic.
+  2. Same-process determinism doesn't prove cross-process canonicality —
+     correct, and that is B2's harness's job, not this endpoint test's.
+  The reviewer also confirmed the response shape's two additive deltas
+  vs the plan's sketch (`required_symbols`; structured `refused`) are
+  supersets of the promised shape, and that deciding the workflow-id at
+  B3 was exactly what the plan authorized ("shape decided at B3 start").
 
 - **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 

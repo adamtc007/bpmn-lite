@@ -10216,12 +10216,16 @@ mod tests {
         // check would — the frozen refusal ordering, not a lost
         // diagnostic: either way the guard construct is named and
         // nothing lossy is emitted.
+        // Exact prefix, not a substring: 'timeout' (the guard node, the
+        // smallest unreachable id per the emitter's deterministic pick),
+        // never 'timeout_end' — a bare contains("'timeout'") would be
+        // satisfied by either (blind-review tightening).
         assert!(
             receipt["refused"]["diagnostic"]
                 .as_str()
                 .unwrap()
-                .contains("'timeout'"),
-            "diagnostic must name the refusing node: {receipt}"
+                .starts_with("node 'timeout' is not reachable"),
+            "diagnostic must name the guard node exactly: {receipt}"
         );
         let graph_after =
             body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
