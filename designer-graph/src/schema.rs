@@ -1199,9 +1199,13 @@ mod tests {
         let (mut budgeted, ..) = linear("emit-wrap-budget");
         budgeted.default_guard_budget = Some(3);
         let err = budgeted.emit_dsl("wf-emit").unwrap_err();
-        assert!(
-            err.to_string().contains("default_guard_budget"),
-            "must refuse the set process-level declaration, got: {err}"
-        );
+        // Exact-variant assertion through the anyhow boundary (downcast,
+        // not a substring check — B1 blind-review finding 6).
+        match err.downcast_ref::<bpmn_lite_compiler::dsl::DslEmitError>() {
+            Some(bpmn_lite_compiler::dsl::DslEmitError::ProcessDeclUnrepresentable {
+                field,
+            }) => assert_eq!(*field, "default_guard_budget"),
+            other => panic!("expected ProcessDeclUnrepresentable, got {other:?} ({err})"),
+        }
     }
 }

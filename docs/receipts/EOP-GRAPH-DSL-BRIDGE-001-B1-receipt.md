@@ -55,7 +55,8 @@ two process-level declarations + `graph_state_hash` witness, returning
 
 ## Work item 3 — tests
 
-`bpmn-lite-compiler` `dsl::emit::tests`, 18 tests:
+`bpmn-lite-compiler` `dsl::emit::tests`, 20 tests (18 initial + 2
+blind-review cement tests):
 - Greens: linear (emits → **recompiles** with the derived empty-bindings
   registry → byte-identical on second emission — idempotence);
   message-wait + terminate-end (recompiles, sentinel asserted); And block
@@ -92,7 +93,7 @@ and the process-decl refusal rationale.
 `python3 scripts/check-semantic-gameboard-boundaries.py`: **pass**
 (workspace-wide baseline ratchet green after update). Baseline diff is
 purely additive, zero removals:
-- `bpmn-lite-compiler` (+40 lines): `dsl::emit_dsl` fn, `DslEmitError`
+- `bpmn-lite-compiler` (+38 API lines): `dsl::emit_dsl` fn, `DslEmitError`
   enum + 12 variants/fields + Error/Display impls, `EmittedDsl` + 3
   fields, `ProcessLevelDecls` + 2 fields (+ derive-generated impls).
 - `designer-graph` (+4 lines): `DesignerDag::emit_dsl`, `DslReceipt` + 2
@@ -113,16 +114,55 @@ contract — canonical-form changes are a version bump.
   unrelated `bpmn-lite-server-designer` warnings).
 - Boundary gates: both pass (above).
 
-- **Refusal catalogue delta vs B0's frozen list: none.** All 12 variants
-  implemented as frozen; no additions were needed during implementation.
+- **Refusal catalogue delta vs B0's frozen list: four amendments,
+  recorded in the B0 receipt** (its own amendment rule) — the first
+  version of this receipt claimed "none", which the blind review refuted:
+  workflow-id token coverage; `WrongOutDegree`'s `expected` payload and
+  per-kind semantics; `UnmatchedGateway` = "no *unique* partner"
+  (shared-join refusal); content-derived `CyclicGraph` witness.
 
 - **Known deviations or explicitly parked work:** the two signature
   deviations under work item 2 (witness location; set-ness booleans) —
   both structural consequences of the crate direction, flagged for
   ratification at this gate.
 
-- **Blind peer-review findings and dispositions:** pending — dispatched
-  at this receipt's close.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context) re-derived the implementation against the
+  frozen B0 contract, reproduced all test runs, verified the no-wildcard
+  claim, the lexer token-mirror (including confirming the lexer has no
+  numeric token kind, so numeric ids re-parse), the Kahn algorithm's
+  parallel-edge correctness, keyword-collision non-exploitability
+  (ids named `flow`/`workflow`/`condition`, task_type `=`/64-hex all
+  emit and recompile — checked empirically), and hunted for an
+  emit-green/recompile-red counterexample (none found). Verdict: seven
+  findings, all disposed:
+  1. **Stage-1 order violated — id token checked before the kind gate**
+     (a `GatewayXor` with a bad id refused `UnrepresentableToken`, not
+     `UnsupportedNode`). Fixed: the out-of-core arm returns first; token
+     checks moved inside each in-core arm. Cement:
+     `stage1_order_kind_before_token_and_degree_before_pairing`.
+  2. **Stage-1 order violated — pairing before out-degree on gateways.**
+     Fixed: both gateway arms check degree first; `single_next` split
+     into `single_out_edge` (degree) + `uncond_next` (condition), so the
+     frozen WrongOutDegree → UnmatchedGateway → conditions order holds.
+     Same cement test.
+  3. **MAJOR: nondeterministic emission on shared-join topologies** —
+     `gateway_pairs` pairs every split with its immediate post-dominator,
+     so several splits can share one join; the reverse map's `HashMap`
+     last-write-wins picked one arbitrarily (reviewer measured three
+     distinct emitted sources for one graph, all recompiling). Fixed:
+     shared joins are detected up front and refuse `UnmatchedGateway` at
+     the join in canonical scan order — never pick one. Cement:
+     `red_shared_join_refuses_deterministically` (20 runs, identical
+     refusal). B0 amended (its item 3).
+  4. **"Catalogue delta: none" was false** — four silent extensions.
+     Disposed by amending the B0 receipt (above) and this line.
+  5. **`CyclicGraph` witness was arena-order dependent.** Fixed:
+     SCC-derived smallest-id witness, content-deterministic.
+  6. **Wrapper red test was a substring check** through the anyhow
+     boundary. Fixed: downcast to `DslEmitError` and exact-variant match.
+  7. Baseline count nit: compiler baseline is +38 API lines (+2 header
+     lines rewritten), not "+40 lines". Corrected here.
 
 - **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 

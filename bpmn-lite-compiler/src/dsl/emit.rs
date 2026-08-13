@@ -236,10 +236,25 @@ pub fn emit_dsl(
         }
     }
 
-    if let Err(cycle) = petgraph::algo::toposort(ir, None) {
-        return Err(DslEmitError::CyclicGraph {
-            id: ir[cycle.node_id()].id().to_owned(),
-        });
+    if petgraph::algo::toposort(ir, None).is_err() {
+        // Deterministic witness (B1 blind-review finding 5: toposort's
+        // witness depends on arena insertion order): smallest BPMN id
+        // among nodes on any cycle, via SCCs — content-derived, not
+        // arena-derived.
+        let mut cyclic: Vec<&str> = petgraph::algo::tarjan_scc(ir)
+            .into_iter()
+            .filter(|scc| {
+                scc.len() > 1 || scc.iter().any(|&n| ir.find_edge(n, n).is_some())
+            })
+            .flatten()
+            .map(|n| ir[n].id())
+            .collect();
+        cyclic.sort();
+        let id = cyclic
+            .first()
+            .map(|s| (*s).to_owned())
+            .unwrap_or_default();
+        return Err(DslEmitError::CyclicGraph { id });
     }
 
     let start_idx = ir
@@ -291,13 +306,28 @@ pub fn emit_dsl(
     debug_assert_eq!(order.len(), ir.node_count(), "stage-0 guarantees totality");
 
     let pairs = gateway_pairs(ir);
-    let join_to_split: BTreeMap<NodeIndex, NodeIndex> =
-        pairs.iter().map(|(s, j)| (*j, *s)).collect();
+    // Reverse map, plus the set of SHARED joins: `gateway_pairs` pairs
+    // every diverging And with its immediate post-dominator, so a
+    // non-SESE shape where several splits share one converging And
+    // produces duplicate join keys — last-write-wins over HashMap
+    // iteration order made emission NONDETERMINISTIC (three distinct
+    // sources for one graph, all recompiling; B1 blind-review finding 3).
+    // A join with more than one paired split has no unique `:split` to
+    // print — it refuses as UnmatchedGateway when the canonical scan
+    // reaches it (keeping the frozen per-node refusal order intact),
+    // never picks one.
+    let mut join_to_split: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+    let mut shared_joins: BTreeSet<NodeIndex> = BTreeSet::new();
+    for (s, j) in pairs.iter() {
+        if join_to_split.insert(*j, *s).is_some() {
+            shared_joins.insert(*j);
+        }
+    }
 
-    // One successor's node id for kinds required to have exactly one
-    // outgoing edge; refuses a condition on that edge (no emitted form
-    // carries one — B0's UnrepresentableCondition).
-    let single_next = |idx: NodeIndex| -> Result<String, DslEmitError> {
+    // Exactly-one-outgoing check for the kinds that require it — degree
+    // only; the condition check is a SEPARATE, later step per the frozen
+    // per-node order (WrongOutDegree → UnmatchedGateway → conditions).
+    let single_out_edge = |idx: NodeIndex| -> Result<petgraph::graph::EdgeIndex, DslEmitError> {
         let id = ir[idx].id();
         let edges: Vec<_> = ir.edges_directed(idx, Direction::Outgoing).collect();
         if edges.len() != 1 {
@@ -307,10 +337,19 @@ pub fn emit_dsl(
                 expected: 1,
             });
         }
-        if edges[0].weight().condition.is_some() {
-            return Err(DslEmitError::UnrepresentableCondition { id: id.to_owned() });
+        Ok(edges[0].id())
+    };
+    // Condition refusal + successor id for a checked single edge.
+    let uncond_next = |idx: NodeIndex,
+                       eidx: petgraph::graph::EdgeIndex|
+     -> Result<String, DslEmitError> {
+        if ir[eidx].condition.is_some() {
+            return Err(DslEmitError::UnrepresentableCondition {
+                id: ir[idx].id().to_owned(),
+            });
         }
-        Ok(ir[edges[0].target()].id().to_owned())
+        let (_, tgt) = ir.edge_endpoints(eidx).expect("edge endpoints");
+        Ok(ir[tgt].id().to_owned())
     };
 
     let check_token = |node_id: &str, field: &'static str, value: &str| {
@@ -328,19 +367,27 @@ pub fn emit_dsl(
     let mut nodes: Vec<NodeAst> = Vec::with_capacity(order.len());
     let mut required_symbols: BTreeSet<String> = BTreeSet::new();
 
+    // Frozen per-node check order (B0, corrected by B1's blind review —
+    // the first cut checked the id token before the kind and pairing
+    // before out-degree): UnsupportedNode → UnrepresentableToken →
+    // WrongOutDegree → UnmatchedGateway → conditions. The out-of-core
+    // arm therefore returns FIRST, before any token check; each in-core
+    // arm runs its own checks in exactly that order.
     for idx in order {
         let node = &ir[idx];
         let id = node.id().to_owned();
-        check_token(&id, "id", &id)?;
         match node {
             IRNode::Start { .. } => {
+                check_token(&id, "id", &id)?;
+                let e = single_out_edge(idx)?;
                 nodes.push(NodeAst::Start(StartAst {
+                    next: uncond_next(idx, e)?,
                     id,
-                    next: single_next(idx)?,
                     span: no_span(),
                 }));
             }
             IRNode::End { terminate, .. } => {
+                check_token(&id, "id", &id)?;
                 let out = ir.edges_directed(idx, Direction::Outgoing).count();
                 if out != 0 {
                     return Err(DslEmitError::WrongOutDegree {
@@ -361,13 +408,15 @@ pub fn emit_dsl(
                 // `name` has no TaskAst field and is plan-invisible on
                 // both paths (project_ir drops it too) — documented
                 // authoring-metadata loss, per the B0 receipt.
+                check_token(&id, "id", &id)?;
                 check_token(&id, "task_type", task_type)?;
+                let e = single_out_edge(idx)?;
                 required_symbols.insert(task_type.clone());
                 nodes.push(NodeAst::Task(TaskAst {
+                    next: uncond_next(idx, e)?,
                     id,
                     plug: task_type.clone(),
                     args: Vec::new(),
-                    next: single_next(idx)?,
                     delivery_mode: None,
                     span: no_span(),
                     loop_origin: None,
@@ -378,25 +427,25 @@ pub fn emit_dsl(
                 corr_key_source,
                 ..
             } => {
+                check_token(&id, "id", &id)?;
                 check_token(&id, "name", name)?;
                 check_token(&id, "corr_key_source", corr_key_source)?;
+                let e = single_out_edge(idx)?;
                 nodes.push(NodeAst::MessageWait(MessageWaitAst {
+                    next: uncond_next(idx, e)?,
                     id,
                     name: name.clone(),
                     correlation_source: corr_key_source.clone(),
-                    next: single_next(idx)?,
                     span: no_span(),
                 }));
             }
             IRNode::GatewayAnd { direction, .. } => match direction {
                 GatewayDirection::Diverging => {
-                    let Some(&join_idx) = pairs.get(&idx) else {
-                        return Err(DslEmitError::UnmatchedGateway { id });
-                    };
-                    // Flows in canonical edge order: sorted by edge id.
+                    check_token(&id, "id", &id)?;
+                    // Out-degree before pairing (frozen order): a
+                    // diverging gateway needs ≥1 outgoing flow.
                     let mut edges: Vec<_> =
                         ir.edges_directed(idx, Direction::Outgoing).collect();
-                    edges.sort_by(|a, b| a.weight().id.cmp(&b.weight().id));
                     if edges.is_empty() {
                         return Err(DslEmitError::WrongOutDegree {
                             id,
@@ -404,6 +453,11 @@ pub fn emit_dsl(
                             expected: 1,
                         });
                     }
+                    let Some(&join_idx) = pairs.get(&idx) else {
+                        return Err(DslEmitError::UnmatchedGateway { id });
+                    };
+                    // Flows in canonical edge order: sorted by edge id.
+                    edges.sort_by(|a, b| a.weight().id.cmp(&b.weight().id));
                     let mut flows = Vec::with_capacity(edges.len());
                     for edge in edges {
                         if edge.weight().condition.is_some() {
@@ -427,14 +481,24 @@ pub fn emit_dsl(
                     }));
                 }
                 GatewayDirection::Converging => {
+                    check_token(&id, "id", &id)?;
+                    // Out-degree before pairing (frozen order).
+                    let e = single_out_edge(idx)?;
+                    // A join shared by several paired splits has no
+                    // unique `:split` — refuse, never pick one (B1
+                    // blind-review finding 3: HashMap last-write-wins
+                    // made this nondeterministic).
+                    if shared_joins.contains(&idx) {
+                        return Err(DslEmitError::UnmatchedGateway { id });
+                    }
                     let Some(&split_idx) = join_to_split.get(&idx) else {
                         return Err(DslEmitError::UnmatchedGateway { id });
                     };
                     nodes.push(NodeAst::Join(super::ast::JoinAst {
+                        next: uncond_next(idx, e)?,
                         id,
                         mode: super::ast::JoinModeAst::And,
                         split: ir[split_idx].id().to_owned(),
-                        next: single_next(idx)?,
                         span: no_span(),
                     }));
                 }
@@ -955,6 +1019,85 @@ mod tests {
                 assert_eq!((gateway_id.as_str(), edge_id.as_str()), ("split1", "f2"));
             }
             other => panic!("expected ConditionOnParallelFlow, got {other:?}"),
+        }
+    }
+
+    /// B1 blind-review finding 3 (cement): several diverging Ands whose
+    /// post-dominator is ONE shared converging And used to emit
+    /// nondeterministically (HashMap last-write-wins picked one split as
+    /// the join's `:split` — three distinct sources observed for one
+    /// graph). Must refuse deterministically at the shared join instead.
+    #[test]
+    fn red_shared_join_refuses_deterministically() {
+        let build = || {
+            let mut ir = IRGraph::new();
+            let s = ir.add_node(start("start"));
+            let sp0 = ir.add_node(and_gw("sp0", GatewayDirection::Diverging));
+            let sp1 = ir.add_node(and_gw("sp1", GatewayDirection::Diverging));
+            let sp2 = ir.add_node(and_gw("sp2", GatewayDirection::Diverging));
+            let ta = ir.add_node(task("ta", "cbu.a"));
+            let tb = ir.add_node(task("tb", "cbu.b"));
+            let tc = ir.add_node(task("tc", "cbu.c"));
+            let td = ir.add_node(task("td", "cbu.d"));
+            let j = ir.add_node(and_gw("j1", GatewayDirection::Converging));
+            let e = ir.add_node(end("end", false));
+            ir.add_edge(s, sp0, edge("f1"));
+            ir.add_edge(sp0, sp1, edge("f2"));
+            ir.add_edge(sp0, sp2, edge("f3"));
+            ir.add_edge(sp1, ta, edge("f4"));
+            ir.add_edge(sp1, tb, edge("f5"));
+            ir.add_edge(sp2, tc, edge("f6"));
+            ir.add_edge(sp2, td, edge("f7"));
+            ir.add_edge(ta, j, edge("f8"));
+            ir.add_edge(tb, j, edge("f9"));
+            ir.add_edge(tc, j, edge("f10"));
+            ir.add_edge(td, j, edge("f11"));
+            ir.add_edge(j, e, edge("f12"));
+            ir
+        };
+        for _ in 0..20 {
+            let ir = build();
+            match emit_dsl(&ir, "wf", &decls()) {
+                Err(DslEmitError::UnmatchedGateway { id }) => assert_eq!(id, "j1"),
+                other => panic!("expected UnmatchedGateway(j1) every run, got {other:?}"),
+            }
+        }
+    }
+
+    /// B1 blind-review findings 1-2 (cement): frozen Stage-1 per-node
+    /// order is UnsupportedNode → UnrepresentableToken → WrongOutDegree
+    /// → UnmatchedGateway. An out-of-core node with an unrepresentable id
+    /// must refuse as UnsupportedNode; an unmatched converging gateway
+    /// with wrong out-degree must refuse as WrongOutDegree.
+    #[test]
+    fn stage1_order_kind_before_token_and_degree_before_pairing() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let x = ir.add_node(IRNode::GatewayXor {
+            id: "bad id".into(),
+            name: String::new(),
+        });
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, x, edge("f1"));
+        ir.add_edge(x, e, edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnsupportedNode { kind, .. }) => assert_eq!(kind, "GatewayXor"),
+            other => panic!("kind gate must precede token check, got {other:?}"),
+        }
+
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let j = ir.add_node(and_gw("join1", GatewayDirection::Converging));
+        let e1 = ir.add_node(end("end1", false));
+        let e2 = ir.add_node(end("end2", false));
+        ir.add_edge(s, j, edge("f1"));
+        ir.add_edge(j, e1, edge("f2"));
+        ir.add_edge(j, e2, edge("f3"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count, expected }) => {
+                assert_eq!((id.as_str(), count, expected), ("join1", 2, 1));
+            }
+            other => panic!("degree check must precede pairing, got {other:?}"),
         }
     }
 

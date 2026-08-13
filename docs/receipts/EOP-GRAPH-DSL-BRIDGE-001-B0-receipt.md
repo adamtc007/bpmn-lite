@@ -89,6 +89,34 @@ node's outgoing edges, in canonical edge order) —
 needs no node order). First refusal wins; the same graph always yields
 the same refusal.
 
+**B1 amendments (added post-B0-acceptance, per this receipt's own
+"additions found during B1 go back into the B0 receipt as amendments"
+rule — B1's blind review caught that the first B1 cut shipped these
+silently):**
+1. **`UnrepresentableToken` also covers the workflow id** (sentinel
+   `node_id: "<workflow>"`), checked in the ordering slot between
+   `ProcessDeclUnrepresentable` and Stage 1 — the `(workflow <name>` head
+   token is a Symbol too.
+2. **`WrongOutDegree` carries `{ id, count, expected }`** (not the
+   originally frozen `{ id, count }`), with per-kind required out-degree:
+   `End` = 0, diverging gateway ≥ 1 (reported as `expected: 1` when 0),
+   everything else exactly 1. The frozen "≠1" wording left End and
+   0-out-diverging shapes uncovered.
+3. **`UnmatchedGateway` means "no UNIQUE partner"**: a converging
+   gateway that several diverging gateways pair to (a non-SESE shape
+   `gateway_pairs` happily produces — it pairs each split with its
+   immediate post-dominator without SESE-integrity checking) refuses at
+   the shared join, deterministically, when the canonical scan reaches
+   it. B1's first cut instead picked one split via `HashMap`
+   last-write-wins — measured THREE distinct emitted sources for one
+   graph, all recompiling — the exact nondeterminism the canonical-form
+   rule exists to forbid. Cement test:
+   `red_shared_join_refuses_deterministically` (20 in-process runs, same
+   refusal every time).
+4. **`CyclicGraph`'s witness is content-derived** (smallest BPMN id on
+   any strongly-connected component), not petgraph's arena-order
+   toposort witness.
+
 **Deviation (recorded, for ratification):** the plan's "at minimum" list
 also names "non-`Eq` edge condition" as its own axis mirroring
 `IrPlanError::UnsupportedConditionOperator`. No such variant is frozen —
