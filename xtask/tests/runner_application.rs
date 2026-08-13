@@ -1,4 +1,9 @@
-//! Integration tests: exercise the full BPMN-Lite lifecycle through the engine facade.
+//! Multi-crate application vertical: full BPMN-Lite lifecycle through the
+//! engine facade and the gRPC transport (engine + store + vm + tonic
+//! server). Moved from bpmn-lite-server-runner/tests/integration.rs under
+//! EOP-PLAN-CRATE-HYGIENE-001 H1 — server-runner is the application crate,
+//! this test exercises engine+store+vm composition, not a single crate's
+//! contract.
 //!
 //! These tests verify the complete pipeline that the gRPC handlers delegate to:
 //! Compile → StartProcess → ActivateJobs → CompleteJob → Inspect

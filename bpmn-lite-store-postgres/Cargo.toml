@@ -29,13 +29,16 @@ tracing = { workspace = true }
 blake3 = { workspace = true }
 
 [dev-dependencies]
-bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
-bpmn-lite-engine = { path = "../bpmn-lite-engine" }
-bpmn-lite-kernel = { path = "../bpmn-lite-kernel" }
-bpmn-lite-vm = { path = "../bpmn-lite-vm" }
+# H1 (EOP-PLAN-CRATE-HYGIENE-001): bpmn-lite-compiler, bpmn-lite-engine,
+# bpmn-lite-kernel, bpmn-lite-vm and ffi-dispatcher were dev-deps only for
+# the multi-crate application scenarios now moved to
+# `xtask/tests/store_postgres_{engine_kernel,engine_fault_injection,
+# bus_outbox}_vertical.rs`; the remaining SQL/persistence-contract tests
+# here don't reach engine/compiler/kernel/FFI-dispatcher composition, so
+# they're removed rather than left unused (bpmn-lite-authoring is
+# unrelated pre-existing surface, left as-is).
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
 dsl-bus-storage = { path = "../dsl-bus-storage" }
-ffi-dispatcher = { path = "../ffi-dispatcher" }
 tokio = { workspace = true, features = ["test-util"] }
 blake3 = { workspace = true }
 

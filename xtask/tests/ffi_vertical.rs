@@ -1,4 +1,8 @@
-//! A11 — First end-to-end FFI proof.
+//! Multi-crate application vertical: A11 — first end-to-end FFI proof
+//! (engine + store + vm + dmn-lite bridge/compiler/parser + ffi
+//! catalogue/dispatcher/types). Moved from
+//! bpmn-lite-engine/tests/a11_ffi_end_to_end.rs under
+//! EOP-PLAN-CRATE-HYGIENE-001 H1.
 //!
 //! Verifies the full call chain:
 //!

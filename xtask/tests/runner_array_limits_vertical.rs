@@ -1,3 +1,9 @@
+//! Multi-crate application vertical: gRPC BpmnLiteService orch_flags
+//! resource-limit boundary (engine + ffi-grpc + ffi-http + dmn-lite-bridge
+//! + ffi-catalogue + store + tonic transport). Moved from
+//! bpmn-lite-server-runner/tests/ under EOP-PLAN-CRATE-HYGIENE-001 H1 —
+//! this is application wiring, not a single crate's contract.
+//!
 //! §18 ruling K Part 2 remediation (blind-review finding, see
 //! docs/todo/EOP-PLAN-BPMN-ISA-002.md): proves the gRPC boundary now
 //! rejects an oversized/deep `Value::Array` supplied via `orch_flags`

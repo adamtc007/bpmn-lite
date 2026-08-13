@@ -48,13 +48,17 @@ hex = { workspace = true }
 futures-executor = { workspace = true }
 futures = "0.3"
 
+# bpmn-lite-authoring remains a dev-dependency: src/tests.rs's unit tests
+# call bpmn_lite_authoring::{parse_workflow_yaml, compile_program_from_dto}
+# directly. This contradicts this crate's own locked "does NOT depend on
+# bpmn-lite-authoring" boundary above (H0 finding, EOP-PLAN-CRATE-HYGIENE-001)
+# — flagged for peer review, not mechanically removed here; H1 only removes
+# dependencies that existed solely for the tests moved to xtask/tests/ in
+# this tranche (ffi-catalogue, dmn-lite-bridge, dmn-lite-compiler,
+# dmn-lite-parser were only used by the now-moved a11_ffi_end_to_end.rs;
+# ffi-types was a redundant duplicate of the regular dependency above).
 [dev-dependencies]
 bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
-ffi-catalogue = { path = "../ffi-catalogue" }
-dmn-lite-bridge = { path = "../dmn-lite-bridge" }
-dmn-lite-compiler = { path = "../dmn-lite-compiler" }
-dmn-lite-parser = { path = "../dmn-lite-parser" }
-ffi-types = { path = "../ffi-types" }
 
 [lints]
 workspace = true

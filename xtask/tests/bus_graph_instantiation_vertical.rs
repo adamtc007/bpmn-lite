@@ -1,3 +1,9 @@
+//! Multi-crate application vertical: graph-authored plan → bus-handler
+//! define-template/spawn-instance dispatch (compiler + store + engine +
+//! dsl-bus-protocol + dsl-bus-server). Moved from
+//! bpmn-lite-bus-handler/tests/graph_authored_plan_instantiation.rs under
+//! EOP-PLAN-CRATE-HYGIENE-001 H1.
+//!
 //! G2 BLOCKER-2 receipt (i): a `WorkflowExecutionPlan` produced by
 //! `bpmn_lite_compiler::dsl::project_ir` (the IRGraph projection a
 //! graph-authored session's save endpoint uses) is not a second-class

@@ -1,4 +1,9 @@
-//! Vertical-slice end-to-end tests — Phase 1.3 §3.9 + Phase 1.4 VM e2e.
+//! Multi-crate application vertical: dmn-lite parser → compiler → engine →
+//! analysis end-to-end (Phase 1.3 §3.9 + Phase 1.4 VM e2e). Moved from
+//! dmn-lite-compiler/tests/end_to_end.rs under EOP-PLAN-CRATE-HYGIENE-001
+//! H1 — wider than a single crate's contract (also exercises
+//! dmn-lite-analysis, not just parser/compiler/engine as originally
+//! scoped).
 //!
 //! Proves that source → AST → typed IR → evaluation → output composes
 //! correctly across all three crates: parser, compiler, engine.

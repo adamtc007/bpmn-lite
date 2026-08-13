@@ -1,3 +1,9 @@
+//! Multi-crate application vertical: sage-macro template registration and
+//! spawn through the bus handler backed by a real Postgres store
+//! (compiler + engine + store + bpmn-lite-store-postgres + dsl-bus).
+//! Moved from bpmn-lite-bus-handler/tests/sage_macro_assembly_tests.rs
+//! under EOP-PLAN-CRATE-HYGIENE-001 H1.
+
 use anyhow::Result;
 use bpmn_lite_bus_handler::BpmnLiteBusHandler;
 use bpmn_lite_store::ArtifactRepository;

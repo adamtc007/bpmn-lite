@@ -17,5 +17,45 @@ serde = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde_json = { workspace = true }
 
+# H1 (EOP-PLAN-CRATE-HYGIENE-001) — multi-crate application vertical test
+# harness. These are the minimum crate set needed to construct and drive
+# the 6 vertical scenarios moved into tests/; xtask's own binary code does
+# not use them. Plain dev-dependencies (not feature-gated): `cargo build
+# -p xtask` for the ops CLI never compiles the test targets, so the
+# ops-CLI binary's build/run cost is unaffected.
+[dev-dependencies]
+bpmn-lite-authoring = { path = "../bpmn-lite-authoring" }
+bpmn-lite-engine = { path = "../bpmn-lite-engine" }
+bpmn-lite-ffi-grpc = { path = "../bpmn-lite-ffi-grpc" }
+bpmn-lite-ffi-http = { path = "../bpmn-lite-ffi-http" }
+bpmn-lite-kernel = { path = "../bpmn-lite-kernel" }
+bpmn-lite-server-runner = { path = "../bpmn-lite-server-runner" }
+bpmn-lite-store = { path = "../bpmn-lite-store" }
+bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres" }
+bpmn-lite-types = { path = "../bpmn-lite-types" }
+bpmn-lite-vm = { path = "../bpmn-lite-vm" }
+dmn-lite-analysis = { path = "../dmn-lite-analysis" }
+dmn-lite-bridge = { path = "../dmn-lite-bridge" }
+dmn-lite-compiler = { path = "../dmn-lite-compiler" }
+dmn-lite-engine = { path = "../dmn-lite-engine" }
+dmn-lite-parser = { path = "../dmn-lite-parser" }
+dmn-lite-types = { path = "../dmn-lite-types" }
+dsl-bus-client = { path = "../dsl-bus-client" }
+dsl-bus-protocol = { path = "../dsl-bus-protocol" }
+dsl-bus-server = { path = "../dsl-bus-server" }
+dsl-bus-storage = { path = "../dsl-bus-storage" }
+ffi-catalogue = { path = "../ffi-catalogue" }
+ffi-dispatcher = { path = "../ffi-dispatcher" }
+ffi-types = { path = "../ffi-types" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "test-util"] }
+tower = { version = "0.4", features = ["util"] }
+tonic = { workspace = true }
+sqlx = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+
 [lints]
 workspace = true
