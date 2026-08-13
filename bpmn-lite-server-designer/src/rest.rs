@@ -10157,6 +10157,75 @@ mod tests {
         assert_eq!(list.as_array().unwrap().len(), 1);
     }
 
+    /// EOP-PLAN-UTTERANCE-DETERMINISTIC-FUZZ-001 U3 work item 1: benchmark
+    /// whether a hermetic router-level harness sustains a useful fuzzing
+    /// execution rate over the composition path (utterance -> resolve ->
+    /// stage workbook -> preview), through the public router only -- no
+    /// internal function is called directly. `#[ignore]`: a one-time
+    /// decision-tranche measurement, not a permanent CI-gated perf test
+    /// (unlike `gameboard_perf`, which tracks an already-shipped path).
+    /// Run explicitly: `cargo test -p bpmn-lite-server-designer --lib
+    /// rest::tests::u3_router_level_benchmark -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn u3_router_level_benchmark() {
+        let setup_start = std::time::Instant::now();
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+        let setup_elapsed = setup_start.elapsed();
+        eprintln!("u3-bench: setup (DesignerState + router + seed session) = {setup_elapsed:?}");
+
+        const ITERATIONS: usize = 200;
+        let phrases = [
+            BINDABLE_UTTERANCE,
+            "attach an interrupting guard; attach a rearming guard",
+            "unrelated xylophone request",
+        ];
+
+        let run_start = std::time::Instant::now();
+        for i in 0..ITERATIONS {
+            let text = phrases[i % phrases.len()];
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/utterance"),
+                    serde_json::json!({ "text": text, "anchor": "review_documents" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "iteration {i} text={text:?}"
+            );
+        }
+        let run_elapsed = run_start.elapsed();
+        let iters_per_sec = ITERATIONS as f64 / run_elapsed.as_secs_f64();
+        eprintln!(
+            "u3-bench: {ITERATIONS} iterations in {run_elapsed:?} ({iters_per_sec:.1} iters/sec)"
+        );
+
+        // Allocation-growth / per-iteration reset question (work item 2):
+        // does calling /utterance repeatedly without ratifying/rejecting
+        // leave PendingProposal entries accumulating in the
+        // DesignerState's in-memory map, with no built-in reset?
+        let proposals = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/proposals"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let proposal_count = proposals.as_array().unwrap().len();
+        eprintln!(
+            "u3-bench: {proposal_count} PendingProposal entries accumulated after \
+             {ITERATIONS} iterations on one un-ratified/un-rejected session"
+        );
+    }
+
     /// Ratify: the graph gains the node, the event log gains a GraphEdit
     /// carrying the "ratified proposal" note, and the proposal is gone.
     #[tokio::test]
