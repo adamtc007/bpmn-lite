@@ -125,15 +125,20 @@ Baseline revision: `89ae3e6` (H0). Prior tranche: H4 (`3c6a357`, `20bf005`,
 - **Known deviations or explicitly parked work:** the utterance-engine
   fuzz/examples restructuring question above — surfaced, not decided.
 
+### Ruling (Adam, post-receipt)
+
+Deferred to the backlog — same disposition as H4's `ProcessInstance`/
+`Fiber`/`ConcurrencyRecord` finding. Not fixed in this plan's execution,
+not ruled out-of-scope either; the fuzz/examples crate-split for
+`utterance-engine` is tracked as future work, separate from
+EOP-PLAN-CRATE-HYGIENE-001.
+
 - **Blind peer-review findings and dispositions:** not yet run — this
   receipt is the input to that review, not its output.
 
-- **STOP-gate decision: blocked — awaiting a ruling on the deferred
-  fuzz/examples-restructuring fork, then peer review of this receipt.**
+- **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 
 Per R8 and Gate H5's own text ("developer tooling no longer defines the
 production crate API. Every remaining public utterance/designer module
 has a named capability, supported consumer, and crate-surface test"),
-**H6 does not begin until: (a) Adam rules on whether/how to pursue the
-`utterance-engine` fuzz/examples crate-split question, and (b) this
-receipt is reviewed and accepted.**
+**H6 does not begin until this receipt is reviewed and accepted.**
