@@ -123,7 +123,7 @@ projection, the ids must be aligned first (flagged, not fixed).
   supersets of the promised shape, and that deciding the workflow-id at
   B3 was exactly what the plan authorized ("shape decided at B3 start").
 
-- **STOP-gate decision: blocked — awaiting peer review of this receipt.**
+- **STOP-gate decision: accepted (Adam, "go", 2026-08-13). Plan closed.**
 
 Per Gate B3's own text: "Endpoint proven read-only; receipt shows both
 response shapes live. Plan closes." Both shapes are live and tested

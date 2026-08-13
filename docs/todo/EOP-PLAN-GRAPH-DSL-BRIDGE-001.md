@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **DRAFT — awaiting peer review. Begin B0 only after acceptance.** |
+| Status | **CLOSED — B0 `2cbd450`, B1 `9d79cb3`, B2 `febdf5e`, B3 `1fca5dd`, all accepted 2026-08-13. Successor: the DSL-parity planning phase (fork-A ruling), seeded by B1's refusal catalogue.** |
 | Governing V&S | `EOP-VS-GRAPH-DSL-BRIDGE-001.md` — all seven forks ruled 2026-08-13 |
 | Baseline | `54f5dbb`, branch `codex/bpmn-gameboard-refactor` |
 | Scope | `emit_dsl`: admitted `IRGraph` + process-level decls → canonical `bpmn-dsl` source for the core-5 kinds; typed refusal for everything else; recompile-equivalence proof; server receipt surface. |
