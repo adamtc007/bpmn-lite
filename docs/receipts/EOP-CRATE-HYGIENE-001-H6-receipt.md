@@ -73,11 +73,11 @@ This tranche's revisions: pending commit (see below).
        simply dead — H4's "confirmed dead_code even internally" claim
        was only true for the *default* (non-test) build; the crate's
        own `#[cfg(test)] mod tests` calls `DslFrontend::lower(...)` at
-       16 call sites (the `cargo public-api`/plain-`cargo check` build
+       14 call sites (the `cargo public-api`/plain-`cargo check` build
        that produced H4's dead_code warning doesn't compile
        `#[cfg(test)]` code at all, so it never saw those uses). The
        trait added no behavior beyond delegating to `lower_plan`, so
-       deleting it cleanly required first rewriting all 16 call sites
+       deleting it cleanly required first rewriting all 14 call sites
        from `DslFrontend::lower(&plan)` to `lower_plan(&plan)` (a
        mechanical, signature-preserving substitution), then removing
        the trait/struct/impl block and fixing one stale doc-comment
@@ -137,7 +137,7 @@ This tranche's revisions: pending commit (see below).
   had zero callers to migrate (confirmed by grep before deletion, then
   by a clean `cargo check --workspace --all-targets`).
   `WorkflowFrontend`/`DslFrontend` were `pub(super)` (not public); their
-  16 real internal callers (this crate's own unit tests) were migrated
+  14 real internal callers (this crate's own unit tests) were migrated
   to call `lower_plan` directly.
 
 - **Added public items and capability justification:** none.
@@ -199,8 +199,31 @@ This tranche's revisions: pending commit (see below).
   noted above belongs to a different, untracked-by-this-plan
   initiative — flagged, not touched.
 
-- **Blind peer-review findings and dispositions:** not yet run — this
-  receipt is the input to that review, not its output.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context on this session's work) verified every
+  claim above directly against the live repo — read and re-derived the
+  gate logic in all three new/extended scripts rather than trusting
+  the receipt's prose, grepped for both deletions workspace-wide,
+  spot-checked 5 of the 45 manifest entries against the filesystem,
+  confirmed the CI step placement, re-ran every focused test and gate
+  command independently and reproduced the exact reported numbers
+  (12/12, 46/46, 45 targets, clean `cargo check`), diffed commit
+  `717d3ef`'s file list against the receipt's own list (exact match,
+  modulo the receipt reasonably omitting itself), and independently
+  re-derived the H4→H6 dead-code correction from the pre-H6 file
+  rather than accepting it asserted.
+  - **One finding, disposed:** the receipt originally stated "16 call
+    sites" for the `DslFrontend::lower` → `lower_plan` migration (three
+    places: the narrative, the deletion description, and the
+    consumer-migration summary). The reviewer recounted directly
+    against `git show a81213f:.../frontend.rs` and the commit diff:
+    the real count is **14** call sites (the migration itself,
+    `cargo test -p bpmn-lite-compiler --lib dsl::frontend` at 12/12,
+    was and remains correct — this was a receipt-text miscount, not a
+    code defect). Corrected in place in this document; all three
+    occurrences now read 14.
+  - No other discrepancy found. Overall reviewer verdict: accept after
+    this correction, no code or gate changes required.
 
 - **STOP-gate decision: blocked — awaiting peer review of this
   receipt.**
