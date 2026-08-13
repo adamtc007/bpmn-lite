@@ -175,15 +175,20 @@ rather than run partially.
 - `bpmn-lite-compiler/fuzz` and `bpmn-lite-types/fuzz` (both standalone
   workspaces): checked clean independently.
 
-## STOP-gate decision: blocked — awaiting a ruling on the deferred R5
-finding, then peer review of this receipt.
+### Ruling on the deferred R5 finding (Adam, post-receipt)
+
+Kept in the backlog — not fixed in this plan's execution, not ruled
+out-of-scope either. `ProcessInstance.counters`, `Fiber.control_stack`/
+`loop_epoch`, and `ConcurrencyRecord`'s rollback/counter fields remain
+public with no accessor. Designing and landing the kernel-touching
+mutation API this would require is future work, tracked separately from
+EOP-PLAN-CRATE-HYGIENE-001.
+
+## STOP-gate decision: blocked — awaiting peer review of this receipt.
 
 Per R8 and Gate H4's own text ("the compiler exposes a capability façade
 rather than an implementation module tree... every retained public field
 in core types has a documented data-contract reason. Peer review rejects
 convenience fields and speculative constructors"), **H5 does not begin
-until: (a) Adam rules on how to handle the deferred `ProcessInstance`/
-`Fiber`/`ConcurrencyRecord` field findings (fix now with a real
-kernel-touching migration, defer explicitly to H6's final inventory, or
-rule them out-of-scope), and (b) this receipt is reviewed and
+until this receipt is reviewed and
 accepted.**
