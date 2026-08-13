@@ -25,6 +25,7 @@ impl ToSexpr for NodeAst {
             Self::End(n) => n.to_sexpr(indent),
             Self::Task(n) => n.to_sexpr(indent),
             Self::MessageWait(n) => n.to_sexpr(indent),
+            Self::TimerWait(n) => n.to_sexpr(indent),
             Self::Split(n) => n.to_sexpr(indent),
             Self::Join(n) => n.to_sexpr(indent),
             Self::Loop(n) => n.to_sexpr(indent),
@@ -223,6 +224,26 @@ impl ToSexpr for BoundaryErrorAst {
     }
 }
 
+impl ToSexpr for TimerWaitAst {
+    fn to_sexpr(&self, indent: usize) -> String {
+        let spec_str = match &self.spec {
+            crate::ir::TimerSpec::Duration { ms } => format!(":duration-ms {ms}"),
+            crate::ir::TimerSpec::Date { deadline_ms } => format!(":deadline-ms {deadline_ms}"),
+            crate::ir::TimerSpec::Cycle {
+                interval_ms,
+                max_fires,
+            } => format!(":cycle-ms {interval_ms} :max-fires {max_fires}"),
+        };
+        format!(
+            "{}(timer-wait :id {} {} :next {})",
+            " ".repeat(indent),
+            self.id,
+            spec_str,
+            self.next
+        )
+    }
+}
+
 impl ToSexpr for LoopAst {
     fn to_sexpr(&self, indent: usize) -> String {
         let pad = " ".repeat(indent);
@@ -279,6 +300,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Start(st) => st.next = to_id.to_string(),
             NodeAst::Task(tk) => tk.next = to_id.to_string(),
             NodeAst::MessageWait(wait) => wait.next = to_id.to_string(),
+            NodeAst::TimerWait(wait) => wait.next = to_id.to_string(),
             NodeAst::Join(jn) => jn.next = to_id.to_string(),
             NodeAst::Loop(lp) => lp.next = to_id.to_string(),
             NodeAst::BoundaryTimer(g) => g.next = to_id.to_string(),
@@ -307,6 +329,7 @@ impl<'a> AstMutator<'a> {
                 NodeAst::Start(st) => st.next.clone(),
                 NodeAst::Task(tk) => tk.next.clone(),
                 NodeAst::MessageWait(wait) => wait.next.clone(),
+                NodeAst::TimerWait(wait) => wait.next.clone(),
                 NodeAst::Join(jn) => jn.next.clone(),
                 NodeAst::Loop(lp) => lp.next.clone(),
                 NodeAst::BoundaryTimer(g) => g.next.clone(),
@@ -323,6 +346,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Start(_) => return Err("Cannot insert a Start event".into()),
             NodeAst::Task(tk) => tk.next = orig_next,
             NodeAst::MessageWait(wait) => wait.next = orig_next,
+            NodeAst::TimerWait(wait) => wait.next = orig_next,
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
             NodeAst::BoundaryTimer(_) | NodeAst::BoundaryError(_) => {
@@ -691,6 +715,55 @@ mod tests {
         expect_err(
             &wrap("  (boundary-error :id g1 :host start :next esc)"),
             "not a service task",
+        );
+    }
+
+    /// D2: all three timer-wait shapes print→parse→print fixpoint and
+    /// recompile.
+    #[test]
+    fn timer_wait_forms_print_reparse_roundtrip_and_recompile() {
+        let source = r#"(workflow test-timer-roundtrip
+  (start-event :id start :next w-dur)
+  (timer-wait :id w-dur :duration-ms 1000 :next w-date)
+  (timer-wait :id w-date :deadline-ms 999 :next w-cyc)
+  (timer-wait :id w-cyc :cycle-ms 60000 :max-fires 3 :next end)
+  (end-event :id end :status "completed"))"#;
+        assert_print_reparse_fixpoint(source);
+        let reg = StubPlaceholderRegistry::new();
+        compile(source, &reg).expect("timer-wait chain must compile");
+    }
+
+    /// D2 red axes: R-D2.1 double shape, R-D2.2 malformed int, R-D2.3
+    /// missing shape — all named parse errors under the timer-wait head;
+    /// discriminating needles per the D1-review convention.
+    #[test]
+    fn timer_wait_red_axes_refuse_at_parse() {
+        let wrap = |node: &str| {
+            format!(
+                "(workflow red\n  (start-event :id start :next w1)\n{node}\n  (end-event :id end :status \"completed\"))"
+            )
+        };
+        let expect_err = |src: &str, needle: &str| {
+            let reg = StubPlaceholderRegistry::new();
+            let err = compile(src, &reg).expect_err("must refuse");
+            let msg = err.to_string();
+            assert!(msg.contains(needle), "expected {needle:?} in: {msg}");
+        };
+        expect_err(
+            &wrap("  (timer-wait :id w1 :duration-ms 100 :deadline-ms 5 :next end)"),
+            "timer-wait carries more than one timer shape",
+        );
+        expect_err(
+            &wrap("  (timer-wait :id w1 :duration-ms 10x :next end)"),
+            "not a valid non-negative integer",
+        );
+        expect_err(
+            &wrap("  (timer-wait :id w1 :cycle-ms 100 :max-fires 2x :next end)"),
+            "not a valid u32 integer",
+        );
+        expect_err(
+            &wrap("  (timer-wait :id w1 :next end)"),
+            "timer-wait requires exactly one timer shape",
         );
     }
 

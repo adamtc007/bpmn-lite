@@ -609,6 +609,65 @@ fn g12_escape_chain_with_task() {
     assert_roundtrip(&dag, "g12");
 }
 
+/// D2 fixture builder: start → timer-wait(spec) → end.
+fn timer_linear(name: &str, spec: bpmn_lite_compiler::TimerSpec) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let w = dag
+        .insert_node(
+            key(),
+            IRNode::TimerWait {
+                id: "w1".into(),
+                spec,
+            },
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, w, edge("f1")).unwrap();
+    dag.insert_edge(w, e, edge("f2")).unwrap();
+    dag
+}
+
+/// G13 (D2) — duration timer wait through the four-proof round trip:
+/// the plan's `ExecutionNode::Wait` now round-trips the bridge.
+#[test]
+fn g13_timer_wait_duration() {
+    let dag = timer_linear("g13", bpmn_lite_compiler::TimerSpec::Duration { ms: 1000 });
+    assert_roundtrip(&dag, "g13");
+}
+
+/// G14 (D2) — date (deadline) timer wait.
+#[test]
+fn g14_timer_wait_deadline() {
+    let dag = timer_linear(
+        "g14",
+        bpmn_lite_compiler::TimerSpec::Date {
+            deadline_ms: 1_755_000_000_000,
+        },
+    );
+    assert_roundtrip(&dag, "g14");
+}
+
+/// G15 (D2) — cycle timer wait, round-tripping BOTH integers
+/// (interval_ms and max_fires).
+#[test]
+fn g15_timer_wait_cycle_max_fires() {
+    let dag = timer_linear(
+        "g15",
+        bpmn_lite_compiler::TimerSpec::Cycle {
+            interval_ms: 60_000,
+            max_fires: 3,
+        },
+    );
+    assert_roundtrip(&dag, "g15");
+}
+
 /// D0 blind-review cement: guard order is content-canonical too. Two
 /// verifier-legal error guards on one host, attached in opposite edit
 /// orders, must project byte-identical plans — before the guard sort,
@@ -680,12 +739,18 @@ fn red_refusal_leaves_identity_untouched() {
     let s = dag
         .insert_node(key(), start("start"), None, Provenance::default())
         .unwrap();
+    // D2 cement update: the refusal VEHICLE was TimerWait until it
+    // joined the emission core; the invariant under test (refusal ⇒
+    // unchanged graph identity) is kind-agnostic, so the vehicle is now
+    // HumanWait — still out of core.
     let t = dag
         .insert_node(
             key(),
-            IRNode::TimerWait {
+            IRNode::HumanWait {
                 id: "wait".into(),
-                spec: bpmn_lite_compiler::TimerSpec::Duration { ms: 1000 },
+                name: String::new(),
+                task_kind: String::new(),
+                corr_key_source: String::new(),
             },
             None,
             Provenance::default(),
@@ -701,9 +766,9 @@ fn red_refusal_leaves_identity_untouched() {
     let err = dag.emit_dsl("red-identity").unwrap_err();
     match err.downcast_ref::<bpmn_lite_compiler::dsl::DslEmitError>() {
         Some(bpmn_lite_compiler::dsl::DslEmitError::UnsupportedNode { kind, .. }) => {
-            assert_eq!(*kind, "TimerWait");
+            assert_eq!(*kind, "HumanWait");
         }
-        other => panic!("expected UnsupportedNode(TimerWait), got {other:?}"),
+        other => panic!("expected UnsupportedNode(HumanWait), got {other:?}"),
     }
     let after = DesignerDag::graph_state_hash(&dag.to_ir().unwrap());
     assert_eq!(before, after, "a refusal must not change graph identity");

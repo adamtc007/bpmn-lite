@@ -9,7 +9,8 @@
 //! pair `ir_plan` writes and `frontend` reads), `ServiceTask`,
 //! `MessageWait`, matched `GatewayAnd` diverging/converging pairs (via
 //! the exposed [`gateway_pairs`] oracle — never hand-rolled re-pairing),
-//! and — since D1 (EOP-PLAN-DSL-PARITY-001) — `BoundaryTimer`/
+//! `TimerWait` (D2, ordinary sequence node, all three `TimerSpec`
+//! shapes), and — since D1 (EOP-PLAN-DSL-PARITY-001) — `BoundaryTimer`/
 //! `BoundaryError` guards on ServiceTask hosts (decoration forms
 //! emitted directly after their host; stage 0 runs over the EFFECTIVE
 //! graph of flow + escape + implicit host→guard edges, with a hard
@@ -60,6 +61,7 @@ use crate::ir::{GatewayDirection, IRGraph, IRNode};
 
 use super::ast::{
     EndAst, MessageWaitAst, NodeAst, SplitAst, SplitFlowAst, SplitModeAst, StartAst, TaskAst,
+    TimerWaitAst,
     WorkflowSource,
 };
 use super::refactor::ToSexpr;
@@ -611,6 +613,21 @@ pub fn emit_dsl(
                     span: no_span(),
                 }));
             }
+            // D2 (EOP-PLAN-DSL-PARITY-001): ordinary sequence node — all
+            // three TimerSpec shapes representable (parity: ir_plan
+            // projects any spec). No semantic checks beyond topology;
+            // `max_fires: 0` passes on BOTH paths (surfaced in the D2.0
+            // freeze for a separate symmetric ruling).
+            IRNode::TimerWait { spec, .. } => {
+                check_token(&id, "id", &id)?;
+                let e = single_out_edge(idx)?;
+                nodes.push(NodeAst::TimerWait(TimerWaitAst {
+                    next: uncond_next(idx, e)?,
+                    id,
+                    spec: spec.clone(),
+                    span: no_span(),
+                }));
+            }
             IRNode::GatewayAnd { direction, .. } => match direction {
                 GatewayDirection::Diverging => {
                     check_token(&id, "id", &id)?;
@@ -759,11 +776,10 @@ pub fn emit_dsl(
 
             // Out-of-core kinds — NO wildcard arm: a new IRNode variant
             // must break this compile, not fall through (B0's structural
-            // fail-closed rule). 8 kinds remain out of core after D1
-            // moved the two boundary kinds above.
+            // fail-closed rule). 7 kinds remain out of core after D1
+            // moved the two boundary kinds and D2 moved TimerWait above.
             IRNode::GatewayXor { .. }
             | IRNode::GatewayInclusive { .. }
-            | IRNode::TimerWait { .. }
             | IRNode::HumanWait { .. }
             | IRNode::DataObject { .. }
             | IRNode::FfiServiceTask { .. }
@@ -918,6 +934,102 @@ mod tests {
         super::super::compile(&emitted.source, &registry_for(&emitted)).expect("recompile");
     }
 
+    fn timer(id: &str, spec: TimerSpec) -> IRNode {
+        IRNode::TimerWait {
+            id: id.to_owned(),
+            spec,
+        }
+    }
+
+    /// GREEN (D2): all three TimerSpec shapes emit the exact frozen
+    /// forms, recompile through the derived registry, and are idempotent.
+    #[test]
+    fn green_timer_wait_all_three_shapes() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let d = ir.add_node(timer("w-dur", TimerSpec::Duration { ms: 1000 }));
+        let a = ir.add_node(timer("w-date", TimerSpec::Date { deadline_ms: 999 }));
+        let c = ir.add_node(timer(
+            "w-cyc",
+            TimerSpec::Cycle {
+                interval_ms: 60_000,
+                max_fires: 3,
+            },
+        ));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, d, edge("f1"));
+        ir.add_edge(d, a, edge("f2"));
+        ir.add_edge(a, c, edge("f3"));
+        ir.add_edge(c, e, edge("f4"));
+        let emitted = emit_dsl(&ir, "wf-timer", &decls()).expect("emit");
+        assert!(emitted
+            .source
+            .contains("(timer-wait :id w-dur :duration-ms 1000 :next w-date)"));
+        assert!(emitted
+            .source
+            .contains("(timer-wait :id w-date :deadline-ms 999 :next w-cyc)"));
+        assert!(emitted
+            .source
+            .contains("(timer-wait :id w-cyc :cycle-ms 60000 :max-fires 3 :next end)"));
+        super::super::compile(&emitted.source, &registry_for(&emitted)).expect("recompile");
+        let again = emit_dsl(&ir, "wf-timer", &decls()).expect("emit twice");
+        assert_eq!(emitted.source, again.source, "emission must be idempotent");
+    }
+
+    /// RED (D2 R-D2.5): out-degree 0 and 2 both refuse WrongOutDegree.
+    #[test]
+    fn red_timer_wait_out_degree_zero_and_two() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let w = ir.add_node(timer("w1", TimerSpec::Duration { ms: 5 }));
+        ir.add_edge(s, w, edge("f1"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count: 0, .. }) => assert_eq!(id, "w1"),
+            other => panic!("expected WrongOutDegree(0), got {other:?}"),
+        }
+        let e1 = ir.add_node(end("end-a", false));
+        let e2 = ir.add_node(end("end-b", false));
+        ir.add_edge(w, e1, edge("f2"));
+        ir.add_edge(w, e2, edge("f3"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count: 2, .. }) => assert_eq!(id, "w1"),
+            other => panic!("expected WrongOutDegree(2), got {other:?}"),
+        }
+    }
+
+    /// RED (D2 R-D2.6): a conditioned outgoing edge refuses.
+    #[test]
+    fn red_timer_wait_conditioned_edge() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let w = ir.add_node(timer("w1", TimerSpec::Duration { ms: 5 }));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, w, edge("f1"));
+        ir.add_edge(w, e, cond_edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnrepresentableCondition { id }) => assert_eq!(id, "w1"),
+            other => panic!("expected UnrepresentableCondition, got {other:?}"),
+        }
+    }
+
+    /// RED (D2 R-D2.7): a non-token id refuses UnrepresentableToken.
+    #[test]
+    fn red_timer_wait_bad_id_token() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let w = ir.add_node(timer("w 1", TimerSpec::Duration { ms: 5 }));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, w, edge("f1"));
+        ir.add_edge(w, e, edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnrepresentableToken { node_id, field, .. }) => {
+                assert_eq!(node_id, "w 1");
+                assert_eq!(field, "id");
+            }
+            other => panic!("expected UnrepresentableToken, got {other:?}"),
+        }
+    }
+
     // ── Red fixtures: exact-variant refusals (never bare is_err) ─────────
 
     #[test]
@@ -1042,13 +1154,8 @@ mod tests {
                 },
                 "GatewayInclusive",
             ),
-            (
-                IRNode::TimerWait {
-                    id: "x".into(),
-                    spec: TimerSpec::Duration { ms: 1000 },
-                },
-                "TimerWait",
-            ),
+            // TimerWait left this list at D2 (named cement update — it
+            // joined the emission core; see the D2 green/red tests).
             (
                 IRNode::HumanWait {
                     id: "x".into(),

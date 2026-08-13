@@ -17,6 +17,7 @@
 
 use super::ast::{
     BoundaryErrorAst, BoundaryTimerAst, JoinAst, LoopAst, MessageWaitAst, NodeAst, SplitAst,
+    TimerWaitAst,
     SplitFlowAst, TaskAst,
 };
 use std::collections::HashMap;
@@ -134,6 +135,10 @@ fn retarget_external_refs(node: NodeAst, loop_entries: &HashMap<String, String>)
         NodeAst::MessageWait(mut w) => {
             w.next = retarget(&w.next);
             NodeAst::MessageWait(w)
+        }
+        NodeAst::TimerWait(mut w) => {
+            w.next = retarget(&w.next);
+            NodeAst::TimerWait(w)
         }
         NodeAst::Split(mut sp) => {
             for flow in &mut sp.flows {
@@ -277,6 +282,12 @@ fn clone_node_iteration(
             id: new_id(&w.id),
             name: w.name.clone(),
             correlation_source: w.correlation_source.clone(),
+            next: remap_next(&w.next, loop_id, id_map, exit_target),
+            span: w.span,
+        }),
+        NodeAst::TimerWait(w) => NodeAst::TimerWait(TimerWaitAst {
+            id: new_id(&w.id),
+            spec: w.spec.clone(),
             next: remap_next(&w.next, loop_id, id_map, exit_target),
             span: w.span,
         }),

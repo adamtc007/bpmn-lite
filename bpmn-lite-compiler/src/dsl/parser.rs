@@ -229,6 +229,7 @@ impl Parser {
             "boundary-error" => self
                 .parse_boundary_error(start_offset)
                 .map(NodeAst::BoundaryError),
+            "timer-wait" => self.parse_timer_wait(start_offset).map(NodeAst::TimerWait),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
                 None
@@ -592,9 +593,13 @@ impl Parser {
     ///  :next escape)` — exactly one timer shape; `:interrupting`
     /// REQUIRED (no default: an implicit choice would silently pick
     /// interrupting-vs-rearming semantics).
-    fn parse_boundary_timer(&mut self, start_offset: usize) -> Option<BoundaryTimerAst> {
-        let id = self.parse_kw_symbol("id")?;
-        let host = self.parse_kw_symbol("host")?;
+    /// Shared D1/D2 timer-shape parse: exactly one of `:duration-ms` /
+    /// `:deadline-ms` / `:cycle-ms`+`:max-fires`, with the missing-shape
+    /// and more-than-one-shape errors NAMED under the calling head. The
+    /// exactly-one check is positional (D1 amendment 4): it fires only
+    /// when the extra shape attribute follows immediately; other orders
+    /// still refuse via the generic expected-keyword error.
+    fn parse_timer_shape(&mut self, head: &str) -> Option<crate::ir::TimerSpec> {
         let spec = if self.peek_keyword("duration-ms") {
             crate::ir::TimerSpec::Duration {
                 ms: self.parse_kw_u64("duration-ms")?,
@@ -611,22 +616,26 @@ impl Parser {
                 max_fires,
             }
         } else {
-            self.error(
-                "boundary-timer requires exactly one timer shape: :duration-ms, :deadline-ms, or :cycle-ms + :max-fires"
-                    .into(),
-            );
+            self.error(format!(
+                "{head} requires exactly one timer shape: :duration-ms, :deadline-ms, or :cycle-ms + :max-fires"
+            ));
             return None;
         };
-        // Exactly-one enforcement: a second shape attribute after the
-        // first is a named error, not silently consumed elsewhere.
         for extra in ["duration-ms", "deadline-ms", "cycle-ms"] {
             if self.peek_keyword(extra) {
                 self.error(format!(
-                    "boundary-timer carries more than one timer shape (unexpected :{extra}) — exactly one of :duration-ms / :deadline-ms / :cycle-ms+:max-fires"
+                    "{head} carries more than one timer shape (unexpected :{extra}) — exactly one of :duration-ms / :deadline-ms / :cycle-ms+:max-fires"
                 ));
                 return None;
             }
         }
+        Some(spec)
+    }
+
+    fn parse_boundary_timer(&mut self, start_offset: usize) -> Option<BoundaryTimerAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let host = self.parse_kw_symbol("host")?;
+        let spec = self.parse_timer_shape("boundary-timer")?;
         let interrupting = self.parse_kw_bool("interrupting")?;
         let budget = if self.peek_keyword("budget") {
             Some(self.parse_kw_u32("budget")?)
@@ -642,6 +651,24 @@ impl Parser {
             spec,
             interrupting,
             budget,
+            next,
+            span,
+        })
+    }
+
+    /// D2.0 frozen grammar: `(timer-wait :id w (:duration-ms N |
+    /// :deadline-ms N | :cycle-ms N :max-fires M) :next n)` — an
+    /// ordinary sequence node; no `:interrupting` (guard semantics),
+    /// no `:budget` (`WaitExecNode` carries none).
+    fn parse_timer_wait(&mut self, start_offset: usize) -> Option<TimerWaitAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let spec = self.parse_timer_shape("timer-wait")?;
+        let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(TimerWaitAst {
+            id,
+            spec,
             next,
             span,
         })

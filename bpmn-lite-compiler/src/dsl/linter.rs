@@ -466,6 +466,22 @@ impl<'a> Linter<'a> {
                     })
                 }
 
+                // D2 (EOP-PLAN-DSL-PARITY-001): lowers to the SAME exec
+                // node `ir_plan` projects `IRNode::TimerWait` to, so plan
+                // equality across the bridge is field-identical by
+                // construction. No semantic checks beyond ref integrity —
+                // neither path validates e.g. `max_fires: 0` (surfaced in
+                // the D2.0 freeze for a separate symmetric ruling).
+                NodeAst::TimerWait(n) => {
+                    self.check_next_ref(id, &n.next, &node_ids);
+                    ExecutionNode::Wait(WaitExecNode {
+                        id: n.id.clone(),
+                        spec: n.spec.clone(),
+                        next: n.next.clone(),
+                        span: Some(n.span),
+                    })
+                }
+
                 NodeAst::Split(n) => {
                     if n.flows.is_empty() {
                         self.err(id, "split has no flows");

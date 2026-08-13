@@ -17,6 +17,7 @@ pub enum NodeAst {
     End(EndAst),
     Task(TaskAst),
     MessageWait(MessageWaitAst),
+    TimerWait(TimerWaitAst),
     Split(SplitAst),
     Join(JoinAst),
     Loop(LoopAst),
@@ -31,6 +32,7 @@ impl NodeAst {
             Self::End(n) => &n.id,
             Self::Task(n) => &n.id,
             Self::MessageWait(n) => &n.id,
+            Self::TimerWait(n) => &n.id,
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
@@ -45,6 +47,7 @@ impl NodeAst {
             Self::End(n) => n.span,
             Self::Task(n) => n.span,
             Self::MessageWait(n) => n.span,
+            Self::TimerWait(n) => n.span,
             Self::Split(n) => n.span,
             Self::Join(n) => n.span,
             Self::Loop(n) => n.span,
@@ -111,6 +114,19 @@ pub struct TaskAst {
     /// `closure.rs`'s L6 idempotency-inside-a-retried-task check survive
     /// unrolling without needing `ExecutionNode::Loop` to still exist.
     pub loop_origin: Option<String>,
+}
+
+/// D2 (EOP-PLAN-DSL-PARITY-001): a sequential timer wait — an ordinary
+/// plan node (unlike the boundary guards), lowering to
+/// `ExecutionNode::Wait`. Same three-shape `TimerSpec` grammar as
+/// `boundary-timer`, but no `:interrupting` (guard semantics) and no
+/// `:budget` (`WaitExecNode` carries none).
+#[derive(Debug, Clone)]
+pub struct TimerWaitAst {
+    pub id: String,
+    pub spec: crate::ir::TimerSpec,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]
