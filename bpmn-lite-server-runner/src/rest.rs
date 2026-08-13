@@ -36,8 +36,8 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::demo::{build_demo_plan, demo_initial_vars};
 use bpmn_lite_compiler::dsl::{ExecutionNode, WorkflowExecutionPlan};
-use bpmn_lite_engine::{build_demo_plan, demo_initial_vars};
 use bpmn_lite_store::store::{ArtifactRepository, RuntimeStore};
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::session_stack::SessionStackState;

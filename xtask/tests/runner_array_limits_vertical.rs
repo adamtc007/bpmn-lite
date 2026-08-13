@@ -109,7 +109,7 @@ async fn start_process_rejects_oversized_array_in_orch_flags() {
         .expect("compile MINIMAL_BPMN");
 
     let payload = r#"{"case":"array-limit-len"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let mut orch_flags = HashMap::new();
     orch_flags.insert("poisoned".to_string(), oversized_len_array());
 
@@ -154,7 +154,7 @@ async fn start_process_rejects_overly_deep_array_in_orch_flags() {
         .expect("compile MINIMAL_BPMN");
 
     let payload = r#"{"case":"array-limit-depth"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let mut orch_flags = HashMap::new();
     orch_flags.insert("poisoned".to_string(), overly_deep_array());
 
@@ -195,7 +195,7 @@ async fn start_process_rejects_any_nonempty_orch_flags() {
         .expect("compile MINIMAL_BPMN");
 
     let payload = r#"{"case":"benign-flag"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let mut orch_flags = HashMap::new();
     orch_flags.insert(
         "flag_0".to_string(),

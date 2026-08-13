@@ -70,7 +70,7 @@ pub mod fixtures;
 // crate references it -- it's exercised entirely from its own #[cfg(test)]
 // submodules, so it's test-only scaffolding, not a runtime dependency.
 #[cfg(test)]
-pub mod metrics;
+mod metrics;
 pub mod pair;
 pub mod policy;
 #[cfg(test)]

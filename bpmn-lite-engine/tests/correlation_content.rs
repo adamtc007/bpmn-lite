@@ -17,7 +17,6 @@ use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::ProcessState;
-use bpmn_lite_vm::compute_hash;
 use std::sync::Arc;
 
 const CORR_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -57,7 +56,7 @@ async fn dynamic_string_business_key_correlates_two_instances_independently() {
         let bv = program.bytecode_version();
         async move {
             let payload = format!(r#"{{"case_id":"{case}"}}"#);
-            let hash = compute_hash(&payload);
+            let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
             let iid = engine
                 .start("corr_proc", bv, &payload, hash, case)
                 .await

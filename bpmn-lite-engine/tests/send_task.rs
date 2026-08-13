@@ -23,7 +23,6 @@ use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::RuntimeEvent;
 use bpmn_lite_types::*;
-use bpmn_lite_vm::compute_hash;
 use std::sync::Arc;
 
 const SEND_TASK_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -70,7 +69,7 @@ async fn send_task_publishes_message_and_advances() {
 
     // ── Start instance + tick to quiescence
     let payload = r#"{"trigger":"calibration","ckey":"pay-1"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "send_proc",

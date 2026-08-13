@@ -1,5 +1,5 @@
 # package: bpmn-lite-engine
-# baseline_revision: 89ae3e6
+# baseline_revision: 496ddb5 (updated H2, EOP-PLAN-CRATE-HYGIENE-001 — see H2 receipt for the diff that produced this)
 # command: cargo public-api -p bpmn-lite-engine -sss
 
 pub mod bpmn_lite_engine
@@ -113,5 +113,3 @@ pub fn bpmn_lite_engine::DeterministicRuntimeContext::new_id(&self) -> uuid::Uui
 impl bpmn_lite_engine::RuntimeContext for bpmn_lite_engine::SystemRuntimeContext
 pub fn bpmn_lite_engine::SystemRuntimeContext::logical_time(&self) -> core::result::Result<bpmn_lite_types::types::Timestamp, bpmn_lite_engine::RuntimeContextError>
 pub fn bpmn_lite_engine::SystemRuntimeContext::new_id(&self) -> uuid::Uuid
-pub fn bpmn_lite_engine::build_demo_plan() -> core::result::Result<bpmn_lite_compiler::dsl::plan::WorkflowExecutionPlan, bpmn_lite_compiler::dsl::CompileError>
-pub fn bpmn_lite_engine::demo_initial_vars(&str, &str) -> std::collections::hash::map::HashMap<alloc::string::String, serde_json::value::Value>

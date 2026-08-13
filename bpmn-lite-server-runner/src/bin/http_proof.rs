@@ -28,7 +28,6 @@ use bpmn_lite_server_runner::grpc::proto::{
     ActivateJobsRequest, CompileRequest, CompleteJobRequest, FfiFieldSchemaProto, HealthRequest,
     InspectRequest, RegisterHttpTemplateRequest, StartRequest,
 };
-use bpmn_lite_vm::compute_hash;
 
 fn build_bpmn_xml(template_id_hex: &str) -> String {
     // client_id: DomainPayload string — set by seed_inputs via domain_payload JSON
@@ -138,7 +137,7 @@ async fn run_case(
     label: &str,
 ) -> Result<()> {
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = client
         .start_process(StartRequest {
             process_key: "http_credit_proof".to_string(),

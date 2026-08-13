@@ -43,7 +43,7 @@ async fn test_pg_full_engine_smoke() {
 
     // Start process
     let payload = r#"{"case_id":"test-123"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start("smoke_proc", version, payload, hash, "test-corr-1")
         .await
@@ -228,7 +228,7 @@ async fn test_phase1_f02_complete_job_with_claim_rejects_stale_worker() {
     let compiled = engine.compile(SMOKE_BPMN).await.unwrap();
     let version = compiled.bytecode_version;
     let payload = r#"{"case_id":"phase1-f02"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start("smoke_proc", version, payload, hash, "phase1-f02-corr")
         .await

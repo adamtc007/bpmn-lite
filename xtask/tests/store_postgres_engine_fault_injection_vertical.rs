@@ -734,7 +734,7 @@ async fn test_pg_integrity_violation_propagates_and_rolls_back() {
     let version = compiled.bytecode_version;
 
     let payload = r#"{"case_id":"test-123"}"#;
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start("smoke_proc", version, payload, hash, "test-corr-1")
         .await

@@ -549,7 +549,7 @@ impl BpmnLite for BpmnLiteService {
         }
         let bytecode_version = parse_bytecode_version(&req.bytecode_version)?;
         let hash = parse_hash(&req.domain_payload_hash)?;
-        let actual_hash = bpmn_lite_vm::compute_hash(&req.domain_payload);
+        let actual_hash = bpmn_lite_types::EffectId::content_hash((req.domain_payload).as_bytes());
         if actual_hash != hash {
             return Err(Status::invalid_argument(
                 "domain_payload_hash does not match domain_payload",
@@ -618,7 +618,7 @@ impl BpmnLite for BpmnLiteService {
         let hash = if req.payload.is_empty() {
             None
         } else {
-            Some(bpmn_lite_vm::compute_hash(payload.unwrap_or_default()))
+            Some(bpmn_lite_types::EffectId::content_hash((payload.unwrap_or_default()).as_bytes()))
         };
 
         let engine = self.engine.for_tenant(tenant_id);

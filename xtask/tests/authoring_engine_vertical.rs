@@ -10,7 +10,6 @@ use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::{ErrorClass, ProcessState, RuntimeEvent, Value};
-use bpmn_lite_vm::compute_hash;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -57,7 +56,7 @@ edges:
 
     // Start instance
     let payload = r#"{"test":"auth1"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "basic-seq",
@@ -99,7 +98,7 @@ edges:
 
     // Complete task_b — hash must match instance's current domain_payload
     // (updated to task_a's completion payload after first complete_job)
-    let hash_b = compute_hash(r#"{"a":"done"}"#);
+    let hash_b = bpmn_lite_types::EffectId::content_hash((r#"{"a":"done"}"#).as_bytes());
     engine
         .complete_job(
             &jobs_b[0].job_key,
@@ -245,7 +244,7 @@ async fn t_auth_2_inclusive_gateway_yaml() {
 
     // Start with flag_a=true, flag_b=false
     let payload = r#"{"test":"ig"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "inclusive-test",
@@ -332,7 +331,7 @@ edges:
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"err"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "error-route",
@@ -442,7 +441,7 @@ edges:
     let cr = engine.store_compiled_program(program).await.unwrap();
 
     let payload = r#"{"test":"xor"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "xor-default",
@@ -540,7 +539,7 @@ edges:
             "yaml-boundary-timer",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "yaml-boundary",
         )
         .await

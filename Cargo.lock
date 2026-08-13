@@ -450,7 +450,6 @@ dependencies = [
  "bpmn-lite-kernel",
  "bpmn-lite-store",
  "bpmn-lite-types",
- "bpmn-lite-vm",
  "chrono",
  "dsl-manifest",
  "ffi-dispatcher",
@@ -559,7 +558,6 @@ dependencies = [
  "bpmn-lite-store",
  "bpmn-lite-store-postgres",
  "bpmn-lite-types",
- "bpmn-lite-vm",
  "chrono",
  "dmn-lite-bridge",
  "dmn-lite-compiler",
@@ -647,7 +645,6 @@ name = "bpmn-lite-vm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "blake3",
  "serde_json",
 ]
 
@@ -6020,7 +6017,6 @@ dependencies = [
  "bpmn-lite-store",
  "bpmn-lite-store-postgres",
  "bpmn-lite-types",
- "bpmn-lite-vm",
  "chrono",
  "dmn-lite-analysis",
  "dmn-lite-bridge",

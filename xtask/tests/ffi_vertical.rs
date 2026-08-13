@@ -32,7 +32,6 @@ use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::*;
-use bpmn_lite_vm::compute_hash;
 use dmn_lite_bridge::DmnLiteOwner;
 use dmn_lite_compiler::{compile_and_verify, load_catalogue_from_str};
 use dmn_lite_parser::parse;
@@ -190,7 +189,7 @@ async fn a11_ffi_call_updates_output_flag_and_process_completes() {
 
     // Start the process instance.
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start("eligibility", bytecode_version, payload, hash, "a11-corr")
         .await
@@ -276,7 +275,7 @@ async fn a11_no_match_score_produces_tier_zero() {
         .0;
 
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start("eligibility", bytecode_version, payload, hash, "a11-corr-2")
         .await
@@ -339,7 +338,7 @@ async fn a11_no_ffi_dispatcher_creates_incident() {
         .0;
 
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start(
             "eligibility",

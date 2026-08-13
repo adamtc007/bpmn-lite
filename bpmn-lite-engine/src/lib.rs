@@ -1,7 +1,7 @@
 //! BPMN-Lite engine.
 //!
 //! The orchestration crate — wires `bpmn-lite-compiler` (compile),
-//! `bpmn-lite-vm` (execute), and `bpmn-lite-store` (persist)
+//! `bpmn-lite-kernel` (execute), and `bpmn-lite-store` (persist)
 //! together behind a single `BpmnLiteEngine` facade. Owns the
 //! process lifecycle API (`start`, `signal`, `cancel`, `inspect`,
 //! `complete_job`, `fail_job`) and the background scheduler
@@ -22,11 +22,9 @@
 //!
 //! …and the runtime API plus scheduler.
 
-mod demo;
 mod engine;
 pub(crate) mod runtime_context;
 
-pub use demo::{build_demo_plan, demo_initial_vars};
 pub use engine::*;
 pub use runtime_context::*;
 

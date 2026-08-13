@@ -17,7 +17,6 @@ use std::sync::Arc;
 use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::{ErrorClass, ProcessState};
-use bpmn_lite_vm::compute_hash;
 
 /// Minimal BPMN with one service task.
 const MINIMAL_BPMN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -66,7 +65,7 @@ async fn test_full_lifecycle() {
 
     // 2. Start process
     let payload = r#"{"case":"integration-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let instance_id = engine
         .start("test_proc", bytecode_version, payload, hash, "corr-1")
@@ -140,7 +139,7 @@ async fn test_two_task_sequential() {
     let bv = compile_result.bytecode_version;
 
     let payload = r#"{"step":"initial"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start("two_task", bv, payload, hash, "corr-2")
         .await
@@ -178,7 +177,7 @@ async fn test_two_task_sequential() {
     // domain_payload_hash must match the INSTANCE's current payload hash
     // (which was updated to payload2 by the first completion's apply_completion)
     let payload3 = r#"{"step":"after_two"}"#;
-    let hash2 = compute_hash(payload2);
+    let hash2 = bpmn_lite_types::EffectId::content_hash((payload2).as_bytes());
     engine
         .complete_job(&all2[0].job_key, payload3, hash2, BTreeMap::new())
         .await
@@ -202,7 +201,7 @@ async fn test_cancel_flow() {
 
     let compile_result = engine.compile(MINIMAL_BPMN).await.unwrap();
     let payload = r#"{"case":"cancel-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let instance_id = engine
         .start(
@@ -251,7 +250,7 @@ async fn test_fail_job_creates_incident() {
 
     let compile_result = engine.compile(MINIMAL_BPMN).await.unwrap();
     let payload = r#"{"case":"fail-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let instance_id = engine
         .start(
@@ -342,7 +341,7 @@ async fn test_grpc_smoke() {
 
     // 2. Start process
     let payload = r#"{"case":"grpc-smoke"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let start_resp = client
         .start_process(StartRequest {
@@ -483,7 +482,7 @@ async fn test_payload_hash_integrity() {
 
     let compile_result = engine.compile(MINIMAL_BPMN).await.unwrap();
     let payload = r#"{"important":"data","hash":"must-match"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let instance_id = engine
         .start(

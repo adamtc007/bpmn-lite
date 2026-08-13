@@ -703,7 +703,7 @@ async fn start_instances(
             "batch_index": idx,
         })
         .to_string();
-        let hash = bpmn_lite_vm::compute_hash(&payload);
+        let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
         let response = client
             .start_process(StartRequest {
                 process_key: fixture.fixture.key.to_string(),

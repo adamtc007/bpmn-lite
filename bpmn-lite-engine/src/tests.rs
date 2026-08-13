@@ -4,7 +4,6 @@ use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_store::{ArtifactRepository as _, JournalReader as _, RuntimeStore as _};
 use bpmn_lite_types::session_stack::SessionStackState;
 use bpmn_lite_types::*;
-use bpmn_lite_vm::compute_hash;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -52,7 +51,7 @@ async fn durable_wait_for_two_seconds_resumes_via_scheduler() {
             "ordinary_timer",
             compiled.bytecode_version,
             payload,
-            compute_hash(payload),
+            bpmn_lite_types::EffectId::content_hash((payload).as_bytes()),
             "timer-wait-for",
         )
         .await
@@ -100,7 +99,7 @@ async fn durable_wait_until_duplicate_delivery_is_typed_noop() {
             "absolute_timer",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "timer-wait-until",
         )
         .await
@@ -167,7 +166,7 @@ async fn test_engine_full_lifecycle() {
 
     // 2. Start a process
     let payload = r#"{"case":"test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start(
             "test_proc",
@@ -250,7 +249,7 @@ async fn start_with_malformed_payload_fails_closed_at_admission() {
             process_key: "reject_proc".to_string(),
             bytecode_version: compile_result.bytecode_version,
             domain_payload: payload.to_string(),
-            domain_payload_hash: compute_hash(payload),
+            domain_payload_hash: bpmn_lite_types::EffectId::content_hash((payload).as_bytes()),
             correlation_id: "corr-reject".to_string(),
             session_stack: SessionStackState::default(),
             entry_id: Uuid::new_v4(),
@@ -272,7 +271,7 @@ async fn start_with_malformed_payload_fails_closed_at_admission() {
             process_key: "reject_proc".to_string(),
             bytecode_version: compile_result.bytecode_version,
             domain_payload: payload.to_string(),
-            domain_payload_hash: compute_hash(payload),
+            domain_payload_hash: bpmn_lite_types::EffectId::content_hash((payload).as_bytes()),
             correlation_id: "corr-array".to_string(),
             session_stack: SessionStackState::default(),
             entry_id: Uuid::new_v4(),
@@ -300,7 +299,7 @@ async fn test_start_with_session_stack_copies_value() {
 
     let compile_result = engine.compile(bpmn).await.unwrap();
     let payload = r#"{"case":"copy"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let original_scope_id = Uuid::new_v4();
     let mutated_scope_id = Uuid::new_v4();
 
@@ -379,7 +378,7 @@ async fn test_job_activation_preserves_runbook_lineage() {
 
     let compile_result = engine.compile(bpmn).await.unwrap();
     let payload = r#"{"case":"lineage"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let entry_id = Uuid::new_v4();
     let runbook_id = Uuid::new_v4();
 
@@ -440,7 +439,7 @@ async fn setup_parked_job() -> (
 
     let cr = engine.compile(SINGLE_TASK_BPMN).await.unwrap();
     let payload = r#"{"case":"cancel-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "cancel_proc",
@@ -542,7 +541,7 @@ async fn t_cancel_duplicate_complete() {
 async fn test_complete_job_recomputes_payload_hash() {
     let (engine, store, iid, job_key, expected_hash) = setup_parked_job().await;
     let new_payload = r#"{"result":"done","version":2}"#;
-    let new_hash = compute_hash(new_payload);
+    let new_hash = bpmn_lite_types::EffectId::content_hash((new_payload).as_bytes());
 
     engine
         .complete_job(&job_key, new_payload, expected_hash, BTreeMap::new())
@@ -590,7 +589,7 @@ async fn test_complete_job_recomputes_payload_hash() {
 #[tokio::test]
 async fn test_complete_job_rejects_stale_expected_hash() {
     let (engine, store, iid, job_key, _expected_hash) = setup_parked_job().await;
-    let stale_hash = compute_hash(r#"{"stale":true}"#);
+    let stale_hash = bpmn_lite_types::EffectId::content_hash((r#"{"stale":true}"#).as_bytes());
 
     let result = engine
         .complete_job(
@@ -613,7 +612,7 @@ async fn test_complete_job_rejects_stale_expected_hash() {
     );
     assert_eq!(
         persisted.domain_payload_hash,
-        compute_hash(r#"{"case":"cancel-test"}"#)
+        bpmn_lite_types::EffectId::content_hash((r#"{"case":"cancel-test"}"#).as_bytes())
     );
 }
 
@@ -761,7 +760,7 @@ async fn test_transient_fail_with_claim_retries_then_requeues() {
 
     let cr = engine.compile(SINGLE_TASK_BPMN).await.unwrap();
     let payload = r#"{"case":"retry"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "cancel_proc",
@@ -841,7 +840,7 @@ async fn test_signal_matches_message_name_and_correlation_key() {
         .unwrap();
 
     let payload = r#"{"case":"signal"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "signal_proc",
@@ -955,7 +954,7 @@ async fn test_signal_before_wait_msg_is_buffered_and_consumed() {
         .unwrap();
 
     let payload = r#"{"case":"early-signal"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "signal_proc",
@@ -1017,7 +1016,7 @@ async fn test_tenant_scoped_engine_rejects_cross_tenant_instance_access() {
 
     let compile_result = tenant_a.compile(SINGLE_TASK_BPMN).await.unwrap();
     let payload = r#"{"case":"tenant-a"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = tenant_a
         .start(
             "cancel_proc",
@@ -1070,7 +1069,7 @@ async fn test_recovery_scanner_reports_running_instance_inconsistencies_by_tenan
         process_key: "orphaned".to_string(),
         bytecode_version: [17u8; 32],
         domain_payload: payload.into(),
-        domain_payload_hash: compute_hash(payload),
+        domain_payload_hash: bpmn_lite_types::EffectId::content_hash((payload).as_bytes()),
         session_stack: SessionStackState::default(),
         flags: BTreeMap::new(),
         counters: BTreeMap::new(),
@@ -1129,7 +1128,7 @@ async fn startup_recovery_scans_every_tenant_before_readiness() {
                 "recovery-all-tenants",
                 compiled.bytecode_version,
                 "{}",
-                compute_hash("{}"),
+                bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
                 tenant_id,
             )
             .await
@@ -1246,7 +1245,7 @@ async fn setup_ni_guard(
 
     let cr = engine.compile(bpmn).await.unwrap();
     let payload = r#"{"case":"ni-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start("ni_proc", cr.bytecode_version, payload, hash, "corr-ni")
         .await
@@ -1417,7 +1416,7 @@ async fn setup_ni_cycle_guard() -> (
         .unwrap();
 
     let payload = r#"{"case":"ni-cycle-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "test",
@@ -1638,7 +1637,7 @@ async fn t_ni_4_job_completes_before_timer() {
 
     let cr = engine.compile(NI_BOUNDARY_BPMN).await.unwrap();
     let payload = r#"{"case":"ni-job-first"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start("ni_proc", cr.bytecode_version, payload, hash, "corr-ni4")
         .await
@@ -1674,13 +1673,14 @@ async fn t_ni_4_job_completes_before_timer() {
             .complete_job(
                 &job.job_key,
                 r#"{"r":"done"}"#,
-                compute_hash(
-                    &store
+                bpmn_lite_types::EffectId::content_hash(
+                    store
                         .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
                         .await
                         .unwrap()
                         .unwrap()
-                        .domain_payload,
+                        .domain_payload
+                        .as_bytes(),
                 ),
                 BTreeMap::new(),
             )
@@ -1804,7 +1804,7 @@ async fn t_ni_6_xml_cycle_fires_three_times_then_exhausts() {
     // already-proven handling of the word once emitted.
     let cr = engine.compile(NI_CYCLE_XML_BPMN).await.unwrap();
     let payload = r#"{"case":"ni-xml-cycle-test"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let iid = engine
         .start(
             "ni_cycle_xml_proc",
@@ -1938,7 +1938,7 @@ async fn t_term_1_single_fiber_terminate() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-1",
         )
         .await
@@ -1947,7 +1947,7 @@ async fn t_term_1_single_fiber_terminate() {
     assert_eq!(jobs.len(), 1);
 
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
         .await
@@ -2060,7 +2060,7 @@ async fn t_term_2_parallel_terminate_kills_siblings() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-2",
         )
         .await
@@ -2179,7 +2179,7 @@ async fn t_term_3_complete_job_after_terminate() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-3",
         )
         .await
@@ -2189,7 +2189,7 @@ async fn t_term_3_complete_job_after_terminate() {
 
     // Complete the job → fiber advances to EndTerminate → instance Terminated
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&job_key, payload, hash, BTreeMap::new())
         .await
@@ -2356,7 +2356,7 @@ async fn t_err_1_business_error_routes_to_handler() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-1",
         )
         .await
@@ -2494,7 +2494,7 @@ async fn t_err_2_unmatched_error_creates_incident() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-2",
         )
         .await
@@ -2594,7 +2594,7 @@ async fn t_err_3_catch_all_routes_any_business_error() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-3",
         )
         .await
@@ -2681,7 +2681,7 @@ async fn t_err_4_transient_error_always_incident() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-4",
         )
         .await
@@ -2754,7 +2754,7 @@ async fn t_err_5_fail_job_on_terminated_instance() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-5",
         )
         .await
@@ -2764,7 +2764,7 @@ async fn t_err_5_fail_job_on_terminated_instance() {
 
     // Complete job → EndTerminate → Terminated
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&job_key, payload, hash, BTreeMap::new())
         .await
@@ -2899,7 +2899,7 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-a",
         )
         .await
@@ -2952,7 +2952,7 @@ async fn t_err_6_multiple_specific_routes_fire_independently() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-b",
         )
         .await
@@ -3106,7 +3106,7 @@ async fn t_err_7_nested_guard_miss_does_not_fall_through_to_outer_catch_all() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-7",
         )
         .await
@@ -3261,7 +3261,7 @@ async fn t_loop_1_bounded_retry_executes_n_times() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-1",
         )
         .await
@@ -3401,7 +3401,7 @@ async fn t_loop_2_unique_job_keys_per_iteration() {
             "test",
             program.bytecode_version(),
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-2",
         )
         .await
@@ -3787,7 +3787,7 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-1",
         )
         .await
@@ -3818,7 +3818,7 @@ async fn t_ig_v2_all_matched_branches_run_concurrently_and_join_completes() {
 
     for job in &jobs {
         let payload = "{}";
-        let hash = bpmn_lite_vm::compute_hash(payload);
+        let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
         engine
             .complete_job(&job.job_key, payload, hash, BTreeMap::new())
             .await
@@ -3867,7 +3867,7 @@ async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-2",
         )
         .await
@@ -3892,7 +3892,7 @@ async fn t_ig_v2_single_matched_branch_skips_the_other_to_join() {
     assert_eq!(jobs.len(), 1, "only the matched branch should do real work");
 
     let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
         .await
@@ -3941,7 +3941,7 @@ async fn t_ig_v2_zero_match_no_default_raises_incident() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-3",
         )
         .await
@@ -3977,7 +3977,7 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-4",
         )
         .await
@@ -3993,7 +3993,7 @@ async fn t_ig_v2_zero_match_with_default_runs_default_branch() {
     assert_eq!(jobs[0].task_type, "always_task");
 
     let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
         .await
@@ -4077,7 +4077,7 @@ async fn drain_and_complete_all(
         for job in &jobs {
             activations.push((round, job.task_type.clone()));
             let payload = "{}";
-            let hash = compute_hash(payload);
+            let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
             engine
                 .complete_job(&job.job_key, payload, hash, BTreeMap::new())
                 .await
@@ -4161,7 +4161,7 @@ async fn t_ig_v2_two_sequential_pairs_route_and_join_independently() {
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-seq",
         )
         .await
@@ -4357,7 +4357,7 @@ async fn t_ig_v2_two_nested_inclusive_pairs_in_and_branches_route_independently(
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-ig-nested-and",
         )
         .await
@@ -4478,7 +4478,7 @@ async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-and-unequal-1",
         )
         .await
@@ -4506,7 +4506,7 @@ async fn t_and_v2_unequal_branch_lengths_compiles_and_completes() {
         }
         for job in &pending {
             let payload = "{}";
-            let hash = bpmn_lite_vm::compute_hash(payload);
+            let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
             engine
                 .complete_job(&job.job_key, payload, hash, BTreeMap::new())
                 .await
@@ -4578,7 +4578,7 @@ async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes(
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-and-3way-1",
         )
         .await
@@ -4603,7 +4603,7 @@ async fn t_and_v2_three_branches_three_different_lengths_compiles_and_completes(
         let jobs = engine.run_instance(instance_id).await.unwrap();
         for job in &jobs {
             let payload = "{}";
-            let hash = bpmn_lite_vm::compute_hash(payload);
+            let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
             engine
                 .complete_job(&job.job_key, payload, hash, BTreeMap::new())
                 .await
@@ -4719,7 +4719,7 @@ async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-and-nested-1",
         )
         .await
@@ -4741,7 +4741,7 @@ async fn t_and_v2_nested_gateway_inside_branch_compiles_and_completes() {
         let jobs = engine.run_instance(instance_id).await.unwrap();
         for job in &jobs {
             let payload = "{}";
-            let hash = bpmn_lite_vm::compute_hash(payload);
+            let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
             engine
                 .complete_job(&job.job_key, payload, hash, BTreeMap::new())
                 .await
@@ -4809,7 +4809,7 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
             "test",
             compiled.bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-xor-merge-1",
         )
         .await
@@ -4824,7 +4824,7 @@ async fn t_xor_v2_merge_unequal_branch_lengths_compiles_and_completes() {
     assert_eq!(jobs[0].task_type, "merge_task");
 
     let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
         .await
@@ -4901,7 +4901,7 @@ async fn t_boundary_timer_v2_guard_timer_fires_and_activates_escalation_job() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-bt-1",
         )
         .await
@@ -4983,7 +4983,7 @@ async fn t_guard_fire_cancels_pending_host_job_activation() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-v2-bt-cancel-1",
         )
         .await
@@ -5157,7 +5157,7 @@ async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-mi-1",
         )
         .await
@@ -5173,7 +5173,7 @@ async fn t_mi_v2_full_collection_all_fibres_do_real_work() {
 
     for job in &jobs {
         let payload = "{}";
-        let hash = bpmn_lite_vm::compute_hash(payload);
+        let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
         engine
             .complete_job(&job.job_key, payload, hash, BTreeMap::new())
             .await
@@ -5212,7 +5212,7 @@ async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-mi-elements",
         )
         .await
@@ -5262,7 +5262,7 @@ async fn t_mi_v2_delivers_distinct_per_branch_element_values() {
 
     for job in &jobs {
         let payload = "{}";
-        let hash = bpmn_lite_vm::compute_hash(payload);
+        let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
         engine
             .complete_job(&job.job_key, payload, hash, BTreeMap::new())
             .await
@@ -5291,7 +5291,7 @@ async fn t_mi_v2_partial_collection_some_fibres_skip() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-mi-2",
         )
         .await
@@ -5307,7 +5307,7 @@ async fn t_mi_v2_partial_collection_some_fibres_skip() {
     );
 
     let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     engine
         .complete_job(&jobs[0].job_key, payload, hash, BTreeMap::new())
         .await
@@ -5339,7 +5339,7 @@ async fn t_mi_v2_empty_collection_completes_without_incident() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-mi-3",
         )
         .await
@@ -5385,7 +5385,7 @@ async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
             "test",
             bytecode_version,
             "{}",
-            compute_hash("{}"),
+            bpmn_lite_types::EffectId::content_hash(("{}").as_bytes()),
             "corr-mi-4",
         )
         .await
@@ -5423,21 +5423,13 @@ async fn t_mi_v2_exceeds_declared_max_is_typed_error_not_silent_truncation() {
 //  residue, a broken lowering path, or a verifier regression on any of
 //  these fixtures fails this test, not just the fixture's own narrower
 //  test elsewhere in this file.
+//
+//  `corpus_sweep_demo_source_lowers_and_verifies` (the §10 demo-workflow
+//  half of this sweep) moved to
+//  `xtask/tests/demo_corpus_vertical.rs` (H2, EOP-PLAN-CRATE-HYGIENE-001)
+//  — `build_demo_plan` no longer lives in this crate, it moved to
+//  `bpmn-lite-server-runner::demo` (rest.rs's real demo-mode consumer).
 // ═══════════════════════════════════════════════════════════
-
-/// The §10 demo workflow (`bpmn_lite_engine::demo::DEMO_SOURCE`) — the
-/// only DSL corpus item compiled against real, checked-in manifests
-/// (`manifests/ob-poc-v1.0.0.yaml`/`manifests/dmn-lite-v1.0.0.yaml`), not
-/// a hand-built in-test fixture. `demo::build_demo_plan()` already proves
-/// the T1 manifest-resolution pipeline; this test adds the missing link —
-/// lowering that plan all the way to a verified `ExecutableWorkflow`,
-/// which `build_demo_plan`'s own tests never do.
-#[test]
-fn corpus_sweep_demo_source_lowers_and_verifies() {
-    let plan = crate::demo::build_demo_plan().expect("§10 demo must compile");
-    bpmn_lite_compiler::Compiler::lower_dsl(&plan)
-        .expect("§10 demo plan must lower and pass the full v2 verifier (V-1..V-11)");
-}
 
 /// Every hand-built XML fixture in this file that exercises a distinct
 /// BPMN construct (parallel/exclusive/inclusive gateways, standalone and
@@ -5550,7 +5542,7 @@ async fn tick_activated_batch_drains_an_instance_start_leaves_runnable() {
         </bpmn:definitions>"#;
     let compile_result = engine.compile(bpmn).await.unwrap();
     let payload = r#"{"case":"drain"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = engine
         .start(
             "drain_proc",
@@ -5710,7 +5702,7 @@ async fn tick_activated_batch_records_claimed_and_consumed_metrics() {
         </bpmn:definitions>"#;
     let compile_result = engine.compile(bpmn).await.unwrap();
     let payload = r#"{"case":"metrics"}"#;
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
 
     let before = engine.activation_metrics();
     engine

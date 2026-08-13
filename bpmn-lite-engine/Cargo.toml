@@ -28,7 +28,6 @@ description = "BPMN-Lite engine facade — compile pipeline orchestration, proce
 bpmn-lite-types = { path = "../bpmn-lite-types" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-kernel = { path = "../bpmn-lite-kernel" }
-bpmn-lite-vm = { path = "../bpmn-lite-vm" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 # T4 — demo model uses ManifestPlaceholderRegistry from dsl-manifest
 dsl-manifest = { path = "../dsl-manifest" }

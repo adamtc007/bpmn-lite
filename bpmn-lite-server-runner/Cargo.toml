@@ -18,7 +18,6 @@ bpmn-lite-engine = { path = "../bpmn-lite-engine" }
 bpmn-lite-compiler = { path = "../bpmn-lite-compiler" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres", optional = true }
-bpmn-lite-vm = { path = "../bpmn-lite-vm" }
 # FFI catalogue + dispatcher
 ffi-types = { path = "../ffi-types" }
 ffi-catalogue = { path = "../ffi-catalogue" }

@@ -33,7 +33,6 @@ bpmn-lite-server-runner = { path = "../bpmn-lite-server-runner" }
 bpmn-lite-store = { path = "../bpmn-lite-store" }
 bpmn-lite-store-postgres = { path = "../bpmn-lite-store-postgres" }
 bpmn-lite-types = { path = "../bpmn-lite-types" }
-bpmn-lite-vm = { path = "../bpmn-lite-vm" }
 dmn-lite-analysis = { path = "../dmn-lite-analysis" }
 dmn-lite-bridge = { path = "../dmn-lite-bridge" }
 dmn-lite-compiler = { path = "../dmn-lite-compiler" }

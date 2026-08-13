@@ -66,7 +66,6 @@ use bpmn_lite_engine::BpmnLiteEngine;
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::store_memory::MemoryStore;
 use bpmn_lite_types::{ProcessInstance, ProcessState, TenantId};
-use bpmn_lite_vm::compute_hash;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -247,7 +246,7 @@ where
     let engine = BpmnLiteEngine::new(store.clone());
     let (engine, bytecode_version) = compile(engine).await;
 
-    let hash = compute_hash(DOMAIN_PAYLOAD);
+    let hash = bpmn_lite_types::EffectId::content_hash((DOMAIN_PAYLOAD).as_bytes());
     let instance_id = engine
         .start(
             process_key,

@@ -22,13 +22,13 @@ pub use pending_store::PostgresPendingInvocationStore;
 pub use store_postgres::*;
 
 #[cfg(test)]
-pub mod test_lock {
+mod test_lock {
     use std::sync::OnceLock;
     use tokio::sync::Mutex;
 
     static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
-    pub fn get_mutex() -> &'static Mutex<()> {
+    pub(crate) fn get_mutex() -> &'static Mutex<()> {
         TEST_MUTEX.get_or_init(|| Mutex::new(()))
     }
 }

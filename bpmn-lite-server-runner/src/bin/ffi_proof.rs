@@ -28,7 +28,6 @@ use bpmn_lite_server_runner::grpc::proto::{
     proto_value, ActivateJobsRequest, CompileRequest, CompleteJobRequest, FfiFieldSchemaProto,
     HealthRequest, InspectRequest, ProtoValue, RegisterDmnDecisionRequest, StartRequest,
 };
-use bpmn_lite_vm::compute_hash;
 
 // DMN decision: integer `score` → bool `eligible`
 //   score = 100 → eligible = true
@@ -159,7 +158,7 @@ async fn run_case(
 ) -> Result<()> {
     // Start a process instance.
     let payload = "{}";
-    let hash = compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = client
         .start_process(StartRequest {
             process_key: "ffi_eligibility_proof".to_string(),

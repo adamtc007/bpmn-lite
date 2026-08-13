@@ -113,7 +113,7 @@ async fn run_case(
     label: &str,
 ) -> Result<()> {
     let payload = "{}";
-    let hash = bpmn_lite_vm::compute_hash(payload);
+    let hash = bpmn_lite_types::EffectId::content_hash((payload).as_bytes());
     let instance_id = client
         .start_process(StartRequest {
             process_key: "grpc_credit_proof".to_string(),
