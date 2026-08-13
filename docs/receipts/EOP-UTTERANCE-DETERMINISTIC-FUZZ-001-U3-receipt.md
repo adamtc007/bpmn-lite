@@ -125,41 +125,120 @@ exactly as the plan requires.
   never mutates the graph" invariant, is proven at the router layer:
   `test_utterance_proposal_stages_without_mutating_graph`.
 
-**Gap found, flagged rather than rushed**: no existing test — at any
-layer — exercises `resolve_compound_chain`'s full **positive** 2-span
-success path (`CompoundChainOutcome::Ready`): span 1 detected, resolved,
-materialised via `start_workbook`, `resolve_hypothetical_chain` succeeds,
-span 2 resolves against the resulting hypothetical position, and a bound
-`ResolvedChain` with both moves comes back. The existing negative test
-proves ambiguity is refused; nothing proves the success path actually
-completes end-to-end. Constructing a genuinely resolvable 2-span
-compound utterance requires phrase-corpus-level knowledge (governed exact
-match against two distinct, sequentially-legal candidates) I did not have
-verified confidence in within this tranche's scope, and I chose not to
-hand-roll a test whose pass/fail might hinge on an unverified assumption
-about phrase resolution — that would risk exactly the "verify, don't
-infer" failure this session has caught in itself twice already (U0's two
-self-corrections). **This is a real, named gap in "focused server
-property tests," not a closed item** — flagged for Adam's ruling at the
-STOP-gate below: invest in constructing this test now (a genuine chunk of
-work, needing semantic-pack phrase-corpus research), or accept the
-existing G2-layer + negative-path + single-span-success coverage as
-sufficient given the composition boundary's disposition is driven by
-*throughput*, not by an unverified logic gap.
+**Gap found while attempting the positive success-path test — and its
+resolution.** No existing test — at any layer — exercised
+`resolve_compound_chain`'s full **positive** 2-span success path
+(`CompoundChainOutcome::Ready`). Attempting to construct one surfaced a
+larger, structural finding: it isn't currently constructible at all.
+
+Investigated directly against the shipped semantic pack
+(`utterance-engine/config/bpmn-semantic-pack.yaml`, **22 capabilities —
+corrected below; the first pass of this receipt undercounted and missed
+a second single-required-argument capability, both caught by independent
+blind review, not by this tranche's own first-pass reading**) and two
+real graph shapes (plain linear; the same graph with a guard attached,
+verified live via a temporary diagnostic harness before being replaced by
+the permanent test below):
+
+- `StrictCompoundSyntax::detect` (`utterance-engine/src/disposition.rs`)
+  only recognises a compound span when the *entire* trimmed span exactly
+  matches a governed phrase — no room for an embedded free-text argument
+  (a quoted node name, a condition, etc.). Confirmed, unchanged from the
+  first pass.
+- **Corrected**: `WorkbookEvidence` (`bpmn-lite-server-designer/src/proposal.rs`)
+  has **two** variants, `Decision` and `PaletteSelection`, not one as
+  first stated. More importantly, `start_workbook` **does** perform
+  real free-text argument extraction (quoted names, node/data
+  references, counts, durations, boolean words) — the first pass's "it
+  performs no free-text argument extraction of its own" was flatly
+  wrong. The narrower, correct claim: `resolve_compound_chain` only ever
+  calls `start_workbook` with a *bare governed-exact span* as the
+  evidence text (`&spans[0]`, `rest.rs:3184`) — there is nothing beyond
+  the phrase itself for that extraction machinery to find, for *this*
+  caller specifically. `start_workbook`'s own extraction capability is
+  real and exercised elsewhere (the mainline single-utterance path); it
+  is simply never fed anything to extract from in the compound-chain
+  path.
+- Two capabilities, not one, have exactly one required argument beyond
+  the position's auto-filled anchor slot: `op.delete_subgraph` (`target`)
+  and `op.close_parallel_region` (`split`) — **corrected**, the first
+  pass missed the second. `op.close_parallel_region` is declared
+  `bpmn.binder_support: not_representable` in the pack, and
+  `NotRepresentable` capabilities are filtered out before legal-move
+  enumeration (`bpmn_pack.rs:388`, `bpmn_board.rs:1161`) — it can never
+  appear as a legal move at all, so it doesn't change the empirical
+  conclusion. `op.delete_subgraph` was never legal in either graph shape
+  tried, as originally stated.
+- Net effect, unchanged by the corrections above: a bare governed-exact
+  compound span can never reach `ReadyForDryRun`/`ReadyForRatification`
+  today, for any graph shape — `resolve_compound_chain`'s `Ready` arm is
+  currently unreachable given the shipped pack. Not a code defect —
+  `resolve_compound_chain`'s and `resolve_hypothetical_chain`'s own
+  mechanics are separately, correctly proven (the negative-path test,
+  `start_workbook`'s direct tests, and G2's own upstream tests all still
+  hold).
+
+**Ruled (Adam, this session): write the negative/structural proof
+instead of continuing to chase an unconstructible positive example.**
+Added `no_legal_move_is_anchor_only_bindable_today` (permanent,
+`#[tokio::test]`, no `#[ignore]`) to `bpmn-lite-server-designer/src/rest.rs`'s
+test module: for both graph shapes, asserts no non-abstention legal move
+ever reaches `MoveBindingState::Complete` from anchor-context alone. This
+pins the finding precisely and durably — if a future pack change ever
+makes a capability anchor-only-bindable, this test fails, flagging that
+`resolve_compound_chain`'s `Ready` arm just became reachable for the
+first time and needs a real success-path test built at that point (not
+before, since one wasn't constructible when this was written). The two
+throwaway diagnostic harnesses used to investigate this live were
+replaced by this one permanent test, not left in the tree.
+
+**Disclosure, added after blind review (not caught in this tranche's own
+first pass)**: `design_position.legal_moves[].binding_state` — the value
+this test asserts on — is computed by
+`utterance-engine/src/legal_moves.rs::position_bound_move`, a separate,
+independently-implemented auto-fill computation from
+`start_workbook`'s own argument-binding logic
+(`proposal.rs::anchor_slot`) — different crate, different function. This
+test therefore pins a property of `position_bound_move`'s output, not a
+direct call into `start_workbook`/`resolve_compound_chain` — it would
+catch a future pack change making some capability anchor-only-bindable
+(the scenario its doc comment names), but it would **not**, by itself,
+catch a regression introduced purely inside `start_workbook`'s own
+extraction logic without a matching change to `legal_moves.rs`. Checked
+this precisely rather than accepting the "they agree" claim at face
+value: `anchor_slot`'s hardcoded per-candidate table and
+`position_bound_move`'s generic "first required node-reference argument"
+rule pick the *same argument name* for every capability except one —
+`anchor_slot` has no entry for `prod.human_review_with_rework` (falls
+through to `None`), while `position_bound_move` computes `anchor` for it
+generically. This one naming mismatch does not change any capability's
+Complete/Incomplete outcome, because `prod.human_review_with_rework` has
+two required arguments (`anchor`, `max_attempts`), not one — auto-filling
+`anchor` alone still leaves it Incomplete either way. So the test's
+Complete/Incomplete conclusion holds for all 22 capabilities today, but
+the two computations are not a perfect 1:1 mirror of each other — a real,
+disclosed scope boundary of what this specific test protects, not a
+direct proof about `resolve_compound_chain`'s own internals.
 
 - **Target(s) and owner crate:** none added — this tranche is a decision,
-  not a target. The benchmark harness itself (`u3_router_level_benchmark`)
-  is `#[ignore]`d and not part of the regular test suite.
+  not a fuzz target. `u3_router_level_benchmark` (`#[ignore]`d, one-time
+  measurement) and `no_legal_move_is_anchor_only_bindable_today`
+  (permanent, always-run) both live in `bpmn-lite-server-designer/src/rest.rs`'s
+  existing test module.
 
 - **Public API diff:** none. `python3 scripts/check-semantic-gameboard-boundaries.py`:
-  `{"status": "pass", ...}`, identical to U2. `python3 scripts/check-test-only-pub.py`:
-  `ok: 0 #[cfg(test)] pub item(s)` — the new benchmark function carries no
-  `pub` qualifier at all (private to the test module), consistent with
-  the prohibited-shortcut constraint.
+  `{"status": "pass", ...}`, identical item counts/hashes to U2.
+  `python3 scripts/check-test-only-pub.py`: `ok: 0 #[cfg(test)] pub item(s)`
+  — neither new function carries any `pub` qualifier, consistent with the
+  prohibited-shortcut constraint.
 
 - **Focused checks:**
   - `cargo test -p bpmn-lite-server-designer --lib rest::tests::u3_router_level_benchmark -- --ignored --nocapture`:
     1 passed, real numbers captured above.
+  - `cargo test -p bpmn-lite-server-designer --lib rest::tests::no_legal_move_is_anchor_only_bindable_today -- --nocapture`:
+    1 passed.
+  - `cargo test -p bpmn-lite-server-designer --lib`: full suite, 94
+    passed, 0 failed, 1 ignored (the benchmark, correctly).
   - `cargo check --workspace --all-targets`: clean, same 2 pre-existing
     unrelated `bpmn-lite-server-designer` warnings as every prior
     tranche.
@@ -167,62 +246,69 @@ sufficient given the composition boundary's disposition is driven by
     `python3 scripts/check-test-only-pub.py`: both clean.
 
 - **Known deviations or explicitly parked work:**
-  - The positive-2-span-success property-test gap named above — the one
-    open item at this gate.
   - Same repo-wide `cargo fmt` drift and `bpmn-lite-engine::xml_compile`
     pre-existing compile failure documented in prior tranches — unchanged,
     unrelated, not touched.
+  - The structural finding itself (no capability can currently reach
+    `Ready`) is now a documented, pinned fact rather than an open gap —
+    but it's worth naming as a standalone observation outside this
+    fuzzing plan's scope: whether the pack should eventually gain a
+    minimal anchor-only capability (making compound chains genuinely
+    exercisable end-to-end) is a product/pack-authoring question this
+    tranche surfaces but does not decide.
 
 - **Blind peer-review findings and dispositions:** an independent
-  reviewer (no prior context) re-derived every claim: confirmed the
-  69-line diff is purely additive and router-only with zero visibility
-  change, reproduced the benchmark three times (36.3–40.0 iters/sec, 3
-  `PendingProposal` entries every run — matching), independently searched
-  for `CompoundChainOutcome::Ready` in test code repo-wide and confirmed
-  zero hits (the flagged gap is real, not missed), checked the one other
-  multi-step router test in the suite
-  (`test_super_user_repl_builds_6_step_2_branch_2_loop_workflow`) and
-  confirmed it builds via sequential single-span calls, not the
-  `;`-delimited compound path — so it doesn't close the gap either.
-  Reproduced all four cited verification commands exactly. Verdict:
-  accept-with-caveats.
-  - **Finding 1, disposed**: the "61s (≈30.8/sec)" framing read as a
-    literal citation from U1's receipt when it was this tranche's own
-    arithmetic from U1's stated "60-second... 1878 executions." Corrected
-    above to state this explicitly.
-  - **Finding 2, disposed**: everything past the two measured numbers
-    (38.7/sec uninstrumented, U1's cited 60s/1878-execs instrumented) was
-    stated in the same declarative tone as the measurements themselves,
-    without marking it as estimated. Corrected above — the estimate
-    section is now explicitly labeled as inference, not derived
-    arithmetic, and cargo-fuzz-specific costs the estimate doesn't
-    itemize (JSON-from-bytes construction, driving tokio from a
-    normally-synchronous libFuzzer harness) are now named as additional,
-    unquantified overhead.
-  - **Finding 3, not disposed by editing — requires Adam's ruling**: the
-    reviewer's central point is procedural, not textual — per Gate U3's
-    own text, the deferred disposition is conditioned on "property-test
-    coverage" being *present*, and work item 4 says to *add* focused
-    property tests, not merely survey existing coverage. This receipt
-    audits and discloses a real gap rather than closing it. The
-    reviewer's own assessment: this is the *correct* procedural move
-    under this project's "surface forks, don't decide them" and "verify,
-    don't infer" discipline (fabricating an unverified resolvable 2-span
-    phrase would repeat a mistake this session already self-corrected
-    twice in U0) — but it does mean **U3 is not actually closed on its
-    own terms yet**, only its benchmark/decision half is. See the
-    STOP-gate line below, which reflects this rather than papering over
-    it.
+  reviewer (no prior context) re-derived every claim on the
+  benchmark/decision half of this tranche: confirmed the diff was purely
+  additive and router-only with zero visibility change, reproduced the
+  benchmark three times (36.3–40.0 iters/sec, 3 `PendingProposal` entries
+  every run — matching), independently searched for
+  `CompoundChainOutcome::Ready` in test code repo-wide and confirmed zero
+  hits at the time (the gap was real, not missed), and checked the one
+  other multi-step router test in the suite
+  (`test_super_user_repl_builds_6_step_2_branch_2_loop_workflow`),
+  confirming it builds via sequential single-span calls and doesn't touch
+  the compound path either. Reproduced all four cited verification
+  commands exactly. Verdict on that half: accept-with-caveats, two of
+  which were textual (disposed by editing — the "61s/30.8/sec" figure
+  corrected from an implied citation to explicit self-derived arithmetic;
+  the throughput extrapolation past the two measured numbers now
+  explicitly labeled as estimate, not measurement) and one procedural
+  (the gap needed either real work or Adam's explicit ruling to accept it
+  as-is — resolved by Adam ruling to build the structural proof).
 
-- **STOP-gate decision: blocked — awaiting peer review of this receipt,
-  and Adam's ruling on the flagged property-test gap.**
+  **A second, independent review pass ran after adding
+  `no_legal_move_is_anchor_only_bindable_today`**, specifically to
+  re-verify the load-bearing empirical claim rather than accept the first
+  pass's own reading of the pack. It found real factual errors in this
+  receipt's prose, all now corrected above: the capability count (21,
+  should be 22), a missed second single-required-argument capability
+  (`op.close_parallel_region`, filtered from legal moves as
+  `not_representable` so it doesn't change the conclusion), the
+  `WorkbookEvidence` variant count (claimed 1, actually 2 —
+  `Decision`/`PaletteSelection`), and a mischaracterization of
+  `start_workbook` as lacking free-text extraction entirely (it has real
+  extraction machinery, exercised elsewhere; `resolve_compound_chain`
+  simply never feeds it anything to extract from). It also identified
+  that the new test asserts on `legal_moves.rs::position_bound_move`'s
+  output, a separate codepath from `start_workbook`'s own binding logic —
+  disclosed above, along with the one naming mismatch found while
+  verifying that disclosure precisely (`prod.human_review_with_rework`,
+  inconsequential to the Complete/Incomplete conclusion since it has 2
+  required arguments regardless). Reproduced the test, the full 94-test
+  suite, and all workspace/gate checks independently — all passed as
+  claimed. Verdict: accept-with-caveats, all caveats now disposed by the
+  corrections above, not by argument.
+
+- **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 
 Per Gate U3's own text: "Peer review accepts either the bounded black-box
 target with evidence of useful throughput, or the explicit deferred
 disposition with property-test coverage. No visibility change is
 accepted as a substitute for this decision." The deferred disposition is
 taken, with real benchmark evidence for why, no visibility change
-anywhere, and a fully honest accounting of what property-test coverage
-exists versus what's still missing — the missing piece is named, not
-hidden. U4 remains blocked pending a separate product decision, unchanged
-by this tranche.
+anywhere, and property-test coverage now genuinely present — including a
+new, permanent, durable test pinning a real structural finding discovered
+in the course of trying to satisfy this exact gate, not merely a survey
+of pre-existing coverage. U4 remains blocked pending a separate product
+decision, unchanged by this tranche.

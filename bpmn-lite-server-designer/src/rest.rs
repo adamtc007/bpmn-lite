@@ -10226,6 +10226,117 @@ mod tests {
         );
     }
 
+    /// EOP-PLAN-UTTERANCE-DETERMINISTIC-FUZZ-001 U3 work item 4 (focused
+    /// property test): pins a structural finding discovered while trying
+    /// to build a positive `resolve_compound_chain` success-path test.
+    ///
+    /// `StrictCompoundSyntax::detect` (`utterance-engine/src/disposition.rs`)
+    /// only recognises a compound span when the ENTIRE trimmed span,
+    /// after normalisation, exactly matches a governed phrase -- no room
+    /// survives for an embedded free-text argument (a quoted node name,
+    /// a condition, etc.). `start_workbook`'s only `WorkbookEvidence`
+    /// variant is `PaletteSelection` -- it does no free-text argument
+    /// extraction of its own. So a compound span's candidate can only
+    /// reach `ReadyForDryRun`/`ReadyForRatification` (the precondition
+    /// for `resolve_compound_chain` to proceed past span 1, per its own
+    /// `Unverifiable` branch) if EVERY required argument is filled by
+    /// context alone -- in practice, only the one argument matching the
+    /// position's own bound anchor slot (confirmed empirically: `anchor`,
+    /// `from`, `host`, `guard`, `split` -- whichever name a given
+    /// candidate uses -- is the only argument ever auto-filled; a second
+    /// `node_reference`-kind argument, e.g. `op.connect`'s `to`, is
+    /// NOT auto-filled even though it's the same kind).
+    ///
+    /// This test asserts that claim directly and generally: for two real
+    /// graph shapes (plain linear; the same graph with a guard attached),
+    /// no non-abstention legal move ever reaches `MoveBindingState::Complete`
+    /// from anchor-context alone. Combined with the semantic pack having
+    /// exactly one capability (`op.delete_subgraph`) with a single
+    /// required argument -- and that capability never being legal in
+    /// either graph shape tried -- this is strong evidence that
+    /// `resolve_compound_chain`'s `Ready` arm is currently unreachable
+    /// given the shipped pack, independent of graph shape. Not a code
+    /// defect: `resolve_compound_chain`/`resolve_hypothetical_chain`'s
+    /// own mechanics are separately proven correct (this crate's
+    /// `test_strict_compound_utterance_never_falls_through_to_one_proposal`,
+    /// `start_workbook`'s direct tests in `proposal.rs`, and
+    /// `utterance-engine::bpmn_board`'s `resolve_hypothetical_chain`
+    /// tests). If this test ever starts failing, it means a pack change
+    /// made a capability anchor-only-bindable for the first time --
+    /// whoever changes the pack should build a real `Ready`-path test at
+    /// that point, since one was not constructible when this was written.
+    #[tokio::test]
+    async fn no_legal_move_is_anchor_only_bindable_today() {
+        async fn assert_no_complete_non_abstention_move(app: &axum::Router, session_id: &str) {
+            let response = app
+                .clone()
+                .oneshot(post_json(
+                    &format!("/api/dsl/sessions/{session_id}/utterance"),
+                    serde_json::json!({ "text": "unrelated xylophone request" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            let legal_moves = body["design_position"]["legal_moves"].as_array().unwrap();
+            assert!(
+                !legal_moves.is_empty(),
+                "fixture produced no legal moves at all -- test no longer exercises anything"
+            );
+            for legal_move in legal_moves {
+                if legal_move["candidate_id"] == semantic_decision_contracts::ABSTENTION_CANDIDATE_ID
+                {
+                    continue;
+                }
+                assert_ne!(
+                    legal_move["binding_state"]["state"], "complete",
+                    "candidate {} is anchor-only bindable -- resolve_compound_chain's \
+                     Ready arm may now be reachable; see this test's doc comment: {legal_move}",
+                    legal_move["candidate_id"]
+                );
+            }
+        }
+
+        // Shape 1: plain linear graph (start -> review_documents -> end).
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+        assert_no_complete_non_abstention_move(&app, &session_id).await;
+
+        // Shape 2: the same graph with a guard attached, in case a
+        // guard-typed anchor changes which arguments auto-fill.
+        let guard = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AttachGuard {
+                host: t1,
+                key: guard,
+                guard_id: "timeout".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+                ),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "timeout_end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow_timeout".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_no_complete_non_abstention_move(&app, &session_id).await;
+    }
+
     /// Ratify: the graph gains the node, the event log gains a GraphEdit
     /// carrying the "ratified proposal" note, and the proposal is gone.
     #[tokio::test]
