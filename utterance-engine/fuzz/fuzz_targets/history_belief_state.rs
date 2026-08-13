@@ -14,8 +14,9 @@ use semantic_decision_contracts::{
 };
 use utterance_engine::board::PolicyFilter;
 use utterance_engine::bpmn_board::{
-    build_bpmn_design_position, build_bpmn_semantic_board, finalize_bpmn_move_evidence,
-    project_bpmn_attempt_history, record_bpmn_attempt, update_bpmn_design_belief,
+    build_bpmn_design_position, build_bpmn_semantic_board, decide_bpmn_game_disposition,
+    finalize_bpmn_move_evidence, project_bpmn_attempt_history, record_bpmn_attempt,
+    update_bpmn_design_belief, BpmnBoardError,
 };
 use utterance_engine::contract::{FiniteScore, RankedCandidate, SlmResult};
 use uuid::Uuid;
@@ -31,6 +32,13 @@ fn observe(index: u8, label: &str) {
 
 fn key(value: u128) -> NodeKey {
     NodeKey(Uuid::from_u128(value))
+}
+
+// P1: content-derived DAG identity, computed the same way
+// `build_bpmn_design_position` derives its own `graph_state_hash` (D23/I34) --
+// not a fuzz-target-local notion of "hash".
+fn content_hash(dag: &DesignerDag) -> String {
+    DesignerDag::graph_state_hash(&dag.to_ir().unwrap())
 }
 
 fn graph(shape: u8) -> DesignerDag {
@@ -134,6 +142,33 @@ fn raw(board: &semantic_decision_contracts::SemanticDecisionBoard, seed: u8) -> 
     }
 }
 
+// U1 P6: case/whitespace decoration of the fixed governed phrase. The phrase
+// content itself must not change -- shape 2's motif.reminder_then_escalate
+// completion check (bottom of this file) depends on the same canonical
+// phrase resolving every time, and normalisation-equivalent variants
+// resolving identically is exactly what P6 asserts, mirroring the proven
+// pattern in evidence_fusion.rs (`"insert after"` vs `"  INSERT   AFTER  "`).
+const CANONICAL_INTENT: &str = "remind then escalate";
+
+fn observed_intent(selector: u8) -> String {
+    match selector % 4 {
+        0 => CANONICAL_INTENT.to_string(),
+        1 => CANONICAL_INTENT.to_uppercase(),
+        2 => format!("  {}  ", CANONICAL_INTENT.replace(' ', "   ")),
+        _ => {
+            let mut mixed = String::new();
+            for (index, ch) in CANONICAL_INTENT.chars().enumerate() {
+                if index % 2 == 0 {
+                    mixed.extend(ch.to_uppercase());
+                } else {
+                    mixed.push(ch);
+                }
+            }
+            format!(" {mixed} ")
+        }
+    }
+}
+
 struct ReferenceHistory {
     ids: BTreeSet<String>,
     corrections: usize,
@@ -159,8 +194,39 @@ impl ReferenceHistory {
 fuzz_target!(|data: &[u8]| {
     let shape = data.first().copied().unwrap_or_default() % 3;
     let dag = graph(shape);
-    let revision = format!("{:064x}", data.get(1).copied().unwrap_or_default());
+    let hash_before = content_hash(&dag);
+    let revision_byte = data.get(1).copied().unwrap_or_default();
+    let revision = format!("{revision_byte:064x}");
     let board = build_bpmn_semantic_board(&dag, None, &revision, &PolicyFilter::default()).unwrap();
+
+    // U1 P5, axis 2: foreign/stale board revision. `build_bpmn_design_position`
+    // must refuse a caller-supplied revision that disagrees with the board's
+    // own -- confirmed by reading bpmn_board.rs directly that no existing
+    // fuzz target exercises this boundary. wrapping_add(1) guarantees a
+    // distinct 64-hex-char string regardless of `revision_byte`'s value.
+    let axis = data.get(3).copied().unwrap_or_default() % 3;
+    if axis == 2 {
+        observe(13, "hostile_stale_board_revision");
+        let foreign_revision = format!("{:064x}", revision_byte.wrapping_add(1));
+        let (empty_hash, _) = project_bpmn_attempt_history(&[]).unwrap();
+        let result = build_bpmn_design_position(
+            &dag,
+            &board,
+            &foreign_revision,
+            &"b".repeat(64),
+            "history-fuzz-v1",
+            &empty_hash,
+            DesignFocus::absent(FocusAbsenceReason::NotProvided),
+            None,
+        );
+        assert!(matches!(
+            result,
+            Err(BpmnBoardError::StaleBoardRevision { .. })
+        ));
+        assert_eq!(content_hash(&dag), hash_before);
+        return;
+    }
+
     let (empty_hash, _) = project_bpmn_attempt_history(&[]).unwrap();
     let position = build_bpmn_design_position(
         &dag,
@@ -178,21 +244,94 @@ fuzz_target!(|data: &[u8]| {
         .iter()
         .map(|legal_move| legal_move.move_id().clone())
         .collect::<BTreeSet<_>>();
+
+    let intent = observed_intent(data.get(4).copied().unwrap_or_default());
+    let ranking_seed = data.get(2).copied().unwrap_or_default();
+
+    // U1 P5, axis 1: off-board candidate injection. `evidence_fusion.rs`
+    // already covers duplicate and omitted candidates against this same
+    // `finalize_bpmn_move_evidence` boundary; a foreign candidate id was the
+    // one malformed-ranking sub-case it never exercises.
+    if axis == 1 {
+        observe(14, "hostile_off_board_candidate");
+        let mut malformed = raw(&board, ranking_seed);
+        malformed.ranking.push(RankedCandidate {
+            candidate_id: format!("fuzz-off-board-{ranking_seed}"),
+            score: FiniteScore::new(0.5).unwrap(),
+        });
+        assert!(finalize_bpmn_move_evidence(
+            &board,
+            &position,
+            &intent,
+            malformed,
+            EvidenceLane::Lexical,
+            vec!["history.reference".into()],
+            &[],
+        )
+        .is_err());
+        assert_eq!(
+            position
+                .legal_moves()
+                .iter()
+                .map(|legal_move| legal_move.move_id().clone())
+                .collect::<BTreeSet<_>>(),
+            legal_before
+        );
+        assert_eq!(content_hash(&dag), hash_before);
+        return;
+    }
+
+    // axis == 0: valid tape.
     let fused = finalize_bpmn_move_evidence(
         &board,
         &position,
-        "remind then escalate",
-        raw(&board, data.get(2).copied().unwrap_or_default()),
+        &intent,
+        raw(&board, ranking_seed),
         EvidenceLane::Lexical,
         vec!["history.reference".into()],
         &[],
     )
     .unwrap();
+
+    // U1 P6 (reuse, not new design): normalisation-equivalent decorations of
+    // the canonical phrase must resolve to identical evidence. Already
+    // proven at this same boundary in evidence_fusion.rs; asserted inline
+    // here too since this target now varies the phrase.
+    if data.get(4).copied().unwrap_or_default() % 4 != 0 {
+        let canonical = finalize_bpmn_move_evidence(
+            &board,
+            &position,
+            CANONICAL_INTENT,
+            raw(&board, ranking_seed),
+            EvidenceLane::Lexical,
+            vec!["history.reference".into()],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&fused.move_evidence).unwrap(),
+            serde_json::to_value(&canonical.move_evidence).unwrap()
+        );
+    }
+
+    // U1 P3 (reuse, not new design): already proven against this same
+    // function in evidence_fusion.rs; asserted inline here for this
+    // target's own generated position too.
+    assert_eq!(fused.move_evidence.len(), position.legal_moves().len());
+    let probability_sum: f64 = fused
+        .move_evidence
+        .iter()
+        .map(|evidence| evidence.probability().get())
+        .sum();
+    // Same epsilon evidence_fusion.rs already proved sufficient at this
+    // boundary (fusion.rs:294) -- not independently re-derived here.
+    assert!((probability_sum - 1.0).abs() < 1e-12);
+
     let mut receipts = Vec::<MoveAttemptReceipt>::new();
     let mut reference = ReferenceHistory::new();
     let mut previous = None;
 
-    for (index, byte) in data.iter().copied().skip(3).take(65).enumerate() {
+    for (index, byte) in data.iter().copied().skip(5).take(65).enumerate() {
         let (outcome, correction) = match byte % 8 {
             0 => (MoveAttemptOutcome::Incomplete, None),
             1 => (MoveAttemptOutcome::Ambiguous, None),
@@ -226,9 +365,10 @@ fuzz_target!(|data: &[u8]| {
             .legal_moves()
             .first()
             .map(|item| item.move_id().clone());
+        let attempt_id = MoveAttemptId::new(format!("attempt-{index}")).unwrap();
         let receipt = record_bpmn_attempt(
             &position,
-            MoveAttemptId::new(format!("attempt-{index}")).unwrap(),
+            attempt_id.clone(),
             attempted_move,
             "fuzz observation",
             outcome,
@@ -271,6 +411,43 @@ fuzz_target!(|data: &[u8]| {
             serde_json::to_value(&belief).unwrap(),
             serde_json::to_value(&replay).unwrap()
         );
+
+        // U1 P2+P4 (ported from disposition_workbook_state.rs's pattern, not
+        // redesigned): decide_bpmn_game_disposition must validate against
+        // this position and name only on-board moves, and repeat calls with
+        // identical inputs must be deterministic.
+        let disposition = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &fused.move_evidence,
+            &belief,
+            &intent,
+            attempt_id.clone(),
+            &receipts,
+            None,
+        )
+        .unwrap();
+        disposition.validate_for_position(&position).unwrap();
+        assert!(disposition.selected_moves().iter().all(|move_id| position
+            .legal_moves()
+            .iter()
+            .any(|legal_move| legal_move.move_id() == move_id)));
+        let disposition_replay = decide_bpmn_game_disposition(
+            &board,
+            &position,
+            &fused.move_evidence,
+            &belief,
+            &intent,
+            attempt_id,
+            &receipts,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&disposition).unwrap(),
+            serde_json::to_value(&disposition_replay).unwrap()
+        );
+
         previous = Some(belief);
         assert_eq!(
             legal_before,
@@ -303,4 +480,8 @@ fuzz_target!(|data: &[u8]| {
                 .all(|motif| motif.motif_id() != "motif.reminder_then_escalate")));
         }
     }
+
+    // U1 P1: the source DAG's content-derived identity must be unchanged
+    // across the whole board -> ... -> disposition sequence, valid-tape path.
+    assert_eq!(content_hash(&dag), hash_before);
 });
