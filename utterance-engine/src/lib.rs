@@ -22,11 +22,15 @@
 //! `designer-graph`'s split (each maps to a distinct conceptual
 //! sub-domain; the sole external consumer, `bpmn-lite-server-designer`,
 //! already addresses them by module-qualified path). `contract`,
-//! `fixtures`, `trained_ranker`, and `metrics` stay `pub mod` because
-//! this crate's own `examples/*.rs` binaries need genuine `pub`
-//! visibility to reach them (an example compiles as an external
-//! consumer of the library, same as any other crate). Do not flatten
-//! into a crate-root facade without re-litigating that call.
+//! `fixtures`, and `trained_ranker` stay `pub mod` because this crate's own
+//! `examples/*.rs` binaries AND `fuzz/` targets need genuine `pub`
+//! visibility to reach them (an example or fuzz target compiles as an
+//! external consumer of the library, same as any other crate — H5,
+//! EOP-PLAN-CRATE-HYGIENE-001, re-verified this with bare-identifier greps
+//! against the whole workspace). `metrics` was already `#[cfg(test)] mod
+//! metrics` (private) as of that plan's H2 — dropped from this list, no
+//! longer part of the question. Do not flatten into a crate-root facade
+//! without re-litigating that call.
 
 mod argument_evidence;
 mod belief;
