@@ -936,6 +936,10 @@ pub fn designer_router(state: Arc<DesignerState>) -> Router {
         .route("/api/dsl/sessions/:id/undo", post(session_undo_endpoint))
         .route("/api/dsl/sessions/:id/runbook", get(session_runbook_endpoint))
         .route(
+            "/api/dsl/sessions/:id/dsl-receipt",
+            get(session_dsl_receipt_endpoint),
+        )
+        .route(
             "/api/dsl/sessions/:id/gameboard",
             get(session_gameboard_endpoint),
         )
@@ -6998,6 +7002,81 @@ async fn sage_move_guidance_endpoint(
 /// surface as diagnostics, never a blank canvas. Layout is computed
 /// here (layered by BFS depth from the start node) — the UI is a
 /// window, not an editor.
+/// B3 (EOP-PLAN-GRAPH-DSL-BRIDGE-001) — canonical DSL source receipt for
+/// a graph-backed session: the admitted DAG projected through
+/// `DesignerDag::emit_dsl` (B1's core-5 emission, proven
+/// recompile-equivalent to `project_ir` by B2's harness). Read-only: no
+/// store write on any path. A refusal is a valid, honest 200 receipt
+/// response (`refused: { stage, diagnostic }`), never a 500 — the
+/// diagnostic names the construct with no DSL surface yet, which is the
+/// DSL-parity programme's backlog input. `workflow_id` is the session
+/// UUID, not `session.name`: the name is free text ("proposal session")
+/// and would refuse `UnrepresentableToken` for every spaced name, while
+/// the UUID is the session's stable identity and always lexes as a DSL
+/// Symbol token.
+async fn session_dsl_receipt_endpoint(
+    State(demo): State<Arc<DesignerState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let session = match demo.store.load_design_session(&demo.tenant_id, id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let refused = |stage: &'static str, diagnostic: String| {
+        Json(serde_json::json!({
+            "source": serde_json::Value::Null,
+            "graph_state_hash": serde_json::Value::Null,
+            "required_symbols": serde_json::Value::Null,
+            "refused": { "stage": stage, "diagnostic": diagnostic },
+        }))
+        .into_response()
+    };
+    if !session.is_graph_backed() {
+        return refused(
+            "session",
+            "session is not graph-backed — its DSL source is authoritative already".to_owned(),
+        );
+    }
+    let dag = match reconstruct_designer_dag(&session, None) {
+        Ok(d) => d,
+        Err(e) => return refused("reconstruction", format!("{e}")),
+    };
+    // Admit first (same discipline as the graph endpoint): the receipt
+    // describes the admitted artifact, never an un-admittable graph.
+    if let Err(errs) = dag.admit() {
+        return refused(
+            "admission",
+            errs.iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
+    }
+    match dag.emit_dsl(&id.to_string()) {
+        Ok(receipt) => Json(serde_json::json!({
+            "source": receipt.emitted.source,
+            "graph_state_hash": receipt.graph_state_hash,
+            "required_symbols": receipt.emitted.required_symbols,
+            "refused": serde_json::Value::Null,
+        }))
+        .into_response(),
+        Err(e) => refused("emission", format!("{e}")),
+    }
+}
+
 async fn session_graph_endpoint(
     State(demo): State<Arc<DesignerState>>,
     Path(id): Path<Uuid>,
@@ -10030,6 +10109,167 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         (session_id, t1)
+    }
+
+    /// B3 (EOP-PLAN-GRAPH-DSL-BRIDGE-001) — green path: a graph-backed
+    /// session's canonical DSL receipt emits, recompiles in-contract
+    /// (derived empty-bindings registry, the B0/B2 equivalence
+    /// discipline), is deterministic across calls, and the endpoint
+    /// never mutates the graph.
+    #[tokio::test]
+    async fn test_dsl_receipt_green_recompiles_and_never_mutates() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, _t1) = seed_graph_backed_session(&app).await;
+
+        let graph_uri = format!("/api/dsl/sessions/{session_id}/graph");
+        let receipt_uri = format!("/api/dsl/sessions/{session_id}/dsl-receipt");
+        let graph_before =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+
+        let response = app.clone().oneshot(get_req(&receipt_uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt = body_json(response).await;
+        assert!(
+            receipt["refused"].is_null(),
+            "green session must emit, got: {receipt}"
+        );
+        let source = receipt["source"].as_str().expect("source string");
+        assert!(source.contains("(workflow "));
+        assert!(source.contains("review_documents"));
+        assert!(!receipt["graph_state_hash"]
+            .as_str()
+            .expect("hash string")
+            .is_empty());
+
+        let mut reg = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new();
+        for sym in receipt["required_symbols"].as_array().expect("symbols") {
+            reg.register_verb(
+                sym.as_str().unwrap(),
+                bpmn_lite_compiler::dsl::BindingDecl::default(),
+            );
+        }
+        bpmn_lite_compiler::dsl::compile(source, &reg)
+            .expect("receipt source must recompile in-contract");
+
+        let receipt_again =
+            body_json(app.clone().oneshot(get_req(&receipt_uri)).await.unwrap()).await;
+        assert_eq!(receipt, receipt_again, "receipt must be deterministic");
+        let graph_after =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        assert_eq!(
+            graph_before["source_hash"], graph_after["source_hash"],
+            "receipt endpoint must never mutate the session graph"
+        );
+    }
+
+    /// B3 — refusing path: a guard (BoundaryTimer — a construct with no
+    /// DSL surface yet) yields an honest 200 refusal naming the
+    /// construct, with no source emitted and the graph untouched.
+    #[tokio::test]
+    async fn test_dsl_receipt_refuses_guard_graph_with_named_diagnostic() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let (session_id, t1) = seed_graph_backed_session(&app).await;
+        let guard = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AttachGuard {
+                host: t1,
+                key: guard,
+                guard_id: "timeout".into(),
+                trigger: designer_graph::ops::GuardTrigger::Timer(
+                    bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+                ),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: guard,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "timeout_end".into(),
+                    terminate: false,
+                },
+                edge_id: "flow_timeout".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let receipt_uri = format!("/api/dsl/sessions/{session_id}/dsl-receipt");
+        let graph_uri = format!("/api/dsl/sessions/{session_id}/graph");
+        let graph_before =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        let response = app.clone().oneshot(get_req(&receipt_uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "refusal is a 200 receipt");
+        let receipt = body_json(response).await;
+        assert!(receipt["source"].is_null());
+        assert_eq!(receipt["refused"]["stage"], "emission");
+        // A boundary node attaches via `attached_to`, not sequence flow,
+        // so the emitter's Stage-0 reachability pre-check refuses it
+        // (naming the guard node) before the per-node UnsupportedNode
+        // check would — the frozen refusal ordering, not a lost
+        // diagnostic: either way the guard construct is named and
+        // nothing lossy is emitted.
+        assert!(
+            receipt["refused"]["diagnostic"]
+                .as_str()
+                .unwrap()
+                .contains("'timeout'"),
+            "diagnostic must name the refusing node: {receipt}"
+        );
+        let graph_after =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);
+    }
+
+    /// B3 — unknown session is 404; a session with no graph edits
+    /// refuses at the "session" stage (its DSL text is authoritative
+    /// already — nothing to project).
+    #[tokio::test]
+    async fn test_dsl_receipt_not_found_and_non_graph_backed() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+
+        let response = app
+            .clone()
+            .oneshot(get_req(&format!(
+                "/api/dsl/sessions/{}/dsl-receipt",
+                Uuid::new_v4()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "plain dsl session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let receipt = body_json(
+            app.clone()
+                .oneshot(get_req(&format!(
+                    "/api/dsl/sessions/{session_id}/dsl-receipt"
+                )))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(receipt["refused"]["stage"], "session");
+        assert!(receipt["source"].is_null());
     }
 
     /// The utterance whose lexical overlap deterministically resolves to
