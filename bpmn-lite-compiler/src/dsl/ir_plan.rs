@@ -216,6 +216,17 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                 escape_entry,
             });
     }
+    // Sorted by guard id (D0 blind-review finding): node_indices() is
+    // arena/edit order, so two edit orders attaching the same guards to
+    // one host produced differently-ordered `guards` Vecs — the same
+    // edit-order-derived-bytes defect D0 fixed for split flows, on the
+    // verifier-legal multi-error-guard-per-host path. Guard order also
+    // feeds lowering's guard arms, so this is a determinism fix, not
+    // cosmetics. Same impact argument as the flow sort: plan hashes are
+    // write-time content addresses, never recompute-compared.
+    for specs in guards_by_host.values_mut() {
+        specs.sort_by(|a, b| a.guard_id.cmp(&b.guard_id));
+    }
 
     let mut nodes: BTreeMap<String, ExecutionNode> = BTreeMap::new();
 

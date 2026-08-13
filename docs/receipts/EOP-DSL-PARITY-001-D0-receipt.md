@@ -13,9 +13,30 @@ projection's stored bytes.**
 `project_ir`'s diverging-gateway arm now collects outgoing edges and
 sorts by sequence-flow id before building `SplitExecNode.flows`
 (ir_plan.rs, replacing the raw `edges_directed` iteration). This matches
-`emit.rs`'s frozen canonical rule exactly — the projection is now
-content-canonical: two edit orders building `ir_graphs_equivalent`
-graphs project byte-identical plans.
+`emit.rs`'s frozen canonical rule exactly.
+
+**Corrected after blind review — the first draft's claim "the projection
+is now content-canonical" was overbroad and empirically refuted:** the
+reviewer built two verifier-clean, `ir_graphs_equivalent` DAGs with two
+error guards on one host attached in opposite orders and got different
+plan bytes — `guards_by_host`'s per-host Vec was still `node_indices()`
+(edit) order. Same defect class, unexercised path. **Fixed in this
+tranche** (not claim-narrowed): each host's `GuardExecSpec`s now sort by
+guard id, with its own cement test
+(`project_ir_guard_order_is_content_canonical`) and mutation red trace
+(guard sort removed → test fails → restored → green). Guard order feeds
+lowering's guard arms, so this was a determinism fix, not cosmetics.
+
+Remaining precise scope of the canonicality claim: node order
+(`BTreeMap`-keyed), flow order (edge-id-sorted), and guard order
+(guard-id-sorted) are content-canonical; **edge ids themselves remain
+part of the content** — `ir_graphs_equivalent` deliberately excludes
+edge ids from its comparison, so two "equivalent" graphs whose split
+arms carry *different edge ids* still project different flow orders.
+The canonical claim is therefore: same nodes + same edges *including
+ids* → byte-identical plan, regardless of edit order. (The
+cement tests assert exactly this; the reviewer's edge-id nuance is
+hereby recorded rather than papered.)
 
 ## Work item 2 — impact check (evidenced, per-consumer)
 
@@ -71,8 +92,32 @@ projected after D0.
 - **Known deviations or explicitly parked work:** none — the tranche is
   exactly its four work items.
 
-- **Blind peer-review findings and dispositions:** pending — dispatched
-  at this receipt's close.
+- **Blind peer-review findings and dispositions:** an independent
+  reviewer (no prior context) re-derived the entire impact table —
+  finding all three `blake3(plan_json)` write sites and confirming no
+  fourth exists, confirming `store_plan` is idempotent-no-op on existing
+  keys in BOTH store impls (memory `or_insert_with`; postgres
+  `ON CONFLICT DO NOTHING`), that `template_plan_hash` has zero
+  recompute-compare consumers, that no test pins a plan-hash constant,
+  and that G6 replay compares graph equivalence, not plan bytes.
+  Reproduced the cement test's mutation red trace (confirming g3/g4/g6 +
+  cement are exactly the tests that depend on the sort) and the full
+  workspace suite. Verdict: A/C/D/E verified; **B refuted as stated** —
+  findings and dispositions:
+  1. **"The projection is now content-canonical" was overbroad**:
+     `guards_by_host` order was still edit-order-derived, empirically
+     reproduced with two error guards on one host (verifier-legal).
+     Disposed by FIXING (guard-id sort + cement test + red trace), not
+     by narrowing — and the work-item-4 determinism note now genuinely
+     holds, since guard order feeds lowering's guard arms.
+  2. **Edge-id nuance**: `ir_graphs_equivalent` excludes edge ids, so
+     "equivalent graphs → identical bytes" needed the precise statement
+     now in work item 1 (same edges *including ids* → identical bytes).
+     Recorded, not papered.
+  3. Confirmed the re-publish behaviour post-D0 (new canonical hash →
+     new plan row via idempotent insert; old template versions keep
+     their old pointers) is harmless duplication, as the impact table
+     claimed.
 
 - **STOP-gate decision: blocked — awaiting peer review of this receipt.**
 

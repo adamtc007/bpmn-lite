@@ -447,6 +447,67 @@ fn project_ir_flow_order_is_content_canonical() {
     );
 }
 
+/// D0 blind-review cement: guard order is content-canonical too. Two
+/// verifier-legal error guards on one host, attached in opposite edit
+/// orders, must project byte-identical plans — before the guard sort,
+/// `guards_by_host`'s per-host Vec was `node_indices()` (edit) order and
+/// this failed (reproduced empirically by the D0 review). Guard order
+/// feeds lowering's guard arms, so this is determinism, not cosmetics.
+#[test]
+fn project_ir_guard_order_is_content_canonical() {
+    let build = |guard_order: &[usize]| {
+        let mut dag = DesignerDag::new("d0-guards");
+        let s = dag
+            .insert_node(key(), start("start"), None, Provenance::default())
+            .unwrap();
+        let t = dag
+            .insert_node(key(), task("t1", "cbu.host"), None, Provenance::default())
+            .unwrap();
+        let e = dag
+            .insert_node(key(), end("end", false), None, Provenance::default())
+            .unwrap();
+        dag.insert_edge(s, t, edge("f1")).unwrap();
+        dag.insert_edge(t, e, edge("f2")).unwrap();
+        for &i in guard_order {
+            let g = dag
+                .insert_node(
+                    key(),
+                    bpmn_lite_compiler::IRNode::BoundaryError {
+                        id: format!("guard-{i}"),
+                        attached_to: "t1".into(),
+                        error_code: Some(format!("E{i}")),
+                        failure_budget: None,
+                    },
+                    Some(t),
+                    Provenance::default(),
+                )
+                .unwrap();
+            let esc = dag
+                .insert_node(
+                    key(),
+                    end(&format!("escape-end-{i}"), false),
+                    None,
+                    Provenance::default(),
+                )
+                .unwrap();
+            dag.insert_edge(g, esc, edge(&format!("f-esc-{i}"))).unwrap();
+        }
+        dag
+    };
+    let a = build(&[0, 1]);
+    let b = build(&[1, 0]);
+    let ir_a = a.to_ir().unwrap();
+    let ir_b = b.to_ir().unwrap();
+    assert!(DesignerDag::ir_graphs_equivalent(&ir_a, &ir_b));
+    let plan_a = project_ir(&ir_a, "d0g".to_owned()).unwrap();
+    let plan_b = project_ir(&ir_b, "d0g".to_owned()).unwrap();
+    assert_eq!(
+        serde_json::to_string(&plan_a).unwrap(),
+        serde_json::to_string(&plan_b).unwrap(),
+        "equivalent guard attachment orders must project byte-identical plans"
+    );
+}
+
 /// Red side — a refusal leaves the graph identity untouched (the B0 red
 /// rule "no partial artifact and unchanged graph_state_hash"; "no
 /// artifact" is structural via `Result`, the identity half is cemented
