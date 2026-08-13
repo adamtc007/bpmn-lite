@@ -20,6 +20,8 @@ pub enum NodeAst {
     Split(SplitAst),
     Join(JoinAst),
     Loop(LoopAst),
+    BoundaryTimer(BoundaryTimerAst),
+    BoundaryError(BoundaryErrorAst),
 }
 
 impl NodeAst {
@@ -32,6 +34,8 @@ impl NodeAst {
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
+            Self::BoundaryTimer(n) => &n.id,
+            Self::BoundaryError(n) => &n.id,
         }
     }
 
@@ -44,8 +48,39 @@ impl NodeAst {
             Self::Split(n) => n.span,
             Self::Join(n) => n.span,
             Self::Loop(n) => n.span,
+            Self::BoundaryTimer(n) => n.span,
+            Self::BoundaryError(n) => n.span,
         }
     }
+}
+
+/// D1 (EOP-PLAN-DSL-PARITY-001): a boundary timer guard — a DECORATION
+/// on its `:host` task, not a plan node. Lowers to a `GuardExecSpec` on
+/// the host's `TaskExecNode`, never to an `ExecutionNode` of its own.
+/// `next` is the escape-flow entry (exactly one, mirroring the
+/// lowering's single-handler resolution).
+#[derive(Debug, Clone)]
+pub struct BoundaryTimerAst {
+    pub id: String,
+    pub host: String,
+    pub spec: crate::ir::TimerSpec,
+    pub interrupting: bool,
+    pub budget: Option<u32>,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+/// D1: a boundary error guard — same decoration semantics as
+/// [`BoundaryTimerAst`]; always interrupting (F2a — a rearming error
+/// guard is not a representable construct, so no flag exists here).
+#[derive(Debug, Clone)]
+pub struct BoundaryErrorAst {
+    pub id: String,
+    pub host: String,
+    pub error_code: Option<String>,
+    pub budget: Option<u32>,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
 }
 
 #[derive(Debug, Clone)]

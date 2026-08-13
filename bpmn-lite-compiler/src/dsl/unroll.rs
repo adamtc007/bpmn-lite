@@ -15,7 +15,10 @@
 //! literal, source-authored fields — so unrolling never needs to bind a
 //! per-copy literal; it is pure structural repetition.
 
-use super::ast::{JoinAst, LoopAst, MessageWaitAst, NodeAst, SplitAst, SplitFlowAst, TaskAst};
+use super::ast::{
+    BoundaryErrorAst, BoundaryTimerAst, JoinAst, LoopAst, MessageWaitAst, NodeAst, SplitAst,
+    SplitFlowAst, TaskAst,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +146,17 @@ fn retarget_external_refs(node: NodeAst, loop_entries: &HashMap<String, String>)
             NodeAst::Join(j)
         }
         NodeAst::End(e) => NodeAst::End(e),
+        // D1: a guard's `next` is its escape-flow entry — retargeted like
+        // any other next; the `host` reference is untouched here (it
+        // names a node, not a flow target).
+        NodeAst::BoundaryTimer(mut g) => {
+            g.next = retarget(&g.next);
+            NodeAst::BoundaryTimer(g)
+        }
+        NodeAst::BoundaryError(mut g) => {
+            g.next = retarget(&g.next);
+            NodeAst::BoundaryError(g)
+        }
         NodeAst::Loop(_) => unreachable!("Loop nodes are expanded by the caller, never reach here"),
     }
 }
@@ -297,6 +311,28 @@ fn clone_node_iteration(
         // unrolling, already rejects duplicate/misplaced Start/End nodes
         // with a precise diagnostic, so there is no silent acceptance.
         NodeAst::Start(_) | NodeAst::End(_) => node.clone(),
+        // D1: a guard inside a loop body clones per iteration with its id
+        // remapped; `host` goes through the SAME id map, so a guard on an
+        // in-body host follows that host's clone (a guard on an
+        // outside-body host keeps the original reference — the lint
+        // duplicate-guard check then owns whether that shape is legal).
+        NodeAst::BoundaryTimer(g) => NodeAst::BoundaryTimer(BoundaryTimerAst {
+            id: new_id(&g.id),
+            host: new_id(&g.host),
+            spec: g.spec.clone(),
+            interrupting: g.interrupting,
+            budget: g.budget,
+            next: remap_next(&g.next, loop_id, id_map, exit_target),
+            span: g.span,
+        }),
+        NodeAst::BoundaryError(g) => NodeAst::BoundaryError(BoundaryErrorAst {
+            id: new_id(&g.id),
+            host: new_id(&g.host),
+            error_code: g.error_code.clone(),
+            budget: g.budget,
+            next: remap_next(&g.next, loop_id, id_map, exit_target),
+            span: g.span,
+        }),
         NodeAst::Loop(inner) => NodeAst::Loop(LoopAst {
             id: new_id(&inner.id),
             ceiling: inner.ceiling,

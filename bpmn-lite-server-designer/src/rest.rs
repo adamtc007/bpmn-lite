@@ -10163,11 +10163,15 @@ mod tests {
         );
     }
 
-    /// B3 — refusing path: a guard (BoundaryTimer — a construct with no
-    /// DSL surface yet) yields an honest 200 refusal naming the
-    /// construct, with no source emitted and the graph untouched.
+    /// D1 cement update (named, per the D1.0 freeze — this test was B3's
+    /// refusing-path proof while guards had no DSL surface; guards
+    /// joined the core in D1, so the SAME graph now emits): the guard
+    /// graph's receipt emits a boundary-timer form, recompiles
+    /// in-contract, and the endpoint still never mutates. The refusing
+    /// path is now proven by `test_dsl_receipt_not_found_and_non_graph_backed`
+    /// plus the emitter's own red suite.
     #[tokio::test]
-    async fn test_dsl_receipt_refuses_guard_graph_with_named_diagnostic() {
+    async fn test_dsl_receipt_guard_graph_emits_boundary_timer() {
         let state = DesignerState::try_new().unwrap();
         let app = designer_router(state);
         let (session_id, t1) = seed_graph_backed_session(&app).await;
@@ -10206,27 +10210,28 @@ mod tests {
         let graph_before =
             body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
         let response = app.clone().oneshot(get_req(&receipt_uri)).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "refusal is a 200 receipt");
+        assert_eq!(response.status(), StatusCode::OK);
         let receipt = body_json(response).await;
-        assert!(receipt["source"].is_null());
-        assert_eq!(receipt["refused"]["stage"], "emission");
-        // A boundary node attaches via `attached_to`, not sequence flow,
-        // so the emitter's Stage-0 reachability pre-check refuses it
-        // (naming the guard node) before the per-node UnsupportedNode
-        // check would — the frozen refusal ordering, not a lost
-        // diagnostic: either way the guard construct is named and
-        // nothing lossy is emitted.
-        // Exact prefix, not a substring: 'timeout' (the guard node, the
-        // smallest unreachable id per the emitter's deterministic pick),
-        // never 'timeout_end' — a bare contains("'timeout'") would be
-        // satisfied by either (blind-review tightening).
         assert!(
-            receipt["refused"]["diagnostic"]
-                .as_str()
-                .unwrap()
-                .starts_with("node 'timeout' is not reachable"),
-            "diagnostic must name the guard node exactly: {receipt}"
+            receipt["refused"].is_null(),
+            "guard graph must emit since D1: {receipt}"
         );
+        let source = receipt["source"].as_str().expect("source string");
+        assert!(
+            source.contains(
+                "(boundary-timer :id timeout :host review_documents :duration-ms 60000 :interrupting true :next timeout_end)"
+            ),
+            "emitted source must carry the exact frozen guard form: {source}"
+        );
+        let mut reg = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new();
+        for sym in receipt["required_symbols"].as_array().expect("symbols") {
+            reg.register_verb(
+                sym.as_str().unwrap(),
+                bpmn_lite_compiler::dsl::BindingDecl::default(),
+            );
+        }
+        bpmn_lite_compiler::dsl::compile(source, &reg)
+            .expect("guard-bearing receipt source must recompile in-contract");
         let graph_after =
             body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
         assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);

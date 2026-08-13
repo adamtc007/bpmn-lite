@@ -4,12 +4,17 @@
 //! `IRGraph`, sibling to [`crate::dsl::ir_plan`] (IR → plan) and aligned
 //! with its refusal posture — **deliberately conservative, fails closed
 //! beyond the core** (no lossy encoding, no silent skipping, no
-//! `ServiceTask`-faking of unrepresented kinds). Supported ("core-5"):
-//! `Start`, `End` (terminate via the `"terminated"` status sentinel, the
-//! same pair `ir_plan` writes and `frontend` reads), `ServiceTask`,
-//! `MessageWait`, and matched `GatewayAnd` diverging/converging pairs
-//! (via the exposed [`gateway_pairs`] oracle — never hand-rolled
-//! re-pairing). Every other `IRNode` kind refuses with a named
+//! `ServiceTask`-faking of unrepresented kinds). Supported: `Start`,
+//! `End` (terminate via the `"terminated"` status sentinel, the same
+//! pair `ir_plan` writes and `frontend` reads), `ServiceTask`,
+//! `MessageWait`, matched `GatewayAnd` diverging/converging pairs (via
+//! the exposed [`gateway_pairs`] oracle — never hand-rolled re-pairing),
+//! and — since D1 (EOP-PLAN-DSL-PARITY-001) — `BoundaryTimer`/
+//! `BoundaryError` guards on ServiceTask hosts (decoration forms
+//! emitted directly after their host; stage 0 runs over the EFFECTIVE
+//! graph of flow + escape + implicit host→guard edges, with a hard
+//! totality assert — refuse, never truncate). Every other `IRNode` kind
+//! refuses with a named
 //! [`DslEmitError`]; the match below has NO wildcard arm, so a new
 //! `IRNode` variant breaks this compile rather than falling through.
 //!
@@ -99,6 +104,18 @@ pub enum DslEmitError {
     },
     #[error("an outgoing edge of node '{id}' carries a condition, but its emitted DSL form has no field to represent one")]
     UnrepresentableCondition { id: String },
+    #[error("guard '{guard_id}' is attached to '{host}' ({host_kind}) — boundary guards emit only on ServiceTask hosts (mirror of the projection's GuardHostUnprojected restriction)")]
+    GuardOnUnsupportedHost {
+        guard_id: String,
+        host: String,
+        host_kind: &'static str,
+    },
+    #[error("edge '{edge_id}' flows INTO guard '{guard_id}' — a boundary guard is a decoration with no incoming sequence flow; the grammar cannot target one")]
+    FlowIntoGuard { guard_id: String, edge_id: String },
+    #[error("guard '{guard_id}' carries failure budget 0 — a zero budget no-ops the guard, and the emitted source would refuse at lint (D1 axis R31); refusing at emission keeps emit-green ⇒ recompile-green")]
+    GuardBudgetZero { guard_id: String },
+    #[error("guard '{guard_id}' is an interrupting cycle timer — contradictory (a cycle timer rearms by definition), and the emitted source would refuse at lint (D1 axis R33)")]
+    InterruptingCycleTimer { guard_id: String },
 }
 
 /// Whether the source `DesignerDag` carries process-level declarations
@@ -164,33 +181,115 @@ fn no_span() -> bpmn_lite_types::SourceSpan {
     bpmn_lite_types::SourceSpan::new(0, 0)
 }
 
-/// Canonical topological order: Kahn's algorithm rooted at the unique
-/// Start, ready-set ordered by BPMN id (lexicographic, byte-wise).
-/// Precondition: stage-0 checks passed (single start, acyclic, all
-/// reachable), so this always yields every node exactly once.
-fn canonical_order(ir: &IRGraph) -> Vec<NodeIndex> {
+fn is_guard(node: &IRNode) -> bool {
+    matches!(
+        node,
+        IRNode::BoundaryTimer { .. } | IRNode::BoundaryError { .. }
+    )
+}
+
+/// D1: guards attached per host index, guard indices sorted by guard id,
+/// plus the guards whose `attached_to` resolves to no node (dangling —
+/// refused as unreachable in stage 0, but the cycle scan must still be
+/// total over them).
+fn collect_guards(
+    ir: &IRGraph,
+) -> (BTreeMap<NodeIndex, Vec<NodeIndex>>, Vec<NodeIndex>) {
+    let id_to_idx: BTreeMap<&str, NodeIndex> =
+        ir.node_indices().map(|i| (ir[i].id(), i)).collect();
+    let mut by_host: BTreeMap<NodeIndex, Vec<NodeIndex>> = BTreeMap::new();
+    let mut dangling = Vec::new();
+    for idx in ir.node_indices() {
+        let host = match &ir[idx] {
+            IRNode::BoundaryTimer { attached_to, .. }
+            | IRNode::BoundaryError { attached_to, .. } => attached_to,
+            _ => continue,
+        };
+        match id_to_idx.get(host.as_str()) {
+            Some(&h) => by_host.entry(h).or_default().push(idx),
+            None => dangling.push(idx),
+        }
+    }
+    for v in by_host.values_mut() {
+        v.sort_by(|a, b| ir[*a].id().cmp(ir[*b].id()));
+    }
+    (by_host, dangling)
+}
+
+/// Canonical scan over the EFFECTIVE graph (D1.0 §3.1b/§3.2): flow +
+/// escape edges plus one implicit host→guard edge per attachment.
+/// Guard nodes never enter the ready set — a host's guards emit directly
+/// after it, ordered by guard id (their escape edges then release
+/// successors normally). `dangling_as_roots` is the stage-0
+/// cycle-check mode: a guard whose host doesn't resolve is treated as a
+/// root there so the totality verdict is about CYCLES, not about the
+/// dangling attachment (which the reachability check refuses next, with
+/// the right diagnostic).
+fn canonical_scan(
+    ir: &IRGraph,
+    guards_of: &BTreeMap<NodeIndex, Vec<NodeIndex>>,
+    dangling: &[NodeIndex],
+    dangling_as_roots: bool,
+) -> Vec<NodeIndex> {
+    let guard_set: BTreeSet<NodeIndex> = ir
+        .node_indices()
+        .filter(|&i| is_guard(&ir[i]))
+        .collect();
     let mut in_degree: BTreeMap<NodeIndex, usize> = ir
         .node_indices()
         .map(|idx| (idx, ir.edges_directed(idx, Direction::Incoming).count()))
         .collect();
-    // Ready set keyed by BPMN id — BTreeMap pops smallest id first.
     let mut ready: BTreeMap<String, NodeIndex> = in_degree
         .iter()
-        .filter(|(_, d)| **d == 0)
+        .filter(|(idx, d)| **d == 0 && !guard_set.contains(idx))
         .map(|(idx, _)| (ir[*idx].id().to_owned(), *idx))
         .collect();
+    if dangling_as_roots {
+        for &g in dangling {
+            if in_degree[&g] == 0 {
+                ready.insert(ir[g].id().to_owned(), g);
+            }
+        }
+    }
     let mut order = Vec::with_capacity(ir.node_count());
-    while let Some((id, idx)) = ready.iter().next().map(|(k, v)| (k.clone(), *v)) {
-        ready.remove(&id);
+    // Emit one node: push it, release its out-edges, then emit its
+    // attached guards directly after it (guard-id order), recursively —
+    // "directly after the host" is the frozen canonical rule.
+    fn emit_node(
+        ir: &IRGraph,
+        idx: NodeIndex,
+        guards_of: &BTreeMap<NodeIndex, Vec<NodeIndex>>,
+        guard_set: &BTreeSet<NodeIndex>,
+        in_degree: &mut BTreeMap<NodeIndex, usize>,
+        ready: &mut BTreeMap<String, NodeIndex>,
+        order: &mut Vec<NodeIndex>,
+    ) {
         order.push(idx);
         for edge in ir.edges_directed(idx, Direction::Outgoing) {
             let tgt = edge.target();
             let d = in_degree.get_mut(&tgt).expect("target tracked");
-            *d -= 1;
-            if *d == 0 {
+            *d = d.saturating_sub(1);
+            if *d == 0 && !guard_set.contains(&tgt) {
                 ready.insert(ir[tgt].id().to_owned(), tgt);
             }
         }
+        if let Some(gs) = guards_of.get(&idx) {
+            for &g in gs {
+                emit_node(ir, g, guards_of, guard_set, in_degree, ready, order);
+            }
+        }
+    }
+    while let Some((id, idx)) = ready.iter().next().map(|(k, v)| (k.clone(), *v)) {
+        ready.remove(&id);
+        emit_node(
+            ir,
+            idx,
+            guards_of,
+            &guard_set,
+            &mut in_degree,
+            &mut ready,
+            &mut order,
+        );
     }
     order
 }
@@ -236,25 +335,53 @@ pub fn emit_dsl(
         }
     }
 
-    if petgraph::algo::toposort(ir, None).is_err() {
-        // Deterministic witness (B1 blind-review finding 5: toposort's
-        // witness depends on arena insertion order): smallest BPMN id
-        // among nodes on any cycle, via SCCs — content-derived, not
-        // arena-derived.
-        let mut cyclic: Vec<&str> = petgraph::algo::tarjan_scc(ir)
-            .into_iter()
-            .filter(|scc| {
-                scc.len() > 1 || scc.iter().any(|&n| ir.find_edge(n, n).is_some())
+    // D1: guard attachments participate in stage 0 — collect first.
+    let (guards_of, dangling_guards) = collect_guards(ir);
+
+    // A guard with an incoming sequence-flow edge is unschedulable (it
+    // emits after its host, not via flow) and untargetable in the
+    // grammar — refuse by name, smallest guard id then smallest edge id
+    // (deterministic). D1.0 amendment recorded in the D1 receipt.
+    {
+        let mut hits: Vec<(String, String)> = ir
+            .node_indices()
+            .filter(|&i| is_guard(&ir[i]))
+            .flat_map(|g| {
+                ir.edges_directed(g, Direction::Incoming)
+                    .map(move |e| (ir[g].id().to_owned(), e.weight().id.clone()))
             })
-            .flatten()
-            .map(|n| ir[n].id())
             .collect();
-        cyclic.sort();
-        let id = cyclic
-            .first()
-            .map(|s| (*s).to_owned())
-            .unwrap_or_default();
-        return Err(DslEmitError::CyclicGraph { id });
+        hits.sort();
+        if let Some((guard_id, edge_id)) = hits.into_iter().next() {
+            return Err(DslEmitError::FlowIntoGuard { guard_id, edge_id });
+        }
+    }
+
+    // Cycle check over the EFFECTIVE graph (D1.0 §3.1b — flow + escape +
+    // implicit host→guard edges, exactly the graph the emission scan
+    // walks and validate_dag's adjacency mirrors): the scan itself, in
+    // dangling-as-roots mode, IS the check — leftover nodes mean a cycle
+    // in the effective graph (an escape edge back into the guard's own
+    // host/ancestor deadlocks the schedule even though plain toposort
+    // over flow edges alone is acyclic, since attachment is a field,
+    // not an edge). Witness: smallest unscheduled BPMN id.
+    {
+        let probe = canonical_scan(ir, &guards_of, &dangling_guards, true);
+        if probe.len() != ir.node_count() {
+            let scheduled: BTreeSet<NodeIndex> = probe.into_iter().collect();
+            let mut leftover: Vec<&str> = ir
+                .node_indices()
+                .filter(|i| !scheduled.contains(i))
+                .map(|i| ir[i].id())
+                .collect();
+            leftover.sort();
+            return Err(DslEmitError::CyclicGraph {
+                id: leftover
+                    .first()
+                    .map(|s| (*s).to_owned())
+                    .unwrap_or_default(),
+            });
+        }
     }
 
     let start_idx = ir
@@ -262,11 +389,32 @@ pub fn emit_dsl(
         .find(|&idx| matches!(ir[idx], IRNode::Start { .. }))
         .expect("start existence checked above");
     {
+        // D1.0 §3.1 reachability fixpoint: flow-DFS from Start, plus
+        // guards attached to reachable hosts, plus flow-DFS from each
+        // such guard's escape edge, to fixpoint. Dangling-host guards
+        // are never reachable — refused here with the right diagnostic
+        // (not as a phantom cycle).
         let mut reachable: BTreeSet<NodeIndex> = BTreeSet::new();
         let mut stack = vec![start_idx];
-        while let Some(idx) = stack.pop() {
-            if reachable.insert(idx) {
-                stack.extend(ir.neighbors_directed(idx, Direction::Outgoing));
+        loop {
+            while let Some(idx) = stack.pop() {
+                if reachable.insert(idx) {
+                    stack.extend(ir.neighbors_directed(idx, Direction::Outgoing));
+                }
+            }
+            let mut grew = false;
+            for (host, gs) in &guards_of {
+                if reachable.contains(host) {
+                    for &g in gs {
+                        if !reachable.contains(&g) {
+                            stack.push(g);
+                            grew = true;
+                        }
+                    }
+                }
+            }
+            if !grew {
+                break;
             }
         }
         let mut unreachable: Vec<&str> = ir
@@ -302,8 +450,28 @@ pub fn emit_dsl(
     }
 
     // ── Stage 1: per-node scan in canonical order ────────────────────────
-    let order = canonical_order(ir);
-    debug_assert_eq!(order.len(), ir.node_count(), "stage-0 guarantees totality");
+    let order = canonical_scan(ir, &guards_of, &dangling_guards, false);
+    // Hard totality assert (D1.0 §3.1b): refuse, never truncate. After
+    // the effective-graph cycle check and the reachability fixpoint this
+    // cannot fire — it is the guard rail the freeze mandates while the
+    // scan mechanism carries guards.
+    if order.len() != ir.node_count() {
+        let scheduled: BTreeSet<NodeIndex> = order.iter().copied().collect();
+        let mut leftover: Vec<&str> = ir
+            .node_indices()
+            .filter(|i| !scheduled.contains(i))
+            .map(|i| ir[i].id())
+            .collect();
+        leftover.sort();
+        return Err(DslEmitError::CyclicGraph {
+            id: leftover
+                .first()
+                .map(|s| (*s).to_owned())
+                .unwrap_or_default(),
+        });
+    }
+    let id_to_idx: BTreeMap<&str, NodeIndex> =
+        ir.node_indices().map(|i| (ir[i].id(), i)).collect();
 
     let pairs = gateway_pairs(ir);
     // Reverse map, plus the set of SHARED joins: `gateway_pairs` pairs
@@ -503,15 +671,96 @@ pub fn emit_dsl(
                     }));
                 }
             },
-            // Out-of-core kinds — NO wildcard arm: a 16th IRNode variant
+            // D1: boundary guards emit as top-level decoration forms.
+            // Per-guard checks in the frozen per-node order: kind gate
+            // (this arm), token checks, host-kind, out-degree, condition.
+            IRNode::BoundaryTimer {
+                attached_to,
+                spec,
+                interrupting,
+                failure_budget,
+                ..
+            } => {
+                check_token(&id, "id", &id)?;
+                let host_idx = *id_to_idx
+                    .get(attached_to.as_str())
+                    .expect("dangling attachments refused in stage 0");
+                if !matches!(ir[host_idx], IRNode::ServiceTask { .. }) {
+                    return Err(DslEmitError::GuardOnUnsupportedHost {
+                        guard_id: id,
+                        host: attached_to.clone(),
+                        host_kind: node_kind_name(&ir[host_idx]),
+                    });
+                }
+                if *failure_budget == Some(0) {
+                    return Err(DslEmitError::GuardBudgetZero { guard_id: id });
+                }
+                if matches!(spec, crate::ir::TimerSpec::Cycle { .. }) && *interrupting {
+                    return Err(DslEmitError::InterruptingCycleTimer { guard_id: id });
+                }
+                let e = single_out_edge(idx)?;
+                nodes.push(NodeAst::BoundaryTimer(super::ast::BoundaryTimerAst {
+                    next: uncond_next(idx, e)?,
+                    id,
+                    host: attached_to.clone(),
+                    spec: spec.clone(),
+                    interrupting: *interrupting,
+                    budget: *failure_budget,
+                    span: no_span(),
+                }));
+            }
+            IRNode::BoundaryError {
+                attached_to,
+                error_code,
+                failure_budget,
+                ..
+            } => {
+                check_token(&id, "id", &id)?;
+                // :error-code prints as a str-lit; the lexer has no
+                // escapes, so a quote or control char breaks re-parse —
+                // refuse (D1.0 amendment: the freeze's blanket "str-lit
+                // exempt" was too wide, recorded in the D1 receipt).
+                if let Some(code) = error_code {
+                    if code.contains('"') || code.chars().any(|c| c.is_control()) {
+                        return Err(DslEmitError::UnrepresentableToken {
+                            node_id: id,
+                            field: "error_code",
+                            value: code.clone(),
+                        });
+                    }
+                }
+                let host_idx = *id_to_idx
+                    .get(attached_to.as_str())
+                    .expect("dangling attachments refused in stage 0");
+                if !matches!(ir[host_idx], IRNode::ServiceTask { .. }) {
+                    return Err(DslEmitError::GuardOnUnsupportedHost {
+                        guard_id: id,
+                        host: attached_to.clone(),
+                        host_kind: node_kind_name(&ir[host_idx]),
+                    });
+                }
+                if *failure_budget == Some(0) {
+                    return Err(DslEmitError::GuardBudgetZero { guard_id: id });
+                }
+                let e = single_out_edge(idx)?;
+                nodes.push(NodeAst::BoundaryError(super::ast::BoundaryErrorAst {
+                    next: uncond_next(idx, e)?,
+                    id,
+                    host: attached_to.clone(),
+                    error_code: error_code.clone(),
+                    budget: *failure_budget,
+                    span: no_span(),
+                }));
+            }
+
+            // Out-of-core kinds — NO wildcard arm: a new IRNode variant
             // must break this compile, not fall through (B0's structural
-            // fail-closed rule).
+            // fail-closed rule). 8 kinds remain out of core after D1
+            // moved the two boundary kinds above.
             IRNode::GatewayXor { .. }
             | IRNode::GatewayInclusive { .. }
             | IRNode::TimerWait { .. }
             | IRNode::HumanWait { .. }
-            | IRNode::BoundaryTimer { .. }
-            | IRNode::BoundaryError { .. }
             | IRNode::DataObject { .. }
             | IRNode::FfiServiceTask { .. }
             | IRNode::SendTask { .. }
@@ -767,10 +1016,12 @@ mod tests {
         }
     }
 
-    /// Every one of the 10 out-of-core kinds refuses as UnsupportedNode
-    /// with its own kind name (R1–R10).
+    /// Every out-of-core kind refuses as UnsupportedNode with its own
+    /// kind name. D1 cement update (named, not silent): BoundaryTimer/
+    /// BoundaryError left this list when guards joined the core — 8
+    /// kinds remain.
     #[test]
-    fn red_unsupported_node_all_ten_kinds() {
+    fn red_unsupported_node_all_remaining_kinds() {
         let unsupported: Vec<(IRNode, &str)> = vec![
             (
                 IRNode::GatewayXor {
@@ -802,25 +1053,6 @@ mod tests {
                     corr_key_source: String::new(),
                 },
                 "HumanWait",
-            ),
-            (
-                IRNode::BoundaryTimer {
-                    id: "x".into(),
-                    attached_to: "t1".into(),
-                    spec: TimerSpec::Duration { ms: 1000 },
-                    interrupting: true,
-                    failure_budget: None,
-                },
-                "BoundaryTimer",
-            ),
-            (
-                IRNode::BoundaryError {
-                    id: "x".into(),
-                    attached_to: "t1".into(),
-                    error_code: None,
-                    failure_budget: None,
-                },
-                "BoundaryError",
             ),
             (
                 IRNode::DataObject {
@@ -1099,6 +1331,172 @@ mod tests {
             }
             other => panic!("degree check must precede pairing, got {other:?}"),
         }
+    }
+
+    // ── D1 guard reds (R25-R28, R36 + emission-side R31/R33 mirrors) ──
+
+    fn guard_on(host_kind: IRNode) -> IRGraph {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let h = ir.add_node(host_kind);
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, h, edge("f1"));
+        ir.add_edge(h, e, edge("f2"));
+        let g = ir.add_node(IRNode::BoundaryTimer {
+            id: "g1".into(),
+            attached_to: ir[h].id().to_owned(),
+            spec: TimerSpec::Duration { ms: 1000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        let ee = ir.add_node(end("escape-end", false));
+        ir.add_edge(g, ee, edge("f-esc"));
+        ir
+    }
+
+    #[test]
+    fn red_guard_on_message_wait_host() {
+        let ir = guard_on(msg("mw", "reply", "case-id"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::GuardOnUnsupportedHost {
+                guard_id,
+                host,
+                host_kind,
+            }) => {
+                assert_eq!(
+                    (guard_id.as_str(), host.as_str(), host_kind),
+                    ("g1", "mw", "MessageWait")
+                );
+            }
+            other => panic!("expected GuardOnUnsupportedHost, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn red_guard_escape_out_degree_zero_and_two() {
+        // 0 escape edges
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let t = ir.add_node(task("t1", "cbu.a"));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, t, edge("f1"));
+        ir.add_edge(t, e, edge("f2"));
+        ir.add_node(IRNode::BoundaryTimer {
+            id: "g1".into(),
+            attached_to: "t1".into(),
+            spec: TimerSpec::Duration { ms: 1000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count, expected }) => {
+                assert_eq!((id.as_str(), count, expected), ("g1", 0, 1));
+            }
+            other => panic!("expected WrongOutDegree(0), got {other:?}"),
+        }
+        // 2 escape edges
+        let mut ir = guard_on(task("t1", "cbu.a"));
+        let g = ir
+            .node_indices()
+            .find(|&i| ir[i].id() == "g1")
+            .unwrap();
+        let ee2 = ir.add_node(end("escape-end-2", false));
+        ir.add_edge(g, ee2, edge("f-esc-2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count, expected }) => {
+                assert_eq!((id.as_str(), count, expected), ("g1", 2, 1));
+            }
+            other => panic!("expected WrongOutDegree(2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn red_guard_conditioned_escape_edge() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let t = ir.add_node(task("t1", "cbu.a"));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, t, edge("f1"));
+        ir.add_edge(t, e, edge("f2"));
+        let g = ir.add_node(IRNode::BoundaryTimer {
+            id: "g1".into(),
+            attached_to: "t1".into(),
+            spec: TimerSpec::Duration { ms: 1000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        let ee = ir.add_node(end("escape-end", false));
+        ir.add_edge(g, ee, cond_edge("f-esc"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnrepresentableCondition { id }) => assert_eq!(id, "g1"),
+            other => panic!("expected UnrepresentableCondition, got {other:?}"),
+        }
+    }
+
+    /// R36 — escape edge back into the guard's own host: acyclic to
+    /// plain flow-edge toposort (attachment is a field), but a deadlock
+    /// in the effective graph — must refuse CyclicGraph, never truncate
+    /// (the D1.0 blind-review fail-open, closed).
+    #[test]
+    fn red_guard_escape_into_own_host_refuses_cyclic() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let t = ir.add_node(task("t1", "cbu.a"));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, t, edge("f1"));
+        ir.add_edge(t, e, edge("f2"));
+        let g = ir.add_node(IRNode::BoundaryTimer {
+            id: "g1".into(),
+            attached_to: "t1".into(),
+            spec: TimerSpec::Duration { ms: 1000 },
+            interrupting: true,
+            failure_budget: None,
+        });
+        ir.add_edge(g, t, edge("f-esc"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::CyclicGraph { .. }) => {}
+            other => panic!("expected CyclicGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn red_flow_into_guard() {
+        let mut ir = guard_on(task("t1", "cbu.a"));
+        let g = ir.node_indices().find(|&i| ir[i].id() == "g1").unwrap();
+        let s = ir.node_indices().find(|&i| ir[i].id() == "start").unwrap();
+        ir.add_edge(s, g, edge("f-bad"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::FlowIntoGuard { guard_id, edge_id }) => {
+                assert_eq!((guard_id.as_str(), edge_id.as_str()), ("g1", "f-bad"));
+            }
+            other => panic!("expected FlowIntoGuard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn red_guard_budget_zero_and_interrupting_cycle() {
+        let mut ir = guard_on(task("t1", "cbu.a"));
+        let g = ir.node_indices().find(|&i| ir[i].id() == "g1").unwrap();
+        if let IRNode::BoundaryTimer { failure_budget, .. } = &mut ir[g] {
+            *failure_budget = Some(0);
+        }
+        assert!(matches!(
+            emit_dsl(&ir, "wf", &decls()),
+            Err(DslEmitError::GuardBudgetZero { .. })
+        ));
+
+        let mut ir = guard_on(task("t1", "cbu.a"));
+        let g = ir.node_indices().find(|&i| ir[i].id() == "g1").unwrap();
+        if let IRNode::BoundaryTimer { spec, .. } = &mut ir[g] {
+            *spec = TimerSpec::Cycle {
+                interval_ms: 1000,
+                max_fires: 3,
+            };
+        }
+        assert!(matches!(
+            emit_dsl(&ir, "wf", &decls()),
+            Err(DslEmitError::InterruptingCycleTimer { .. })
+        ));
     }
 
     #[test]

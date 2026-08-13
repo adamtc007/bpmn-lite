@@ -223,6 +223,12 @@ impl Parser {
                 .parse_join(start_offset, JoinModeAst::And)
                 .map(NodeAst::Join),
             "loop" => self.parse_loop(start_offset).map(NodeAst::Loop),
+            "boundary-timer" => self
+                .parse_boundary_timer(start_offset)
+                .map(NodeAst::BoundaryTimer),
+            "boundary-error" => self
+                .parse_boundary_error(start_offset)
+                .map(NodeAst::BoundaryError),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
                 None
@@ -526,6 +532,149 @@ impl Parser {
     fn parse_kw_symbol(&mut self, keyword: &str) -> Option<String> {
         self.expect_keyword(keyword)?;
         self.expect_symbol(&format!(":{keyword} value"))
+    }
+
+    /// D1.0-frozen integer convention: the value is a Symbol (the lexer
+    /// has no numeric kind) and a malformed digit string is a NAMED
+    /// parse error — deliberately stricter than `parse_loop`'s legacy
+    /// silent-zero (`:ceiling 10x` → 0), a pre-existing trap door
+    /// surfaced at the D1.0 gate.
+    fn parse_kw_u64(&mut self, keyword: &str) -> Option<u64> {
+        let raw = self.parse_kw_symbol(keyword)?;
+        match raw.parse::<u64>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                self.error(format!(
+                    ":{keyword} value '{raw}' is not a valid non-negative integer"
+                ));
+                None
+            }
+        }
+    }
+
+    fn parse_kw_u32(&mut self, keyword: &str) -> Option<u32> {
+        let raw = self.parse_kw_symbol(keyword)?;
+        match raw.parse::<u32>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                self.error(format!(
+                    ":{keyword} value '{raw}' is not a valid u32 integer"
+                ));
+                None
+            }
+        }
+    }
+
+    /// D1.0-frozen boolean convention (new — no boolean attribute existed
+    /// before): exactly the Symbol tokens `true`/`false`; anything else
+    /// is a NAMED parse error.
+    fn parse_kw_bool(&mut self, keyword: &str) -> Option<bool> {
+        let raw = self.parse_kw_symbol(keyword)?;
+        match raw.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            other => {
+                self.error(format!(
+                    ":{keyword} value '{other}' is not a boolean — exactly 'true' or 'false'"
+                ));
+                None
+            }
+        }
+    }
+
+    fn peek_keyword(&self, keyword: &str) -> bool {
+        matches!(&self.peek().kind, TokenKind::Keyword(k) if k == keyword)
+    }
+
+    /// D1.0 frozen grammar:
+    /// `(boundary-timer :id g :host t (:duration-ms N | :deadline-ms N |
+    ///  :cycle-ms N :max-fires M) :interrupting true|false [:budget N]
+    ///  :next escape)` — exactly one timer shape; `:interrupting`
+    /// REQUIRED (no default: an implicit choice would silently pick
+    /// interrupting-vs-rearming semantics).
+    fn parse_boundary_timer(&mut self, start_offset: usize) -> Option<BoundaryTimerAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let host = self.parse_kw_symbol("host")?;
+        let spec = if self.peek_keyword("duration-ms") {
+            crate::ir::TimerSpec::Duration {
+                ms: self.parse_kw_u64("duration-ms")?,
+            }
+        } else if self.peek_keyword("deadline-ms") {
+            crate::ir::TimerSpec::Date {
+                deadline_ms: self.parse_kw_u64("deadline-ms")?,
+            }
+        } else if self.peek_keyword("cycle-ms") {
+            let interval_ms = self.parse_kw_u64("cycle-ms")?;
+            let max_fires = self.parse_kw_u32("max-fires")?;
+            crate::ir::TimerSpec::Cycle {
+                interval_ms,
+                max_fires,
+            }
+        } else {
+            self.error(
+                "boundary-timer requires exactly one timer shape: :duration-ms, :deadline-ms, or :cycle-ms + :max-fires"
+                    .into(),
+            );
+            return None;
+        };
+        // Exactly-one enforcement: a second shape attribute after the
+        // first is a named error, not silently consumed elsewhere.
+        for extra in ["duration-ms", "deadline-ms", "cycle-ms"] {
+            if self.peek_keyword(extra) {
+                self.error(format!(
+                    "boundary-timer carries more than one timer shape (unexpected :{extra}) — exactly one of :duration-ms / :deadline-ms / :cycle-ms+:max-fires"
+                ));
+                return None;
+            }
+        }
+        let interrupting = self.parse_kw_bool("interrupting")?;
+        let budget = if self.peek_keyword("budget") {
+            Some(self.parse_kw_u32("budget")?)
+        } else {
+            None
+        };
+        let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(BoundaryTimerAst {
+            id,
+            host,
+            spec,
+            interrupting,
+            budget,
+            next,
+            span,
+        })
+    }
+
+    /// D1.0 frozen grammar: `(boundary-error :id g :host t
+    /// [:error-code "E"] [:budget N] :next escape)` — always
+    /// interrupting (F2a), hence no flag.
+    fn parse_boundary_error(&mut self, start_offset: usize) -> Option<BoundaryErrorAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let host = self.parse_kw_symbol("host")?;
+        let error_code = if self.peek_keyword("error-code") {
+            self.advance();
+            Some(self.expect_str_lit(":error-code value")?)
+        } else {
+            None
+        };
+        let budget = if self.peek_keyword("budget") {
+            Some(self.parse_kw_u32("budget")?)
+        } else {
+            None
+        };
+        let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(BoundaryErrorAst {
+            id,
+            host,
+            error_code,
+            budget,
+            next,
+            span,
+        })
     }
 }
 

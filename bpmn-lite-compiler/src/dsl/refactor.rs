@@ -28,6 +28,8 @@ impl ToSexpr for NodeAst {
             Self::Split(n) => n.to_sexpr(indent),
             Self::Join(n) => n.to_sexpr(indent),
             Self::Loop(n) => n.to_sexpr(indent),
+            Self::BoundaryTimer(n) => n.to_sexpr(indent),
+            Self::BoundaryError(n) => n.to_sexpr(indent),
         }
     }
 }
@@ -171,6 +173,56 @@ impl ToSexpr for JoinAst {
     }
 }
 
+impl ToSexpr for BoundaryTimerAst {
+    fn to_sexpr(&self, indent: usize) -> String {
+        let spec_str = match &self.spec {
+            crate::ir::TimerSpec::Duration { ms } => format!(":duration-ms {ms}"),
+            crate::ir::TimerSpec::Date { deadline_ms } => format!(":deadline-ms {deadline_ms}"),
+            crate::ir::TimerSpec::Cycle {
+                interval_ms,
+                max_fires,
+            } => format!(":cycle-ms {interval_ms} :max-fires {max_fires}"),
+        };
+        let budget_str = self
+            .budget
+            .map(|b| format!(" :budget {b}"))
+            .unwrap_or_default();
+        format!(
+            "{}(boundary-timer :id {} :host {} {} :interrupting {}{} :next {})",
+            " ".repeat(indent),
+            self.id,
+            self.host,
+            spec_str,
+            self.interrupting,
+            budget_str,
+            self.next
+        )
+    }
+}
+
+impl ToSexpr for BoundaryErrorAst {
+    fn to_sexpr(&self, indent: usize) -> String {
+        let code_str = self
+            .error_code
+            .as_ref()
+            .map(|c| format!(" :error-code \"{c}\""))
+            .unwrap_or_default();
+        let budget_str = self
+            .budget
+            .map(|b| format!(" :budget {b}"))
+            .unwrap_or_default();
+        format!(
+            "{}(boundary-error :id {} :host {}{}{} :next {})",
+            " ".repeat(indent),
+            self.id,
+            self.host,
+            code_str,
+            budget_str,
+            self.next
+        )
+    }
+}
+
 impl ToSexpr for LoopAst {
     fn to_sexpr(&self, indent: usize) -> String {
         let pad = " ".repeat(indent);
@@ -229,6 +281,8 @@ impl<'a> AstMutator<'a> {
             NodeAst::MessageWait(wait) => wait.next = to_id.to_string(),
             NodeAst::Join(jn) => jn.next = to_id.to_string(),
             NodeAst::Loop(lp) => lp.next = to_id.to_string(),
+            NodeAst::BoundaryTimer(g) => g.next = to_id.to_string(),
+            NodeAst::BoundaryError(g) => g.next = to_id.to_string(),
             NodeAst::End(_) => return Err("Cannot rewire 'next' on an end event".into()),
             NodeAst::Split(_) => {
                 return Err("Cannot directly rewire Split next; edit flow paths instead".into());
@@ -255,6 +309,8 @@ impl<'a> AstMutator<'a> {
                 NodeAst::MessageWait(wait) => wait.next.clone(),
                 NodeAst::Join(jn) => jn.next.clone(),
                 NodeAst::Loop(lp) => lp.next.clone(),
+                NodeAst::BoundaryTimer(g) => g.next.clone(),
+                NodeAst::BoundaryError(g) => g.next.clone(),
                 NodeAst::Split(_) => {
                     return Err("Target is a Split node. Insert into branches instead.".into())
                 }
@@ -269,6 +325,11 @@ impl<'a> AstMutator<'a> {
             NodeAst::MessageWait(wait) => wait.next = orig_next,
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
+            NodeAst::BoundaryTimer(_) | NodeAst::BoundaryError(_) => {
+                return Err(
+                    "Cannot insert a boundary guard via insert_after: guards attach to a :host, not to sequence flow".into(),
+                )
+            }
             NodeAst::End(_) => {}
             NodeAst::Split(_) => return Err("Cannot insert a Split node directly via insert_after; use specialized refactoring macros".into()),
         }
@@ -499,6 +560,114 @@ mod tests {
   (join-or :id type-gateway-join :split type-gateway :next end)
   (end-event :id end :status "done"))"#;
         assert_print_reparse_fixpoint(source);
+    }
+
+    /// D1 fixpoint cement: every guard form and timer shape prints to
+    /// source the parser accepts, byte-stably, and recompiles with the
+    /// guards lowered onto the right hosts in guard-id order. (One timer
+    /// per host — R32 — so the two timer shapes live on two hosts.)
+    #[test]
+    fn guard_forms_print_reparse_roundtrip_and_recompile() {
+        let source = r#"(workflow test-guard-roundtrip
+  (start-event :id start :next t1)
+  (service-task :id t1 :verb cbu.host :next t2)
+  (service-task :id t2 :verb cbu.host2 :next end)
+  (boundary-timer :id g-dur :host t1 :duration-ms 60000 :interrupting true :next esc1)
+  (boundary-timer :id g-cyc :host t2 :cycle-ms 30000 :max-fires 5 :interrupting false :budget 3 :next esc2)
+  (boundary-error :id g-err :host t1 :error-code "E42" :budget 2 :next esc3)
+  (boundary-error :id g-bare :host t2 :next esc4)
+  (end-event :id esc1 :status "done")
+  (end-event :id esc2 :status "done")
+  (end-event :id esc3 :status "done")
+  (end-event :id esc4 :status "done")
+  (end-event :id end :status "completed"))"#;
+        let printed = assert_print_reparse_fixpoint(source);
+        let mut registry = StubPlaceholderRegistry::new();
+        registry.register_verb("cbu.host", crate::dsl::linter::BindingDecl::default());
+        registry.register_verb("cbu.host2", crate::dsl::linter::BindingDecl::default());
+        let plan = compile(&printed, &registry).expect("guard source must compile");
+        match plan.nodes().get("t1") {
+            Some(crate::dsl::ExecutionNode::Task(t)) => {
+                let ids: Vec<&str> = t.guards.iter().map(|g| g.guard_id.as_str()).collect();
+                assert_eq!(ids, ["g-dur", "g-err"], "guard-id order on t1");
+            }
+            other => panic!("t1 must be a Task, got {other:?}"),
+        }
+        match plan.nodes().get("t2") {
+            Some(crate::dsl::ExecutionNode::Task(t)) => {
+                let ids: Vec<&str> = t.guards.iter().map(|g| g.guard_id.as_str()).collect();
+                assert_eq!(ids, ["g-bare", "g-cyc"], "guard-id order on t2");
+            }
+            other => panic!("t2 must be a Task, got {other:?}"),
+        }
+    }
+
+    /// D1 parse/lint reds R29-R35 — each names its exact refusal.
+    #[test]
+    fn guard_red_axes_refuse_at_parse_or_lint() {
+        let reg = || {
+            let mut r = StubPlaceholderRegistry::new();
+            r.register_verb("cbu.host", crate::dsl::linter::BindingDecl::default());
+            r
+        };
+        let wrap = |guards: &str| {
+            format!(
+                "(workflow red\n  (start-event :id start :next t1)\n  (service-task :id t1 :verb cbu.host :next end)\n{guards}\n  (end-event :id esc :status \"done\")\n  (end-event :id end :status \"completed\"))"
+            )
+        };
+        let expect_err = |src: &str, needle: &str| {
+            let err = compile(src, &reg()).expect_err("must refuse");
+            let msg = err.to_string();
+            assert!(msg.contains(needle), "expected {needle:?} in: {msg}");
+        };
+        // R31 budget 0 (lint)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :interrupting true :budget 0 :next esc)"),
+            ":budget 0",
+        );
+        // R32 second timer on one host (lint)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :interrupting true :next esc)\n  (boundary-timer :id g2 :host t1 :deadline-ms 999 :interrupting true :next esc)"),
+            "already carries timer guard",
+        );
+        // R33 interrupting cycle (lint)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :cycle-ms 100 :max-fires 2 :interrupting true :next esc)"),
+            "interrupting cycle timer",
+        );
+        // R34 malformed integer (parse, named — never silent-zero)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 10x :interrupting true :next esc)"),
+            "not a valid non-negative integer",
+        );
+        // R35 non-boolean :interrupting (parse, named)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :interrupting maybe :next esc)"),
+            "not a boolean",
+        );
+        // R30 missing :interrupting / double timer shape (parse)
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :next esc)"),
+            "interrupting",
+        );
+        expect_err(
+            &wrap("  (boundary-timer :id g1 :host t1 :duration-ms 100 :deadline-ms 5 :interrupting true :next esc)"),
+            "more than one timer shape",
+        );
+        // R29 duplicate guard id vs node id (lint pass 2)
+        expect_err(
+            &wrap("  (boundary-error :id t1 :host t1 :next esc)"),
+            "duplicate node id",
+        );
+        // unknown host / non-task host (lint)
+        expect_err(
+            &wrap("  (boundary-error :id g1 :host nope :next esc)"),
+            "unknown node",
+        );
+        expect_err(
+            &wrap("  (boundary-error :id g1 :host start :next esc)"),
+            "not a service task",
+        );
     }
 
     #[test]

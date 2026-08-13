@@ -525,8 +525,111 @@ impl<'a> Linter<'a> {
                     status: n.status.clone(),
                     span: Some(n.span),
                 }),
+
+                // D1: guards are decorations, never plan nodes — lowered
+                // in Pass 3.4 below onto their host's TaskExecNode.
+                NodeAst::BoundaryTimer(_) | NodeAst::BoundaryError(_) => continue,
             };
             exec_nodes.insert(id.to_owned(), exec_node);
+        }
+
+        // ── Pass 3.4 (D1, EOP-PLAN-DSL-PARITY-001): boundary guards ──────
+        // Lower each guard form to the IDENTICAL GuardExecSpec ir_plan
+        // builds for the same content — that identity is the bridge's
+        // plan-equality proof. Refusal axes live HERE, not at lowering:
+        // the DSL pipeline is unroll → lint → validate_dag only (the
+        // verifier and admission never run on it), so every graph-path
+        // guard refusal is re-owned by lint per the D1.0 freeze.
+        {
+            let mut timer_hosts: HashMap<String, String> = HashMap::new();
+            for node in &flat_ast_nodes {
+                enum GuardKind {
+                    Timer { spec: crate::ir::TimerSpec, interrupting: bool },
+                    Error { error_code: Option<String> },
+                }
+                let (guard_id, host, kind, budget, next) = match node {
+                    NodeAst::BoundaryTimer(g) => (
+                        &g.id,
+                        &g.host,
+                        GuardKind::Timer {
+                            spec: g.spec.clone(),
+                            interrupting: g.interrupting,
+                        },
+                        g.budget,
+                        &g.next,
+                    ),
+                    NodeAst::BoundaryError(g) => (
+                        &g.id,
+                        &g.host,
+                        GuardKind::Error {
+                            error_code: g.error_code.clone(),
+                        },
+                        g.budget,
+                        &g.next,
+                    ),
+                    _ => continue,
+                };
+                self.check_next_ref(guard_id, next, &node_ids);
+                if budget == Some(0) {
+                    self.err(
+                        guard_id,
+                        ":budget 0 is not a valid failure budget — a zero budget would \
+                         no-op the guard; omit :budget to inherit the workflow default",
+                    );
+                }
+                if let GuardKind::Timer { spec, interrupting } = &kind {
+                    if matches!(spec, crate::ir::TimerSpec::Cycle { .. }) && *interrupting {
+                        self.err(
+                            guard_id,
+                            "an interrupting cycle timer is contradictory — a cycle \
+                             timer rearms by definition; use :interrupting false or a \
+                             :duration-ms/:deadline-ms shape",
+                        );
+                    }
+                    if let Some(first) = timer_hosts.get(host.as_str()) {
+                        self.err(
+                            guard_id,
+                            format!(
+                                "host '{host}' already carries timer guard '{first}' — \
+                                 at most one timer guard per host (verifier §7d, \
+                                 re-owned by lint on the DSL path)"
+                            ),
+                        );
+                    } else {
+                        timer_hosts.insert(host.clone(), guard_id.clone());
+                    }
+                }
+                let trigger = match kind {
+                    GuardKind::Timer { spec, interrupting } => {
+                        GuardTriggerExec::Timer { spec, interrupting }
+                    }
+                    GuardKind::Error { error_code } => GuardTriggerExec::Error { error_code },
+                };
+                match exec_nodes.get_mut(host.as_str()) {
+                    Some(ExecutionNode::Task(t)) => t.guards.push(GuardExecSpec {
+                        guard_id: guard_id.clone(),
+                        trigger,
+                        failure_budget: budget,
+                        escape_entry: next.clone(),
+                    }),
+                    Some(_) => self.err(
+                        guard_id,
+                        format!(
+                            ":host '{host}' is not a service task — boundary guards \
+                             attach to task hosts only (mirror of the projection's \
+                             GuardHostUnprojected restriction)"
+                        ),
+                    ),
+                    None => self.err(guard_id, format!(":host '{host}' references an unknown node")),
+                }
+            }
+            // D0 canonical rule: guard order is content-canonical on BOTH
+            // paths — sort by guard id, same as ir_plan's pre-pass.
+            for node in exec_nodes.values_mut() {
+                if let ExecutionNode::Task(t) = node {
+                    t.guards.sort_by(|a, b| a.guard_id.cmp(&b.guard_id));
+                }
+            }
         }
 
         // ── Pass 3.5: Synthesize missing Join nodes for Splits ─────────────────

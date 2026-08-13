@@ -447,6 +447,168 @@ fn project_ir_flow_order_is_content_canonical() {
     );
 }
 
+/// D1 guard-fixture builder: a linear host graph plus `guards` attached
+/// to `t1`, each with its own escape End.
+fn guarded_linear(
+    name: &str,
+    guards: &[bpmn_lite_compiler::IRNode],
+) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let t = dag
+        .insert_node(key(), task("t1", "cbu.host"), None, Provenance::default())
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, t, edge("f1")).unwrap();
+    dag.insert_edge(t, e, edge("f2")).unwrap();
+    for (i, g) in guards.iter().enumerate() {
+        let gk = dag
+            .insert_node(key(), g.clone(), Some(t), Provenance::default())
+            .unwrap();
+        let esc = dag
+            .insert_node(
+                key(),
+                end(&format!("escape-end-{i}"), false),
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        dag.insert_edge(gk, esc, edge(&format!("f-esc-{i}"))).unwrap();
+    }
+    dag
+}
+
+fn timer_guard(id: &str, spec: bpmn_lite_compiler::TimerSpec, interrupting: bool) -> bpmn_lite_compiler::IRNode {
+    bpmn_lite_compiler::IRNode::BoundaryTimer {
+        id: id.into(),
+        attached_to: "t1".into(),
+        spec,
+        interrupting,
+        failure_budget: None,
+    }
+}
+
+fn error_guard(id: &str, code: Option<&str>, budget: Option<u32>) -> bpmn_lite_compiler::IRNode {
+    bpmn_lite_compiler::IRNode::BoundaryError {
+        id: id.into(),
+        attached_to: "t1".into(),
+        error_code: code.map(Into::into),
+        failure_budget: budget,
+    }
+}
+
+/// G8 (D1) — interrupting duration-timer guard: the full four-proof
+/// round trip now covers `TaskExecNode.guards` (compared ORDERED per the
+/// D1.0 equality delta — both paths guard-id-sort).
+#[test]
+fn g8_interrupting_timer_guard() {
+    let dag = guarded_linear(
+        "g8",
+        &[timer_guard(
+            "g-timeout",
+            bpmn_lite_compiler::TimerSpec::Duration { ms: 60_000 },
+            true,
+        )],
+    );
+    let receipt = assert_roundtrip(&dag, "g8");
+    assert!(receipt
+        .emitted
+        .source
+        .contains(":duration-ms 60000 :interrupting true"));
+}
+
+/// G9 (D1) — non-interrupting (rearming) cycle timer with max-fires.
+#[test]
+fn g9_rearming_cycle_timer_guard() {
+    let dag = guarded_linear(
+        "g9",
+        &[timer_guard(
+            "g-remind",
+            bpmn_lite_compiler::TimerSpec::Cycle {
+                interval_ms: 30_000,
+                max_fires: 5,
+            },
+            false,
+        )],
+    );
+    let receipt = assert_roundtrip(&dag, "g9");
+    assert!(receipt
+        .emitted
+        .source
+        .contains(":cycle-ms 30000 :max-fires 5 :interrupting false"));
+}
+
+/// G10 (D1) — error guard with code and budget.
+#[test]
+fn g10_error_guard_code_and_budget() {
+    let dag = guarded_linear("g10", &[error_guard("g-err", Some("E42"), Some(3))]);
+    let receipt = assert_roundtrip(&dag, "g10");
+    assert!(receipt
+        .emitted
+        .source
+        .contains(":error-code \"E42\" :budget 3"));
+}
+
+/// G11 (D1) — two error guards on one host: guard-order canonicality
+/// through the FULL round trip (extends D0's projection-side cement).
+#[test]
+fn g11_two_error_guards_ordered() {
+    let dag = guarded_linear(
+        "g11",
+        &[
+            error_guard("g-b", Some("EB"), None),
+            error_guard("g-a", Some("EA"), None),
+        ],
+    );
+    let receipt = assert_roundtrip(&dag, "g11");
+    let a = receipt.emitted.source.find("g-a").unwrap();
+    let b = receipt.emitted.source.find("g-b").unwrap();
+    assert!(a < b, "guards must emit in guard-id order");
+}
+
+/// G12 (D1) — escape chain containing a task: the escape subgraph is
+/// ordinary flow on both paths.
+#[test]
+fn g12_escape_chain_with_task() {
+    let mut dag = DesignerDag::new("g12");
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let t = dag
+        .insert_node(key(), task("t1", "cbu.host"), None, Provenance::default())
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, t, edge("f1")).unwrap();
+    dag.insert_edge(t, e, edge("f2")).unwrap();
+    let g = dag
+        .insert_node(
+            key(),
+            timer_guard(
+                "g-esc",
+                bpmn_lite_compiler::TimerSpec::Duration { ms: 1000 },
+                true,
+            ),
+            Some(t),
+            Provenance::default(),
+        )
+        .unwrap();
+    let et = dag
+        .insert_node(key(), task("cleanup", "cbu.clean"), None, Provenance::default())
+        .unwrap();
+    let ee = dag
+        .insert_node(key(), end("escape-end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(g, et, edge("f-esc-1")).unwrap();
+    dag.insert_edge(et, ee, edge("f-esc-2")).unwrap();
+    assert_roundtrip(&dag, "g12");
+}
+
 /// D0 blind-review cement: guard order is content-canonical too. Two
 /// verifier-legal error guards on one host, attached in opposite edit
 /// orders, must project byte-identical plans — before the guard sort,

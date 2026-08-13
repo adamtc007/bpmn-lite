@@ -220,6 +220,12 @@ generated_at: "2026-06-04T12:00:00Z"
                         NodeAst::Split(_) => {
                             return Err("Cannot automatically remove split node safely".to_string())
                         }
+                        // D1: a guard's next is its escape entry; removing
+                        // the guard leaves the host untouched, so its next
+                        // is the value predecessors (if any target the
+                        // guard, which flow nodes cannot) would rewire to.
+                        NodeAst::BoundaryTimer(g) => g.next.clone(),
+                        NodeAst::BoundaryError(g) => g.next.clone(),
                     }
                 };
 
@@ -279,6 +285,18 @@ fn find_all_predecessors_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<S
                     if flow.next == target_id {
                         acc.push(s.id.clone());
                     }
+                }
+            }
+            // D1: a guard's next (escape entry) is a flow reference like
+            // any other for predecessor discovery.
+            NodeAst::BoundaryTimer(g) => {
+                if g.next == target_id {
+                    acc.push(g.id.clone());
+                }
+            }
+            NodeAst::BoundaryError(g) => {
+                if g.next == target_id {
+                    acc.push(g.id.clone());
                 }
             }
             NodeAst::End(_) => {}
