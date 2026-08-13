@@ -102,25 +102,20 @@ fn derived_registry(receipt: &DslReceipt) -> StubPlaceholderRegistry {
 }
 
 /// Normalize a serialized plan for the frozen equality comparison:
-/// 1. remove the `span` field from every node — the field the B0
-///    equality table excludes BY NAME (targeted at the known JSON shape,
-///    not a blanket recursive strip, so an accidental future data field
-///    named "span" elsewhere would still be compared);
-/// 2. sort each Split's `flows` array by content — **B2 amendment to the
-///    B0 equality table** (caught by this harness's own first run, G3/G4/
-///    G6 red): `project_ir` writes flows in petgraph arena-iteration
-///    order (`edges_directed`, most-recent-first), which is
-///    edit-order-derived, not content-canonical, while emission's flow
-///    order is frozen as edge-id-sorted. And-flow order carries no
-///    OUTCOME semantics (all flows fire; the kernel's V2Join barrier
-///    reconciles by arrival count, never branch index) — though it does
-///    feed V2Fork target order and hence fiber-ID/tape ordering, so
-///    order-differing plans are outcome-equivalent but not
-///    replay-tape-identical. Flows therefore compare as a multiset. The
-///    underlying observation — two equivalent edit orders give
-///    `project_ir` plans different stored bytes and different lowered
-///    fork order — is surfaced in the B2 receipt as a standalone
-///    finding, not silently "fixed" here.
+/// remove the `span` field from every node — the field the B0 equality
+/// table excludes BY NAME (targeted at the known JSON shape, not a
+/// blanket recursive strip, so an accidental future data field named
+/// "span" elsewhere would still be compared).
+///
+/// History: between B2 and D0 this also sorted each Split's `flows` as a
+/// multiset, because `project_ir` wrote flows in petgraph arena order
+/// (edit-order-derived) while emission is edge-id-sorted — this
+/// harness's own first run caught that divergence (G3/G4/G6 red). D0
+/// (EOP-PLAN-DSL-PARITY-001) made `project_ir` sort by edge id too, so
+/// flow order is now content-canonical on BOTH paths and the comparison
+/// is back to strict ordered equality — the B2-era multiset amendment is
+/// reversed. `project_ir_flow_order_is_content_canonical` below cements
+/// the projection-side property directly.
 fn normalize_plan(plan: &mut serde_json::Value) {
     if let Some(nodes) = plan.get_mut("nodes").and_then(|n| n.as_object_mut()) {
         for node in nodes.values_mut() {
@@ -128,10 +123,6 @@ fn normalize_plan(plan: &mut serde_json::Value) {
                 for inner in tagged.values_mut() {
                     if let Some(fields) = inner.as_object_mut() {
                         fields.remove("span");
-                        if let Some(flows) = fields.get_mut("flows").and_then(|f| f.as_array_mut())
-                        {
-                            flows.sort_by_key(|f| f.to_string());
-                        }
                     }
                 }
             }
@@ -391,6 +382,69 @@ fn g7_required_symbols_dedup() {
     dag.insert_edge(t3, e, edge("f4")).unwrap();
     let receipt = assert_roundtrip(&dag, "g7");
     assert_eq!(receipt.emitted.required_symbols, vec!["cbu.same".to_owned()]);
+}
+
+/// D0 cement (EOP-PLAN-DSL-PARITY-001): two different edit orders that
+/// build `ir_graphs_equivalent` DAGs must project BYTE-IDENTICAL plans —
+/// `project_ir`'s flow order is content-canonical (edge-id-sorted), not
+/// edit-order-derived. Before D0 this failed: petgraph arena order made
+/// the flows arrays differ, giving the same design content different
+/// stored plan bytes/hashes and different lowered V2Fork target order.
+#[test]
+fn project_ir_flow_order_is_content_canonical() {
+    // Same And-block content, branches inserted in opposite orders.
+    let build = |branch_order: &[usize]| {
+        let mut dag = DesignerDag::new("d0-canonical");
+        let s = dag
+            .insert_node(key(), start("start"), None, Provenance::default())
+            .unwrap();
+        let sp = dag
+            .insert_node(
+                key(),
+                and_gw("split1", GatewayDirection::Diverging),
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let j = dag
+            .insert_node(
+                key(),
+                and_gw("join1", GatewayDirection::Converging),
+                None,
+                Provenance::default(),
+            )
+            .unwrap();
+        let e = dag
+            .insert_node(key(), end("end", false), None, Provenance::default())
+            .unwrap();
+        dag.insert_edge(s, sp, edge("f-in")).unwrap();
+        for &i in branch_order {
+            let t = dag
+                .insert_node(
+                    key(),
+                    task(&format!("branch-{i}"), &format!("cbu.b{i}")),
+                    None,
+                    Provenance::default(),
+                )
+                .unwrap();
+            dag.insert_edge(sp, t, edge(&format!("f-out-{i}"))).unwrap();
+            dag.insert_edge(t, j, edge(&format!("f-back-{i}"))).unwrap();
+        }
+        dag.insert_edge(j, e, edge("f-end")).unwrap();
+        dag
+    };
+    let a = build(&[0, 1, 2]);
+    let b = build(&[2, 1, 0]);
+    let ir_a = a.to_ir().unwrap();
+    let ir_b = b.to_ir().unwrap();
+    assert!(DesignerDag::ir_graphs_equivalent(&ir_a, &ir_b));
+    let plan_a = project_ir(&ir_a, "d0".to_owned()).unwrap();
+    let plan_b = project_ir(&ir_b, "d0".to_owned()).unwrap();
+    assert_eq!(
+        serde_json::to_string(&plan_a).unwrap(),
+        serde_json::to_string(&plan_b).unwrap(),
+        "equivalent edit orders must project byte-identical plans"
+    );
 }
 
 /// Red side — a refusal leaves the graph identity untouched (the B0 red

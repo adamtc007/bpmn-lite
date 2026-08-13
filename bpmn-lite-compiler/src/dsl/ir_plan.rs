@@ -318,8 +318,25 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                         // parallel-edge fork/successor pair. edges_directed
                         // pairs each edge with its own target directly —
                         // the same pattern verifier.rs already uses.
-                        let flows: Vec<SplitExecFlow> = ir
-                            .edges_directed(idx, Direction::Outgoing)
+                        //
+                        // Sorted by sequence-flow id (D0,
+                        // EOP-PLAN-DSL-PARITY-001): petgraph's arena
+                        // iteration order is edit-order-derived, so two
+                        // edit orders building equivalent graphs projected
+                        // plans with differently-ordered flows — different
+                        // stored bytes/plan hashes and different lowered
+                        // V2Fork target order for the same design content
+                        // (caught by the B2 round-trip harness). Edge-id
+                        // order matches emit.rs's frozen canonical rule,
+                        // making this projection content-canonical. Safe
+                        // by the D0 impact check: plan hashes are
+                        // write-time content addresses, never
+                        // recompute-compared against stored values.
+                        let mut out_edges: Vec<_> =
+                            ir.edges_directed(idx, Direction::Outgoing).collect();
+                        out_edges.sort_by(|a, b| a.weight().id.cmp(&b.weight().id));
+                        let flows: Vec<SplitExecFlow> = out_edges
+                            .into_iter()
                             .map(|edge| {
                                 let condition = &edge.weight().condition;
                                 let (placeholder, expected_value) = match condition {
