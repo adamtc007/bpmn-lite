@@ -73,7 +73,7 @@ Everything else is deficient in at least one direction:
 | Construct | DSL AST surface | `project_ir` support | Verdict today |
 | --- | --- | --- | --- |
 | `GatewayXor` | `SplitAst{mode:Xor}` exists | **Refused** (falls into the `UnsupportedNode` catch-all, ir_plan.rs:407-409, cement test :577-593 — no direction field, no join-pairing oracle) | Round-trips in *neither* direction |
-| `GatewayInclusive` | none | supported | DSL-unwritable |
+| `GatewayInclusive` | `SplitAst{mode:Or}` exists (`split-or`) — but the grammar REQUIRES `:plug` + a `:condition` on every flow (parser.rs:393-406), and the DSL path lowers plug → `routing_socket: Some`, while `project_ir` emits `routing_socket: None` | supported | Plan-equality unreachable → **not** in the lossless core (B0 finding — refines this row's original "none/DSL-unwritable", which was imprecise about the surface but right about the verdict) |
 | `MultiInstance` (+ per-element `inputs`, G4) | none | supported | DSL-unwritable |
 | `FfiServiceTask`, `SendTask`, `HumanWait` | none | **refused** | Both directions missing |
 | `BoundaryTimer`/`BoundaryError` (guards, budgets) | none | supported (as `GuardExecSpec` on host) | DSL-unwritable |
