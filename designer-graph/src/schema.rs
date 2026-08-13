@@ -107,6 +107,17 @@ pub struct DesignerDag {
     edge_ids: HashSet<String>,
 }
 
+/// A successful canonical-DSL emission for a [`DesignerDag`]: the
+/// compiler's emitted source/AST/required-symbols plus this crate's
+/// content-derived graph identity witness (`graph_state_hash` — NOT the
+/// server's route-derived hashes; see [`DesignerDag::graph_state_hash`]'s
+/// naming-trap warning). EOP-PLAN-GRAPH-DSL-BRIDGE-001 B1.
+#[derive(Debug, Clone)]
+pub struct DslReceipt {
+    pub emitted: bpmn_lite_compiler::dsl::EmittedDsl,
+    pub graph_state_hash: String,
+}
+
 impl DesignerDag {
     /// Cross-crate read access to the process-level guard-budget default
     /// (the field itself is `pub(crate)` — see its doc comment).
@@ -272,6 +283,31 @@ impl DesignerDag {
             );
         }
         Ok(ir)
+    }
+
+    /// EOP-PLAN-GRAPH-DSL-BRIDGE-001 B1 — canonical `bpmn-dsl` source
+    /// receipt for this DAG: the `to_ir()` projection, plus the
+    /// process-level declarations `to_ir()` cannot carry (review F1),
+    /// plus the content-derived identity witness. All emission logic
+    /// (refusal catalogue, canonical ordering, printing) lives in
+    /// [`bpmn_lite_compiler::dsl::emit_dsl`] — this wrapper is field
+    /// plumbing only: the compiler sits below this crate and can know
+    /// neither these two DAG-root fields nor this crate's
+    /// [`Self::graph_state_hash`] identity. A DAG that sets either
+    /// process-level declaration refuses
+    /// (`DslEmitError::ProcessDeclUnrepresentable`) — the DSL grammar has
+    /// no syntax for them; dropping them silently would be a trap door.
+    pub fn emit_dsl(&self, workflow_id: &str) -> Result<DslReceipt> {
+        let ir = self.to_ir()?;
+        let decls = bpmn_lite_compiler::dsl::ProcessLevelDecls {
+            default_guard_budget_set: self.default_guard_budget.is_some(),
+            default_retry_policy_set: self.default_retry_policy.is_some(),
+        };
+        let emitted = bpmn_lite_compiler::dsl::emit_dsl(&ir, workflow_id, &decls)?;
+        Ok(DslReceipt {
+            graph_state_hash: Self::graph_state_hash(&ir),
+            emitted,
+        })
     }
 
     /// Structural equivalence of two reconstructed graphs by BPMN element
@@ -1140,5 +1176,32 @@ mod tests {
         par.insert_edge(t2, j, edge("e5")).unwrap();
         par.insert_edge(j, e, edge("e6")).unwrap();
         par.admit().expect("parallel region must admit");
+    }
+
+    /// B1 wrapper: emission succeeds for a plain linear DAG, the witness
+    /// is the content-derived hash of the same projection, and setting a
+    /// process-level declaration refuses (never silently drops — the
+    /// declaration has no DSL syntax and `to_ir()` doesn't carry it, so
+    /// silent emission would be the exact trap door the plan forbids).
+    #[test]
+    fn emit_dsl_wrapper_plumbs_decls_and_witness() {
+        let (dag, ..) = linear("emit-wrap");
+        let receipt = dag.emit_dsl("wf-emit").expect("linear DAG must emit");
+        assert!(receipt.emitted.source.contains("(workflow wf-emit"));
+        assert_eq!(
+            receipt.emitted.required_symbols,
+            vec!["noop".to_owned()],
+            "distinct task_types of the DAG"
+        );
+        let ir = dag.to_ir().unwrap();
+        assert_eq!(receipt.graph_state_hash, DesignerDag::graph_state_hash(&ir));
+
+        let (mut budgeted, ..) = linear("emit-wrap-budget");
+        budgeted.default_guard_budget = Some(3);
+        let err = budgeted.emit_dsl("wf-emit").unwrap_err();
+        assert!(
+            err.to_string().contains("default_guard_budget"),
+            "must refuse the set process-level declaration, got: {err}"
+        );
     }
 }

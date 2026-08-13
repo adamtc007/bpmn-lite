@@ -1,5 +1,5 @@
 # package: designer-graph
-# baseline_revision: updated H5, EOP-PLAN-CRATE-HYGIENE-001 — see H5 receipt for the diff that produced this
+# baseline_revision: updated B1, EOP-PLAN-GRAPH-DSL-BRIDGE-001 — see B1 receipt for the diff that produced this
 # command: cargo public-api -p designer-graph -sss
 
 pub mod designer_graph
@@ -218,6 +218,7 @@ pub struct designer_graph::schema::DesignerDag
 pub designer_graph::schema::DesignerDag::name: alloc::string::String
 impl designer_graph::schema::DesignerDag
 pub fn designer_graph::schema::DesignerDag::admit(&self) -> core::result::Result<bpmn_lite_compiler::VerifiedWorkflow, alloc::vec::Vec<bpmn_lite_compiler::verifier::VerifyError>>
+pub fn designer_graph::schema::DesignerDag::emit_dsl(&self, &str) -> anyhow::Result<designer_graph::schema::DslReceipt>
 pub fn designer_graph::schema::DesignerDag::graph_state_hash(&bpmn_lite_compiler::ir::IRGraph) -> alloc::string::String
 pub fn designer_graph::schema::DesignerDag::ir_graphs_equivalent(&bpmn_lite_compiler::ir::IRGraph, &bpmn_lite_compiler::ir::IRGraph) -> bool
 pub fn designer_graph::schema::DesignerDag::key_for_bpmn_id(&self, &str) -> core::option::Option<designer_graph::schema::NodeKey>
@@ -228,6 +229,9 @@ pub fn designer_graph::schema::DesignerDag::to_ir(&self) -> anyhow::Result<bpmn_
 impl designer_graph::schema::DesignerDag
 pub fn designer_graph::schema::DesignerDag::default_guard_budget(&self) -> core::option::Option<u32>
 pub fn designer_graph::schema::DesignerDag::default_retry_policy(&self) -> core::option::Option<bpmn_lite_compiler::ir::RetryPolicyDecl>
+pub struct designer_graph::schema::DslReceipt
+pub designer_graph::schema::DslReceipt::emitted: bpmn_lite_compiler::dsl::emit::EmittedDsl
+pub designer_graph::schema::DslReceipt::graph_state_hash: alloc::string::String
 pub struct designer_graph::schema::NodeKey(pub uuid::Uuid)
 pub struct designer_graph::schema::Provenance
 pub designer_graph::schema::Provenance::board_hash: core::option::Option<alloc::string::String>

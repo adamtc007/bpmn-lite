@@ -1,5 +1,5 @@
 # package: bpmn-lite-compiler
-# baseline_revision: updated H4.1, EOP-PLAN-CRATE-HYGIENE-001 — see H4 receipt for the diff that produced this
+# baseline_revision: updated B1, EOP-PLAN-GRAPH-DSL-BRIDGE-001 — see B1 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-compiler -sss
 
 pub mod bpmn_lite_compiler
@@ -16,6 +16,36 @@ pub enum bpmn_lite_compiler::dsl::DeliveryMode
 pub bpmn_lite_compiler::dsl::DeliveryMode::BestEffort
 pub bpmn_lite_compiler::dsl::DeliveryMode::Blocking
 pub bpmn_lite_compiler::dsl::DeliveryMode::GuaranteedAsync
+pub enum bpmn_lite_compiler::dsl::DslEmitError
+pub bpmn_lite_compiler::dsl::DslEmitError::ConditionOnParallelFlow
+pub bpmn_lite_compiler::dsl::DslEmitError::ConditionOnParallelFlow::edge_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::ConditionOnParallelFlow::gateway_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::CyclicGraph
+pub bpmn_lite_compiler::dsl::DslEmitError::CyclicGraph::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::DuplicateNodeId
+pub bpmn_lite_compiler::dsl::DslEmitError::DuplicateNodeId::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::MissingStart
+pub bpmn_lite_compiler::dsl::DslEmitError::MultipleStarts
+pub bpmn_lite_compiler::dsl::DslEmitError::MultipleStarts::ids: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_compiler::dsl::DslEmitError::ProcessDeclUnrepresentable
+pub bpmn_lite_compiler::dsl::DslEmitError::ProcessDeclUnrepresentable::field: &'static str
+pub bpmn_lite_compiler::dsl::DslEmitError::UnmatchedGateway
+pub bpmn_lite_compiler::dsl::DslEmitError::UnmatchedGateway::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnreachableNode
+pub bpmn_lite_compiler::dsl::DslEmitError::UnreachableNode::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableCondition
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableCondition::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableToken
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableToken::field: &'static str
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableToken::node_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnrepresentableToken::value: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnsupportedNode
+pub bpmn_lite_compiler::dsl::DslEmitError::UnsupportedNode::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::UnsupportedNode::kind: &'static str
+pub bpmn_lite_compiler::dsl::DslEmitError::WrongOutDegree
+pub bpmn_lite_compiler::dsl::DslEmitError::WrongOutDegree::count: usize
+pub bpmn_lite_compiler::dsl::DslEmitError::WrongOutDegree::expected: usize
+pub bpmn_lite_compiler::dsl::DslEmitError::WrongOutDegree::id: alloc::string::String
 pub enum bpmn_lite_compiler::dsl::ExecutionNode
 pub bpmn_lite_compiler::dsl::ExecutionNode::End(bpmn_lite_compiler::dsl::EndExecNode)
 pub bpmn_lite_compiler::dsl::ExecutionNode::Join(bpmn_lite_compiler::dsl::JoinExecNode)
@@ -118,6 +148,10 @@ pub struct bpmn_lite_compiler::dsl::Diagnostic
 pub bpmn_lite_compiler::dsl::Diagnostic::message: alloc::string::String
 pub bpmn_lite_compiler::dsl::Diagnostic::missing_placeholder: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::dsl::Diagnostic::node_id: alloc::string::String
+pub struct bpmn_lite_compiler::dsl::EmittedDsl
+pub bpmn_lite_compiler::dsl::EmittedDsl::ast: bpmn_lite_compiler::dsl::WorkflowSource
+pub bpmn_lite_compiler::dsl::EmittedDsl::required_symbols: alloc::vec::Vec<alloc::string::String>
+pub bpmn_lite_compiler::dsl::EmittedDsl::source: alloc::string::String
 pub struct bpmn_lite_compiler::dsl::EndExecNode
 pub bpmn_lite_compiler::dsl::EndExecNode::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::EndExecNode::span: core::option::Option<bpmn_lite_types::types::SourceSpan>
@@ -177,6 +211,9 @@ pub struct bpmn_lite_compiler::dsl::PlaceholderSlot
 pub bpmn_lite_compiler::dsl::PlaceholderSlot::consumed_by: alloc::vec::Vec<alloc::string::String>
 pub bpmn_lite_compiler::dsl::PlaceholderSlot::name: alloc::string::String
 pub bpmn_lite_compiler::dsl::PlaceholderSlot::produced_by: alloc::string::String
+pub struct bpmn_lite_compiler::dsl::ProcessLevelDecls
+pub bpmn_lite_compiler::dsl::ProcessLevelDecls::default_guard_budget_set: bool
+pub bpmn_lite_compiler::dsl::ProcessLevelDecls::default_retry_policy_set: bool
 pub struct bpmn_lite_compiler::dsl::RepeatNTimesError
 pub bpmn_lite_compiler::dsl::RepeatNTimesError::message: alloc::string::String
 impl core::convert::From<alloc::string::String> for bpmn_lite_compiler::dsl::RepeatNTimesError
@@ -326,6 +363,7 @@ pub fn bpmn_lite_compiler::dsl::create_parallel_split_join(&str, alloc::vec::Vec
 pub fn bpmn_lite_compiler::dsl::create_xor_split_join(&str, &str, alloc::vec::Vec<bpmn_lite_compiler::dsl::XorBranchConfig>, &str, &str) -> (bpmn_lite_compiler::dsl::ast::SplitAst, bpmn_lite_compiler::dsl::JoinAst)
 pub fn bpmn_lite_compiler::dsl::derive_delivery_mode(core::option::Option<bpmn_lite_compiler::dsl::DeliveryMode>, bool, bool) -> bpmn_lite_compiler::dsl::DeliveryMode
 pub fn bpmn_lite_compiler::dsl::derive_version(&dsl_manifest::Manifest, &bpmn_lite_compiler::dsl::WorkflowPackDAG) -> alloc::string::String
+pub fn bpmn_lite_compiler::dsl::emit_dsl(&bpmn_lite_compiler::IRGraph, &str, &bpmn_lite_compiler::dsl::ProcessLevelDecls) -> core::result::Result<bpmn_lite_compiler::dsl::EmittedDsl, bpmn_lite_compiler::dsl::DslEmitError>
 pub fn bpmn_lite_compiler::dsl::generate_closure(&dsl_manifest::Manifest, &bpmn_lite_compiler::dsl::WorkflowPackDAG) -> bpmn_lite_compiler::dsl::PackClosureManifest
 pub fn bpmn_lite_compiler::dsl::generate_manifest(&bpmn_lite_compiler::dsl::WorkflowPackDAG) -> core::result::Result<dsl_manifest::Manifest, alloc::string::String>
 pub fn bpmn_lite_compiler::dsl::lint(&bpmn_lite_compiler::dsl::WorkflowSource, &dyn bpmn_lite_compiler::dsl::PlaceholderRegistry) -> core::result::Result<bpmn_lite_compiler::dsl::WorkflowExecutionPlan, alloc::vec::Vec<bpmn_lite_compiler::dsl::LintError>>

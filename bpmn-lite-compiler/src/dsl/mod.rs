@@ -8,6 +8,7 @@
 mod ast;
 mod closure;
 mod dag;
+mod emit;
 mod frontend;
 pub(crate) mod ir_plan;
 mod lexer;
@@ -41,6 +42,7 @@ mod unroll;
 pub use ast::{JoinAst, JoinModeAst, NodeAst, WorkflowSource};
 pub use closure::{validate_path_family, Diagnostic};
 pub use dag::{validate_dag, DagError};
+pub use emit::{emit_dsl, DslEmitError, EmittedDsl, ProcessLevelDecls};
 pub use frontend::{lower_plan, FrontendError};
 pub use ir_plan::{project_ir, IrPlanError};
 pub use linter::{lint, BindingDecl, LintError, PlaceholderRegistry, StubPlaceholderRegistry};
