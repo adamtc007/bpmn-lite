@@ -364,9 +364,21 @@ rewrite of this existing, already-corpus-backed bound.
    `validate_for_position` + off-board-move assertion) as the reference
    implementation, and add game-turn record closure where applicable.
 4. Implement P1 (genuinely new — full-sequence content-hash assertion) and
-   the residual P5 hostile axes (foreign board hash, omitted/duplicate
-   candidate, evidence-level off-board candidate, invalid correction
-   reference) per the U0 receipt's work item 4. Use independent expected
+   the residual P5 hostile axes, narrowed by the U0 receipt's second
+   correction (verified empirically before implementation, not assumed):
+   only **off-board-candidate injection** (extending
+   `evidence_fusion.rs`'s existing duplicate/omit malformed-ranking
+   pattern with the one sub-case it doesn't cover) and **foreign/stale
+   board revision** (`build_bpmn_design_position`'s
+   `BpmnBoardError::StaleBoardRevision`, confirmed exercised by zero
+   existing fuzz targets) are genuinely new. "Foreign board hash" is not
+   a real refusal at `finalize_bpmn_move_evidence` (the field is stamped
+   on output, never validated on input — verified by reading
+   `fusion.rs:632`); "stale/unknown focus" is not a refusal at all
+   (`DesignFocus::unknown(...)` succeeds — verified by reading
+   `disposition_workbook_state.rs:201-203`); "invalid correction
+   reference" is already exhaustively covered by the existing
+   `correction_history.rs` target. Use independent expected
    classifications for hostile axes; do not treat every `Err` as success.
    Do not re-add P2/P3/P4/P6 assertions that already exist in sibling
    targets against the same production boundary — port the pattern into

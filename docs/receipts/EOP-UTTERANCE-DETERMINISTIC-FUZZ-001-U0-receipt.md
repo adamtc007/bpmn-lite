@@ -192,23 +192,71 @@ not fix the exact byte offsets.
 
 ## Work item 4 — hostile axis → expected refusal API
 
-**Correction (post blind-review, consistent with work item 2's
-correction above):** two rows below were misclassified as wholly new in
-the first version of this table; they are already proven elsewhere in the
-crate and should be *ported*, not redesigned.
+**Second correction (found during U1 implementation start, before any
+fuzz-target code was written against the claims below):** three more rows
+in the original table were wrong in ways only empirical verification of
+the actual function bodies caught — not just misclassified as new
+(work item 2's blind-review finding), but actually asserting a refusal
+that doesn't happen, or missing a dedicated existing target entirely:
+
+- **"Foreign board hash" does not error at `finalize_bpmn_move_evidence`.**
+  Read `fusion.rs:632`: `result.board_hash` is never validated against
+  `board.board_hash` — the output is unconditionally stamped with the
+  real board's hash, the input field is ignored. This axis does not exist
+  at this boundary as originally claimed.
+- **"Stale/unknown focus" is not a refusal at all.** Read
+  `disposition_workbook_state.rs:201-203`:
+  `DesignFocus::unknown(GraphElementRef::new("missing-focus").unwrap())`
+  is passed to `build_bpmn_design_position` and **succeeds**
+  (`.unwrap()`, not `.unwrap_err()`) — it's a valid, typed representation
+  of "the referenced element isn't on the position," not an error. This
+  was never a hostile axis; dropped from P5 entirely.
+- **"Invalid correction reference" already has its own dedicated,
+  exhaustive fuzz target**, missed by both the original table and the
+  work-item-2 correction: `correction_history.rs` (one of the 6 targets
+  omitted from the plan's §2 table, per work item 1) fuzzes every
+  correction-chain malformation — none, backward, self-cycle
+  (refused at `record_bpmn_attempt` construction, line 186), forward
+  (may resolve later), and phantom/missing target — against an
+  independent acyclic-graph reference model
+  (`reference_valid`, lines 90-111), plus the `MAX_HISTORY_ATTEMPTS`
+  resource bound as a separately-asserted second dimension. This is
+  exhaustive existing coverage, not a gap.
+- **The real `MAX_HISTORY_ATTEMPTS` cap is a named production constant,
+  not a fuzz-target-local choice**: `utterance-engine/src/history.rs:19`,
+  `pub const MAX_HISTORY_ATTEMPTS: usize = 64`, re-exported at
+  `lib.rs:83` and used by both `history.rs`'s own production check and
+  `correction_history.rs`. This strengthens (does not change) the
+  cap ruling above — 64 is not an arbitrary existing-target choice, it's
+  the actual governed bound.
+- **`evidence_fusion.rs` already covers two of the three malformed-ranking
+  sub-cases**, not zero as the original table implied: read
+  `evidence_fusion.rs:222-249` — `malformed == 1` duplicates a candidate
+  id (line 225), `malformed == 2` omits one via `.pop()` (line 227), both
+  asserted `.is_err()` against `finalize_bpmn_move_evidence` with a P1-style
+  legal-moves-unchanged check after refusal (lines 240-247). Only
+  **off-board candidate** (injecting a foreign id, never exercised —
+  `evidence_fusion.rs` only ever duplicates or removes, never inserts a
+  foreign id) remains genuinely uncovered.
 
 | Hostile axis (§4) | Expected refusal, at | Existing precedent |
 | --- | --- | --- |
-| Foreign board hash | `finalize_bpmn_move_evidence` (board/position hash mismatch) | none yet anywhere in the crate; genuinely new |
-| Omitted candidate | `finalize_bpmn_move_evidence` (incomplete evidence, P3) | none yet; genuinely new |
-| Duplicate candidate | `finalize_bpmn_move_evidence` (P3 exactly-one-entry violation) | none yet; genuinely new |
-| Off-board candidate, at evidence-finalisation | `finalize_bpmn_move_evidence` or `SlmResult` construction | none yet at *this* boundary; genuinely new. Adjacent precedent at a different boundary: `game_turn_replay.rs:267-274` fuzzes an off-board *chosen move* at `GameTurnRecord::new` (game-turn-closure), not at evidence finalisation — informative pattern to reuse, not a substitute. |
-| Rank-order permutation, identical scores | must **not** refuse — must reproduce the identical canonical result (this is P2, not P5) | **already covered** for `finalize_bpmn_move_evidence`, `evidence_fusion.rs:260-271,295-298` — see work item 2's corrected P2 row; port, don't re-add |
-| Stale/unknown focus | `build_bpmn_design_position` (`DesignFocus`/`FocusAbsenceReason` path) | **already covered**, `disposition_workbook_state.rs:194-207` (`unknown_focus` scenario 7) — `history_belief_state` itself always passes `DesignFocus::absent(...)` today, but the axis is proven elsewhere in the crate; port the existing pattern rather than redesign it |
-| Invalid correction reference | `record_bpmn_attempt` (correction target not in history) | `ReferenceHistory::append`'s own `assert!` (line 153) checks the *reference* model's bookkeeping, not that production code refuses an invalid one — genuinely new |
-| Resource-limited history (> receipt cap) | `project_bpmn_attempt_history` | **already covered**, lines 240–245 (cap is 64, not the plan's proposed 16 — see note below) |
-| Exact-match-equivalent vs. non-equivalent formatting | governed text-resolution boundary, inside `finalize_bpmn_move_evidence` | **already covered** — this is P6, proven in `evidence_fusion.rs:327-341`; port, don't re-add (corrects work item 2's original P6 row, which wrongly called this uncovered) |
-| Compound delimiter, unresolvable span | `resolve_compound_chain` / `resolve_hypothetical_chain` — **but these are server-owned (bpmn-lite-server-designer), not reachable from `utterance-engine/fuzz`** | out of scope for the extended `history_belief_state` target; belongs to U3, not U1 — plan §4 lists this axis under the shared hostile-axis table but it is only actually exercisable once/if U3 stands up a server-owned target |
+| Off-board candidate (inject a foreign id into the ranking) | `finalize_bpmn_move_evidence`, same `anyhow::bail!` at `fusion.rs:243` that duplicate/omitted already hit | duplicate/omitted already covered (`evidence_fusion.rs:222-249`); **off-board injection is the one genuinely new sub-case** — port the pattern, add the third variant |
+| Foreign/stale board revision | `build_bpmn_design_position` — `board.graph_revision != current_graph_revision` → `Err(BpmnBoardError::StaleBoardRevision)`, `bpmn_board.rs:339-344` | **genuinely new** — confirmed via `grep -rl StaleBoardRevision utterance-engine/fuzz` returning zero fuzz-target hits; only production code and its own unit tests reference it |
+| Rank-order permutation, identical scores | must **not** refuse — must reproduce the identical canonical result (this is P2, not P5) | **already covered**, `evidence_fusion.rs:260-271,295-298` — port, don't re-add |
+| Resource-limited history (> receipt cap) | `project_bpmn_attempt_history` | **already covered**, `history_belief_state.rs:240-245` and exhaustively by `correction_history.rs` |
+| Exact-match-equivalent vs. non-equivalent formatting | governed text-resolution boundary, inside `finalize_bpmn_move_evidence` | **already covered**, `evidence_fusion.rs:327-341` — port, don't re-add |
+| Invalid correction reference (all schemes) | `record_bpmn_attempt` (self-cycle) / `project_bpmn_attempt_history` (missing/forward/phantom) | **already exhaustively covered**, `correction_history.rs` — no U1 work |
+| Foreign board hash | — | **not a real axis at this boundary** — dropped |
+| Stale/unknown focus | — | **not a refusal** — dropped |
+| Compound delimiter, unresolvable span | `resolve_compound_chain` / `resolve_hypothetical_chain` — server-owned (bpmn-lite-server-designer), not reachable from `utterance-engine/fuzz` | out of scope for U1; belongs to U3 |
+
+**Corrected residual P5 work for U1, final**: exactly two genuinely new
+hostile axes — off-board-candidate injection (extend the existing
+malformed-ranking pattern with a third variant) and foreign/stale board
+revision (new). Everything else in §4's hostile-axis list is either
+already covered elsewhere in the crate or was never a real refusal to
+begin with.
 
 Non-finite scores are confirmed already rejected by `FiniteScore::new` and
 exercised directly in `evidence_fusion.rs` (not `model_boundary.rs`,
