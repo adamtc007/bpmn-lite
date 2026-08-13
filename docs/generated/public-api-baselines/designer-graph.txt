@@ -1,5 +1,5 @@
 # package: designer-graph
-# baseline_revision: 89ae3e6
+# baseline_revision: updated H5, EOP-PLAN-CRATE-HYGIENE-001 — see H5 receipt for the diff that produced this
 # command: cargo public-api -p designer-graph -sss
 
 pub mod designer_graph
@@ -213,9 +213,6 @@ pub fn designer_graph::productions::interrupting_timeout(designer_graph::product
 pub fn designer_graph::productions::non_interrupting_notification(designer_graph::productions::NonInterruptingNotificationBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
 pub fn designer_graph::productions::reminder_then_escalate(designer_graph::productions::ReminderThenEscalateBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
 pub fn designer_graph::productions::request_and_wait(designer_graph::productions::RequestAndWaitBindings) -> alloc::vec::Vec<designer_graph::ops::Operation>
-pub mod designer_graph::runbook
-pub fn designer_graph::runbook::render_operation(&designer_graph::ops::Operation) -> alloc::string::String
-pub fn designer_graph::runbook::render_runbook<'a>(impl core::iter::traits::collect::IntoIterator<Item = &'a designer_graph::ops::Operation>) -> alloc::string::String
 pub mod designer_graph::schema
 pub struct designer_graph::schema::DesignerDag
 pub designer_graph::schema::DesignerDag::name: alloc::string::String

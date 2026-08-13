@@ -30,5 +30,4 @@ mod g2_receipts;
 pub mod ops;
 pub mod positional;
 pub mod productions;
-pub mod runbook;
 pub mod schema;

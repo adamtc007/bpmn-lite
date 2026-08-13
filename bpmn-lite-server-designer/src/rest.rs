@@ -3010,7 +3010,7 @@ async fn session_runbook_endpoint(
         };
         all_ops.extend(ops);
     }
-    let runbook = designer_graph::runbook::render_runbook(&all_ops);
+    let runbook = crate::runbook::render_runbook(&all_ops);
     (
         StatusCode::OK,
         Json(serde_json::json!({

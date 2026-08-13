@@ -8,3 +8,8 @@
 
 mod proposal;
 pub mod rest;
+// H5 (EOP-PLAN-CRATE-HYGIENE-001): moved from designer-graph — this crate
+// (specifically rest.rs's session-runbook endpoint) was always the sole
+// consumer; designer-graph's own module-boundary doc comment never listed
+// it among its 5 deliberate pub submodules.
+mod runbook;

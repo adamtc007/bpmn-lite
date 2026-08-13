@@ -11,8 +11,8 @@
 //! No round-trip is claimed or attempted: this is read-only session
 //! review text, not a re-parseable program.
 
-use crate::ops::{GuardTrigger, Operation, RegionBranch};
 use bpmn_lite_compiler::IRNode;
+use designer_graph::ops::{GuardTrigger, Operation, RegionBranch};
 
 fn ir_node_sexpr(node: &IRNode) -> String {
     match node {
@@ -64,7 +64,7 @@ fn guard_trigger_sexpr(trigger: &GuardTrigger) -> String {
 
 /// Render a single `Operation` as one readable, S-expression-shaped line.
 /// Field order matches the operation's own doc comment in `ops.rs`.
-pub fn render_operation(op: &Operation) -> String {
+pub(crate) fn render_operation(op: &Operation) -> String {
     match op {
         Operation::InsertAfter { anchor, key, node, edge_id } => format!(
             "(insert-after :anchor {:?} :key {:?} :edge {edge_id:?} :as {})",
@@ -149,7 +149,7 @@ pub fn render_operation(op: &Operation) -> String {
 /// Render a full operation tape (one `GraphEdit` payload's `Vec<Operation>`,
 /// or a whole session's folded tape) as readable Designer-DSL text, one
 /// operation per line.
-pub fn render_runbook<'a>(ops: impl IntoIterator<Item = &'a Operation>) -> String {
+pub(crate) fn render_runbook<'a>(ops: impl IntoIterator<Item = &'a Operation>) -> String {
     ops.into_iter()
         .map(render_operation)
         .collect::<Vec<_>>()
@@ -159,7 +159,7 @@ pub fn render_runbook<'a>(ops: impl IntoIterator<Item = &'a Operation>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::NodeKey;
+    use designer_graph::schema::NodeKey;
     use uuid::Uuid;
 
     fn key(byte: u8) -> NodeKey {
