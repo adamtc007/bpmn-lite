@@ -192,6 +192,18 @@ jobs:
           cd utterance-engine/fuzz
           cargo fuzz run evidence_fusion "$evidence_corpus" -- \
             -runs=64 -max_len=256 -print_final_stats=1
+      # EOP-PLAN-UTTERANCE-DETERMINISTIC-FUZZ-001 U2: the deterministic
+      # discovery-pipeline composition target (board -> position ->
+      # evidence -> belief -> disposition). Was nightly-discovery-only
+      # before this tranche.
+      - name: Deterministic discovery-pipeline (history/belief/disposition) smoke
+        run: |
+          history_corpus=$(mktemp -d)
+          cp utterance-engine/fuzz/seeds/history_belief_state/active.seed \
+            "$history_corpus/seed"
+          cd utterance-engine/fuzz
+          cargo fuzz run history_belief_state "$history_corpus" -- \
+            -runs=64 -max_len=256 -print_final_stats=1
       # 2026-08-10 fuzz-coverage audit tranche — PR-time smoke for the five
       # gaps closed that day (see docs/receipts/fuzz-coverage-*-2026-08-10.md),
       # matching the same live-smoke discipline the gameboard targets above

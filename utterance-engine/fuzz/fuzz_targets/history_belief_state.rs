@@ -298,6 +298,7 @@ fuzz_target!(|data: &[u8]| {
     // proven at this same boundary in evidence_fusion.rs; asserted inline
     // here too since this target now varies the phrase.
     if data.get(4).copied().unwrap_or_default() % 4 != 0 {
+        observe(15, "text_mutation_equivalence_checked");
         let canonical = finalize_bpmn_move_evidence(
             &board,
             &position,
