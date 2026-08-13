@@ -1,5 +1,5 @@
 # package: bpmn-lite-types
-# baseline_revision: 89ae3e6
+# baseline_revision: updated H4.2, EOP-PLAN-CRATE-HYGIENE-001 — see H4 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-types -sss
 
 pub mod bpmn_lite_types
@@ -1516,7 +1516,6 @@ pub fn bpmn_lite_types::apply_ffi_outputs(&mut bpmn_lite_types::ProcessInstance,
 pub fn bpmn_lite_types::compute_instance_integrity_hash(&bpmn_lite_types::ProcessInstance) -> [u8; 32]
 pub fn bpmn_lite_types::correlation_key_string(&serde_json::value::Value) -> core::result::Result<alloc::string::String, bpmn_lite_types::FfiBindingError>
 pub fn bpmn_lite_types::encode_ffi_inputs(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::FfiTaskDecl) -> core::result::Result<alloc::vec::Vec<u8>, bpmn_lite_types::FfiBindingError>
-pub fn bpmn_lite_types::resolve_binding_scalar(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::BindingSource, &str) -> core::result::Result<serde_json::value::Value, bpmn_lite_types::FfiBindingError>
 pub fn bpmn_lite_types::resolve_correlation_key(&bpmn_lite_types::ProcessInstance, &bpmn_lite_types::BindingSource) -> core::result::Result<alloc::string::String, bpmn_lite_types::FfiBindingError>
 pub fn bpmn_lite_types::v2_control_stack_effect(&bpmn_lite_types::Instr) -> bpmn_lite_types::ControlStackEffect
 pub fn bpmn_lite_types::validate_concurrency_record_shape(&bpmn_lite_types::ConcurrencyRecord) -> core::result::Result<(), bpmn_lite_types::ConcurrencyValidationError>

@@ -207,7 +207,10 @@ fn resolve_binding_scalar_with_domain(
 /// Resolve a `BindingSource` to a concrete JSON scalar, parsing the domain
 /// payload as needed. The correlation-facing entry point onto the same
 /// resolution `encode_ffi_inputs` uses.
-pub fn resolve_binding_scalar(
+// H4.2 (EOP-PLAN-CRATE-HYGIENE-001): pub(crate) — zero external callers
+// (grep-confirmed); only used by this same file's `correlation key`
+// resolution path.
+pub(crate) fn resolve_binding_scalar(
     instance: &ProcessInstance,
     source: &BindingSource,
     label: &str,
