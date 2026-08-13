@@ -26,6 +26,7 @@
 //! re-litigating that call.
 
 pub mod board_candidate;
+mod b2_roundtrip_receipts;
 mod g2_receipts;
 pub mod ops;
 pub mod positional;
