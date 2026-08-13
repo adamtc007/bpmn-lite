@@ -112,14 +112,11 @@ Baseline revision: `89ae3e6`. This tranche's revision: see `git log -1` on branc
     reconciled above via the xtask `--tests` run.)
 
 - **Known deviations or explicitly parked work:**
-  - `bpmn-lite-authoring` remains a `bpmn-lite-engine` dev-dependency.
-    `src/tests.rs` still calls `bpmn_lite_authoring::{parse_workflow_yaml,
-    compile_program_from_dto}` directly, contradicting the crate's own locked
-    "does NOT depend on bpmn-lite-authoring" Phase-0 boundary (H0 finding). This
-    is an architectural decision, not a mechanical dev-dependency cleanup — H1
-    only removed dependencies that existed solely to support tests that moved to
-    xtask this tranche. Flagged again here for explicit peer-review disposition
-    before H2/H3.
+  - `bpmn-lite-authoring` remained a `bpmn-lite-engine` dev-dependency at the
+    time this receipt was first written — **closed** in
+    `EOP-CRATE-HYGIENE-001-H1-ADDENDUM-authoring-boundary.md`: the 6
+    dependent tests moved to `xtask/tests/authoring_engine_vertical.rs`, the
+    dev-dependency removed. See that addendum for verification evidence.
   - `bpmn-lite-authoring` is also an unused dev-dependency of
     `bpmn-lite-store-postgres` (zero references, confirmed by the H1.3 agent) —
     pre-existing before this tranche's moves, left untouched as out of scope.
