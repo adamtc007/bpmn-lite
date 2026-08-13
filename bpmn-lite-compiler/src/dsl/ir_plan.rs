@@ -10,11 +10,12 @@
 //!
 //! **Scope — deliberately conservative, fails closed beyond it (CAREFUL
 //! tier: no unproven lossy shoehorning under time pressure).** Supported:
-//! `Start`, `End`, `ServiceTask`, and `GatewayAnd`/`GatewayInclusive`
-//! matched diverging/converging pairs (via the exposed [`gateway_pairs`]
-//! pairing oracle — never a hand-rolled re-pairing). `DataObject` nodes
-//! are structural-only (zero bytecode, per their own IR doc comment) and
-//! are simply omitted from the projected plan.
+//! `Start`, `End`, `ServiceTask`, `MessageWait`, `MultiInstance` (G5.4a),
+//! and `GatewayAnd`/`GatewayInclusive` matched diverging/converging pairs
+//! (via the exposed [`gateway_pairs`] pairing oracle — never a hand-rolled
+//! re-pairing). `DataObject` nodes are structural-only (zero bytecode, per
+//! their own IR doc comment) and are simply omitted from the projected
+//! plan.
 //!
 //! **WS-D D1 (Adam's "own phase" ruling, 2026-08-03)** widened the scope
 //! with timer semantics: `BoundaryTimer`/`BoundaryError` project onto
@@ -35,11 +36,14 @@
 //!   DSL counterpart's `join` id is an explicit AST annotation
 //!   (`linter.rs`'s `NodeAst::Split.join`) with no IR equivalent. Adding
 //!   XOR support needs its own traced join-inference design, not a guess.
-//! - `MessageWait`, `HumanWait`, `SendTask`, `MultiInstance`,
-//!   `FfiServiceTask` — still no `ExecutionNode` representation in
-//!   `WorkflowExecutionPlan` (XML/IR-authoring-only constructs). A guard
-//!   ATTACHED to a wait host therefore also cannot project — the host
-//!   itself is refused first.
+//! - `HumanWait`, `SendTask`, `FfiServiceTask` — still no `ExecutionNode`
+//!   representation in `WorkflowExecutionPlan` (XML/IR-authoring-only
+//!   constructs). A guard ATTACHED to such a host therefore also cannot
+//!   project — the host itself is refused first. (`MessageWait` and
+//!   `MultiInstance`, formerly on this list, project since the
+//!   MessageWait exec-node landing and G5.4a respectively — this header
+//!   lagged the code and was corrected under EOP-PLAN-GRAPH-DSL-BRIDGE-001
+//!   B0.)
 //!
 //! Placeholder inference is also out of scope for graph-authored
 //! `ServiceTask` nodes: DSL's `Task.plug` is a catalogue-registered
