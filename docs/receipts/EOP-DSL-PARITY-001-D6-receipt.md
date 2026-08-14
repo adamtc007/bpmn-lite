@@ -1,8 +1,8 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D6: Inclusive alignment (fork D / P1½)
 
-**Status:** Blind-reviewed — ACCEPT, no corrections needed. Awaiting Adam's
-acceptance. This is the **final tranche** in the ratified
-`EOP-PLAN-DSL-PARITY-001` programme.
+**Status:** Blind-reviewed — ACCEPT, no corrections needed. **Accepted by
+Adam.** This is the **final tranche** in the ratified
+`EOP-PLAN-DSL-PARITY-001` programme — the programme (D0→D6) is now closed.
 
 ## What was built
 
@@ -149,4 +149,9 @@ or (c) — and every fixture was confirmed to test what it claims to test.
 ## STOP
 
 Blind-reviewed, ACCEPT, no corrections applied. D6 — and with it, the
-`EOP-PLAN-DSL-PARITY-001` programme — awaits Adam's acceptance.
+`EOP-PLAN-DSL-PARITY-001` programme — **accepted by Adam.** Programme closed:
+D0 through D6, no further tranche defined in the ratified plan doc. The two
+items noted in "Programme closure note" above (named-subset OR condition
+semantics; unification of `gateway_pairs` with the XML importer's
+`find_corresponding_join`) remain open, out-of-scope items for future,
+separately-ruled work.
