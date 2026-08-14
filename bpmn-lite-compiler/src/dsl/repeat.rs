@@ -67,14 +67,6 @@ pub fn repeat_n_times(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{target_node_id}-retry-loop"));
 
-    // Every predecessor that used to flow into the target now flows past
-    // it, to whatever the target used to point at — the loop is spliced
-    // back in at that same position below.
-    for pred in find_all_predecessor_ids(workflow, target_node_id) {
-        let mut mutator = AstMutator::new(workflow);
-        mutator.rewire_next(&pred, &exit_next)?;
-    }
-
     let loop_node = NodeAst::Loop(create_bounded_retry_macro(
         target_task,
         ceiling,
@@ -82,14 +74,35 @@ pub fn repeat_n_times(
         &exit_next,
     ));
 
-    let anchor = find_all_predecessor_ids(workflow, &exit_next)
-        .into_iter()
-        .next()
+    // Every predecessor that used to flow into the target now flows into
+    // the LOOP (not past it to `exit_next`) — a predecessor rewired to
+    // `exit_next` would silently bypass the retry entirely. This is the
+    // D2-review-surfaced fix: the previous version rewired every
+    // predecessor to `exit_next` and then separately spliced the loop in
+    // after only ONE (arbitrarily chosen) predecessor, leaving every
+    // OTHER predecessor's callers never retried, with no error raised.
+    let preds = find_all_predecessor_ids(workflow, target_node_id);
+    for pred in &preds {
+        let mut mutator = AstMutator::new(workflow);
+        mutator.rewire_next(pred, &loop_id)?;
+    }
+
+    // Injection position is a text-layout choice only — flow is
+    // graph-driven via `next`/`id`, not source order — so any one
+    // (already-rewired) predecessor's scope is a valid anchor. Use
+    // `inject_into_same_scope` directly (not `insert_after`): every
+    // predecessor was just rewired to `loop_id` above, so re-rewiring
+    // the anchor via `insert_after`'s own anchor-rewire step would be
+    // redundant at best and wrong if `insert_after`'s next-stealing
+    // semantics ever diverged from this loop's.
+    let anchor = preds
+        .first()
+        .cloned()
         .or_else(|| workflow.nodes.first().map(|n| n.id().to_string()))
         .ok_or_else(|| RepeatNTimesError::from("empty workflow scope".to_string()))?;
 
     let mut mutator = AstMutator::new(workflow);
-    mutator.insert_after(&anchor, loop_node)?;
+    mutator.inject_into_same_scope(&anchor, loop_node)?;
     Ok(())
 }
 
@@ -262,17 +275,12 @@ mod tests {
     }
 
     /// Same axis for a D1 boundary guard whose escape enters the wrapped
-    /// task: discovery must find the guard predecessor so its `next` is
-    /// rewired OFF the removed task (no dangling reference; the result
-    /// recompiles). NOTE this cements discovery only: `repeat_n_times`
-    /// has a PRE-EXISTING multi-predecessor defect (not guard-specific —
-    /// two service-task predecessors show it too) where only the anchor
-    /// predecessor is routed through the loop and every other one is
-    /// left rewired to the exit, bypassing the retry. Surfaced at the D2
-    /// gate for a separate ruling; do not strengthen this assertion to
-    /// "== charge-loop" until that ruling lands.
+    /// task: the guard predecessor is rewired ONTO the loop, same as
+    /// every other predecessor kind (strengthened from the D2-review
+    /// placeholder assertion `!= "charge"` now that the multi-predecessor
+    /// splice defect below is fixed).
     #[test]
-    fn repeat_n_times_rewires_a_guard_escape_predecessor_off_the_removed_task() {
+    fn repeat_n_times_rewires_a_guard_escape_predecessor_onto_the_loop() {
         let mut workflow = parse_workflow_str(
             r#"(workflow test
   (start-event :id start :next protected)
@@ -294,16 +302,67 @@ mod tests {
                 _ => None,
             })
             .expect("guard present");
-        assert_ne!(
-            g1.next, "charge",
-            "guard escape must not dangle at the removed task"
-        );
+        assert_eq!(g1.next, "charge-loop", "guard escape rewired to the loop");
 
         let mut reg = crate::dsl::linter::StubPlaceholderRegistry::new();
         reg.register_verb("billing.charge", crate::dsl::linter::BindingDecl::default());
         reg.register_verb("cbu.host", crate::dsl::linter::BindingDecl::default());
         let printed = crate::dsl::refactor::ToSexpr::to_sexpr(&workflow, 0);
         crate::dsl::compile(&printed, &reg).expect("rewired workflow must recompile");
+    }
+
+    /// The multi-predecessor splice defect itself (D2-review fork,
+    /// ruled): a diamond where two independent branches both flow
+    /// directly into the wrapped task. Before the fix, only the
+    /// arbitrarily-chosen anchor predecessor was rewired to the loop —
+    /// the other was left pointed at `exit_next` (`end`), silently
+    /// bypassing the retry for callers reaching `charge` via that
+    /// branch. Both must now point at the loop.
+    #[test]
+    fn repeat_n_times_rewires_every_predecessor_in_a_diamond() {
+        let mut workflow = parse_workflow_str(
+            r#"(workflow test
+  (start-event :id start :next split1)
+  (split-and :id split1 :join charge
+    (flow :next branch-a)
+    (flow :next branch-b))
+  (service-task :id branch-a :verb cbu.a :next charge)
+  (service-task :id branch-b :verb cbu.b :next charge)
+  (service-task :id charge :verb billing.charge :next end)
+  (end-event :id end :status "done")
+)"#,
+        )
+        .expect("parse");
+
+        repeat_n_times(&mut workflow, "charge", 3, Some("charge-loop")).expect("repeat_n_times");
+
+        let next_of = |id: &str| -> String {
+            workflow
+                .nodes
+                .iter()
+                .find_map(|n| match n {
+                    NodeAst::Task(t) if t.id == id => Some(t.next.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("task '{id}' not found"))
+        };
+        assert_eq!(
+            next_of("branch-a"),
+            "charge-loop",
+            "branch-a must be rewired to the loop, not left at exit_next"
+        );
+        assert_eq!(
+            next_of("branch-b"),
+            "charge-loop",
+            "branch-b must be rewired to the loop, not left at exit_next"
+        );
+
+        let mut reg = crate::dsl::linter::StubPlaceholderRegistry::new();
+        reg.register_verb("cbu.a", crate::dsl::linter::BindingDecl::default());
+        reg.register_verb("cbu.b", crate::dsl::linter::BindingDecl::default());
+        reg.register_verb("billing.charge", crate::dsl::linter::BindingDecl::default());
+        let printed = crate::dsl::refactor::ToSexpr::to_sexpr(&workflow, 0);
+        crate::dsl::compile(&printed, &reg).expect("rewired diamond workflow must recompile");
     }
 
     #[test]

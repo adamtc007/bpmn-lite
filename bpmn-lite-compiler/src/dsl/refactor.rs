@@ -366,7 +366,14 @@ impl<'a> AstMutator<'a> {
         Ok(())
     }
 
-    fn inject_into_same_scope(
+    /// `pub(crate)`, not private: `dsl::repeat`'s multi-predecessor splice
+    /// (D2-review fork) needs to inject a node into a sibling's scope
+    /// WITHOUT the anchor-rewire `insert_after` also performs — every
+    /// predecessor is rewired explicitly beforehand there, so
+    /// re-rewiring the one used as the injection anchor would be wrong.
+    /// Reused, not duplicated, per the injection logic `insert_after`
+    /// already owns.
+    pub(crate) fn inject_into_same_scope(
         &mut self,
         sibling_id: &str,
         node_to_insert: NodeAst,
