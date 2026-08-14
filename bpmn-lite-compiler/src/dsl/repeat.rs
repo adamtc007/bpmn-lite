@@ -365,6 +365,52 @@ mod tests {
         crate::dsl::compile(&printed, &reg).expect("rewired diamond workflow must recompile");
     }
 
+    /// D2.1 blind-review finding: a Split node can itself be a direct
+    /// predecessor of the wrapped task (a flow's `:next` targeting it,
+    /// legal per the grammar — `parse_split_flow` places no restriction
+    /// on `:next`). `rewire_next` refuses ANY `NodeAst::Split` unconditionally
+    /// (`"Cannot directly rewire Split next; edit flow paths instead"`),
+    /// so this predecessor kind was NEVER rewireable by `repeat_n_times`
+    /// — before or after this tranche's fix. This cements that the
+    /// failure is closed (a named `Err`, not a panic and not a silent
+    /// partial rewire) rather than leaving the gap untested.
+    ///
+    /// NOT fixed here (surfaced, not decided — out of this tranche's
+    /// scope): `repeat_n_times` is non-transactional. By the time this
+    /// `Err` is produced, the target task has already been removed from
+    /// `workflow`, and any predecessor rewired earlier in the same
+    /// iteration already points at a `loop_id` that was never created
+    /// (the loop node is injected AFTER the rewire loop) — the caller's
+    /// `WorkflowSource` is left corrupted despite the `Err` return. This
+    /// is pre-existing (the pre-D2.1 code had the identical shape: remove
+    /// target, then loop-and-rewire with `?`), not introduced by this
+    /// fix. Harmless today only because the sole caller
+    /// (`bpmn-lite-server-designer`'s `apply_dsl_macro` handler) discards
+    /// the mutated workflow on error rather than persisting it. A future
+    /// fix would clone-and-restore-on-error or validate all predecessor
+    /// kinds up front before mutating.
+    #[test]
+    fn repeat_n_times_refuses_a_split_predecessor_without_corrupting_silently() {
+        let mut workflow = parse_workflow_str(
+            r#"(workflow test
+  (start-event :id start :next split1)
+  (split-xor :id split1 :plug pick :join charge
+    (flow :condition (= @flag "a") :next charge)
+    (flow :condition (= @flag "b") :next other))
+  (service-task :id charge :verb billing.charge :next end)
+  (service-task :id other :verb billing.other :next end)
+  (end-event :id end :status "done")
+)"#,
+        )
+        .expect("parse");
+        let err = repeat_n_times(&mut workflow, "charge", 3, Some("charge-loop")).unwrap_err();
+        assert!(
+            err.message.contains("Cannot directly rewire Split next"),
+            "got: {}",
+            err.message
+        );
+    }
+
     #[test]
     fn repeat_n_times_refuses_a_missing_target() {
         let mut workflow = parse_workflow_str(

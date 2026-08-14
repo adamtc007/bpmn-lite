@@ -47,6 +47,22 @@ reapply.
   `repeat_n_times_refuses_a_missing_target` — unchanged, still green (confirms
   the fix is behavior-preserving for the single-predecessor case).
 
+## Blind-review disposition
+
+The review of the initial commit (`598a760`) returned **ACCEPT-WITH-CORRECTIONS**.
+Both findings verified personally (a scratch probe reproducing each scenario
+against the real `compile()`/`repeat_n_times` pipeline) before disposition:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A `Split` node can itself be a direct predecessor of the wrapped task (legal per grammar); `rewire_next` refuses ANY Split unconditionally, so this predecessor kind was never rewireable — before or after this fix — and the new diamond test doesn't exercise it despite being the commit's whole point | **Verified fails closed** (named `Err`, not a panic or silent bypass) via probe; **cemented**: `repeat_n_times_refuses_a_split_predecessor_without_corrupting_silently` |
+| 2 | `repeat_n_times` is non-transactional: on that same Split-predecessor error path, the target task is already removed and earlier predecessors may already be rewired to a `loop_id` that was never created, corrupting the caller's `WorkflowSource` despite the `Err` return | **Confirmed pre-existing** (identical shape before D2.1 — not introduced by this fix); harmless today only because the sole caller discards the workflow on error. **Surfaced, NOT fixed** — documented in the new test's doc comment; needs its own ruling (clone-and-restore-on-error, or up-front predecessor-kind validation before any mutation) |
+
+Disposition does not block this gate: the core defect this tranche targets (silent
+retry-bypass for callers via a non-anchor Task/Wait/Guard predecessor) is genuinely
+fixed and cemented; the Split-predecessor gap and the transactionality gap are both
+pre-existing, both fail closed, and are now tested/documented rather than silent.
+
 ## Public-API impact
 
 None. `inject_into_same_scope` is `pub(crate)`, not `pub` — invisible to
@@ -54,8 +70,8 @@ None. `inject_into_same_scope` is `pub(crate)`, not `pub` — invisible to
 
 ## Verification sweep (all green before commit)
 
-- `cargo test -p bpmn-lite-compiler` — 216 passed, 0 failed (was 215; +1 net:
-  +1 new diamond test, 0 removed, 1 renamed+strengthened)
+- `cargo test -p bpmn-lite-compiler` — 217 passed, 0 failed (was 215; +2 net:
+  +1 diamond test, +1 blind-review cement, 0 removed, 1 renamed+strengthened)
 - `cargo test -p designer-graph` — 90 passed, 0 failed (untouched)
 - `cargo test -p bpmn-lite-server-designer` — 98 passed, 0 failed, 1 ignored (untouched)
 - `cargo test -p bpmn-lite-authoring` — 69 passed, 0 failed (untouched)
