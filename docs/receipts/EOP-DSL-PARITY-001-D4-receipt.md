@@ -1,6 +1,7 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D4, Piece 1: loop provenance IR carriage (fork E)
 
-**Status:** awaiting acceptance
+**Status:** awaiting acceptance (blind review of commit `e2d6f98` returned
+**ACCEPT**, no corrections — see disposition below)
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Design note:** `docs/receipts/EOP-DSL-PARITY-001-D4.0-design.md`, ratified
 "proceed carrier only" (Adam, 2026-08-14) — fold-back explicitly deferred,
@@ -152,6 +153,26 @@ Diff: **+4 lines, −0 removals**:
 - `scripts/check-semantic-gameboard-boundaries.py` — pass (after baseline
   regen)
 - `scripts/check-test-only-pub.py` — pass (0 items)
+
+## Blind-review disposition
+
+Independent authorship-blind review of commit `e2d6f98` returned
+**ACCEPT**. The reviewer independently re-derived every claim rather than
+trusting the receipt prose: re-ran `cargo build --workspace --all-targets`
+and confirmed 0 errors; ran all four new tests directly and read their
+actual assertions rather than trusting pass counts; read `refactor.rs`'s
+real `impl ToSexpr for TaskAst` to independently confirm `loop_origin` has
+no printable grammar surface — the reasoning behind the refusal, not just
+its existence; diffed the live `cargo public-api` output against the
+committed baseline (exact match, 531 lines each) and confirmed the
+committed baseline's own diff from D3 is exactly the claimed +4/−0;
+sampled 9 of the ~28 mechanically-touched files plus `lowering.rs`/
+`verifier.rs` and confirmed every hunk is a single-field
+`loop_origin: None,` addition or a `..` rest-pattern addition, no smuggled
+logic changes; grepped the full commit for any `LoopAst`
+construction/reconstruction code and found none — confirming fold-back
+stayed out of scope as ratified. No discrepancies found; no corrections
+made.
 
 ## STOP
 
