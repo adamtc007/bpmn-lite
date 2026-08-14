@@ -1048,8 +1048,8 @@ mod tests {
         use super::*;
         let mut g: IRGraph = IRGraph::new();
         let s = g.add_node(IRNode::Start { id: "start".into() });
-        let a = g.add_node(IRNode::ServiceTask { id: "t1".into(), name: "a".into(), task_type: "x".into() });
-        let b = g.add_node(IRNode::ServiceTask { id: "t1".into(), name: "b".into(), task_type: "x".into() });
+        let a = g.add_node(IRNode::ServiceTask { loop_origin: None, id: "t1".into(), name: "a".into(), task_type: "x".into() });
+        let b = g.add_node(IRNode::ServiceTask { loop_origin: None, id: "t1".into(), name: "b".into(), task_type: "x".into() });
         let e = g.add_node(IRNode::End { id: "end".into(), terminate: false });
         g.add_edge(s, a, IREdge { id: "e1".into(), condition: None });
         g.add_edge(a, b, IREdge { id: "e1".into(), condition: None });
@@ -1060,7 +1060,7 @@ mod tests {
 
         let mut ok: IRGraph = IRGraph::new();
         let s = ok.add_node(IRNode::Start { id: "start".into() });
-        let a = ok.add_node(IRNode::ServiceTask { id: "t1".into(), name: "a".into(), task_type: "x".into() });
+        let a = ok.add_node(IRNode::ServiceTask { loop_origin: None, id: "t1".into(), name: "a".into(), task_type: "x".into() });
         let e = ok.add_node(IRNode::End { id: "end".into(), terminate: false });
         ok.add_edge(s, a, IREdge { id: "e1".into(), condition: None });
         ok.add_edge(a, e, IREdge { id: "e2".into(), condition: None });
@@ -1108,7 +1108,7 @@ mod tests {
         let join1 = graph.add_node(IRNode::GatewayAnd {
             id: "join1".to_string(), name: "Join1".to_string(), direction: GatewayDirection::Converging,
         });
-        let a = graph.add_node(IRNode::ServiceTask { id: "a".to_string(), name: "A".to_string(), task_type: "a".to_string() });
+        let a = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "a".to_string(), name: "A".to_string(), task_type: "a".to_string() });
         let end_dangle = graph.add_node(IRNode::End { id: "end_dangle".to_string(), terminate: false });
         let fork2 = graph.add_node(IRNode::GatewayAnd {
             id: "fork2".to_string(), name: "Fork2".to_string(), direction: GatewayDirection::Diverging,
@@ -1116,8 +1116,8 @@ mod tests {
         let join2 = graph.add_node(IRNode::GatewayAnd {
             id: "join2".to_string(), name: "Join2".to_string(), direction: GatewayDirection::Converging,
         });
-        let c1 = graph.add_node(IRNode::ServiceTask { id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
-        let c2 = graph.add_node(IRNode::ServiceTask { id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
+        let c1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
+        let c2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
         let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
 
         graph.add_edge(start, fork1, IREdge { id: "e0".to_string(), condition: None });
@@ -1162,12 +1162,12 @@ mod tests {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
         let b = graph.add_node(IRNode::GatewayXor { id: "b".to_string(), name: "B".to_string() });
-        let p = graph.add_node(IRNode::ServiceTask { id: "p".to_string(), name: "P".to_string(), task_type: "p".to_string() });
-        let q = graph.add_node(IRNode::ServiceTask { id: "q".to_string(), name: "Q".to_string(), task_type: "q".to_string() });
-        let m1 = graph.add_node(IRNode::ServiceTask { id: "m1".to_string(), name: "M1".to_string(), task_type: "m1".to_string() });
+        let p = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "p".to_string(), name: "P".to_string(), task_type: "p".to_string() });
+        let q = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "q".to_string(), name: "Q".to_string(), task_type: "q".to_string() });
+        let m1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "m1".to_string(), name: "M1".to_string(), task_type: "m1".to_string() });
         let end1 = graph.add_node(IRNode::End { id: "end1".to_string(), terminate: false });
         let a = graph.add_node(IRNode::GatewayXor { id: "a".to_string(), name: "A".to_string() });
-        let m2 = graph.add_node(IRNode::ServiceTask { id: "m2".to_string(), name: "M2".to_string(), task_type: "m2".to_string() });
+        let m2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "m2".to_string(), name: "M2".to_string(), task_type: "m2".to_string() });
         let end2 = graph.add_node(IRNode::End { id: "end2".to_string(), terminate: false });
 
         graph.add_edge(start, b, IREdge { id: "e0".to_string(), condition: None });
@@ -1338,6 +1338,7 @@ mod tests {
             id: "host".to_string(),
             name: "Host".to_string(),
             task_type: "long_work".to_string(),
+            loop_origin: None,
         });
         let normal_end = graph.add_node(IRNode::End {
             id: "normal_end".to_string(),
@@ -1354,6 +1355,7 @@ mod tests {
             id: "escalate".to_string(),
             name: "Escalate".to_string(),
             task_type: "escalate_work".to_string(),
+            loop_origin: None,
         });
         let timeout_end = graph.add_node(IRNode::End {
             id: "timeout_end".to_string(),
@@ -1450,6 +1452,7 @@ mod tests {
             id: "escalate".to_string(),
             name: "Escalate".to_string(),
             task_type: "escalate_work".to_string(),
+            loop_origin: None,
         });
         let escalate_end = graph.add_node(IRNode::End { id: "escalate_end".to_string(), terminate: false });
 
@@ -1493,6 +1496,7 @@ mod tests {
             id: "host".to_string(),
             name: "Host".to_string(),
             task_type: "long_work".to_string(),
+            loop_origin: None,
         });
         let errors = verify(&graph);
         assert!(
@@ -1544,6 +1548,7 @@ mod tests {
             id: "host".to_string(),
             name: "Host".to_string(),
             task_type: "long_work".to_string(),
+            loop_origin: None,
         });
         let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
         let boundary_a = graph.add_node(IRNode::BoundaryError {
@@ -1562,11 +1567,13 @@ mod tests {
             id: "handler_a".to_string(),
             name: "Handler A".to_string(),
             task_type: "handle_a".to_string(),
+            loop_origin: None,
         });
         let handler_b = graph.add_node(IRNode::ServiceTask {
             id: "handler_b".to_string(),
             name: "Handler B".to_string(),
             task_type: "handle_b".to_string(),
+            loop_origin: None,
         });
         let end_a = graph.add_node(IRNode::End { id: "end_a".to_string(), terminate: false });
         let end_b = graph.add_node(IRNode::End { id: "end_b".to_string(), terminate: false });
@@ -1599,6 +1606,7 @@ mod tests {
             id: "host".to_string(),
             name: "Host".to_string(),
             task_type: "long_work".to_string(),
+            loop_origin: None,
         });
         let normal_end = graph.add_node(IRNode::End { id: "normal_end".to_string(), terminate: false });
         let boundary_a = graph.add_node(IRNode::BoundaryError {
@@ -1617,11 +1625,13 @@ mod tests {
             id: "handler_a".to_string(),
             name: "Handler A".to_string(),
             task_type: "handle_a".to_string(),
+            loop_origin: None,
         });
         let handler_b = graph.add_node(IRNode::ServiceTask {
             id: "handler_b".to_string(),
             name: "Handler B".to_string(),
             task_type: "handle_b".to_string(),
+            loop_origin: None,
         });
         let end_a = graph.add_node(IRNode::End { id: "end_a".to_string(), terminate: false });
         let end_b = graph.add_node(IRNode::End { id: "end_b".to_string(), terminate: false });
@@ -1683,8 +1693,8 @@ mod tests {
         let ig_join_a = graph.add_node(IRNode::GatewayInclusive {
             id: "ig_join_a".to_string(), name: "JoinA".to_string(), direction: GatewayDirection::Converging,
         });
-        let a1 = graph.add_node(IRNode::ServiceTask { id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
-        let a2 = graph.add_node(IRNode::ServiceTask { id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
+        let a1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
+        let a2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
 
         let ig_fork_b = graph.add_node(IRNode::GatewayInclusive {
             id: "ig_fork_b".to_string(), name: "ForkB".to_string(), direction: GatewayDirection::Diverging,
@@ -1692,10 +1702,10 @@ mod tests {
         let ig_join_b = graph.add_node(IRNode::GatewayInclusive {
             id: "ig_join_b".to_string(), name: "JoinB".to_string(), direction: GatewayDirection::Converging,
         });
-        let b1 = graph.add_node(IRNode::ServiceTask { id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
-        let b2 = graph.add_node(IRNode::ServiceTask { id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
-        let b3 = graph.add_node(IRNode::ServiceTask { id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
-        let b_pre = graph.add_node(IRNode::ServiceTask { id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
+        let b1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
+        let b2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
+        let b3 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
+        let b_pre = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
 
         graph.add_edge(start, and_fork, IREdge { id: "f0".to_string(), condition: None });
         graph.add_edge(and_fork, ig_fork_a, IREdge { id: "fa0".to_string(), condition: None });
@@ -1743,15 +1753,15 @@ mod tests {
             id: "outer_join".to_string(), name: "OuterJoin".to_string(), direction: GatewayDirection::Converging,
         });
         let end = graph.add_node(IRNode::End { id: "end".to_string(), terminate: false });
-        let leaf = graph.add_node(IRNode::ServiceTask { id: "leaf".to_string(), name: "Leaf".to_string(), task_type: "leaf".to_string() });
+        let leaf = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "leaf".to_string(), name: "Leaf".to_string(), task_type: "leaf".to_string() });
         let inner_fork = graph.add_node(IRNode::GatewayInclusive {
             id: "inner_fork".to_string(), name: "InnerFork".to_string(), direction: GatewayDirection::Diverging,
         });
         let inner_join = graph.add_node(IRNode::GatewayInclusive {
             id: "inner_join".to_string(), name: "InnerJoin".to_string(), direction: GatewayDirection::Converging,
         });
-        let c1 = graph.add_node(IRNode::ServiceTask { id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
-        let c2 = graph.add_node(IRNode::ServiceTask { id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
+        let c1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "c1".to_string(), name: "C1".to_string(), task_type: "c1".to_string() });
+        let c2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "c2".to_string(), name: "C2".to_string(), task_type: "c2".to_string() });
 
         let cond = |flag: &str| Some(ConditionExpr { flag_name: flag.to_string(), op: ConditionOp::Eq, literal: ConditionLiteral::Bool(true) });
 
@@ -1820,18 +1830,18 @@ mod tests {
         let inner_join_a = graph.add_node(IRNode::GatewayAnd {
             id: "inner_join_a".to_string(), name: "InnerJoinA".to_string(), direction: GatewayDirection::Converging,
         });
-        let a1 = graph.add_node(IRNode::ServiceTask { id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
-        let a2 = graph.add_node(IRNode::ServiceTask { id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
+        let a1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "a1".to_string(), name: "A1".to_string(), task_type: "a1".to_string() });
+        let a2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "a2".to_string(), name: "A2".to_string(), task_type: "a2".to_string() });
         let inner_fork_b = graph.add_node(IRNode::GatewayAnd {
             id: "inner_fork_b".to_string(), name: "InnerForkB".to_string(), direction: GatewayDirection::Diverging,
         });
         let inner_join_b = graph.add_node(IRNode::GatewayAnd {
             id: "inner_join_b".to_string(), name: "InnerJoinB".to_string(), direction: GatewayDirection::Converging,
         });
-        let b1 = graph.add_node(IRNode::ServiceTask { id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
-        let b2 = graph.add_node(IRNode::ServiceTask { id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
-        let b3 = graph.add_node(IRNode::ServiceTask { id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
-        let b_pre = graph.add_node(IRNode::ServiceTask { id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
+        let b1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b1".to_string(), name: "B1".to_string(), task_type: "b1".to_string() });
+        let b2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b2".to_string(), name: "B2".to_string(), task_type: "b2".to_string() });
+        let b3 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b3".to_string(), name: "B3".to_string(), task_type: "b3".to_string() });
+        let b_pre = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "b_pre".to_string(), name: "BPre".to_string(), task_type: "b_pre".to_string() });
 
         graph.add_edge(start, outer_fork, IREdge { id: "f0".to_string(), condition: None });
         graph.add_edge(outer_fork, inner_fork_a, IREdge { id: "fa0".to_string(), condition: None });

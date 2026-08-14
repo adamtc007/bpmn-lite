@@ -32,11 +32,13 @@ fn pairing_oracle_is_consumable_across_the_crate_boundary() {
         id: "t1".into(),
         name: "t1".into(),
         task_type: "noop".into(),
+        loop_origin: None,
     });
     let t2 = graph.add_node(IRNode::ServiceTask {
         id: "t2".into(),
         name: "t2".into(),
         task_type: "noop".into(),
+        loop_origin: None,
     });
     let join = graph.add_node(IRNode::GatewayAnd {
         id: "join".into(),

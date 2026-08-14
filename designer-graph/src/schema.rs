@@ -634,6 +634,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             task_type: "noop".into(),
+            loop_origin: None,
         }
     }
 
@@ -717,6 +718,7 @@ mod tests {
                     id: "t1".into(),
                     name: "a different declared name".into(),
                     task_type: "noop".into(),
+                    loop_origin: None,
                 },
                 None,
                 Provenance::default(),
@@ -838,6 +840,7 @@ mod tests {
                     id: "t1".into(),
                     name: "a different declared name".into(),
                     task_type: "noop".into(),
+                    loop_origin: None,
                 },
                 None,
                 Provenance::default(),

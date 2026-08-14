@@ -128,6 +128,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             id,
             name,
             task_type,
+            ..
         } => {
             // Preserve bpmn_id if name differs from id (was explicitly set)
             let bpmn_id = if name != id { Some(name.clone()) } else { None };

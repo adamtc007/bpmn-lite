@@ -38,6 +38,7 @@ fn task(id: &str) -> IRNode {
         id: id.into(),
         name: id.into(),
         task_type: "noop".into(),
+        loop_origin: None,
     }
 }
 

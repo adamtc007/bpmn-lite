@@ -87,6 +87,7 @@ fn build_graph_authored_plan() -> bpmn_lite_compiler::dsl::WorkflowExecutionPlan
         id: "t1".into(),
         name: "t1".into(),
         task_type: "noop".into(),
+        loop_origin: None,
     });
     let e = g.add_node(IRNode::End { id: "end".into(), terminate: false });
     g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });

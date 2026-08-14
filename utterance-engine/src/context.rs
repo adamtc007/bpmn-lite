@@ -400,7 +400,8 @@ mod tests {
                 IRNode::ServiceTask {
                     id: "smuggled".into(),
                     name: "s".into(),
-                    task_type: "t".into()
+                    task_type: "t".into(),
+                    loop_origin: None,
                 },
                 Provenance::default(),
             )
@@ -419,6 +420,7 @@ mod tests {
                     id: "send_request".into(),
                     name: "send_request".into(),
                     task_type: "noop".into(),
+                    loop_origin: None,
                 },
                 edge_id: "f1".into(),
             },

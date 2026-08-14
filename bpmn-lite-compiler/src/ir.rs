@@ -71,6 +71,18 @@ pub enum IRNode {
         id: String,
         name: String,
         task_type: String,
+        /// D4 (EOP-PLAN-DSL-PARITY-001, fork E): the IR-side twin of
+        /// `dsl::ast::TaskAst::loop_origin` / `dsl::plan::TaskExecNode::loop_origin`
+        /// — the original (unqualified) loop id this task was unrolled from,
+        /// or `None` if authored outside any loop. No graph-side producer
+        /// exists yet (no loop-authoring operation, and `DSL->graph import`
+        /// is out of this programme's scope per the ruled V&S) — this field
+        /// is a pass-through carrier for `project_ir`/`emit_dsl`, not
+        /// something either projection currently sets to `Some`.
+        /// `serde(default)` so every IRGraph serialized before this field
+        /// existed deserializes as `None`, matching its actual provenance.
+        #[serde(default)]
+        loop_origin: Option<String>,
     },
     GatewayXor {
         id: String,

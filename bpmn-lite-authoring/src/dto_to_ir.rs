@@ -47,6 +47,7 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 id: id.clone(),
                 name: bpmn_id.as_ref().cloned().unwrap_or_else(|| id.clone()),
                 task_type: task_type.clone(),
+                loop_origin: None,
             },
 
             NodeDto::ExclusiveGateway { id } => IRNode::GatewayXor {

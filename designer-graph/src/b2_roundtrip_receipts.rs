@@ -70,6 +70,7 @@ fn task(id: &str, task_type: &str) -> IRNode {
         id: id.into(),
         name: id.into(),
         task_type: task_type.into(),
+        loop_origin: None,
     }
 }
 
@@ -706,6 +707,80 @@ fn g16_multi_instance_declared_max_round_trip() {
     let dag = multi_instance_linear("g16", 50);
     let receipt = assert_roundtrip(&dag, "g16");
     assert!(receipt.emitted.required_symbols.is_empty());
+}
+
+/// D4 (fork E) fixture builder: start -> task(loop_origin) -> end. No
+/// graph-side operation sets `IRNode::ServiceTask.loop_origin` today (D4.0
+/// design note §1 — no loop-authoring op exists), so this hand-builds the
+/// node directly via `insert_node`, same convention G13-G16 already use
+/// for shapes with no authoring op of their own.
+fn loop_origin_task_linear(name: &str, loop_origin: &str) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let t = dag
+        .insert_node(
+            key(),
+            IRNode::ServiceTask {
+                id: "t1".into(),
+                name: "t1".into(),
+                task_type: "noop".into(),
+                loop_origin: Some(loop_origin.into()),
+            },
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, t, edge("f1")).unwrap();
+    dag.insert_edge(t, e, edge("f2")).unwrap();
+    dag
+}
+
+/// G17 (D4, fork E, Piece 1), red axis — `IRNode::ServiceTask.loop_origin`
+/// has no `ToSexpr` grammar surface, so `emit_dsl` REFUSES a graph that
+/// carries it rather than silently emitting source that would recompile
+/// to a plan missing the provenance. This is the fixture that caught the
+/// tranche's own first-draft defect: a naive `project_ir`/`emit_dsl`
+/// pass-through looked plausible in isolation but broke this exact
+/// four-proof round trip (DSL-recompiled plan lacked `loop_origin`, graph
+/// plan had it) the moment it was checked here — refusal, not a lossy
+/// green flip, is the fail-closed disposition.
+#[test]
+fn g17_service_task_loop_origin_refuses_at_emission() {
+    let dag = loop_origin_task_linear("g17", "retry-loop");
+    match dag.emit_dsl("g17") {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("loop provenance") && msg.contains("t1"),
+                "unexpected refusal message: {msg}"
+            );
+        }
+        Ok(_) => panic!("expected LoopOriginUnrepresentable refusal"),
+    }
+}
+
+/// `project_ir` still projects a `loop_origin`-carrying graph cleanly —
+/// only the DSL-text emission direction refuses (see
+/// `g17_service_task_loop_origin_refuses_at_emission` above). Confirms the
+/// refusal is specific to the unprintable direction, not a graph-admission
+/// defect.
+#[test]
+fn g17b_service_task_loop_origin_still_projects_to_plan() {
+    let dag = loop_origin_task_linear("g17b", "retry-loop");
+    let ir = dag.to_ir().expect("graph must project to IR");
+    let plan = project_ir(&ir, "g17b".into())
+        .expect("project_ir must accept a loop_origin-carrying graph");
+    match plan.nodes().get("t1").unwrap() {
+        bpmn_lite_compiler::dsl::ExecutionNode::Task(t) => {
+            assert_eq!(t.loop_origin.as_deref(), Some("retry-loop"));
+        }
+        other => panic!("expected Task, got {other:?}"),
+    }
 }
 
 /// D0 blind-review cement: guard order is content-canonical too. Two

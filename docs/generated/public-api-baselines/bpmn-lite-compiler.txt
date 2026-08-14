@@ -1,5 +1,5 @@
 # package: bpmn-lite-compiler
-# baseline_revision: updated D3, EOP-PLAN-DSL-PARITY-001 — see D3 receipt for the diff that produced this
+# baseline_revision: updated D4 Piece 1, EOP-PLAN-DSL-PARITY-001 — see D4 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-compiler -sss
 
 pub mod bpmn_lite_compiler
@@ -38,6 +38,9 @@ pub bpmn_lite_compiler::dsl::DslEmitError::InputsUnrepresentable::count: usize
 pub bpmn_lite_compiler::dsl::DslEmitError::InputsUnrepresentable::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::InterruptingCycleTimer
 pub bpmn_lite_compiler::dsl::DslEmitError::InterruptingCycleTimer::guard_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::LoopOriginUnrepresentable
+pub bpmn_lite_compiler::dsl::DslEmitError::LoopOriginUnrepresentable::id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::LoopOriginUnrepresentable::loop_origin: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::MissingStart
 pub bpmn_lite_compiler::dsl::DslEmitError::MultipleStarts
 pub bpmn_lite_compiler::dsl::DslEmitError::MultipleStarts::ids: alloc::vec::Vec<alloc::string::String>
@@ -467,6 +470,7 @@ pub bpmn_lite_compiler::IRNode::SendTask::message_name: alloc::string::String
 pub bpmn_lite_compiler::IRNode::SendTask::name: alloc::string::String
 pub bpmn_lite_compiler::IRNode::ServiceTask
 pub bpmn_lite_compiler::IRNode::ServiceTask::id: alloc::string::String
+pub bpmn_lite_compiler::IRNode::ServiceTask::loop_origin: core::option::Option<alloc::string::String>
 pub bpmn_lite_compiler::IRNode::ServiceTask::name: alloc::string::String
 pub bpmn_lite_compiler::IRNode::ServiceTask::task_type: alloc::string::String
 pub bpmn_lite_compiler::IRNode::Start

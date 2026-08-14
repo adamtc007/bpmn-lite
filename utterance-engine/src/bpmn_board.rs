@@ -1242,6 +1242,7 @@ mod tests {
                     id: "task-1".into(),
                     name: "Review".into(),
                     task_type: "review".into(),
+                    loop_origin: None,
                 },
                 edge_id: "flow-1".into(),
             },
@@ -2305,6 +2306,7 @@ mod tests {
                     id: "task-1".into(),
                     name: "Unwanted".into(),
                     task_type: "wrong".into(),
+                    loop_origin: None,
                 },
             },
             Provenance::default(),
@@ -2360,6 +2362,7 @@ mod tests {
                     id: "task-1".into(),
                     name: "Review".into(),
                     task_type: "review".into(),
+                    loop_origin: None,
                 },
             },
             Provenance::default(),
@@ -2394,6 +2397,7 @@ mod tests {
                     id,
                     name,
                     task_type,
+                    ..
                 } if id == "task-1" => Some((name.clone(), task_type.clone())),
                 _ => None,
             })
@@ -2447,6 +2451,7 @@ mod tests {
                     id: "task-2".into(),
                     name: "Approve".into(),
                     task_type: "approve".into(),
+                    loop_origin: None,
                 },
                 edge_id: "flow-2".into(),
             },
@@ -2471,6 +2476,7 @@ mod tests {
                 id: "task-3".into(),
                 name: "Publish".into(),
                 task_type: "publish".into(),
+                loop_origin: None,
             },
             edge_id: "flow-3".into(),
         }];
@@ -2584,6 +2590,7 @@ mod tests {
                     id: "task-2".into(),
                     name: "Approve".into(),
                     task_type: "approve".into(),
+                    loop_origin: None,
                 },
                 edge_id: "flow-2".into(),
             },
@@ -2607,6 +2614,7 @@ mod tests {
                 id: "task-3".into(),
                 name: "Publish".into(),
                 task_type: "publish".into(),
+                loop_origin: None,
             },
             edge_id: "flow-3".into(),
         }];

@@ -1321,7 +1321,7 @@ mod tests {
     use crate::ir::{IREdge, IRGraph, IRNode};
 
     fn ir_task(id: &str) -> IRNode {
-        IRNode::ServiceTask { id: id.into(), name: id.into(), task_type: "noop".into() }
+        IRNode::ServiceTask { loop_origin: None, id: id.into(), name: id.into(), task_type: "noop".into() }
     }
 
     /// start → t1 → end with a boundary timer guard on t1 whose escape

@@ -338,6 +338,7 @@ fn task(name: &str) -> IRNode {
         id: name.to_string(),
         name: name.to_string(),
         task_type: "noop".to_string(),
+        loop_origin: None,
     }
 }
 
@@ -971,6 +972,7 @@ mod tests {
                     id: "task".into(),
                     name: "Task".into(),
                     task_type: "noop".into(),
+                    loop_origin: None,
                 },
                 edge_id: "flow_task".into(),
             },
@@ -1065,6 +1067,7 @@ mod tests {
                         id: format!("task_{index}"),
                         name: format!("Task {index}"),
                         task_type: "noop".into(),
+                        loop_origin: None,
                     },
                     edge_id: format!("flow_{index}"),
                 },

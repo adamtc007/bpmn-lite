@@ -53,6 +53,7 @@ fn graph() -> (DesignerDag, NodeKey) {
                 id: "review".into(),
                 name: "Review".into(),
                 task_type: "review".into(),
+                loop_origin: None,
             },
             edge_id: "flow_review".into(),
         },

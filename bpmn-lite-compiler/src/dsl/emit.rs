@@ -124,6 +124,8 @@ pub enum DslEmitError {
     InterruptingCycleTimer { guard_id: String },
     #[error("node '{id}' carries {count} per-element input binding(s), but the DSL grammar has no syntax to represent them — refusing rather than silently dropping them (D3.0 freeze §2, ruled (b))")]
     InputsUnrepresentable { id: String, count: usize },
+    #[error("task '{id}' carries loop provenance ({loop_origin:?}), but `TaskAst.loop_origin` has no DSL grammar surface — it is stamped only by `unroll::unroll_loops`, never printed by `ToSexpr` — so emitting it would silently produce source that recompiles to a DIFFERENT plan (loop_origin lost); refusing rather than lying (D4.0 design note, fork E, Piece 1)")]
+    LoopOriginUnrepresentable { id: String, loop_origin: String },
 }
 
 /// Whether the source `DesignerDag` carries process-level declarations
@@ -584,12 +586,29 @@ pub fn emit_dsl(
                     span: no_span(),
                 }));
             }
-            IRNode::ServiceTask { task_type, .. } => {
+            IRNode::ServiceTask { task_type, loop_origin, .. } => {
                 // `name` has no TaskAst field and is plan-invisible on
                 // both paths (project_ir drops it too) — documented
                 // authoring-metadata loss, per the B0 receipt.
                 check_token(&id, "id", &id)?;
                 check_token(&id, "task_type", task_type)?;
+                // D4 (fork E), Piece 1: unlike `name`, `loop_origin` IS
+                // plan-relevant (`TaskExecNode.loop_origin` feeds closure.rs's
+                // L6 idempotency check) but has no `ToSexpr` grammar surface —
+                // `unroll::unroll_loops` is the only writer, and it runs
+                // BEFORE printing within one compile pass, never after
+                // reparsing. Passing a stamped value into `TaskAst` here
+                // would silently emit source that recompiles to a plan
+                // MISSING that provenance — refuse instead of lying about
+                // what the printed text can reproduce. (Caught by this
+                // tranche's own B2 fixture failing on a naive pass-through
+                // before this refusal was added.)
+                if let Some(origin) = loop_origin {
+                    return Err(DslEmitError::LoopOriginUnrepresentable {
+                        id,
+                        loop_origin: origin.clone(),
+                    });
+                }
                 let e = single_out_edge(idx)?;
                 required_symbols.insert(task_type.clone());
                 nodes.push(NodeAst::Task(TaskAst {
@@ -895,6 +914,20 @@ mod tests {
             id: id.to_owned(),
             name: String::new(),
             task_type: task_type.to_owned(),
+            loop_origin: None,
+        }
+    }
+
+    /// D4 (fork E): a task carrying the IR-side loop-provenance carrier.
+    /// No graph-side producer sets this today (D4.0 design note §1) — this
+    /// helper hand-builds the shape a future producer would create, to
+    /// prove `emit_dsl` refuses rather than silently discarding it.
+    fn task_with_loop_origin(id: &str, task_type: &str, loop_origin: &str) -> IRNode {
+        IRNode::ServiceTask {
+            id: id.to_owned(),
+            name: String::new(),
+            task_type: task_type.to_owned(),
+            loop_origin: Some(loop_origin.to_owned()),
         }
     }
 
@@ -944,6 +977,32 @@ mod tests {
             .expect("emitted source must recompile");
         let again = emit_dsl(&ir, "wf-linear", &decls()).expect("emit twice");
         assert_eq!(emitted.source, again.source, "emission must be idempotent");
+    }
+
+    /// D4 (fork E), Piece 1, red axis: `IRNode::ServiceTask.loop_origin` has
+    /// no `ToSexpr` grammar surface (only `unroll::unroll_loops` stamps it,
+    /// within one compile pass, never printed) — emission REFUSES rather
+    /// than silently producing source that would recompile to a plan
+    /// missing the provenance `TaskExecNode.loop_origin` (and closure.rs's
+    /// L6 idempotency check) depends on. Discovered by this tranche's own
+    /// B2 plan-equality fixture (g17) failing on a naive pass-through —
+    /// the harness catching a design defect before it shipped, not after.
+    #[test]
+    fn red_service_task_loop_origin_unrepresentable() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let t = ir.add_node(task_with_loop_origin("t1", "cbu.create", "retry-loop"));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, t, edge("f1"));
+        ir.add_edge(t, e, edge("f2"));
+
+        match emit_dsl(&ir, "wf-loop-origin", &decls()) {
+            Err(DslEmitError::LoopOriginUnrepresentable { id, loop_origin }) => {
+                assert_eq!(id, "t1");
+                assert_eq!(loop_origin, "retry-loop");
+            }
+            other => panic!("expected LoopOriginUnrepresentable, got {other:?}"),
+        }
     }
 
     #[test]

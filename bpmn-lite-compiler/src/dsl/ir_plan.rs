@@ -251,7 +251,7 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                 );
             }
 
-            IRNode::ServiceTask { id, task_type, .. } => {
+            IRNode::ServiceTask { id, task_type, loop_origin, .. } => {
                 let next = single_successor(ir, idx)?;
                 let delivery_mode = derive_delivery_mode(None, false, false);
                 nodes.insert(
@@ -266,7 +266,13 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
                         consumes_placeholders: Vec::new(),
                         guards: guards_by_host.remove(id).unwrap_or_default(),
                         span: None,
-                        loop_origin: None,
+                        // D4 (fork E): pass through honestly instead of a
+                        // fabricated `None` literal. No graph-side producer
+                        // sets this today (no loop-authoring op exists; see
+                        // the D4.0 design note) — every existing graph still
+                        // projects `None`, but this is now a genuine
+                        // pass-through, not a hardcoded discard.
+                        loop_origin: loop_origin.clone(),
                     }),
                 );
             }
@@ -533,7 +539,7 @@ mod tests {
     use crate::ir::{ConditionExpr, IREdge, IRGraph};
 
     fn task(id: &str) -> IRNode {
-        IRNode::ServiceTask { id: id.into(), name: id.into(), task_type: "noop".into() }
+        IRNode::ServiceTask { loop_origin: None, id: id.into(), name: id.into(), task_type: "noop".into() }
     }
 
     /// GREEN: a plain linear Start -> Task -> End chain projects cleanly
@@ -555,6 +561,33 @@ mod tests {
                 assert_eq!(t.plug, "noop");
                 assert_eq!(t.delivery_mode, DeliveryMode::BestEffort);
                 assert_eq!(t.next, "end");
+            }
+            other => panic!("expected Task, got {other:?}"),
+        }
+    }
+
+    /// D4 (fork E), Piece 1: `IRNode::ServiceTask.loop_origin` projects
+    /// through to `TaskExecNode.loop_origin` instead of being hardcoded to
+    /// `None`. No graph-side producer sets this today (D4.0 design note
+    /// §1) — this hand-builds the shape a future producer would create.
+    #[test]
+    fn service_task_loop_origin_projects_through() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let t = g.add_node(IRNode::ServiceTask {
+            id: "t1".into(),
+            name: "t1".into(),
+            task_type: "noop".into(),
+            loop_origin: Some("retry-loop".into()),
+        });
+        let e = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, t, IREdge { id: "e1".into(), condition: None });
+        g.add_edge(t, e, IREdge { id: "e2".into(), condition: None });
+
+        let plan = project_ir(&g, "wf".into()).expect("linear chain must project");
+        match plan.nodes.get("t1").unwrap() {
+            ExecutionNode::Task(t) => {
+                assert_eq!(t.loop_origin.as_deref(), Some("retry-loop"));
             }
             other => panic!("expected Task, got {other:?}"),
         }

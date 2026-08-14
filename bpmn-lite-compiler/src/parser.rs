@@ -299,6 +299,7 @@ fn handle_open_tag(
                     id: id.clone(),
                     name,
                     task_type,
+                    loop_origin: None,
                 });
                 node_map.insert(id, idx);
             } else {
@@ -701,6 +702,7 @@ fn handle_close_tag(
                         id: id.clone(),
                         name,
                         task_type,
+                        loop_origin: None,
                     });
                     node_map.insert(id, idx);
                 }

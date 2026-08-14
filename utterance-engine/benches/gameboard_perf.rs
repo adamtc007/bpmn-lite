@@ -68,6 +68,7 @@ fn anchored_task() -> (DesignerDag, NodeKey) {
                 id: "task-1".into(),
                 name: "Review".into(),
                 task_type: "review".into(),
+                loop_origin: None,
             },
             edge_id: "flow-1".into(),
         },

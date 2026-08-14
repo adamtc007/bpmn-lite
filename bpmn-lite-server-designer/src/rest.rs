@@ -8538,6 +8538,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             task_type: "noop".into(),
+            loop_origin: None,
         }
     }
 
@@ -8744,6 +8745,7 @@ mod tests {
                 id: "appended_directly".into(),
                 name: "appended_directly".into(),
                 task_type: "http_call".into(), // materialize_workbook only ever emits "noop"
+                loop_origin: None,
             },
             edge_id: "arbitrary_direct_edge_id".into(),
         }];

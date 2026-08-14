@@ -18,7 +18,7 @@ fn ir_node_sexpr(node: &IRNode) -> String {
     match node {
         IRNode::Start { id } => format!("(start :id {id:?})"),
         IRNode::End { id, terminate } => format!("(end :id {id:?} :terminate {terminate})"),
-        IRNode::ServiceTask { id, name, task_type } => {
+        IRNode::ServiceTask { id, name, task_type, .. } => {
             format!("(service-task :id {id:?} :name {name:?} :task-type {task_type:?})")
         }
         IRNode::GatewayXor { id, name } => format!("(gateway-xor :id {id:?} :name {name:?})"),
@@ -175,6 +175,7 @@ mod tests {
                 id: "t1".into(),
                 name: "Do it".into(),
                 task_type: "verb:pack.do".into(),
+                loop_origin: None,
             },
             edge_id: "e1".into(),
         };

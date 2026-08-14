@@ -74,6 +74,7 @@ fn task(name: &str) -> IRNode {
         id: name.to_string(),
         name: name.to_string(),
         task_type: "noop".to_string(),
+        loop_origin: None,
     }
 }
 
@@ -917,6 +918,7 @@ mod tests {
                     id: "t1".into(),
                     name: "t1".into(),
                     task_type: "noop".into(),
+                    loop_origin: None,
                 },
                 edge_id: "f1".into(),
             }],
