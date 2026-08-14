@@ -1,7 +1,15 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D3: MultiInstance vertical
 
-**Status:** awaiting acceptance (blind review of commit `fd7c606` returned
-**ACCEPT**, no corrections — see disposition below)
+**Status:** RATIFIED (Adam, 2026-08-14, "Data object rechability needs its
+own desing thinking - so defer - but do not 'forget' it - continue with
+next"). Blind review of commit `fd7c606` returned **ACCEPT**, no
+corrections — see disposition below. The surfaced DataObject-reachability
+gap (§ "Surfaced, NOT decided") is EXPLICITLY DEFERRED, not resolved — it
+is out of this programme's scope per `EOP-PLAN-DSL-PARITY-001.md`'s own
+binding scope line ("DataObject are OUT — a future programme with its own
+V&S") and is tracked at
+`docs/receipts/EOP-DSL-PARITY-001-DEFERRED-dataobject-reachability.md`
+so it is not lost between tranches.
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Freeze:** `docs/receipts/EOP-DSL-PARITY-001-D3.0-freeze.md` (ratified "(b) go").
 
