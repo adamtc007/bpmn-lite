@@ -87,6 +87,19 @@ pub enum IRNode {
     GatewayXor {
         id: String,
         name: String,
+        /// D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3): added so `gateway_pairs`
+        /// (`lowering.rs`) can pair XOR splits/joins via the identical
+        /// same-kind+direction post-dominator match already used for
+        /// `GatewayAnd`/`GatewayInclusive` — see D5.0 design note, option
+        /// (a). The two real non-test producers of `GatewayXor` outside the
+        /// designer-graph path (`bpmn-lite-authoring::dto_to_ir`,
+        /// `bpmn-lite-compiler::parser`'s raw BPMN-XML importer) have no
+        /// authored direction data available (`NodeDto::ExclusiveGateway`
+        /// and the `exclusiveGateway` XML element carry none, unlike
+        /// Parallel/Inclusive) — both infer this field locally from
+        /// out/in-degree at construction time rather than fabricating a
+        /// constant (Adam's ruling, 2026-08-14: disposition (1)).
+        direction: GatewayDirection,
     },
     GatewayAnd {
         id: String,

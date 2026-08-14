@@ -12,7 +12,9 @@
 //! exists to prevent.
 
 use anyhow::Result;
-use bpmn_lite_compiler::{ConditionExpr, ConditionLiteral, ConditionOp, IRNode, TimerSpec};
+use bpmn_lite_compiler::{
+    ConditionExpr, ConditionLiteral, ConditionOp, GatewayDirection, IRNode, TimerSpec,
+};
 use designer_graph::ops::{apply, GuardTrigger, Operation, RegionBranch};
 use designer_graph::schema::{DesignerDag, NodeKey, Provenance};
 
@@ -335,6 +337,7 @@ pub fn enumeration_classes() -> Result<Vec<ClassState>> {
                 node: IRNode::GatewayXor {
                     id: "outcome".into(),
                     name: "outcome".into(),
+                    direction: GatewayDirection::Diverging,
                 },
                 edge_id: "f2".into(),
             },

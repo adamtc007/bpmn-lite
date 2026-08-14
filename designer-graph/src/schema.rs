@@ -778,7 +778,11 @@ mod tests {
         let gw_a = dag_a
             .insert_node(
                 key(),
-                IRNode::GatewayXor { id: "gw".into(), name: "gw".into() },
+                IRNode::GatewayXor {
+                    id: "gw".into(),
+                    name: "gw".into(),
+                    direction: GatewayDirection::Diverging,
+                },
                 None,
                 Provenance::default(),
             )
@@ -797,7 +801,11 @@ mod tests {
         let gw_b = dag_b
             .insert_node(
                 key(),
-                IRNode::GatewayXor { id: "gw".into(), name: "gw".into() },
+                IRNode::GatewayXor {
+                    id: "gw".into(),
+                    name: "gw".into(),
+                    direction: GatewayDirection::Diverging,
+                },
                 None,
                 Provenance::default(),
             )
@@ -869,6 +877,7 @@ mod tests {
                 IRNode::GatewayXor {
                     id: "gw".into(),
                     name: "gw".into(),
+                    direction: GatewayDirection::Diverging,
                 },
                 None,
                 Provenance::default(),
@@ -900,6 +909,7 @@ mod tests {
                 IRNode::GatewayXor {
                     id: "gw".into(),
                     name: "gw".into(),
+                    direction: GatewayDirection::Diverging,
                 },
                 None,
                 Provenance::default(),

@@ -11,11 +11,11 @@
 //! **Scope — deliberately conservative, fails closed beyond it (CAREFUL
 //! tier: no unproven lossy shoehorning under time pressure).** Supported:
 //! `Start`, `End`, `ServiceTask`, `MessageWait`, `MultiInstance` (G5.4a),
-//! and `GatewayAnd`/`GatewayInclusive` matched diverging/converging pairs
-//! (via the exposed [`gateway_pairs`] pairing oracle — never a hand-rolled
-//! re-pairing). `DataObject` nodes are structural-only (zero bytecode, per
-//! their own IR doc comment) and are simply omitted from the projected
-//! plan.
+//! and `GatewayAnd`/`GatewayInclusive`/`GatewayXor` (D5) matched diverging/
+//! converging pairs (via the exposed [`gateway_pairs`] pairing oracle —
+//! never a hand-rolled re-pairing). `DataObject` nodes are structural-only
+//! (zero bytecode, per their own IR doc comment) and are simply omitted
+//! from the projected plan.
 //!
 //! **WS-D D1 (Adam's "own phase" ruling, 2026-08-03)** widened the scope
 //! with timer semantics: `BoundaryTimer`/`BoundaryError` project onto
@@ -31,11 +31,6 @@
 //!
 //! Explicitly OUT of scope, refused with a named [`IrPlanError`] rather
 //! than guessed at:
-//! - `GatewayXor` — has no `direction` field (unlike `GatewayAnd`/
-//!   `GatewayInclusive`) and no compiler-exposed join-pairing oracle; its
-//!   DSL counterpart's `join` id is an explicit AST annotation
-//!   (`linter.rs`'s `NodeAst::Split.join`) with no IR equivalent. Adding
-//!   XOR support needs its own traced join-inference design, not a guess.
 //! - `HumanWait`, `SendTask`, `FfiServiceTask` — still no `ExecutionNode`
 //!   representation in `WorkflowExecutionPlan` (XML/IR-authoring-only
 //!   constructs). A guard ATTACHED to such a host therefore also cannot
@@ -81,13 +76,13 @@ pub enum IrPlanError {
         "node '{id}' has {count} outgoing edge(s), expected exactly 1 for a non-gateway node"
     )]
     WrongOutDegree { id: String, count: usize },
-    #[error("gateway '{id}' has no matching join (only GatewayAnd/GatewayInclusive diverging/converging pairs are supported)")]
+    #[error("gateway '{id}' has no matching join (only GatewayAnd/GatewayInclusive/GatewayXor diverging/converging pairs are supported)")]
     UnmatchedGateway { id: String },
     #[error("projected plan failed its own DAG validation: {0:?}")]
     DagInvalid(Vec<DagError>),
     #[error("edge on gateway '{gateway_id}' uses condition operator {op:?}, but SplitExecFlow only carries an equality comparison (DSL's own ConditionAst is Eq-only) — no lossy encoding attempted")]
     UnsupportedConditionOperator { gateway_id: String, op: ConditionOp },
-    #[error("edge from '{id}' carries a condition, but {kind} has no field to represent one — only diverging GatewayAnd/GatewayInclusive edges can be conditioned")]
+    #[error("edge from '{id}' carries a condition, but {kind} has no field to represent one — only diverging GatewayAnd/GatewayInclusive/GatewayXor edges can be conditioned")]
     UnrepresentableCondition { id: String, kind: &'static str },
     #[error("boundary guard '{guard_id}' on host '{host}' has {count} outgoing escape edge(s) — GuardExecSpec carries exactly one escape_entry (mirroring the lowering's single-successor handler resolution); 0 means the escape flow is missing, >1 would be first-edge-guessed rather than represented")]
     GuardEscapeUnresolved {
@@ -315,10 +310,12 @@ pub fn project_ir(ir: &IRGraph, workflow_id: String) -> Result<WorkflowExecution
             }
 
             IRNode::GatewayAnd { id, direction, .. }
-            | IRNode::GatewayInclusive { id, direction, .. } => {
+            | IRNode::GatewayInclusive { id, direction, .. }
+            | IRNode::GatewayXor { id, direction, .. } => {
                 let mode = match node {
                     IRNode::GatewayAnd { .. } => SplitMode::Parallel,
                     IRNode::GatewayInclusive { .. } => SplitMode::Inclusive,
+                    IRNode::GatewayXor { .. } => SplitMode::Exclusive,
                     _ => unreachable!(),
                 };
                 match direction {
@@ -639,24 +636,90 @@ mod tests {
         }
     }
 
-    /// RED: GatewayXor has no compiler-exposed join-pairing oracle — must
-    /// fail closed, never guess a join.
+    /// GREEN (D5, EOP-PLAN-DSL-PARITY-001): a matched GatewayXor
+    /// diverging/converging pair (via the same `gateway_pairs` oracle
+    /// AND/Inclusive already use, extended with one match arm — see the
+    /// D5.0 design note) projects to a real Split/Join pair with
+    /// `SplitMode::Exclusive`/`JoinMode::Exclusive`, conditions carried
+    /// through exactly as AND/Inclusive already do.
     #[test]
-    fn xor_gateway_is_refused_not_guessed() {
+    fn matched_xor_gateway_pair_projects_to_split_join() {
         let mut g: IRGraph = IRGraph::new();
         let s = g.add_node(IRNode::Start { id: "start".into() });
-        let x = g.add_node(IRNode::GatewayXor { id: "xor".into(), name: "xor".into() });
+        let fork = g.add_node(IRNode::GatewayXor {
+            id: "fork".into(),
+            name: "fork".into(),
+            direction: GatewayDirection::Diverging,
+        });
+        let a = g.add_node(task("a"));
+        let b = g.add_node(task("b"));
+        let join = g.add_node(IRNode::GatewayXor {
+            id: "join".into(),
+            name: "join".into(),
+            direction: GatewayDirection::Converging,
+        });
+        let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
+        g.add_edge(s, fork, IREdge { id: "e0".into(), condition: None });
+        g.add_edge(
+            fork,
+            a,
+            IREdge {
+                id: "e1".into(),
+                condition: Some(ConditionExpr {
+                    flag_name: "@decision".into(),
+                    op: ConditionOp::Eq,
+                    literal: ConditionLiteral::Bool(true),
+                }),
+            },
+        );
+        g.add_edge(fork, b, IREdge { id: "e2".into(), condition: None });
+        g.add_edge(a, join, IREdge { id: "e3".into(), condition: None });
+        g.add_edge(b, join, IREdge { id: "e4".into(), condition: None });
+        g.add_edge(join, end, IREdge { id: "e5".into(), condition: None });
+
+        let plan = project_ir(&g, "wf".into()).expect("matched XOR pair must project");
+        match plan.nodes.get("fork").unwrap() {
+            ExecutionNode::Split(s) => {
+                assert_eq!(s.mode, SplitMode::Exclusive);
+                assert_eq!(s.join, "join");
+                assert_eq!(s.flows.len(), 2);
+                assert_eq!(s.flows[0].placeholder.as_deref(), Some("@decision"));
+                assert_eq!(s.flows[0].expected_value.as_deref(), Some("true"));
+                assert_eq!(s.flows[1].placeholder, None);
+            }
+            other => panic!("expected Split, got {other:?}"),
+        }
+        match plan.nodes.get("join").unwrap() {
+            ExecutionNode::Join(j) => {
+                assert_eq!(j.mode, JoinMode::Exclusive);
+                assert_eq!(j.split, "fork");
+                assert_eq!(j.next, "end");
+            }
+            other => panic!("expected Join, got {other:?}"),
+        }
+    }
+
+    /// RED (D5): an unmatched GatewayXor (post-dominator is not a
+    /// Converging GatewayXor of the same kind) still refuses by name,
+    /// never guesses a join — the oracle's mispair guard applies to XOR
+    /// identically to AND/Inclusive.
+    #[test]
+    fn unmatched_xor_gateway_is_refused_not_guessed() {
+        let mut g: IRGraph = IRGraph::new();
+        let s = g.add_node(IRNode::Start { id: "start".into() });
+        let x = g.add_node(IRNode::GatewayXor {
+            id: "xor".into(),
+            name: "xor".into(),
+            direction: GatewayDirection::Diverging,
+        });
         let a = g.add_node(task("a"));
         let end = g.add_node(IRNode::End { id: "end".into(), terminate: false });
         g.add_edge(s, x, IREdge { id: "e0".into(), condition: None });
         g.add_edge(x, a, IREdge { id: "e1".into(), condition: None });
         g.add_edge(a, end, IREdge { id: "e2".into(), condition: None });
 
-        let err = project_ir(&g, "wf".into()).expect_err("GatewayXor must be refused");
-        assert!(matches!(
-            err,
-            IrPlanError::UnsupportedNode { kind: "GatewayXor", .. }
-        ));
+        let err = project_ir(&g, "wf".into()).expect_err("unmatched GatewayXor must be refused");
+        assert!(matches!(err, IrPlanError::UnmatchedGateway { .. }));
     }
 
     /// RED (amended for WS-D D1, Adam's "own phase" ruling 2026-08-03):

@@ -90,6 +90,29 @@ fn and_gw(id: &str, direction: GatewayDirection) -> IRNode {
     }
 }
 
+fn xor_gw(id: &str, direction: GatewayDirection) -> IRNode {
+    IRNode::GatewayXor {
+        id: id.into(),
+        name: String::new(),
+        direction,
+    }
+}
+
+/// D5: a diverging edge with an Eq condition — the only operator both
+/// `project_ir` and `emit_dsl` represent (DSL's own `ConditionAst` is
+/// Eq-only).
+fn cond_edge(id: &str, flag_name: &str, value: bool) -> DesignerEdge {
+    DesignerEdge {
+        id: id.to_owned(),
+        condition: Some(bpmn_lite_compiler::ConditionExpr {
+            flag_name: flag_name.to_owned(),
+            op: bpmn_lite_compiler::ConditionOp::Eq,
+            literal: bpmn_lite_compiler::ConditionLiteral::Bool(value),
+        }),
+        provenance: Provenance::default(),
+    }
+}
+
 fn derived_registry(receipt: &DslReceipt) -> StubPlaceholderRegistry {
     // The B0 equivalence contract: every required symbol declared with an
     // EMPTY BindingDecl — the honest mirror of "no catalogue signal
@@ -780,6 +803,133 @@ fn g17b_service_task_loop_origin_still_projects_to_plan() {
             assert_eq!(t.loop_origin.as_deref(), Some("retry-loop"));
         }
         other => panic!("expected Task, got {other:?}"),
+    }
+}
+
+/// D5 fixture builder: start -> XOR-split(cond A / default B) -> join ->
+/// end. Shared by g18 (emit refusal) and g18b (project_ir still works).
+fn xor_block_conditioned(name: &str) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let sp = dag
+        .insert_node(
+            key(),
+            xor_gw("split1", GatewayDirection::Diverging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let ta = dag
+        .insert_node(key(), task("branch-a", "cbu.a"), None, Provenance::default())
+        .unwrap();
+    let tb = dag
+        .insert_node(key(), task("branch-b", "cbu.b"), None, Provenance::default())
+        .unwrap();
+    let j = dag
+        .insert_node(
+            key(),
+            xor_gw("join1", GatewayDirection::Converging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, sp, edge("f-in")).unwrap();
+    dag.insert_edge(sp, ta, cond_edge("f-a", "@approved", true))
+        .unwrap();
+    dag.insert_edge(sp, tb, edge("f-b")).unwrap();
+    dag.insert_edge(ta, j, edge("f-a-back")).unwrap();
+    dag.insert_edge(tb, j, edge("f-b-back")).unwrap();
+    dag.insert_edge(j, e, edge("f-end")).unwrap();
+    dag
+}
+
+/// G18 (D5, EOP-PLAN-DSL-PARITY-001, fork B/P3), red axis — this
+/// tranche's own B2 harness caught that `dsl/parser.rs::parse_split`
+/// requires a `:plug` (a bound decision-verb reference) and a
+/// `:condition` on every flow for `split-xor` — `IRNode::GatewayXor`
+/// carries neither, so NO graph-authored diverging GatewayXor can ever
+/// satisfy the grammar (Adam's ruling, 2026-08-14: refuse unconditionally
+/// rather than fabricate a plug or loosen the grammar). This fixture
+/// would have looked plausible as a GREEN round-trip in isolation — the
+/// harness rejected it exactly as g17's loop_origin refusal did.
+#[test]
+fn g18_xor_split_refuses_at_emission() {
+    let dag = xor_block_conditioned("g18");
+    match dag.emit_dsl("g18") {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("split1") && msg.contains("GatewayXor"),
+                "unexpected refusal message: {msg}"
+            );
+        }
+        Ok(_) => panic!("expected GatewayXorSplitUnrepresentable refusal"),
+    }
+}
+
+/// `project_ir` still projects a matched GatewayXor pair cleanly — only
+/// the DSL-text emission direction refuses (see
+/// `g18_xor_split_refuses_at_emission` above). Confirms the refusal is
+/// specific to the unprintable grammar direction, not a graph-admission
+/// defect — same pattern as g17b for loop_origin.
+#[test]
+fn g18b_xor_split_still_projects_to_plan() {
+    let dag = xor_block_conditioned("g18b");
+    let ir = dag.to_ir().expect("graph must project to IR");
+    let plan = project_ir(&ir, "g18b".into()).expect("project_ir must accept a matched XOR pair");
+    match plan.nodes().get("split1").unwrap() {
+        bpmn_lite_compiler::dsl::ExecutionNode::Split(s) => {
+            assert_eq!(s.mode, bpmn_lite_compiler::dsl::SplitMode::Exclusive);
+            assert_eq!(s.join, "join1");
+            assert_eq!(s.flows.len(), 2);
+        }
+        other => panic!("expected Split, got {other:?}"),
+    }
+}
+
+/// G19 (D5), red axis — an unmatched CONVERGING GatewayXor (no paired
+/// diverging node reachable by `gateway_pairs`' post-dominator match)
+/// refuses via `UnmatchedGateway`, mirroring G-series AND coverage for
+/// the newly admitted kind. Deliberately has NO diverging GatewayXor
+/// anywhere in the graph: a diverging XOR always refuses first
+/// (`GatewayXorSplitUnrepresentable`, see g18), so exercising the
+/// Converging arm's own `UnmatchedGateway` path requires a graph where
+/// the canonical scan reaches a converging XOR without ever visiting a
+/// diverging one.
+#[test]
+fn g19_unmatched_converging_xor_gateway_refuses_at_emission() {
+    let mut dag = DesignerDag::new("g19");
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let t = dag
+        .insert_node(key(), task("t1", "cbu.t"), None, Provenance::default())
+        .unwrap();
+    let j = dag
+        .insert_node(
+            key(),
+            xor_gw("j1", GatewayDirection::Converging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, t, edge("f1")).unwrap();
+    dag.insert_edge(t, j, edge("f2")).unwrap();
+    dag.insert_edge(j, e, edge("f3")).unwrap();
+    match dag.emit_dsl("g19") {
+        Err(err) => assert!(
+            err.to_string().contains("no matching join"),
+            "unexpected refusal message: {err}"
+        ),
+        Ok(_) => panic!("expected UnmatchedGateway refusal"),
     }
 }
 

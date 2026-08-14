@@ -21,7 +21,9 @@ fn ir_node_sexpr(node: &IRNode) -> String {
         IRNode::ServiceTask { id, name, task_type, .. } => {
             format!("(service-task :id {id:?} :name {name:?} :task-type {task_type:?})")
         }
-        IRNode::GatewayXor { id, name } => format!("(gateway-xor :id {id:?} :name {name:?})"),
+        IRNode::GatewayXor { id, name, direction } => {
+            format!("(gateway-xor :id {id:?} :name {name:?} :direction {direction:?})")
+        }
         IRNode::GatewayAnd { id, name, direction } => {
             format!("(gateway-and :id {id:?} :name {name:?} :direction {direction:?})")
         }

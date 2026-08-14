@@ -1161,12 +1161,12 @@ mod tests {
     fn test_cyclic_graph_rejected() {
         let mut graph = IRGraph::new();
         let start = graph.add_node(IRNode::Start { id: "start".to_string() });
-        let b = graph.add_node(IRNode::GatewayXor { id: "b".to_string(), name: "B".to_string() });
+        let b = graph.add_node(IRNode::GatewayXor { id: "b".to_string(), name: "B".to_string(), direction: GatewayDirection::Diverging });
         let p = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "p".to_string(), name: "P".to_string(), task_type: "p".to_string() });
         let q = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "q".to_string(), name: "Q".to_string(), task_type: "q".to_string() });
         let m1 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "m1".to_string(), name: "M1".to_string(), task_type: "m1".to_string() });
         let end1 = graph.add_node(IRNode::End { id: "end1".to_string(), terminate: false });
-        let a = graph.add_node(IRNode::GatewayXor { id: "a".to_string(), name: "A".to_string() });
+        let a = graph.add_node(IRNode::GatewayXor { id: "a".to_string(), name: "A".to_string(), direction: GatewayDirection::Diverging });
         let m2 = graph.add_node(IRNode::ServiceTask { loop_origin: None, id: "m2".to_string(), name: "M2".to_string(), task_type: "m2".to_string() });
         let end2 = graph.add_node(IRNode::End { id: "end2".to_string(), terminate: false });
 

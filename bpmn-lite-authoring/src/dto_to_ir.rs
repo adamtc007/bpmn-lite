@@ -50,9 +50,18 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
                 loop_origin: None,
             },
 
+            // D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3, Adam's ruling
+            // 2026-08-14, disposition (1)): `NodeDto::ExclusiveGateway`
+            // carries no `direction` field (unlike Parallel/Inclusive) —
+            // this DTO shape is direction-agnostic across the whole
+            // authoring crate. Edges aren't wired yet at this point (step
+            // 4 below) — placeholder value here is overwritten by the
+            // post-pass after all edges exist, which infers it from final
+            // out/in-degree rather than fabricating a constant.
             NodeDto::ExclusiveGateway { id } => IRNode::GatewayXor {
                 id: id.clone(),
                 name: String::new(),
+                direction: GatewayDirection::Diverging,
             },
 
             NodeDto::ParallelGateway { id, direction, .. } => IRNode::GatewayAnd {
@@ -248,6 +257,33 @@ pub fn dto_to_ir(dto: &WorkflowGraphDto) -> Result<IRGraph> {
         edge_counter += 1;
 
         graph.add_edge(synth_idx, *to_idx, ir_edge);
+    }
+
+    // D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3): now that every edge is
+    // wired, infer each `GatewayXor`'s direction from its actual degree —
+    // out-degree > 1 => Diverging, in-degree > 1 => Converging. Mirrors
+    // `bpmn-lite-compiler::parser`'s identical post-pass for the raw
+    // BPMN-XML importer (same disposition, same reasoning: no authored
+    // direction data exists in `NodeDto::ExclusiveGateway` to read).
+    let xor_indices: Vec<petgraph::graph::NodeIndex> = graph
+        .node_indices()
+        .filter(|&i| matches!(graph[i], IRNode::GatewayXor { .. }))
+        .collect();
+    for idx in xor_indices {
+        let out_degree = graph
+            .edges_directed(idx, petgraph::Direction::Outgoing)
+            .count();
+        let in_degree = graph
+            .edges_directed(idx, petgraph::Direction::Incoming)
+            .count();
+        let inferred = if in_degree > 1 && out_degree <= 1 {
+            GatewayDirection::Converging
+        } else {
+            GatewayDirection::Diverging
+        };
+        if let IRNode::GatewayXor { direction, .. } = &mut graph[idx] {
+            *direction = inferred;
+        }
     }
 
     Ok(graph)

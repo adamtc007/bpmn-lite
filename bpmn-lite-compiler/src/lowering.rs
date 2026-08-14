@@ -1378,6 +1378,10 @@ pub fn gateway_pairs(graph: &IRGraph) -> HashMap<NodeIndex, NodeIndex> {
                 IRNode::GatewayInclusive { direction: GatewayDirection::Diverging, .. },
                 IRNode::GatewayInclusive { direction: GatewayDirection::Converging, .. },
             ) => true,
+            (
+                IRNode::GatewayXor { direction: GatewayDirection::Diverging, .. },
+                IRNode::GatewayXor { direction: GatewayDirection::Converging, .. },
+            ) => true,
             _ => false,
         };
         if paired {
@@ -2506,6 +2510,7 @@ mod tests {
         let gw = graph.add_node(IRNode::GatewayXor {
             id: "gw1".to_string(),
             name: "Decision".to_string(),
+            direction: GatewayDirection::Diverging,
         });
         let task_a = graph.add_node(IRNode::ServiceTask {
             id: "task_a".to_string(),
@@ -2815,6 +2820,7 @@ mod tests {
         let gw = graph.add_node(IRNode::GatewayXor {
             id: "gw1".to_string(),
             name: "Decision".to_string(),
+            direction: GatewayDirection::Diverging,
         });
         let task_a = graph.add_node(IRNode::ServiceTask {
             id: "task_a".to_string(),

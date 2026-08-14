@@ -101,7 +101,7 @@ pub enum DslEmitError {
         count: usize,
         expected: usize,
     },
-    #[error("gateway '{id}' has no matching join (only GatewayAnd diverging/converging pairs are emittable)")]
+    #[error("gateway '{id}' has no matching join (only GatewayAnd/GatewayXor diverging/converging pairs are emittable)")]
     UnmatchedGateway { id: String },
     #[error("edge '{edge_id}' on parallel gateway '{gateway_id}' carries a condition — the DSL grammar cannot express a condition on an And-split flow")]
     ConditionOnParallelFlow {
@@ -126,6 +126,8 @@ pub enum DslEmitError {
     InputsUnrepresentable { id: String, count: usize },
     #[error("task '{id}' carries loop provenance ({loop_origin:?}), but `TaskAst.loop_origin` has no DSL grammar surface — it is stamped only by `unroll::unroll_loops`, never printed by `ToSexpr` — so emitting it would silently produce source that recompiles to a DIFFERENT plan (loop_origin lost); refusing rather than lying (D4.0 design note, fork E, Piece 1)")]
     LoopOriginUnrepresentable { id: String, loop_origin: String },
+    #[error("gateway '{id}' is a diverging GatewayXor — the DSL grammar's `split-xor` requires a bound decision-verb `:plug` and a `:condition` on every flow (parse_split), but `IRNode::GatewayXor` carries no plug/decision field and no way to guarantee every edge is conditioned; no graph-authored GatewayXor split can ever satisfy this grammar, so this refuses unconditionally rather than fabricate a plug (D5.0 design note follow-up, Adam's ruling 2026-08-14)")]
+    GatewayXorSplitUnrepresentable { id: String },
 }
 
 /// Whether the source `DesignerDag` carries process-level declarations
@@ -758,6 +760,46 @@ pub fn emit_dsl(
                     }));
                 }
             },
+            // D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3): the Converging
+            // (Join) side mirrors GatewayAnd's exactly — `JoinAst` has no
+            // plug/condition fields, no grammar constraint applies. The
+            // Diverging (Split) side is a STRUCTURAL refusal, not a
+            // guess: `dsl/parser.rs::parse_split` requires `:plug`
+            // unconditionally for `split-xor`/`split-or` (a bound
+            // decision-verb reference `linter.rs` resolves via
+            // `registry.decision_bindings`) and a `:condition` on every
+            // flow — `IRNode::GatewayXor` carries neither a plug/decision
+            // field nor any way to guarantee every edge is conditioned,
+            // so NO graph-authored GatewayXor diverging node can ever
+            // satisfy this grammar, independent of graph content. Found
+            // empirically by this tranche's own B2 harness (a first-draft
+            // pass-through attempt failed reparse-identity with "expected
+            // ':plug', found ':join'"); Adam's ruling (2026-08-14):
+            // refuse unconditionally rather than fabricate a plug or
+            // loosen the grammar. `project_ir` is unaffected — no
+            // grammar dependency on that direction.
+            IRNode::GatewayXor { direction, .. } => match direction {
+                GatewayDirection::Diverging => {
+                    return Err(DslEmitError::GatewayXorSplitUnrepresentable { id });
+                }
+                GatewayDirection::Converging => {
+                    check_token(&id, "id", &id)?;
+                    let e = single_out_edge(idx)?;
+                    if shared_joins.contains(&idx) {
+                        return Err(DslEmitError::UnmatchedGateway { id });
+                    }
+                    let Some(&split_idx) = join_to_split.get(&idx) else {
+                        return Err(DslEmitError::UnmatchedGateway { id });
+                    };
+                    nodes.push(NodeAst::Join(super::ast::JoinAst {
+                        next: uncond_next(idx, e)?,
+                        id,
+                        mode: super::ast::JoinModeAst::Xor,
+                        split: ir[split_idx].id().to_owned(),
+                        span: no_span(),
+                    }));
+                }
+            },
             // D1: boundary guards emit as top-level decoration forms.
             // Per-guard checks in the frozen per-node order: kind gate
             // (this arm), token checks, host-kind, out-degree, condition.
@@ -842,11 +884,10 @@ pub fn emit_dsl(
 
             // Out-of-core kinds — NO wildcard arm: a new IRNode variant
             // must break this compile, not fall through (B0's structural
-            // fail-closed rule). 6 kinds remain out of core after D1
-            // moved the two boundary kinds, D2 moved TimerWait, and D3
-            // moved MultiInstance above.
-            IRNode::GatewayXor { .. }
-            | IRNode::GatewayInclusive { .. }
+            // fail-closed rule). 5 kinds remain out of core after D1
+            // moved the two boundary kinds, D2 moved TimerWait, D3 moved
+            // MultiInstance, and D5 moved GatewayXor above.
+            IRNode::GatewayInclusive { .. }
             | IRNode::HumanWait { .. }
             | IRNode::DataObject { .. }
             | IRNode::FfiServiceTask { .. }
@@ -1365,18 +1406,11 @@ mod tests {
 
     /// Every out-of-core kind refuses as UnsupportedNode with its own
     /// kind name. D1 cement update (named, not silent): BoundaryTimer/
-    /// BoundaryError left this list when guards joined the core — 8
-    /// kinds remain.
+    /// BoundaryError left this list when guards joined the core; D5
+    /// (cement update) moved GatewayXor into the core — 7 kinds remain.
     #[test]
     fn red_unsupported_node_all_remaining_kinds() {
         let unsupported: Vec<(IRNode, &str)> = vec![
-            (
-                IRNode::GatewayXor {
-                    id: "x".into(),
-                    name: String::new(),
-                },
-                "GatewayXor",
-            ),
             (
                 IRNode::GatewayInclusive {
                     id: "x".into(),
@@ -1638,15 +1672,16 @@ mod tests {
     fn stage1_order_kind_before_token_and_degree_before_pairing() {
         let mut ir = IRGraph::new();
         let s = ir.add_node(start("start"));
-        let x = ir.add_node(IRNode::GatewayXor {
+        let x = ir.add_node(IRNode::GatewayInclusive {
             id: "bad id".into(),
             name: String::new(),
+            direction: GatewayDirection::Diverging,
         });
         let e = ir.add_node(end("end", false));
         ir.add_edge(s, x, edge("f1"));
         ir.add_edge(x, e, edge("f2"));
         match emit_dsl(&ir, "wf", &decls()) {
-            Err(DslEmitError::UnsupportedNode { kind, .. }) => assert_eq!(kind, "GatewayXor"),
+            Err(DslEmitError::UnsupportedNode { kind, .. }) => assert_eq!(kind, "GatewayInclusive"),
             other => panic!("kind gate must precede token check, got {other:?}"),
         }
 

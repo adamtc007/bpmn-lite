@@ -2736,6 +2736,7 @@ mod tests {
                 node: IRNode::GatewayXor {
                     id: "xor6".into(),
                     name: "xor6".into(),
+                    direction: GatewayDirection::Diverging,
                 },
                 edge_id: "e1b".into(),
             },
@@ -2825,6 +2826,7 @@ mod tests {
                 IRNode::GatewayXor {
                     id: "xor7".into(),
                     name: "xor7".into(),
+                    direction: GatewayDirection::Diverging,
                 },
                 None,
                 Provenance::default(),

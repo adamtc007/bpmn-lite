@@ -1,5 +1,5 @@
 # package: bpmn-lite-compiler
-# baseline_revision: updated D4 Piece 1, EOP-PLAN-DSL-PARITY-001 — see D4 receipt for the diff that produced this
+# baseline_revision: updated D5, EOP-PLAN-DSL-PARITY-001 — see D5 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-compiler -sss
 
 pub mod bpmn_lite_compiler
@@ -27,6 +27,8 @@ pub bpmn_lite_compiler::dsl::DslEmitError::DuplicateNodeId::id: alloc::string::S
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard::edge_id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard::guard_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::GatewayXorSplitUnrepresentable
+pub bpmn_lite_compiler::dsl::DslEmitError::GatewayXorSplitUnrepresentable::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::GuardBudgetZero
 pub bpmn_lite_compiler::dsl::DslEmitError::GuardBudgetZero::guard_id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::GuardOnUnsupportedHost
@@ -445,6 +447,7 @@ pub bpmn_lite_compiler::IRNode::GatewayInclusive::direction: bpmn_lite_compiler:
 pub bpmn_lite_compiler::IRNode::GatewayInclusive::id: alloc::string::String
 pub bpmn_lite_compiler::IRNode::GatewayInclusive::name: alloc::string::String
 pub bpmn_lite_compiler::IRNode::GatewayXor
+pub bpmn_lite_compiler::IRNode::GatewayXor::direction: bpmn_lite_compiler::GatewayDirection
 pub bpmn_lite_compiler::IRNode::GatewayXor::id: alloc::string::String
 pub bpmn_lite_compiler::IRNode::GatewayXor::name: alloc::string::String
 pub bpmn_lite_compiler::IRNode::HumanWait

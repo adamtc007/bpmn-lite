@@ -225,6 +225,39 @@ pub fn parse_bpmn_with_meta(xml: &str) -> Result<(IRGraph, ProcessMeta)> {
         );
     }
 
+    // D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3): now that every sequence
+    // flow is wired, infer each `GatewayXor`'s direction from its actual
+    // degree — out-degree > 1 => Diverging, in-degree > 1 => Converging.
+    // This importer has no authored direction data to read (see the
+    // construction-site comment above); inferring locally here, once,
+    // rather than fabricating a constant, is Adam's ruled disposition.
+    // Ambiguous/degenerate shapes (out-degree <= 1 and in-degree <= 1)
+    // default to Diverging, matching the placeholder set at construction —
+    // `gateway_pairs` itself only ever admits a pairing when a real
+    // Diverging/Converging pair is found by post-dominance, so a
+    // misclassified degenerate node simply fails to pair (fails closed),
+    // it never silently mispairs.
+    let xor_indices: Vec<NodeIndex> = graph
+        .node_indices()
+        .filter(|&i| matches!(graph[i], IRNode::GatewayXor { .. }))
+        .collect();
+    for idx in xor_indices {
+        let out_degree = graph
+            .edges_directed(idx, petgraph::Direction::Outgoing)
+            .count();
+        let in_degree = graph
+            .edges_directed(idx, petgraph::Direction::Incoming)
+            .count();
+        let inferred = if in_degree > 1 && out_degree <= 1 {
+            GatewayDirection::Converging
+        } else {
+            GatewayDirection::Diverging
+        };
+        if let IRNode::GatewayXor { direction, .. } = &mut graph[idx] {
+            *direction = inferred;
+        }
+    }
+
     Ok((graph, process_meta))
 }
 
@@ -377,9 +410,20 @@ fn handle_open_tag(
         "exclusiveGateway" if *in_process => {
             let id = get_attr(e, "id")?;
             let name = get_attr_opt(e, "name").unwrap_or_default();
+            // D5 (EOP-PLAN-DSL-PARITY-001, fork B/P3, Adam's ruling
+            // 2026-08-14, disposition (1)): unlike `parallelGateway`, real
+            // BPMN `<exclusiveGateway>` elements carry no `gatewayDirection`
+            // attribute in this importer (nor does the BPMN spec require
+            // one — Diverging/Converging is conventionally implied by
+            // topology for XOR). Edges aren't wired yet at this point in
+            // the streaming parse (`sequenceFlow`s are only added after the
+            // full document is read, below) — placeholder value here is
+            // overwritten by the post-pass that infers it from final
+            // out/in-degree once the whole graph exists.
             let idx = graph.add_node(IRNode::GatewayXor {
                 id: id.clone(),
                 name,
+                direction: GatewayDirection::Diverging,
             });
             node_map.insert(id, idx);
         }
