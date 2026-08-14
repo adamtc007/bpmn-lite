@@ -1,6 +1,7 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D3: MultiInstance vertical
 
-**Status:** awaiting acceptance
+**Status:** awaiting acceptance (blind review of commit `fd7c606` returned
+**ACCEPT**, no corrections — see disposition below)
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Freeze:** `docs/receipts/EOP-DSL-PARITY-001-D3.0-freeze.md` (ratified "(b) go").
 
@@ -159,6 +160,23 @@ same as D1/D2's structs.)
 - `cargo check --workspace --all-targets` — 0 errors
 - `scripts/check-semantic-gameboard-boundaries.py` — pass (after baseline regen)
 - `scripts/check-test-only-pub.py` — pass
+
+## Blind-review disposition
+
+Independent authorship-blind review of commit `fd7c606` returned **ACCEPT**.
+The reviewer independently re-derived every claim rather than trusting the
+prose: re-grepped `collection_flag_name`'s real construction sites (bare
+names confirmed, no `@`-prefix anywhere), re-grepped every `NodeAst::` match
+site across all four touched crates (no missed wildcard-fallthrough — B0
+held), ran the full test suite and diffed the live `cargo public-api`
+output against the checked-in baseline (byte-identical modulo the header
+comment), and git-blamed the Stage-0 reachability DFS to confirm it
+predates D1/D2/D3 as the receipt claims (not misattributed). One
+non-blocking observation: R-D3.7's freeze axis text says "non-token id /
+task-type" but only `id` gets a dedicated bad-token fixture — consistent
+with the identical pattern already established in D1/D2 (their `check_token`
+closure is exercised per-field elsewhere in the suite, just not per-node-
+kind for every field), so no correction was made.
 
 ## STOP
 
