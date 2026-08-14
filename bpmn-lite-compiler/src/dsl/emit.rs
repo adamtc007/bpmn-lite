@@ -101,7 +101,7 @@ pub enum DslEmitError {
         count: usize,
         expected: usize,
     },
-    #[error("gateway '{id}' has no matching join (only GatewayAnd/GatewayXor diverging/converging pairs are emittable)")]
+    #[error("gateway '{id}' has no matching join (GatewayAnd diverging/converging pairs are emittable; for GatewayXor only a Converging join can reach this — a Diverging split always refuses earlier as GatewayXorSplitUnrepresentable)")]
     UnmatchedGateway { id: String },
     #[error("edge '{edge_id}' on parallel gateway '{gateway_id}' carries a condition — the DSL grammar cannot express a condition on an And-split flow")]
     ConditionOnParallelFlow {

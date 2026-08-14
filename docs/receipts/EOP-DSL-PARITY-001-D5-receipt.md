@@ -1,6 +1,8 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D5: XOR join oracle (fork B/P3)
 
-**Status:** CODE-COMPLETE, pending Adam's acceptance.
+**Status:** Blind review of commit `f998f3e` returned **ACCEPT**, no
+corrections required (one cosmetic wording nit, fixed post-review — see
+disposition below). Pending Adam's acceptance.
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Design note:** `docs/receipts/EOP-DSL-PARITY-001-D5.0-design.md`, ratified
 option (a) (Adam, 2026-08-14: "a").
@@ -196,8 +198,43 @@ Diff: **+3 lines, −0 removals**:
   regen; verified `EXIT:0` directly, not inferred from stdout content)
 - `scripts/check-test-only-pub.py` — pass (0 items)
 
+## Blind-review disposition
+
+Independent authorship-blind review of commit `f998f3e` returned
+**ACCEPT**. The reviewer independently re-derived every claim from
+primary sources rather than trusting the receipt's prose: ran
+`cargo build --workspace --all-targets` and `cargo test --workspace`
+directly (confirmed 124 test-result lines, all "0 failed", not inferred
+from a grep exit code); read `gateway_pairs`' new match arm and confirmed
+it doesn't relax the existing mispair guard; read `project_ir`'s combined
+match arm and confirmed GatewayXor gets fully symmetric treatment; read
+`dsl/parser.rs::parse_split` directly and independently confirmed `:plug`
+is unconditionally mandatory for Xor/Or (the highest-priority item — the
+central asymmetric-refusal claim); read all three new/changed B2 fixtures
+node-by-node and confirmed g18 tests a genuinely matched pair (not an
+unmatched one), g18b calls `project_ir` (not `emit_dsl`), and g19's graph
+contains zero diverging `GatewayXor` nodes so it isolates the Converging
+arm's own `UnmatchedGateway` path rather than accidentally re-testing the
+Diverging refusal; confirmed both direction-inference post-passes
+(`parser.rs`, `dto_to_ir.rs`) run after all edges are wired and use the
+identical inference rule; sampled 5 of the mechanical touch-up sites and
+confirmed no smuggled logic; ran `cargo public-api` live and confirmed it
+matches the committed baseline exactly; confirmed zero changes to
+`bpmn-lite-authoring/src/importer.rs`'s `find_corresponding_join`
+(out-of-scope per the design note).
+
+One non-blocking wording nit: the `UnmatchedGateway` error message said
+"only GatewayAnd/GatewayXor diverging/converging pairs are emittable,"
+which overstates the XOR case — only its Converging half can ever reach
+that message (Diverging refuses earlier, unconditionally, via
+`GatewayXorSplitUnrepresentable`). Fixed post-review: the message now
+names the asymmetry explicitly rather than implying XOR pairs are
+emittable as pairs. Re-verified green after the fix (`cargo test -p
+bpmn-lite-compiler -p designer-graph`: 228 + 96 passed, 0 failed).
+
 ## STOP
 
-D5 is code-complete pending Adam's acceptance. Awaiting blind review next.
-D6 (Inclusive gateway alignment, the final tranche in the ratified
-programme sequence) begins only after Adam accepts this gate.
+D5 is code-complete, blind-reviewed (ACCEPT + one cosmetic fix), pending
+Adam's acceptance. D6 (Inclusive gateway alignment, the final tranche in
+the ratified programme sequence) begins only after Adam accepts this
+gate.
