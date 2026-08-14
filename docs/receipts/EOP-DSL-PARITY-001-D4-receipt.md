@@ -1,7 +1,7 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D4, Piece 1: loop provenance IR carriage (fork E)
 
-**Status:** awaiting acceptance (blind review of commit `e2d6f98` returned
-**ACCEPT**, no corrections — see disposition below)
+**Status:** RATIFIED (Adam, 2026-08-14, "accepted"). Blind review of commit
+`e2d6f98` returned **ACCEPT**, no corrections — see disposition below.
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Design note:** `docs/receipts/EOP-DSL-PARITY-001-D4.0-design.md`, ratified
 "proceed carrier only" (Adam, 2026-08-14) — fold-back explicitly deferred,
