@@ -1,5 +1,5 @@
 # package: bpmn-lite-compiler
-# baseline_revision: updated D5, EOP-PLAN-DSL-PARITY-001 — see D5 receipt for the diff that produced this
+# baseline_revision: updated D6, EOP-PLAN-DSL-PARITY-001 — see D6 receipt for the diff that produced this
 # command: cargo public-api -p bpmn-lite-compiler -sss
 
 pub mod bpmn_lite_compiler
@@ -27,6 +27,8 @@ pub bpmn_lite_compiler::dsl::DslEmitError::DuplicateNodeId::id: alloc::string::S
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard::edge_id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::FlowIntoGuard::guard_id: alloc::string::String
+pub bpmn_lite_compiler::dsl::DslEmitError::GatewayInclusiveSplitUnrepresentable
+pub bpmn_lite_compiler::dsl::DslEmitError::GatewayInclusiveSplitUnrepresentable::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::GatewayXorSplitUnrepresentable
 pub bpmn_lite_compiler::dsl::DslEmitError::GatewayXorSplitUnrepresentable::id: alloc::string::String
 pub bpmn_lite_compiler::dsl::DslEmitError::GuardBudgetZero

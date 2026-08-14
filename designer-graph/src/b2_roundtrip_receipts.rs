@@ -98,6 +98,14 @@ fn xor_gw(id: &str, direction: GatewayDirection) -> IRNode {
     }
 }
 
+fn inclusive_gw(id: &str, direction: GatewayDirection) -> IRNode {
+    IRNode::GatewayInclusive {
+        id: id.into(),
+        name: String::new(),
+        direction,
+    }
+}
+
 /// D5: a diverging edge with an Eq condition — the only operator both
 /// `project_ir` and `emit_dsl` represent (DSL's own `ConditionAst` is
 /// Eq-only).
@@ -925,6 +933,127 @@ fn g19_unmatched_converging_xor_gateway_refuses_at_emission() {
     dag.insert_edge(t, j, edge("f2")).unwrap();
     dag.insert_edge(j, e, edge("f3")).unwrap();
     match dag.emit_dsl("g19") {
+        Err(err) => assert!(
+            err.to_string().contains("no matching join"),
+            "unexpected refusal message: {err}"
+        ),
+        Ok(_) => panic!("expected UnmatchedGateway refusal"),
+    }
+}
+
+/// D6 fixture builder: start -> INCLUSIVE-split(cond A / default B) ->
+/// join -> end. Shared by g20 (emit refusal) and g20b (project_ir still
+/// works) — identical shape to `xor_block_conditioned`, per the D6.0
+/// design note's finding that GatewayInclusive faces the exact same
+/// `:plug`-required structural gap D5 found for GatewayXor.
+fn inclusive_block_conditioned(name: &str) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let sp = dag
+        .insert_node(
+            key(),
+            inclusive_gw("split1", GatewayDirection::Diverging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let ta = dag
+        .insert_node(key(), task("branch-a", "cbu.a"), None, Provenance::default())
+        .unwrap();
+    let tb = dag
+        .insert_node(key(), task("branch-b", "cbu.b"), None, Provenance::default())
+        .unwrap();
+    let j = dag
+        .insert_node(
+            key(),
+            inclusive_gw("join1", GatewayDirection::Converging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, sp, edge("f-in")).unwrap();
+    dag.insert_edge(sp, ta, cond_edge("f-a", "@approved", true))
+        .unwrap();
+    dag.insert_edge(sp, tb, edge("f-b")).unwrap();
+    dag.insert_edge(ta, j, edge("f-a-back")).unwrap();
+    dag.insert_edge(tb, j, edge("f-b-back")).unwrap();
+    dag.insert_edge(j, e, edge("f-end")).unwrap();
+    dag
+}
+
+/// G20 (D6, EOP-PLAN-DSL-PARITY-001, fork D/P1½), red axis — mirrors
+/// g18 exactly: `dsl/parser.rs::parse_split` requires `:plug` and a
+/// `:condition` on every flow for `split-or`, and `IRNode::GatewayInclusive`
+/// carries neither, so no graph-authored diverging GatewayInclusive can
+/// ever satisfy the grammar (D6.0 design note, Adam's ruling: option (a)).
+#[test]
+fn g20_inclusive_split_refuses_at_emission() {
+    let dag = inclusive_block_conditioned("g20");
+    match dag.emit_dsl("g20") {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("split1") && msg.contains("GatewayInclusive"),
+                "unexpected refusal message: {msg}"
+            );
+        }
+        Ok(_) => panic!("expected GatewayInclusiveSplitUnrepresentable refusal"),
+    }
+}
+
+/// `project_ir` still projects a matched GatewayInclusive pair cleanly —
+/// only the DSL-text emission direction refuses (see
+/// `g20_inclusive_split_refuses_at_emission` above). Mirrors g18b.
+#[test]
+fn g20b_inclusive_split_still_projects_to_plan() {
+    let dag = inclusive_block_conditioned("g20b");
+    let ir = dag.to_ir().expect("graph must project to IR");
+    let plan =
+        project_ir(&ir, "g20b".into()).expect("project_ir must accept a matched Inclusive pair");
+    match plan.nodes().get("split1").unwrap() {
+        bpmn_lite_compiler::dsl::ExecutionNode::Split(s) => {
+            assert_eq!(s.mode, bpmn_lite_compiler::dsl::SplitMode::Inclusive);
+            assert_eq!(s.join, "join1");
+            assert_eq!(s.flows.len(), 2);
+        }
+        other => panic!("expected Split, got {other:?}"),
+    }
+}
+
+/// G21 (D6), red axis — an unmatched CONVERGING GatewayInclusive refuses
+/// via `UnmatchedGateway`, mirroring g19's isolation of the Converging
+/// arm's own pairing-refusal path (no diverging Inclusive anywhere in
+/// the graph, since a diverging one always refuses first at
+/// `GatewayInclusiveSplitUnrepresentable`, see g20).
+#[test]
+fn g21_unmatched_converging_inclusive_gateway_refuses_at_emission() {
+    let mut dag = DesignerDag::new("g21");
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let t = dag
+        .insert_node(key(), task("t1", "cbu.t"), None, Provenance::default())
+        .unwrap();
+    let j = dag
+        .insert_node(
+            key(),
+            inclusive_gw("j1", GatewayDirection::Converging),
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, t, edge("f1")).unwrap();
+    dag.insert_edge(t, j, edge("f2")).unwrap();
+    dag.insert_edge(j, e, edge("f3")).unwrap();
+    match dag.emit_dsl("g21") {
         Err(err) => assert!(
             err.to_string().contains("no matching join"),
             "unexpected refusal message: {err}"
