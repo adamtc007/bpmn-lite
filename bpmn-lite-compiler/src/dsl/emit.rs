@@ -10,8 +10,12 @@
 //! `MessageWait`, matched `GatewayAnd` diverging/converging pairs (via
 //! the exposed [`gateway_pairs`] oracle — never hand-rolled re-pairing),
 //! `TimerWait` (D2, ordinary sequence node, all three `TimerSpec`
-//! shapes), and — since D1 (EOP-PLAN-DSL-PARITY-001) — `BoundaryTimer`/
-//! `BoundaryError` guards on ServiceTask hosts (decoration forms
+//! shapes), `MultiInstance` (D3, ordinary sequence node; representable
+//! only when its per-element `inputs` is empty — the D3.0 freeze's ruled
+//! (b) — a non-empty `inputs` refuses via
+//! [`DslEmitError::InputsUnrepresentable`] rather than silently dropping
+//! the bindings), and — since D1 (EOP-PLAN-DSL-PARITY-001) —
+//! `BoundaryTimer`/`BoundaryError` guards on ServiceTask hosts (decoration forms
 //! emitted directly after their host; stage 0 runs over the EFFECTIVE
 //! graph of flow + escape + implicit host→guard edges, with a hard
 //! totality assert — refuse, never truncate). Every other `IRNode` kind
@@ -60,8 +64,8 @@ use crate::gateway_pairs;
 use crate::ir::{GatewayDirection, IRGraph, IRNode};
 
 use super::ast::{
-    EndAst, MessageWaitAst, NodeAst, SplitAst, SplitFlowAst, SplitModeAst, StartAst, TaskAst,
-    TimerWaitAst,
+    EndAst, MessageWaitAst, MultiInstanceAst, NodeAst, SplitAst, SplitFlowAst, SplitModeAst,
+    StartAst, TaskAst, TimerWaitAst,
     WorkflowSource,
 };
 use super::refactor::ToSexpr;
@@ -118,6 +122,8 @@ pub enum DslEmitError {
     GuardBudgetZero { guard_id: String },
     #[error("guard '{guard_id}' is an interrupting cycle timer — contradictory (a cycle timer rearms by definition), and the emitted source would refuse at lint (D1 axis R33)")]
     InterruptingCycleTimer { guard_id: String },
+    #[error("node '{id}' carries {count} per-element input binding(s), but the DSL grammar has no syntax to represent them — refusing rather than silently dropping them (D3.0 freeze §2, ruled (b))")]
+    InputsUnrepresentable { id: String, count: usize },
 }
 
 /// Whether the source `DesignerDag` carries process-level declarations
@@ -628,6 +634,47 @@ pub fn emit_dsl(
                     span: no_span(),
                 }));
             }
+            // D3 (EOP-PLAN-DSL-PARITY-001): ordinary sequence node (no
+            // split/join pairing, mirrors TimerWait). `name` has no
+            // MultiInstanceAst field and is plan-invisible on both paths
+            // (`MultiInstanceExecNode` carries neither `name` nor
+            // `inputs` — G5.4a). `inputs` is checked here per the D3.0
+            // freeze's ruled (b): non-empty refuses rather than silently
+            // dropping the bindings. `declared_max: 0` passes on both
+            // paths (surfaced in the D3.0 freeze for a separate symmetric
+            // ruling, same class as D2.0's `max_fires: 0`).
+            IRNode::MultiInstance {
+                task_type,
+                collection_flag_name,
+                declared_max,
+                inputs,
+                ..
+            } => {
+                check_token(&id, "id", &id)?;
+                check_token(&id, "task_type", task_type)?;
+                check_token(&id, "collection_flag_name", collection_flag_name)?;
+                if !inputs.is_empty() {
+                    return Err(DslEmitError::InputsUnrepresentable {
+                        id,
+                        count: inputs.len(),
+                    });
+                }
+                // No `required_symbols` entry: unlike `ServiceTask.plug`,
+                // `task_type` here is never resolved against the
+                // placeholder registry by the linter (verified: neither
+                // this tranche's `NodeAst::MultiInstance` lowering arm nor
+                // `ir_plan`'s G5.4a projection performs such a lookup) —
+                // adding one would be a misleading no-op requirement.
+                let e = single_out_edge(idx)?;
+                nodes.push(NodeAst::MultiInstance(MultiInstanceAst {
+                    next: uncond_next(idx, e)?,
+                    id,
+                    task_type: task_type.clone(),
+                    collection_flag_name: collection_flag_name.clone(),
+                    declared_max: *declared_max,
+                    span: no_span(),
+                }));
+            }
             IRNode::GatewayAnd { direction, .. } => match direction {
                 GatewayDirection::Diverging => {
                     check_token(&id, "id", &id)?;
@@ -776,15 +823,15 @@ pub fn emit_dsl(
 
             // Out-of-core kinds — NO wildcard arm: a new IRNode variant
             // must break this compile, not fall through (B0's structural
-            // fail-closed rule). 7 kinds remain out of core after D1
-            // moved the two boundary kinds and D2 moved TimerWait above.
+            // fail-closed rule). 6 kinds remain out of core after D1
+            // moved the two boundary kinds, D2 moved TimerWait, and D3
+            // moved MultiInstance above.
             IRNode::GatewayXor { .. }
             | IRNode::GatewayInclusive { .. }
             | IRNode::HumanWait { .. }
             | IRNode::DataObject { .. }
             | IRNode::FfiServiceTask { .. }
-            | IRNode::SendTask { .. }
-            | IRNode::MultiInstance { .. } => {
+            | IRNode::SendTask { .. } => {
                 return Err(DslEmitError::UnsupportedNode {
                     id,
                     kind: node_kind_name(node),
@@ -1030,6 +1077,131 @@ mod tests {
         }
     }
 
+    fn mi(id: &str, task_type: &str, collection: &str, declared_max: u32) -> IRNode {
+        mi_with_inputs(id, task_type, collection, declared_max, Vec::new())
+    }
+
+    fn mi_with_inputs(
+        id: &str,
+        task_type: &str,
+        collection: &str,
+        declared_max: u32,
+        inputs: Vec<crate::ir::FfiInputBinding>,
+    ) -> IRNode {
+        IRNode::MultiInstance {
+            id: id.to_owned(),
+            name: String::new(),
+            task_type: task_type.to_owned(),
+            collection_flag_name: collection.to_owned(),
+            declared_max,
+            inputs,
+        }
+    }
+
+    /// GREEN (D3): emits the frozen form, recompiles through the derived
+    /// registry (no `required_symbols` entry — verified neither lowering
+    /// path resolves `task_type` against the placeholder registry), and
+    /// is idempotent.
+    #[test]
+    fn green_multi_instance_declared_max_round_trip() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let m = ir.add_node(mi("review-all", "review-doc", "docs", 50));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, m, edge("f1"));
+        ir.add_edge(m, e, edge("f2"));
+        let emitted = emit_dsl(&ir, "wf-mi", &decls()).expect("emit");
+        assert!(emitted.source.contains(
+            "(multi-instance :id review-all :task-type review-doc :collection docs :max 50 :next end)"
+        ));
+        assert!(
+            emitted.required_symbols.is_empty(),
+            "task_type is not registry-resolved on either path"
+        );
+        super::super::compile(&emitted.source, &registry_for(&emitted)).expect("recompile");
+        let again = emit_dsl(&ir, "wf-mi", &decls()).expect("emit twice");
+        assert_eq!(emitted.source, again.source, "emission must be idempotent");
+    }
+
+    /// RED (D3 R-D3.5): out-degree 0 and 2 both refuse WrongOutDegree.
+    #[test]
+    fn red_multi_instance_out_degree_zero_and_two() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let m = ir.add_node(mi("m1", "review-doc", "docs", 10));
+        ir.add_edge(s, m, edge("f1"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count: 0, .. }) => assert_eq!(id, "m1"),
+            other => panic!("expected WrongOutDegree(0), got {other:?}"),
+        }
+        let e1 = ir.add_node(end("end-a", false));
+        let e2 = ir.add_node(end("end-b", false));
+        ir.add_edge(m, e1, edge("f2"));
+        ir.add_edge(m, e2, edge("f3"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::WrongOutDegree { id, count: 2, .. }) => assert_eq!(id, "m1"),
+            other => panic!("expected WrongOutDegree(2), got {other:?}"),
+        }
+    }
+
+    /// RED (D3 R-D3.6): a conditioned outgoing edge refuses.
+    #[test]
+    fn red_multi_instance_conditioned_edge() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let m = ir.add_node(mi("m1", "review-doc", "docs", 10));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, m, edge("f1"));
+        ir.add_edge(m, e, cond_edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnrepresentableCondition { id }) => assert_eq!(id, "m1"),
+            other => panic!("expected UnrepresentableCondition, got {other:?}"),
+        }
+    }
+
+    /// RED (D3 R-D3.7): a non-token id refuses UnrepresentableToken.
+    #[test]
+    fn red_multi_instance_bad_id_token() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let m = ir.add_node(mi("m 1", "review-doc", "docs", 10));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, m, edge("f1"));
+        ir.add_edge(m, e, edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::UnrepresentableToken { node_id, field, .. }) => {
+                assert_eq!(node_id, "m 1");
+                assert_eq!(field, "id");
+            }
+            other => panic!("expected UnrepresentableToken, got {other:?}"),
+        }
+    }
+
+    /// RED (D3 R-D3.9, D3.0 freeze §2 ruled (b)): non-empty `inputs`
+    /// refuses rather than silently dropping the bindings.
+    #[test]
+    fn red_multi_instance_non_empty_inputs_unrepresentable() {
+        let mut ir = IRGraph::new();
+        let s = ir.add_node(start("start"));
+        let m = ir.add_node(mi_with_inputs(
+            "m1",
+            "review-doc",
+            "docs",
+            10,
+            vec![crate::ir::FfiInputBinding {
+                target_field: "priority".into(),
+                expression: crate::ir::Expression::Literal(crate::ir::IrLiteral::I64(3)),
+            }],
+        ));
+        let e = ir.add_node(end("end", false));
+        ir.add_edge(s, m, edge("f1"));
+        ir.add_edge(m, e, edge("f2"));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::InputsUnrepresentable { id, count: 1 }) => assert_eq!(id, "m1"),
+            other => panic!("expected InputsUnrepresentable, got {other:?}"),
+        }
+    }
+
     // ── Red fixtures: exact-variant refusals (never bare is_err) ─────────
 
     #[test]
@@ -1195,17 +1367,8 @@ mod tests {
                 },
                 "SendTask",
             ),
-            (
-                IRNode::MultiInstance {
-                    id: "x".into(),
-                    name: String::new(),
-                    task_type: "cbu.mi".into(),
-                    collection_flag_name: "flag".into(),
-                    declared_max: 2,
-                    inputs: Vec::new(),
-                },
-                "MultiInstance",
-            ),
+            // MultiInstance left this list at D3 (named cement update — it
+            // joined the emission core; see the D3 green/red tests).
         ];
         for (node, kind) in unsupported {
             let mut ir = IRGraph::new();
@@ -1500,6 +1663,30 @@ mod tests {
                 assert_eq!(
                     (guard_id.as_str(), host.as_str(), host_kind),
                     ("g1", "tw", "TimerWait")
+                );
+            }
+            other => panic!("expected GuardOnUnsupportedHost, got {other:?}"),
+        }
+    }
+
+    /// D3 R-D3.8: written up front (D2's TimerWait-host red was missed at
+    /// freeze time and only added as a review correction — this tranche
+    /// does not repeat that gap). The `!matches!(ServiceTask)` host check
+    /// is generic over IRNode kind, so no new emit code was needed — only
+    /// this fixture, proving MultiInstance is covered like every other
+    /// non-ServiceTask host.
+    #[test]
+    fn red_guard_on_multi_instance_host() {
+        let ir = guard_on(mi("m1", "review-doc", "docs", 10));
+        match emit_dsl(&ir, "wf", &decls()) {
+            Err(DslEmitError::GuardOnUnsupportedHost {
+                guard_id,
+                host,
+                host_kind,
+            }) => {
+                assert_eq!(
+                    (guard_id.as_str(), host.as_str(), host_kind),
+                    ("g1", "m1", "MultiInstance")
                 );
             }
             other => panic!("expected GuardOnUnsupportedHost, got {other:?}"),

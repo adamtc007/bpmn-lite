@@ -26,6 +26,7 @@ impl ToSexpr for NodeAst {
             Self::Task(n) => n.to_sexpr(indent),
             Self::MessageWait(n) => n.to_sexpr(indent),
             Self::TimerWait(n) => n.to_sexpr(indent),
+            Self::MultiInstance(n) => n.to_sexpr(indent),
             Self::Split(n) => n.to_sexpr(indent),
             Self::Join(n) => n.to_sexpr(indent),
             Self::Loop(n) => n.to_sexpr(indent),
@@ -244,6 +245,20 @@ impl ToSexpr for TimerWaitAst {
     }
 }
 
+impl ToSexpr for MultiInstanceAst {
+    fn to_sexpr(&self, indent: usize) -> String {
+        format!(
+            "{}(multi-instance :id {} :task-type {} :collection {} :max {} :next {})",
+            " ".repeat(indent),
+            self.id,
+            self.task_type,
+            self.collection_flag_name,
+            self.declared_max,
+            self.next
+        )
+    }
+}
+
 impl ToSexpr for LoopAst {
     fn to_sexpr(&self, indent: usize) -> String {
         let pad = " ".repeat(indent);
@@ -301,6 +316,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Task(tk) => tk.next = to_id.to_string(),
             NodeAst::MessageWait(wait) => wait.next = to_id.to_string(),
             NodeAst::TimerWait(wait) => wait.next = to_id.to_string(),
+            NodeAst::MultiInstance(mi) => mi.next = to_id.to_string(),
             NodeAst::Join(jn) => jn.next = to_id.to_string(),
             NodeAst::Loop(lp) => lp.next = to_id.to_string(),
             NodeAst::BoundaryTimer(g) => g.next = to_id.to_string(),
@@ -330,6 +346,7 @@ impl<'a> AstMutator<'a> {
                 NodeAst::Task(tk) => tk.next.clone(),
                 NodeAst::MessageWait(wait) => wait.next.clone(),
                 NodeAst::TimerWait(wait) => wait.next.clone(),
+                NodeAst::MultiInstance(mi) => mi.next.clone(),
                 NodeAst::Join(jn) => jn.next.clone(),
                 NodeAst::Loop(lp) => lp.next.clone(),
                 NodeAst::BoundaryTimer(g) => g.next.clone(),
@@ -347,6 +364,7 @@ impl<'a> AstMutator<'a> {
             NodeAst::Task(tk) => tk.next = orig_next,
             NodeAst::MessageWait(wait) => wait.next = orig_next,
             NodeAst::TimerWait(wait) => wait.next = orig_next,
+            NodeAst::MultiInstance(mi) => mi.next = orig_next,
             NodeAst::Join(jn) => jn.next = orig_next,
             NodeAst::Loop(lp) => lp.next = orig_next,
             NodeAst::BoundaryTimer(_) | NodeAst::BoundaryError(_) => {
@@ -730,6 +748,12 @@ mod tests {
             "(workflow red\n  (start-event :id start :next w1)\n  (timer-wait :id w1 :duration-ms 100 :next end)\n  (boundary-error :id g1 :host w1 :next esc)\n  (end-event :id esc :status \"done\")\n  (end-event :id end :status \"completed\"))",
             "not a service task",
         );
+        // D3 R-D3.8 (written up front — the D2 freeze's missed-red gap is
+        // not repeated here): a multi-instance host specifically.
+        expect_err(
+            "(workflow red\n  (start-event :id start :next m1)\n  (multi-instance :id m1 :task-type review-doc :collection docs :max 10 :next end)\n  (boundary-error :id g1 :host m1 :next esc)\n  (end-event :id esc :status \"done\")\n  (end-event :id end :status \"completed\"))",
+            "not a service task",
+        );
     }
 
     /// D2: all three timer-wait shapes print→parse→print fixpoint and
@@ -778,6 +802,56 @@ mod tests {
         expect_err(
             &wrap("  (timer-wait :id w1 :next end)"),
             "timer-wait requires exactly one timer shape",
+        );
+    }
+
+    /// D3: multi-instance prints→parses→prints to a fixpoint and recompiles.
+    #[test]
+    fn multi_instance_forms_print_reparse_roundtrip_and_recompile() {
+        let source = r#"(workflow test-mi-roundtrip
+  (start-event :id start :next review-all)
+  (multi-instance :id review-all :task-type review-doc :collection docs :max 50 :next end)
+  (end-event :id end :status "completed"))"#;
+        assert_print_reparse_fixpoint(source);
+        let reg = StubPlaceholderRegistry::new();
+        compile(source, &reg).expect("multi-instance chain must compile");
+    }
+
+    /// D3 red axes: R-D3.1 missing keywords, R-D3.3 malformed/overflow
+    /// `:max` — all named parse errors under the multi-instance head;
+    /// discriminating needles per the D1-review convention.
+    #[test]
+    fn multi_instance_red_axes_refuse_at_parse() {
+        let wrap = |node: &str| {
+            format!(
+                "(workflow red\n  (start-event :id start :next m1)\n{node}\n  (end-event :id end :status \"completed\"))"
+            )
+        };
+        let expect_err = |src: &str, needle: &str| {
+            let reg = StubPlaceholderRegistry::new();
+            let err = compile(src, &reg).expect_err("must refuse");
+            let msg = err.to_string();
+            assert!(msg.contains(needle), "expected {needle:?} in: {msg}");
+        };
+        expect_err(
+            &wrap("  (multi-instance :id m1 :collection docs :max 10 :next end)"),
+            "expected ':task-type'",
+        );
+        expect_err(
+            &wrap("  (multi-instance :id m1 :task-type review-doc :max 10 :next end)"),
+            "expected ':collection'",
+        );
+        expect_err(
+            &wrap("  (multi-instance :id m1 :task-type review-doc :collection docs :next end)"),
+            "expected ':max'",
+        );
+        expect_err(
+            &wrap("  (multi-instance :id m1 :task-type review-doc :collection docs :max 10x :next end)"),
+            "not a valid u32 integer",
+        );
+        expect_err(
+            &wrap("  (multi-instance :id m1 :task-type review-doc :collection docs :max 4294967296 :next end)"),
+            "not a valid u32 integer",
         );
     }
 

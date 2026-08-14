@@ -1,6 +1,6 @@
 # Receipt — EOP-PLAN-DSL-PARITY-001 Gate D2.1: `repeat_n_times` multi-predecessor fix
 
-**Status:** awaiting acceptance
+**Status:** RATIFIED (Adam, 2026-08-14, "accepted continue")
 **Branch:** `codex/bpmn-gameboard-refactor`
 **Scope:** fixes the multi-predecessor splice defect the D2 blind review surfaced
 and explicitly declined to fix inline (recorded in

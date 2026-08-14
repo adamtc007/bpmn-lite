@@ -230,6 +230,9 @@ impl Parser {
                 .parse_boundary_error(start_offset)
                 .map(NodeAst::BoundaryError),
             "timer-wait" => self.parse_timer_wait(start_offset).map(NodeAst::TimerWait),
+            "multi-instance" => self
+                .parse_multi_instance(start_offset)
+                .map(NodeAst::MultiInstance),
             other => {
                 self.error(format!("unknown node kind '{other}'"));
                 None
@@ -669,6 +672,35 @@ impl Parser {
         Some(TimerWaitAst {
             id,
             spec,
+            next,
+            span,
+        })
+    }
+
+    /// D3.0 frozen grammar: `(multi-instance :id m :task-type t :collection
+    /// c :max N :next n)` — an ordinary sequence node, mirroring
+    /// `timer-wait` (no split/join pairing). `:task-type` and `:collection`
+    /// are bare Symbol tokens (`parse_kw_symbol`), matching `TaskAst.plug`'s
+    /// and `collection_flag_name`'s actual plain-string convention (no
+    /// `@`-prefix — that convention belongs to `ConditionAst`'s inferred
+    /// placeholder flow, a different mechanism; verified against
+    /// `collection_flag_name`'s existing construction sites, e.g.
+    /// `"doc_count"`, `"directors"`, before writing this parser). `:max`
+    /// is `declared_max` (u32, named error on malformed/overflow, never
+    /// silent-zero — same `parse_kw_u32` D1/D2 use for `:max-fires`).
+    fn parse_multi_instance(&mut self, start_offset: usize) -> Option<MultiInstanceAst> {
+        let id = self.parse_kw_symbol("id")?;
+        let task_type = self.parse_kw_symbol("task-type")?;
+        let collection_flag_name = self.parse_kw_symbol("collection")?;
+        let declared_max = self.parse_kw_u32("max")?;
+        let next = self.parse_kw_symbol("next")?;
+        let end_offset = self.get_span_end();
+        let span = bpmn_lite_types::SourceSpan::new(start_offset as u32, end_offset as u32);
+        Some(MultiInstanceAst {
+            id,
+            task_type,
+            collection_flag_name,
+            declared_max,
             next,
             span,
         })

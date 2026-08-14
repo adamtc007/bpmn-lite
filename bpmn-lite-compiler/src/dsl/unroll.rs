@@ -16,8 +16,8 @@
 //! per-copy literal; it is pure structural repetition.
 
 use super::ast::{
-    BoundaryErrorAst, BoundaryTimerAst, JoinAst, LoopAst, MessageWaitAst, NodeAst, SplitAst,
-    TimerWaitAst,
+    BoundaryErrorAst, BoundaryTimerAst, JoinAst, LoopAst, MessageWaitAst, MultiInstanceAst,
+    NodeAst, SplitAst, TimerWaitAst,
     SplitFlowAst, TaskAst,
 };
 use std::collections::HashMap;
@@ -139,6 +139,10 @@ fn retarget_external_refs(node: NodeAst, loop_entries: &HashMap<String, String>)
         NodeAst::TimerWait(mut w) => {
             w.next = retarget(&w.next);
             NodeAst::TimerWait(w)
+        }
+        NodeAst::MultiInstance(mut m) => {
+            m.next = retarget(&m.next);
+            NodeAst::MultiInstance(m)
         }
         NodeAst::Split(mut sp) => {
             for flow in &mut sp.flows {
@@ -290,6 +294,14 @@ fn clone_node_iteration(
             spec: w.spec.clone(),
             next: remap_next(&w.next, loop_id, id_map, exit_target),
             span: w.span,
+        }),
+        NodeAst::MultiInstance(m) => NodeAst::MultiInstance(MultiInstanceAst {
+            id: new_id(&m.id),
+            task_type: m.task_type.clone(),
+            collection_flag_name: m.collection_flag_name.clone(),
+            declared_max: m.declared_max,
+            next: remap_next(&m.next, loop_id, id_map, exit_target),
+            span: m.span,
         }),
         NodeAst::Split(s) => NodeAst::Split(SplitAst {
             id: new_id(&s.id),

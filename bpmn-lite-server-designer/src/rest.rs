@@ -10330,6 +10330,125 @@ mod tests {
         assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);
     }
 
+    /// D3 endpoint witness. Not a green flip (see the surfaced-not-decided
+    /// note below the receipt fetch): a REALISTIC G7.4-admitted MI graph
+    /// (start → review_documents → review-all(multi-instance, collection
+    /// @docs) → end, with the `docs` DataObject G7.4 requires) refuses at
+    /// DSL emission for a reason unrelated to D3's own code — proving the
+    /// current, honest end-to-end behavior rather than asserting a green
+    /// path that doesn't exist for graphs built the real way.
+    #[tokio::test]
+    async fn test_dsl_receipt_multi_instance_graph_refuses_on_unreachable_data_object() {
+        let state = DesignerState::try_new().unwrap();
+        let app = designer_router(state);
+        let session_id = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/dsl/sessions",
+                    serde_json::json!({ "name": "proposal session" }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sid: Uuid = session_id.parse().unwrap();
+        let t1 = new_key();
+        let m = new_key();
+        let ops = vec![
+            designer_graph::ops::Operation::AppendNode {
+                anchor: seed_start_key(sid),
+                key: t1,
+                node: task_ir("review_documents"),
+                edge_id: "f1".into(),
+            },
+            // G7.4: verify_data_objects requires collection_flag_name to
+            // name a declared DataObject.
+            designer_graph::ops::Operation::CreateDataObject {
+                key: new_key(),
+                id: "docs".into(),
+                name: "docs".into(),
+                type_decl: bpmn_lite_types::DataObjectType::Primitive(
+                    bpmn_lite_types::PrimitiveType::String,
+                ),
+                role: bpmn_lite_types::DataObjectRole::Internal,
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: t1,
+                key: m,
+                node: bpmn_lite_compiler::IRNode::MultiInstance {
+                    id: "review-all".into(),
+                    name: String::new(),
+                    task_type: "review-doc".into(),
+                    collection_flag_name: "docs".into(),
+                    declared_max: 50,
+                    inputs: Vec::new(),
+                },
+                edge_id: "f2".into(),
+            },
+            designer_graph::ops::Operation::AppendNode {
+                anchor: m,
+                key: new_key(),
+                node: bpmn_lite_compiler::IRNode::End {
+                    id: "end".into(),
+                    terminate: false,
+                },
+                edge_id: "f3".into(),
+            },
+        ];
+        let response = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/dsl/sessions/{session_id}/graph-edit"),
+                serde_json::json!({ "operations": ops }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let receipt_uri = format!("/api/dsl/sessions/{session_id}/dsl-receipt");
+        let graph_uri = format!("/api/dsl/sessions/{session_id}/graph");
+        let graph_before =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        let response = app.clone().oneshot(get_req(&receipt_uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt = body_json(response).await;
+        // Surfaced, NOT decided (D3 receipt): a real designer-admitted MI
+        // graph is REQUIRED (G7.4/verifier.rs) to reference a declared
+        // `IRNode::DataObject` for its collection — but a DataObject is
+        // permanently edgeless (`Operation::CreateDataObject`: "no anchor,
+        // no edge", `ir_plan.rs`: "structural-only, zero bytecode") and
+        // `emit_dsl`'s Stage-0 reachability DFS (D1.0 §3.1, unchanged by
+        // D3) has no exemption for structural-declaration nodes. So this
+        // realistic MI graph refuses at emission with `UnreachableNode`
+        // naming the DataObject — NOT a D3 defect (the same DFS has always
+        // refused any DataObject-containing graph, since B1, predating
+        // MultiInstance's move into the emission core), but it means the
+        // green MI-emits-to-DSL path this tranche opens is reachable only
+        // for a hand-built `IRGraph` (see the unit/B2 green fixtures,
+        // which correctly omit the DataObject since they bypass the G7.4
+        // admission gate), never for a session that went through the real
+        // REST graph-edit admission path. Needs its own ruling — either a
+        // Stage-0 reachability exemption for `DataObject` or a
+        // `:collection` grammar rethink — not decided here.
+        assert_eq!(
+            receipt["refused"]["stage"], "emission",
+            "expected an emission-stage refusal: {receipt}"
+        );
+        let diagnostic = receipt["refused"]["diagnostic"]
+            .as_str()
+            .expect("diagnostic string");
+        assert!(
+            diagnostic.contains("'docs' is not reachable from Start"),
+            "expected the DataObject-unreachable diagnostic: {diagnostic}"
+        );
+        let graph_after =
+            body_json(app.clone().oneshot(get_req(&graph_uri)).await.unwrap()).await;
+        assert_eq!(graph_before["source_hash"], graph_after["source_hash"]);
+    }
+
     /// B3 — unknown session is 404; a session with no graph edits
     /// refuses at the "session" stage (its DSL text is authoritative
     /// already — nothing to project).

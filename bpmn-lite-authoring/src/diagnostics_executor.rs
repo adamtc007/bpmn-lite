@@ -216,6 +216,7 @@ generated_at: "2026-06-04T12:00:00Z"
                         NodeAst::Task(t) => t.next.clone(),
                         NodeAst::MessageWait(wait) => wait.next.clone(),
                         NodeAst::TimerWait(wait) => wait.next.clone(),
+                        NodeAst::MultiInstance(mi) => mi.next.clone(),
                         NodeAst::Join(j) => j.next.clone(),
                         NodeAst::Loop(l) => l.next.clone(),
                         NodeAst::Split(_) => {
@@ -273,6 +274,11 @@ fn find_all_predecessors_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Vec<S
             NodeAst::TimerWait(wait) => {
                 if wait.next == target_id {
                     acc.push(wait.id.clone());
+                }
+            }
+            NodeAst::MultiInstance(mi) => {
+                if mi.next == target_id {
+                    acc.push(mi.id.clone());
                 }
             }
             NodeAst::Join(j) => {

@@ -668,6 +668,46 @@ fn g15_timer_wait_cycle_max_fires() {
     assert_roundtrip(&dag, "g15");
 }
 
+/// D3 fixture builder: start → multi-instance(declared_max) → end.
+fn multi_instance_linear(name: &str, declared_max: u32) -> DesignerDag {
+    let mut dag = DesignerDag::new(name);
+    let s = dag
+        .insert_node(key(), start("start"), None, Provenance::default())
+        .unwrap();
+    let m = dag
+        .insert_node(
+            key(),
+            IRNode::MultiInstance {
+                id: "m1".into(),
+                name: String::new(),
+                task_type: "review-doc".into(),
+                collection_flag_name: "docs".into(),
+                declared_max,
+                inputs: Vec::new(),
+            },
+            None,
+            Provenance::default(),
+        )
+        .unwrap();
+    let e = dag
+        .insert_node(key(), end("end", false), None, Provenance::default())
+        .unwrap();
+    dag.insert_edge(s, m, edge("f1")).unwrap();
+    dag.insert_edge(m, e, edge("f2")).unwrap();
+    dag
+}
+
+/// G16 (D3) — multi-instance through the four-proof round trip: the
+/// plan's `ExecutionNode::MultiInstance` now round-trips the bridge,
+/// with `declared_max` (ruling K's required ceiling) proven to survive
+/// print→parse→print and DSL-vs-graph plan equality.
+#[test]
+fn g16_multi_instance_declared_max_round_trip() {
+    let dag = multi_instance_linear("g16", 50);
+    let receipt = assert_roundtrip(&dag, "g16");
+    assert!(receipt.emitted.required_symbols.is_empty());
+}
+
 /// D0 blind-review cement: guard order is content-canonical too. Two
 /// verifier-legal error guards on one host, attached in opposite edit
 /// orders, must project byte-identical plans — before the guard sort,

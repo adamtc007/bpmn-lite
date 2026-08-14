@@ -143,6 +143,11 @@ fn find_all_predecessor_ids_rec(nodes: &[NodeAst], target_id: &str, acc: &mut Ve
                     acc.push(w.id.clone());
                 }
             }
+            NodeAst::MultiInstance(m) => {
+                if m.next == target_id {
+                    acc.push(m.id.clone());
+                }
+            }
             NodeAst::Join(j) => {
                 if j.next == target_id {
                     acc.push(j.id.clone());

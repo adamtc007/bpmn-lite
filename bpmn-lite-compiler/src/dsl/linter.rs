@@ -482,6 +482,27 @@ impl<'a> Linter<'a> {
                     })
                 }
 
+                // D3 (EOP-PLAN-DSL-PARITY-001): lowers to the SAME exec
+                // node G5.4a's `ir_plan` projects `IRNode::MultiInstance`
+                // to (`MultiInstanceExecNode` — which itself carries
+                // neither `name` nor `inputs`), so plan equality across
+                // the bridge is field-identical by construction. No
+                // semantic checks beyond ref integrity — `declared_max: 0`
+                // is unvalidated on both paths today (surfaced in the
+                // D3.0 freeze for a separate symmetric ruling, same class
+                // as D2.0's `max_fires: 0`).
+                NodeAst::MultiInstance(n) => {
+                    self.check_next_ref(id, &n.next, &node_ids);
+                    ExecutionNode::MultiInstance(MultiInstanceExecNode {
+                        id: n.id.clone(),
+                        task_type: n.task_type.clone(),
+                        collection_flag_name: n.collection_flag_name.clone(),
+                        declared_max: n.declared_max,
+                        next: n.next.clone(),
+                        span: Some(n.span),
+                    })
+                }
+
                 NodeAst::Split(n) => {
                     if n.flows.is_empty() {
                         self.err(id, "split has no flows");

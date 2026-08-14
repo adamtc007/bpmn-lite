@@ -18,6 +18,7 @@ pub enum NodeAst {
     Task(TaskAst),
     MessageWait(MessageWaitAst),
     TimerWait(TimerWaitAst),
+    MultiInstance(MultiInstanceAst),
     Split(SplitAst),
     Join(JoinAst),
     Loop(LoopAst),
@@ -33,6 +34,7 @@ impl NodeAst {
             Self::Task(n) => &n.id,
             Self::MessageWait(n) => &n.id,
             Self::TimerWait(n) => &n.id,
+            Self::MultiInstance(n) => &n.id,
             Self::Split(n) => &n.id,
             Self::Join(n) => &n.id,
             Self::Loop(n) => &n.id,
@@ -48,6 +50,7 @@ impl NodeAst {
             Self::Task(n) => n.span,
             Self::MessageWait(n) => n.span,
             Self::TimerWait(n) => n.span,
+            Self::MultiInstance(n) => n.span,
             Self::Split(n) => n.span,
             Self::Join(n) => n.span,
             Self::Loop(n) => n.span,
@@ -125,6 +128,39 @@ pub struct TaskAst {
 pub struct TimerWaitAst {
     pub id: String,
     pub spec: crate::ir::TimerSpec,
+    pub next: String,
+    pub span: bpmn_lite_types::SourceSpan,
+}
+
+/// D3 (EOP-PLAN-DSL-PARITY-001): a multi-instance region — an ordinary
+/// sequence node (no split/join pairing; mirrors `TimerWait`), lowering to
+/// `ExecutionNode::MultiInstance`. Per the ratified D3.0 freeze, `name`
+/// (`IRNode::MultiInstance.name`) is NOT represented — DSL-authored MI
+/// nodes get `name == id` at projection — and `inputs`
+/// (`Vec<FfiInputBinding>`, G4.0/G4.1) is wave-1-excluded: representable
+/// only when empty; a graph MI node with non-empty `inputs` refuses at DSL
+/// emission (`DslEmitError::InputsUnrepresentable`) rather than silently
+/// dropping the bindings. Neither field has a home in this AST node.
+#[derive(Debug, Clone)]
+pub struct MultiInstanceAst {
+    pub id: String,
+    /// Inner activity dispatch identity — same convention as
+    /// `TaskAst.plug`/`service-task`'s `:verb` (a bare Symbol, not a
+    /// quoted string: dispatch identities are DSL tokens here, matching
+    /// every other task-type-shaped field, not string literals).
+    pub task_type: String,
+    /// Names the data-object/flag carrying the collection's `Value::Array`
+    /// data — a plain id (verified against `bpmn-lite-compiler/src/ir.rs`
+    /// and `verifier.rs`'s `declared.contains_key(collection_flag_name)`:
+    /// existing construction sites use bare names like `"doc_count"`,
+    /// `"directors"`, never `@`-prefixed), NOT the `@placeholder` inferred-
+    /// flow convention `ConditionAst` uses — those are a different
+    /// mechanism (split/gateway condition inference) this field has no
+    /// relation to.
+    pub collection_flag_name: String,
+    /// Required ceiling (ruling K deviation from Zeebe — deliberate, not
+    /// an oversight).
+    pub declared_max: u32,
     pub next: String,
     pub span: bpmn_lite_types::SourceSpan,
 }
