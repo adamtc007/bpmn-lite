@@ -381,6 +381,7 @@ pub fn lower_with_default(
                     &boundary_error_lookup,
                     &mut task_intern,
                     &mut task_manifest,
+                    &mut flag_intern,
                     &mut instructions,
                     &mut v2_guard_budgets,
                 )?;
@@ -581,6 +582,13 @@ pub fn lower_with_default(
                         instructions.push(Instr::PushI64(*interval_ms as i64));
                         instructions.push(Instr::V2WaitFor);
                     }
+                    TimerSpec::FromStartValue { name } => {
+                        // BL-T3: remaining-duration ms seeded at start
+                        // under this name; read at wait time.
+                        let key = intern_flag(&mut flag_intern, name);
+                        instructions.push(Instr::LoadFlag { key });
+                        instructions.push(Instr::V2WaitFor);
+                    }
                 }
 
                 // `V2WaitFor`/`V2WaitUntil` carry no `next` field (kernel
@@ -630,6 +638,7 @@ pub fn lower_with_default(
                     &boundary_error_lookup,
                     &mut task_intern,
                     &mut task_manifest,
+                    &mut flag_intern,
                     &mut instructions,
                     &mut v2_guard_budgets,
                 )?
@@ -694,6 +703,7 @@ pub fn lower_with_default(
                     &boundary_error_lookup,
                     &mut task_intern,
                     &mut task_manifest,
+                    &mut flag_intern,
                     &mut instructions,
                     &mut v2_guard_budgets,
                 )?
@@ -813,7 +823,14 @@ pub fn lower_with_default(
                         // Same adjacency requirement as the `ServiceTask`
                         // arm (`lower_boundary_guarded_task_v2`'s doc
                         // comment) — `duration` pushed BEFORE guard-open.
-                        instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+                        match spec {
+                            TimerSpec::FromStartValue { name } => {
+                                let key = intern_flag(&mut flag_intern, name);
+                                instructions.push(Instr::LoadFlag { key });
+                            }
+                            other => instructions
+                                .push(Instr::PushI64(timer_spec_duration_ms(other) as i64)),
+                        }
                     }
                     // V8 (§31): the guard-open is at the current address (one
                     // past the optional `PushI64` above). Record the boundary
@@ -1692,6 +1709,10 @@ pub(crate) fn timer_spec_duration_ms(spec: &TimerSpec) -> u64 {
             deadline_ms.saturating_sub(now)
         }
         TimerSpec::Cycle { interval_ms, .. } => *interval_ms,
+        TimerSpec::FromStartValue { .. } => unreachable!(
+            "FromStartValue has no static duration; every emission site \
+             matches it and emits LoadFlag before calling here (BL-T3)"
+        ),
     }
 }
 
@@ -1787,6 +1808,7 @@ fn lower_boundary_guarded_task_v2(
     boundary_error_lookup: &HashMap<String, Vec<(NodeIndex, Option<String>)>>,
     task_intern: &mut HashMap<String, u32>,
     task_manifest: &mut Vec<String>,
+    flag_intern: &mut HashMap<String, FlagKey>,
     instructions: &mut Vec<Instr>,
     v2_guard_budgets: &mut BTreeMap<Addr, ScopeFailureBudget>,
 ) -> Result<Option<Addr>> {
@@ -1877,7 +1899,13 @@ fn lower_boundary_guarded_task_v2(
         // see `bpmn-lite-kernel`'s own `v2_guard_timer_trigger_fires_the_same_
         // cascade_as_manual_v2_trigger_guard` fixture, `PushI64` at index 0,
         // guard-open at index 1, `V2GuardArmTimer` at index 2).
-        instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+        match spec {
+            TimerSpec::FromStartValue { name } => {
+                let key = intern_flag(flag_intern, name);
+                instructions.push(Instr::LoadFlag { key });
+            }
+            other => instructions.push(Instr::PushI64(timer_spec_duration_ms(other) as i64)),
+        }
     }
     // V8 (§31): record the guard's per-boundary failure budget (see the
     // identical logic on the FFI-task guard-open path).

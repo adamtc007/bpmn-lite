@@ -120,6 +120,16 @@ pub struct StartCommand {
     initial_payload: String,
     initial_payload_hash: [u8; 32],
     session_stack: SessionStackState,
+    /// BL-T3 named-deadline channel — the ONLY values a caller may seed
+    /// into instance flags at start. Keys must name flags the artifact
+    /// declares (`:deadline-from` timer operands); values are absolute
+    /// epoch-ms timestamps, converted to remaining-duration ms at start.
+    ///
+    /// Payload rule: start data carries identifiers and timestamps only —
+    /// **never amounts**. Monetary/quantity values belong in governed
+    /// effect calls, not in `initial_payload` or this map.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    deadlines: BTreeMap<String, i64>,
     logical_time: Timestamp,
 }
 
@@ -140,6 +150,7 @@ impl StartCommand {
             idempotency_key: None,
             initial_payload: None,
             session_stack: None,
+            deadlines: BTreeMap::new(),
             logical_time: None,
         }
     }
@@ -174,6 +185,7 @@ impl StartCommand {
             session_stack: builder
                 .session_stack
                 .ok_or(StartCommandBuildError::Missing("session_stack"))?,
+            deadlines: builder.deadlines,
             logical_time: builder
                 .logical_time
                 .ok_or(StartCommandBuildError::Missing("logical_time"))?,
@@ -219,6 +231,9 @@ impl StartCommand {
     pub fn logical_time(&self) -> Timestamp {
         self.logical_time
     }
+    pub fn deadlines(&self) -> &BTreeMap<String, i64> {
+        &self.deadlines
+    }
 }
 
 /// Validating constructor for the complete lineage required by a canonical start.
@@ -234,6 +249,7 @@ pub struct StartCommandBuilder {
     idempotency_key: Option<Uuid>,
     initial_payload: Option<String>,
     session_stack: Option<SessionStackState>,
+    deadlines: BTreeMap<String, i64>,
     logical_time: Option<Timestamp>,
 }
 
@@ -271,6 +287,13 @@ impl StartCommandBuilder {
 
     pub fn logical_time(mut self, value: Timestamp) -> Self {
         self.logical_time = Some(value);
+        self
+    }
+
+    /// Optional named-deadline map (see the field doc: identifiers and
+    /// timestamps only, never amounts).
+    pub fn deadlines(mut self, value: BTreeMap<String, i64>) -> Self {
+        self.deadlines = value;
         self
     }
 

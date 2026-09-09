@@ -184,6 +184,9 @@ impl ToSexpr for BoundaryTimerAst {
                 interval_ms,
                 max_fires,
             } => format!(":cycle-ms {interval_ms} :max-fires {max_fires}"),
+            crate::ir::TimerSpec::FromStartValue { name } => {
+                format!(":deadline-from {name}")
+            }
         };
         let budget_str = self
             .budget
@@ -234,6 +237,9 @@ impl ToSexpr for TimerWaitAst {
                 interval_ms,
                 max_fires,
             } => format!(":cycle-ms {interval_ms} :max-fires {max_fires}"),
+            crate::ir::TimerSpec::FromStartValue { name } => {
+                format!(":deadline-from {name}")
+            }
         };
         format!(
             "{}(timer-wait :id {} {} :next {})",
@@ -609,6 +615,30 @@ mod tests {
   (join-or :id type-gateway-join :split type-gateway :next end)
   (end-event :id end :status "done"))"#;
         assert_print_reparse_fixpoint(source);
+    }
+
+    /// BL-T3: the named start-value deadline shape (`:deadline-from`)
+    /// prints/reparses byte-stably and compiles — both as a boundary
+    /// guard and as a timer-wait.
+    #[test]
+    fn deadline_from_shape_roundtrips_and_compiles() {
+        let source = r#"(workflow test-deadline-from
+  (start-event :id start :next t1)
+  (service-task :id t1 :verb host.step :next w1)
+  (timer-wait :id w1 :deadline-from settle-by :next end)
+  (boundary-timer :id g-named :host t1 :deadline-from respond-by :interrupting false :next esc1)
+  (end-event :id esc1 :status "done")
+  (end-event :id end :status "completed"))"#;
+        let printed = assert_print_reparse_fixpoint(source);
+        let mut registry = StubPlaceholderRegistry::new();
+        registry.register_verb("host.step", crate::dsl::linter::BindingDecl::default());
+        let plan = compile(&printed, &registry).expect("deadline-from source must compile");
+        match plan.nodes().get("t1") {
+            Some(crate::dsl::ExecutionNode::Task(t)) => {
+                assert_eq!(t.guards.len(), 1, "t1 must carry the named timer guard");
+            }
+            other => panic!("t1 must be a task, got {other:?}"),
+        }
     }
 
     /// D1 fixpoint cement: every guard form and timer shape prints to

@@ -618,13 +618,19 @@ impl Parser {
                 interval_ms,
                 max_fires,
             }
+        } else if self.peek_keyword("deadline-from") {
+            // BL-T3: named instance-start deadline — the value is seeded
+            // into the instance flag of this name by the start command.
+            crate::ir::TimerSpec::FromStartValue {
+                name: self.parse_kw_symbol("deadline-from")?,
+            }
         } else {
             self.error(format!(
-                "{head} requires exactly one timer shape: :duration-ms, :deadline-ms, or :cycle-ms + :max-fires"
+                "{head} requires exactly one timer shape: :duration-ms, :deadline-ms, :deadline-from, or :cycle-ms + :max-fires"
             ));
             return None;
         };
-        for extra in ["duration-ms", "deadline-ms", "cycle-ms"] {
+        for extra in ["duration-ms", "deadline-ms", "cycle-ms", "deadline-from"] {
             if self.peek_keyword(extra) {
                 self.error(format!(
                     "{head} carries more than one timer shape (unexpected :{extra}) — exactly one of :duration-ms / :deadline-ms / :cycle-ms+:max-fires"

@@ -33,6 +33,12 @@ pub enum TimerSpec {
     Duration { ms: u64 },
     Date { deadline_ms: u64 },
     Cycle { interval_ms: u64, max_fires: u32 },
+    /// BL-T3: the deadline is not a compile-time constant — it is read at
+    /// arm time from the instance flag seeded under `name` by the start
+    /// command's named-deadline map (engine converts the supplied absolute
+    /// timestamp to remaining-duration ms at start). Lowers to
+    /// `LoadFlag { key }` where the constant forms lower to `PushI64`.
+    FromStartValue { name: String },
 }
 
 /// Condition expression for XOR gateway edges.

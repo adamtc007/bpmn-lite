@@ -628,6 +628,7 @@ fn timer_spec_label(spec: &bpmn_lite_compiler::TimerSpec) -> String {
             interval_ms,
             max_fires,
         } => format!("every {}s ×{}", interval_ms / 1000, max_fires),
+        TimerSpec::FromStartValue { name } => format!("at start value [{name}]"),
     }
 }
 

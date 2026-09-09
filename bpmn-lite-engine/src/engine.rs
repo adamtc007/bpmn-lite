@@ -922,8 +922,38 @@ impl BpmnLiteEngine {
             return Err(anyhow!("start command tenant does not match engine tenant"));
         }
         let artifact_hash = ArtifactHash::from_bytes(command.artifact_hash());
-        if self.store.load_artifact(artifact_hash).await?.is_none() {
-            return Err(anyhow!("start command references an unknown artifact"));
+        let artifact = self
+            .store
+            .load_artifact(artifact_hash)
+            .await?
+            .ok_or_else(|| anyhow!("start command references an unknown artifact"))?;
+        // BL-T3 named-deadline seeding — the ONE sanctioned start-time flag
+        // channel (F-DSGN-1 otherwise unchanged: instances spawn with an
+        // empty flag table; arbitrary orch_flags at start remain rejected
+        // at the gRPC boundary). Each supplied name must resolve to a flag
+        // the artifact itself declares (a `:deadline-from` operand); the
+        // absolute epoch-ms deadline is converted to remaining-duration ms
+        // as of the command's own logical time, clamped at zero (an
+        // already-passed deadline arms and fires immediately).
+        let mut seeded_flags: BTreeMap<u32, Value> = BTreeMap::new();
+        if !command.deadlines().is_empty() {
+            let symbols = artifact.envelope().metadata().flag_symbol_table();
+            let key_by_name: BTreeMap<&str, u32> = symbols
+                .iter()
+                .map(|(key, name)| (name.as_str(), *key))
+                .collect();
+            let start_time = command.logical_time();
+            for (name, deadline_ms) in command.deadlines() {
+                let key = key_by_name.get(name.as_str()).ok_or_else(|| {
+                    anyhow!(
+                        "start command supplies deadline '{name}' but the artifact \
+                         declares no flag of that name (no `:deadline-from {name}` \
+                         timer operand)"
+                    )
+                })?;
+                let remaining = deadline_ms.saturating_sub(start_time).max(0);
+                seeded_flags.insert(*key, Value::I64(remaining));
+            }
         }
         if let Some(instance_id) = self
             .store
@@ -949,7 +979,7 @@ impl BpmnLiteEngine {
             domain_payload: command.initial_payload().to_string().into(),
             domain_payload_hash: command.initial_payload_hash(),
             session_stack: command.session_stack().clone(),
-            flags: BTreeMap::new(),
+            flags: seeded_flags,
             counters: BTreeMap::new(),
             join_expected: BTreeMap::new(),
             state: ProcessState::Running,

@@ -157,7 +157,16 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     let GuardTriggerExec::Timer { spec, .. } = &guard.trigger else {
                         unreachable!("timer_guard returns Timer triggers only");
                     };
-                    instructions.push(Instr::PushI64(timer_spec_duration_ms(spec) as i64));
+                    match spec {
+                        TimerSpec::FromStartValue { name } => {
+                            // BL-T3: remaining-duration ms seeded at start
+                            // under this name; read at arm time.
+                            let key = intern_flag(name, &mut flag_ids);
+                            instructions.push(Instr::LoadFlag { key });
+                        }
+                        other => instructions
+                            .push(Instr::PushI64(timer_spec_duration_ms(other) as i64)),
+                    }
                 }
                 if !node.guards.is_empty() {
                     let guard_open_addr = Addr::new(instructions.len() as u32);
@@ -252,6 +261,11 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                     }
                     TimerSpec::Cycle { interval_ms, .. } => {
                         instructions.push(Instr::PushI64(*interval_ms as i64));
+                        instructions.push(Instr::V2WaitFor);
+                    }
+                    TimerSpec::FromStartValue { name } => {
+                        let key = intern_flag(name, &mut flag_ids);
+                        instructions.push(Instr::LoadFlag { key });
                         instructions.push(Instr::V2WaitFor);
                     }
                 }
@@ -466,7 +480,8 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         message_name_map: message_name_map,
         write_set: BTreeMap::new(),
         task_manifest: task_manifest,
-        // G5.4a: `flag_ids`' only writers are MI's own arm above — empty
+        // G5.4a (amended BL-T3): `flag_ids`' writers are MI's arm above
+        // plus `:deadline-from` timer operands (guard + wait) — empty
         // for every plan without one, matching this field's prior
         // always-empty behavior exactly.
         flag_symbol_table: flag_ids.into_iter().map(|(name, key)| (key, name)).collect(),

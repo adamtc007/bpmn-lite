@@ -154,7 +154,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
         },
 
         IRNode::TimerWait { id, spec } => {
-            let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec);
+            let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec)?;
             NodeDto::TimerWait {
                 id: id.clone(),
                 duration_ms,
@@ -192,7 +192,7 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
             interrupting,
             ..
         } => {
-            let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec);
+            let (duration_ms, deadline_ms, cycle_ms, cycle_max) = timer_spec_to_fields(spec)?;
             NodeDto::BoundaryTimer {
                 id: id.clone(),
                 host: attached_to.clone(),
@@ -273,14 +273,22 @@ fn ir_node_to_dto(ir_node: &IRNode) -> Result<NodeDto> {
 }
 
 /// Convert a TimerSpec back to the DTO optional fields.
-fn timer_spec_to_fields(spec: &TimerSpec) -> (Option<u64>, Option<u64>, Option<u64>, Option<u32>) {
+fn timer_spec_to_fields(
+    spec: &TimerSpec,
+) -> Result<(Option<u64>, Option<u64>, Option<u64>, Option<u32>)> {
     match spec {
-        TimerSpec::Duration { ms } => (Some(*ms), None, None, None),
-        TimerSpec::Date { deadline_ms } => (None, Some(*deadline_ms), None, None),
+        TimerSpec::Duration { ms } => Ok((Some(*ms), None, None, None)),
+        TimerSpec::Date { deadline_ms } => Ok((None, Some(*deadline_ms), None, None)),
         TimerSpec::Cycle {
             interval_ms,
             max_fires,
-        } => (None, None, Some(*interval_ms), Some(*max_fires)),
+        } => Ok((None, None, Some(*interval_ms), Some(*max_fires))),
+        // BL-T3 follow-up: the authoring DTO has no field for a named
+        // start-value deadline yet. Fail closed rather than silently
+        // dropping the shape into an all-None timer.
+        TimerSpec::FromStartValue { name } => Err(anyhow::anyhow!(
+            "timer deadline-from '{name}' is not representable in the authoring DTO yet"
+        )),
     }
 }
 

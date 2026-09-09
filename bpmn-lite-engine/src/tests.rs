@@ -5850,3 +5850,349 @@ async fn tick_activated_batch_records_released_metric_on_failure() {
         "a failed drain must not also count as consumed"
     );
 }
+
+// ── BL-T3: named, data-supplied deadlines (`:deadline-from`) ──────────
+//
+// The turn-clock acceptance verticals: N named timers whose deadlines
+// arrive in the start command's `deadlines` map, each firing its own
+// named handler effect (an authored handler task — the effect name is
+// the handler's verb, `clock.<timer-name>-passed` by convention), in
+// declared order; non-interrupting fire leaves the host untouched;
+// interrupting fire cancels the host scope. Kernel and verifier are
+// unchanged — only the frontend and the start-seeding path are new.
+
+const NAMED_TURN_CLOCK_DSL: &str = r#"(workflow named-turn-clock
+  (start-event :id start :next t1)
+  (service-task :id t1 :verb host.step-one :next t2)
+  (service-task :id t2 :verb host.step-two :next t3)
+  (service-task :id t3 :verb host.step-three :next end)
+  (boundary-timer :id alpha :host t1 :deadline-from deadline-alpha :interrupting false :next h1)
+  (boundary-timer :id beta :host t2 :deadline-from deadline-beta :interrupting false :next h2)
+  (boundary-timer :id gamma :host t3 :deadline-from deadline-gamma :interrupting false :next h3)
+  (service-task :id h1 :verb clock.alpha-passed :next e1)
+  (service-task :id h2 :verb clock.beta-passed :next e2)
+  (service-task :id h3 :verb clock.gamma-passed :next e3)
+  (end-event :id e1 :status "done")
+  (end-event :id e2 :status "done")
+  (end-event :id e3 :status "done")
+  (end-event :id end :status "completed"))"#;
+
+fn turn_clock_registry() -> bpmn_lite_compiler::dsl::StubPlaceholderRegistry {
+    let mut registry = bpmn_lite_compiler::dsl::StubPlaceholderRegistry::new();
+    for verb in [
+        "host.step-one",
+        "host.step-two",
+        "host.step-three",
+        "host.slow",
+        "clock.alpha-passed",
+        "clock.beta-passed",
+        "clock.gamma-passed",
+        "clock.cutoff-passed",
+    ] {
+        registry.register_verb(verb, bpmn_lite_compiler::dsl::BindingDecl::default());
+    }
+    registry
+}
+
+fn wall_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+async fn start_with_deadlines(
+    engine: &BpmnLiteEngine,
+    bytecode_version: [u8; 32],
+    process_key: &str,
+    deadlines: BTreeMap<String, i64>,
+) -> anyhow::Result<Uuid> {
+    let command = bpmn_lite_types::StartCommand::builder(
+        bpmn_lite_types::TenantId::new("default").unwrap(),
+        Uuid::now_v7(),
+        bytecode_version,
+    )
+    .process_key(process_key)
+    .lineage(Uuid::now_v7(), Uuid::now_v7())
+    .correlation_id("corr-named-deadlines")
+    .idempotency_key(Uuid::now_v7())
+    .initial_payload(r#"{"case":"turn-clock"}"#)
+    .session_stack(SessionStackState::default())
+    .deadlines(deadlines)
+    .logical_time(wall_now_ms())
+    .build()?;
+    engine.start_command(command).await
+}
+
+/// BL-T3 green vertical: a named, data-supplied deadline fires exactly
+/// one named effect (the authored handler's verb) carrying the instance
+/// identity, and the non-interrupting host is untouched by the fire.
+///
+/// The full N-in-declared-order acceptance is BLOCKED by a pre-existing
+/// kernel defect cemented below (`t_bl3_baseline_k2_*`): after any
+/// non-interrupting fire, the host can never complete its guarded task
+/// (the live handler fibre holds the guard-record handle; the host's
+/// `V2GuardNEnd` retires the record → Ring 3 K-2 either way), so no
+/// topology can arm timer N+1 after timer N has fired. See the BL-T3
+/// receipt and follow-up F6.
+#[tokio::test]
+async fn t_bl3_named_deadline_fires_named_effect_host_unaffected() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let plan =
+        bpmn_lite_compiler::dsl::compile(NAMED_TURN_CLOCK_DSL, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+
+    let now = wall_now_ms();
+    let deadlines: BTreeMap<String, i64> = [
+        ("deadline-alpha".to_string(), now + 100_000),
+        ("deadline-beta".to_string(), now + 200_000),
+        ("deadline-gamma".to_string(), now + 300_000),
+    ]
+    .into_iter()
+    .collect();
+    let iid = start_with_deadlines(&engine, cr.bytecode_version, "named-turn-clock", deadlines)
+        .await
+        .unwrap();
+
+    let acts = engine.run_instance(iid).await.unwrap();
+    let host_jobs: Vec<_> = acts
+        .iter()
+        .filter(|a| a.task_type == "host.step-one")
+        .collect();
+    assert_eq!(host_jobs.len(), 1, "first host must be active");
+
+    // A sweep past ALL declared deadlines fires only the armed timer —
+    // later-declared timers are not armed yet, so no later effect leaks.
+    engine
+        .tick_due_timers("bl3-test", (now + 400_000) as u64, 10, 30_000)
+        .await
+        .unwrap();
+    let fired = engine.run_instance(iid).await.unwrap();
+    let effect_types: Vec<_> = fired
+        .iter()
+        .filter(|a| a.task_type.starts_with("clock."))
+        .map(|a| a.task_type.clone())
+        .collect();
+    assert_eq!(
+        effect_types,
+        vec!["clock.alpha-passed".to_string()],
+        "exactly the first declared deadline's named effect must fire"
+    );
+    assert!(fired
+        .iter()
+        .filter(|a| a.task_type == "clock.alpha-passed")
+        .all(|a| a.process_instance_id == iid));
+
+    // Non-interrupting: the host fibre still waits on its own job.
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
+    assert!(
+        fibers
+            .iter()
+            .any(|f| matches!(&f.wait, WaitState::Job { job_key } if *job_key == host_jobs[0].job_key)),
+        "host must still be parked on its own job after the fire, waits: {:?}",
+        fibers.iter().map(|f| &f.wait).collect::<Vec<_>>()
+    );
+}
+
+/// BL-T3 discovery — PRE-EXISTING kernel defect, baseline-captured,
+/// variant (b): the handler fibre is still ALIVE (parked on its effect
+/// job); completing the host trips K-2 because `V2GuardNEnd` retires the
+/// guard record while the handler's control stack still references it.
+/// Reproduces identically with constant durations (variant (a) below
+/// uses `:duration-ms` and a handler that already ENDED). Fail-closed
+/// integrity rejection, not corruption. Flip to unwrap() when the kernel
+/// fix lands. Follow-up F6.
+#[tokio::test]
+async fn t_bl3_baseline_k2_host_completion_after_ni_fire_with_live_handler() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let plan =
+        bpmn_lite_compiler::dsl::compile(NAMED_TURN_CLOCK_DSL, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+
+    let now = wall_now_ms();
+    let deadlines: BTreeMap<String, i64> = [
+        ("deadline-alpha".to_string(), now + 100_000),
+        ("deadline-beta".to_string(), now + 200_000),
+        ("deadline-gamma".to_string(), now + 300_000),
+    ]
+    .into_iter()
+    .collect();
+    let iid = start_with_deadlines(&engine, cr.bytecode_version, "named-turn-clock", deadlines)
+        .await
+        .unwrap();
+    let acts = engine.run_instance(iid).await.unwrap();
+    let host_key = acts
+        .iter()
+        .find(|a| a.task_type == "host.step-one")
+        .unwrap()
+        .job_key
+        .clone();
+    engine
+        .tick_due_timers("bl3-test", (now + 400_000) as u64, 10, 30_000)
+        .await
+        .unwrap();
+    engine.run_instance(iid).await.unwrap();
+
+    let payload = r#"{"ok":true}"#;
+    let start_hash = bpmn_lite_types::EffectId::content_hash(br#"{"case":"turn-clock"}"#);
+    engine
+        .complete_job(&host_key, payload, start_hash, BTreeMap::new())
+        .await
+        .unwrap();
+    let err = engine
+        .run_instance(iid)
+        .await
+        .expect_err("K-2 baseline (live handler): flip to unwrap() when the kernel fix lands");
+    assert!(
+        err.to_string().contains("K-2"),
+        "expected the K-2 integrity rejection, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn t_bl3_interrupting_named_deadline_cancels_host_scope() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let src = r#"(workflow named-cutoff
+  (start-event :id start :next t1)
+  (service-task :id t1 :verb host.slow :next end)
+  (boundary-timer :id cut :host t1 :deadline-from cutoff-at :interrupting true :next h)
+  (service-task :id h :verb clock.cutoff-passed :next e1)
+  (end-event :id e1 :status "done")
+  (end-event :id end :status "completed"))"#;
+    let plan = bpmn_lite_compiler::dsl::compile(src, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+
+    let now = wall_now_ms();
+    let deadlines: BTreeMap<String, i64> =
+        [("cutoff-at".to_string(), now + 50_000)].into_iter().collect();
+    let iid = start_with_deadlines(&engine, cr.bytecode_version, "named-cutoff", deadlines)
+        .await
+        .unwrap();
+
+    let acts = engine.run_instance(iid).await.unwrap();
+    let host_jobs: Vec<_> = acts.iter().filter(|a| a.task_type == "host.slow").collect();
+    assert_eq!(host_jobs.len(), 1);
+
+    engine
+        .tick_due_timers("bl3-test", (wall_now_ms() + 400_000) as u64, 10, 30_000)
+        .await
+        .unwrap();
+    let acts_after_fire = engine.run_instance(iid).await.unwrap();
+
+    // Interrupting: the handler's named effect is live, and the host
+    // fibre is gone — no fibre still waits on the host job.
+    let cutoff_jobs: Vec<_> = acts_after_fire
+        .iter()
+        .filter(|a| a.task_type == "clock.cutoff-passed")
+        .collect();
+    assert_eq!(cutoff_jobs.len(), 1, "cutoff effect must fire, got {:?}",
+        acts_after_fire.iter().map(|a| &a.task_type).collect::<Vec<_>>());
+    let fibers = store
+        .load_fibers(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap();
+    assert!(
+        !fibers
+            .iter()
+            .any(|f| matches!(&f.wait, WaitState::Job { job_key } if *job_key == host_jobs[0].job_key)),
+        "interrupting named timer must cancel the host scope, fibres: {:?}",
+        fibers.iter().map(|f| &f.wait).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn t_bl3_unknown_deadline_name_is_rejected_at_start() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let plan =
+        bpmn_lite_compiler::dsl::compile(NAMED_TURN_CLOCK_DSL, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+
+    let deadlines: BTreeMap<String, i64> =
+        [("no-such-deadline".to_string(), wall_now_ms() + 100_000)]
+            .into_iter()
+            .collect();
+    let err = start_with_deadlines(&engine, cr.bytecode_version, "named-turn-clock", deadlines)
+        .await
+        .expect_err("unknown deadline name must be rejected at start");
+    assert!(
+        err.to_string().contains("declares no flag"),
+        "error must name the failure, got: {err}"
+    );
+}
+
+/// BL-T3 discovery — PRE-EXISTING kernel defect, baseline-captured (the
+/// Phase-0 pattern), variant (a): after a non-interrupting guard timer fires and its
+/// handler fibre runs to an end-event, the host's later job completion
+/// trips Ring 3 K-2 ("record Retired, not Armed" while still on the host
+/// fibre's control stack). Reproduces with CONSTANT durations — nothing
+/// to do with `:deadline-from` (this fixture uses `:duration-ms`).
+/// The violation is a fail-closed integrity rejection, not corruption.
+/// When the kernel fix lands, this test flips: replace the expect_err
+/// with the original three unwraps. Logged as follow-up F6.
+#[tokio::test]
+async fn t_bl3_baseline_k2_host_completion_after_ni_fire_and_handler_end() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let src = r#"(workflow const-turn-clock
+  (start-event :id start :next t1)
+  (service-task :id t1 :verb host.step-one :next t2)
+  (service-task :id t2 :verb host.step-two :next end)
+  (boundary-timer :id alpha :host t1 :duration-ms 100000 :interrupting false :next h1)
+  (service-task :id h1 :verb clock.alpha-passed :next e1)
+  (end-event :id e1 :status "done")
+  (end-event :id end :status "completed"))"#;
+    let plan = bpmn_lite_compiler::dsl::compile(src, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+    let iid = start_with_deadlines(&engine, cr.bytecode_version, "const-turn-clock", BTreeMap::new())
+        .await
+        .unwrap();
+    let acts = engine.run_instance(iid).await.unwrap();
+    let host_key = acts
+        .iter()
+        .find(|a| a.task_type == "host.step-one")
+        .unwrap()
+        .job_key
+        .clone();
+    engine
+        .tick_due_timers("bl3-probe", (wall_now_ms() + 400_000) as u64, 10, 30_000)
+        .await
+        .unwrap();
+    let acts2 = engine.run_instance(iid).await.unwrap();
+    let effect_key = acts2
+        .iter()
+        .find(|a| a.task_type == "clock.alpha-passed")
+        .unwrap()
+        .job_key
+        .clone();
+    let payload = r#"{"ok":true}"#;
+    let start_hash = bpmn_lite_types::EffectId::content_hash(br#"{"case":"turn-clock"}"#);
+    engine
+        .complete_job(&host_key, payload, start_hash, BTreeMap::new())
+        .await
+        .unwrap();
+    let next_hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
+    engine
+        .complete_job(&effect_key, payload, next_hash, BTreeMap::new())
+        .await
+        .unwrap();
+    let err = engine
+        .run_instance(iid)
+        .await
+        .expect_err("K-2 baseline: flip this to unwrap() when the kernel fix lands");
+    assert!(
+        err.to_string().contains("K-2"),
+        "expected the K-2 integrity rejection, got: {err}"
+    );
+}
