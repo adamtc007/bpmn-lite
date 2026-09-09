@@ -315,6 +315,40 @@ async fn inbox_lookup_returns_some_for_existing_none_for_missing() {
     assert!(miss.is_none());
 }
 
+/// BL-T4 (EOP-PLAN-CA-REUSE-001): the processed-stamp is write-once. A
+/// second mark (duplicate delivery replay racing the first handler) and a
+/// mark for a missing row are both typed `InboxMarkLost` errors — never a
+/// silent success and never a re-stamp of `processed_at`.
+#[tokio::test]
+async fn inbox_mark_processed_is_write_once() {
+    let (pool, _guard) = setup().await;
+    let key = Uuid::now_v7();
+    insert_inbox(&pool, &sample_inbox(key)).await.unwrap();
+
+    mark_inbox_processed(&pool, key).await.unwrap();
+    let first = lookup_inbox(&pool, key).await.unwrap().unwrap();
+    assert_eq!(first.status, InboxStatus::Processed);
+    let first_processed_at = first.processed_at.expect("stamped");
+
+    let second = mark_inbox_processed(&pool, key).await;
+    assert!(
+        matches!(second, Err(crate::BusStorageError::InboxMarkLost(k)) if k == key),
+        "second mark must be InboxMarkLost, got {second:?}"
+    );
+    let after = lookup_inbox(&pool, key).await.unwrap().unwrap();
+    assert_eq!(
+        after.processed_at,
+        Some(first_processed_at),
+        "processed_at must not be re-stamped"
+    );
+
+    let missing = mark_inbox_processed(&pool, Uuid::now_v7()).await;
+    assert!(
+        matches!(missing, Err(crate::BusStorageError::InboxMarkLost(_))),
+        "marking a missing row must be InboxMarkLost, got {missing:?}"
+    );
+}
+
 #[tokio::test]
 async fn inbox_mark_processed_sets_processed_at_and_status() {
     let (pool, _guard) = setup().await;

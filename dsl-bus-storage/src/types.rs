@@ -17,6 +17,12 @@ pub enum BusStorageError {
 
     #[error("outbox dispatch lease was lost for row {0}")]
     LostClaim(Uuid),
+
+    /// BL-T4 (write-once family, same rule as the pending-invocation ack):
+    /// `mark_inbox_processed` found no row in `received` state — the row is
+    /// already processed or missing. A re-stamp must never silently succeed.
+    #[error("inbox row {0} was not marked processed: not in 'received' state or missing")]
+    InboxMarkLost(Uuid),
 }
 
 /// Outbox / inbox endpoint discriminator. Both tables store these as

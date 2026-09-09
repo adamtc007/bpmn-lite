@@ -63,21 +63,30 @@ pub async fn lookup_inbox(
 }
 
 /// Transition `status → processed` and stamp `processed_at = now()`.
+///
+/// Write-once (BL-T4): only a row still in `received` state transitions;
+/// a re-mark (already processed) or a missing row is a typed
+/// [`InboxMarkLost`](crate::BusStorageError::InboxMarkLost) error, never
+/// a silent success or a `processed_at` re-stamp.
 pub async fn mark_inbox_processed(
     executor: impl PgExecutor<'_>,
     idempotency_key: Uuid,
 ) -> Result<()> {
-    sqlx::query(
+    let res = sqlx::query(
         r#"
         UPDATE dsl_bus.inbox
            SET status = 'processed',
                processed_at = now()
          WHERE idempotency_key = $1
+           AND status = 'received'
         "#,
     )
     .bind(idempotency_key)
     .execute(executor)
     .await?;
+    if res.rows_affected() != 1 {
+        return Err(crate::BusStorageError::InboxMarkLost(idempotency_key));
+    }
     Ok(())
 }
 
