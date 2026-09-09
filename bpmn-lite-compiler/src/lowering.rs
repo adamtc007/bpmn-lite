@@ -119,67 +119,12 @@ pub fn lower_with_default(
         }
     }
 
-    // V5 (§18 ruling I, `LoweringTarget::V2` only): a non-interrupting
-    // (`V2GuardN`) boundary timer's handler fibre inherits the guard's
-    // token POST-push (V4's ratified `V2GuardN` handler-entry-state
-    // derivation, `bpmn-lite-kernel`'s
-    // `v2_nested_guard_n_under_guard`-family fixtures, `V2GuardN`'s handler
-    // at e.g. address 7 closing with its own `V2GuardNEnd` at address 7
-    // before reaching `End`) — unlike an interrupting `V2Guard`'s handler,
-    // which runs PRE-push (the scope was already retired at trigger time)
-    // and needs no close. V-1 (control-stack balance) therefore requires
-    // the escalation flow's own terminal `End`/`EndTerminate` to close the
-    // inherited `V2GuardN` scope before it, not just the host task's
-    // normal-completion path. Walked here, over the IR graph (not
-    // bytecode — addresses aren't assigned yet), following the escalation
-    // flow's SEQUENCE OF SINGLE-SUCCESSOR nodes from the boundary event's
-    // outgoing flow to its own terminal End. **Deliberately narrow, and
-    // recorded as such rather than silently assumed general:** a
-    // branching escalation flow (a gateway, or a second boundary timer
-    // nested in the handler chain) is NOT resolved by this walk — it
-    // simply finds no terminal to mark, and `verify_v2_control_stack`
-    // then rejects the resulting program with a precise V-1 diagnostic
-    // ("control stack not empty at program end") rather than this
-    // function silently mis-lowering it. A linear escalation chain (the
-    // common BPMN shape — one or more tasks between the boundary event and
-    // its own end) is fully supported; a branching one is a real,
-    // out-of-this-step's-scope gap, not a hidden defect.
-    let mut guardn_close_before_end: HashSet<NodeIndex> = HashSet::new();
-    {
-        for (host_idx, spec) in boundary_lookup.values() {
-            let interrupting = matches!(
-                &graph[*host_idx],
-                IRNode::BoundaryTimer {
-                    interrupting: true,
-                    ..
-                }
-            );
-            let _ = spec;
-            if interrupting {
-                continue;
-            }
-            let mut cursor = get_successors(graph, *host_idx).into_iter().next();
-            let mut steps = 0usize;
-            while let Some(idx) = cursor {
-                steps += 1;
-                if steps > graph.node_count() {
-                    break; // cycle guard — should not occur (V-8 forbids
-                           // unbounded backward v2 edges elsewhere), but
-                           // this walk must not hang regardless.
-                }
-                if matches!(&graph[idx], IRNode::End { .. }) {
-                    guardn_close_before_end.insert(idx);
-                    break;
-                }
-                let succs = get_successors(graph, idx);
-                cursor = if succs.len() == 1 {
-                    Some(succs[0])
-                } else {
-                    None // branching escalation flow — unsupported, see above.
-                };
-            }
-        }
-    }
+    // F6/BL-T5: the `guardn_close_before_end` pre-pass (V5 ruling I) is
+    // REMOVED — non-interrupting handler fibres no longer inherit the
+    // guard's own token (PRE-push for both guard kinds), so the
+    // escalation terminal has nothing to close and the injected
+    // `V2GuardNEnd` would underflow V-1. The `dsl/frontend.rs` mirror
+    // walk was removed in the same tranche.
 
     // V5 (§18 ruling H, `LoweringTarget::V2` only): per diverging
     // `GatewayInclusive` node, classify its outgoing edges into "always
@@ -229,7 +174,6 @@ pub fn lower_with_default(
             &boundary_lookup,
             &boundary_error_lookup,
             &inclusive_branches,
-            &guardn_close_before_end,
         );
     }
 
@@ -337,7 +281,6 @@ pub fn lower_with_default(
             &boundary_lookup,
             &boundary_error_lookup,
             &inclusive_branches,
-            &guardn_close_before_end,
         ) > 0
         {
             debug_map.insert(base, node.id().to_string());
@@ -356,12 +299,6 @@ pub fn lower_with_default(
             }
 
             IRNode::End { terminate, .. } => {
-                if guardn_close_before_end.contains(&node_idx) {
-                    // A non-interrupting boundary timer's escalation
-                    // terminal — close the inherited V2GuardN scope before
-                    // this End (see the pre-pass doc comment above).
-                    instructions.push(Instr::V2GuardNEnd);
-                }
                 if *terminate {
                     instructions.push(Instr::EndTerminate);
                 } else {
@@ -1601,7 +1538,6 @@ fn instr_count_for(
     boundary_lookup: &HashMap<String, (NodeIndex, TimerSpec)>,
     boundary_error_lookup: &HashMap<String, Vec<(NodeIndex, Option<String>)>>,
     inclusive_branches: &HashMap<NodeIndex, Vec<InclusiveBranchInfo>>,
-    guardn_close_before_end: &HashSet<NodeIndex>,
 ) -> u32 {
     match &graph[node_idx] {
         // Guarded-wait extension (2026-07-27): MessageWait/HumanWait size
@@ -1664,13 +1600,6 @@ fn instr_count_for(
         // synthesizes its own `declared_max` branches internally, so no
         // separate pairing-stack bookkeeping across graph nodes is needed.
         IRNode::MultiInstance { declared_max, .. } => declared_max.saturating_mul(6) + 4,
-        IRNode::End { .. } if guardn_close_before_end.contains(&node_idx) => {
-            // +1 for the `V2GuardNEnd` a non-interrupting boundary timer's
-            // escalation terminal must emit before its own `End`/
-            // `EndTerminate` — see the `guardn_close_before_end` pre-pass
-            // doc comment above.
-            estimate_instr_count(graph, node_idx) + 1
-        }
         _ => estimate_instr_count(graph, node_idx),
     }
 }

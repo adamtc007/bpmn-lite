@@ -471,32 +471,33 @@ pub(crate) fn verify_v2_control_stack(
             }
             // `V2GuardN` (non-interrupting): "GUARD-N> ... on trigger,
             // spawn handler fibre WITHOUT unwinding members; record stays
-            // armed." Unlike the interrupting case, this guard's own
-            // record is explicitly NOT retired when the handler fires —
-            // it stays a live, referenceable scope. The handler fibre is
-            // a NEW fibre spawned from this still-armed activation, which
-            // is exactly the shape `V2Fork`'s children-inherit-parent-
-            // stack-plus-own-token pattern already establishes elsewhere
-            // in this walker: a fibre spawned from an open scope inherits
-            // that scope's own token, it does not skip past it. So the
-            // handler's entry state is the state WITH this `V2GuardN`'s
-            // own token still present (POST-push) — the SAME state the
-            // fallthrough edge gets, not the pre-push state.
+            // armed." The record stays a live scope for the HOST — but
+            // per the F6 ruling (BL-T5), the handler fibre does NOT
+            // inherit the guard's own token: host and handler are
+            // independent by definition, and a handler holding the token
+            // coupled the host's `V2GuardNEnd` retirement to the
+            // handler's lifetime (the K-2 defect both `t_bl3_baseline_*`
+            // engine tests captured). Guard records are host-owned;
+            // handler fibres never hold them. So the handler's entry
+            // state is PRE-push — the same derivation as `V2Guard` —
+            // while the fallthrough (host) edge alone carries the token.
             //
-            // This is a genuine divergence from treating `V2Guard`/
-            // `V2GuardN` identically (the first V2.7/V3 cut's shared
-            // arm, and the reviewer's own stated lean during the V3
-            // addressing review) — flagged explicitly for confirmation,
-            // not silently landed as settled.
+            // History: the first V2.7/V3 cut used POST-push here,
+            // mirroring `V2Fork`'s children-inherit-parent-stack-plus-
+            // own-token pattern, and flagged the divergence from
+            // `V2Guard` "for confirmation". The F6 ruling is that
+            // confirmation, decided the other way: a spawned handler is
+            // not a fork child — it observes the guard, it is not a
+            // member of it.
             Instr::V2GuardN { handler } => {
-                let mut pushed = state;
-                pushed.push(ScopeToken {
-                    kind: ScopeKind::GuardN,
-                    opened_at: Addr::from(address as u32),
-                });
                 check_forward(address, handler.index(), "guard-n handler")?;
-                propagate(&mut entry_states, &mut worklist, address, handler.index(), pushed.clone())?;
+                propagate(&mut entry_states, &mut worklist, address, handler.index(), state.clone())?;
                 if address + 1 < len {
+                    let mut pushed = state;
+                    pushed.push(ScopeToken {
+                        kind: ScopeKind::GuardN,
+                        opened_at: Addr::from(address as u32),
+                    });
                     propagate(&mut entry_states, &mut worklist, address, address + 1, pushed)?;
                 }
             }
@@ -1061,20 +1062,34 @@ mod tests {
         ]);
     }
 
-    /// `V2GuardN` (non-interrupting): handler entry state is POST-push —
-    /// the handler inherits this `V2GuardN`'s own still-armed token,
-    /// mirroring `V2Fork`'s children-inherit-parent-stack-plus-own-token
-    /// pattern. The handler target here is a `V2GuardNEnd` — this only
-    /// admits if the handler's entry state actually HAS a `GuardN`-kind
-    /// token on top to pop; under the (rejected) pre-push model this
-    /// would be a V-1 underflow instead.
+    /// `V2GuardN` (non-interrupting): handler entry state is PRE-push —
+    /// the F6 ruling (BL-T5): guard records are host-owned, handler
+    /// fibres never hold the guard's own token, so both guard kinds share
+    /// the `V2Guard` derivation. The handler target here is an `End` with
+    /// no `V2GuardNEnd` before it — this only admits if the handler is
+    /// entered with an EMPTY stack. (History: the first V2.7/V3 cut ruled
+    /// POST-push, fixture-named `..._is_post_push_inherits_own_token`,
+    /// flagged "for confirmation"; F6 confirmed the opposite.)
     #[test]
-    fn v4_guardn_handler_entry_state_is_post_push_inherits_own_token() {
+    fn v4_guardn_handler_entry_state_is_pre_push_no_own_token() {
         admit(vec![
             /* 0 */ Instr::V2GuardN { handler: Addr::new(3) },
             /* 1 */ Instr::V2GuardNEnd,
+            /* 2 */ Instr::End, // main line: guard opened then closed, empty at End
+            /* 3 */ Instr::End, // handler: must ALSO be empty (pre-push) to admit
+        ]);
+    }
+
+    /// Adversarial counterpart: a handler that tries to POP the guard's
+    /// own token (the old POST-push shape) must now be REJECTED — the
+    /// handler never holds it.
+    #[test]
+    fn v4_guardn_handler_popping_own_token_is_rejected() {
+        reject(vec![
+            /* 0 */ Instr::V2GuardN { handler: Addr::new(3) },
+            /* 1 */ Instr::V2GuardNEnd,
             /* 2 */ Instr::End,
-            /* 3 */ Instr::V2GuardNEnd, // handler: pops the still-armed GuardN token
+            /* 3 */ Instr::V2GuardNEnd, // handler: pops a token it does not have
             /* 4 */ Instr::End,
         ]);
     }

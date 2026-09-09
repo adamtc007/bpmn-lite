@@ -3736,17 +3736,23 @@ fn v2_trigger_guard_changes_with_target(
         ));
     }
 
-    // V-4: interrupting `V2Guard`'s handler entry state is PRE-push (the
-    // guard is being torn down, so the handler inherits whatever existed
-    // before it). Non-interrupting `V2GuardN` is the opposite — POST-push
-    // (fixture-proven independently in v2_verifier.rs,
-    // `v4_guardn_handler_entry_state_is_post_push_inherits_own_token`):
-    // since nothing unwinds, the handler inherits the guard's own
-    // still-armed token too, mirroring `V2Fork`'s
-    // children-inherit-parent-stack-plus-own-token pattern. Every fibre
-    // still inside the guard shares the same prefix up to this handle
-    // (inherited unchanged through `V2Fork`'s `control_stack.clone()`),
-    // so any one of them fixes it.
+    // V-4 (amended by the F6 ruling, BL-T5): the handler's entry state is
+    // PRE-push for BOTH guard kinds — a handler fibre NEVER holds the
+    // guard's own record handle. A non-interrupting guard means host and
+    // handler are independent by definition; the old POST-push rule
+    // (handler inherits the still-armed token, mirroring `V2Fork`)
+    // coupled the host's ability to close its scope (`V2GuardNEnd`
+    // retiring the record) to the handler's lifetime — any handler still
+    // live, or already ended, left a stale handle that tripped K-2 the
+    // moment the host completed its guarded task. Guard records are
+    // host-owned; a handler that needs to know which guard spawned it
+    // reads that as a value (the `V2GuardNTriggered`/`V2GuardTriggered`
+    // event carries `record_id`), never as a handle. Ancestor handles
+    // (scopes enclosing the guard) are still inherited — the handler
+    // genuinely runs inside those. Every fibre still inside the guard
+    // shares the same prefix up to this handle (inherited unchanged
+    // through `V2Fork`'s `control_stack.clone()`), so any one of them
+    // fixes it.
     let handler_stack = snapshot
         .fibers()
         .values()
@@ -3755,10 +3761,7 @@ fn v2_trigger_guard_changes_with_target(
                 .control_stack
                 .iter()
                 .position(|id| *id == record_id)
-                .map(|pos| {
-                    let end = if interrupting { pos } else { pos + 1 };
-                    fiber.control_stack[..end].to_vec()
-                })
+                .map(|pos| fiber.control_stack[..pos].to_vec())
         })
         .unwrap_or_default();
 
@@ -3772,10 +3775,10 @@ fn v2_trigger_guard_changes_with_target(
         pc: handler_target,
         parent: None,
     });
-    // K-1/K-2 (V4.2): the handler fibre inherits every handle in
-    // `handler_stack` (ancestors above this guard for the interrupting
-    // case; those plus the guard's own re-armed token for `V2GuardN`) —
-    // each such still-`Armed` record must count it as a member.
+    // K-1/K-2 (V4.2, F6-amended): the handler fibre inherits every handle
+    // in `handler_stack` — ancestors above this guard only, for BOTH
+    // kinds (never the guard's own token) — and each such still-`Armed`
+    // record must count it as a member.
     let handler_ops: Vec<_> = handler_stack
         .iter()
         .map(|ancestor| (*ancestor, MembershipOp::Add(handler_fiber_id)))
@@ -7558,9 +7561,11 @@ mod tests {
                 /* 4 */ Instr::V2GuardEnd,
                 /* 5 */ Instr::End,
                 /* 6 */ Instr::End,
-                /* 7 */ Instr::V2GuardNEnd,
-                /* 8 */ Instr::V2GuardEnd,
-                /* 9 */ Instr::End,
+                // GuardN handler (PRE-push per F6/BL-T5): entry state is
+                // the outer Guard token only — the handler never holds the
+                // GuardN's own token; it closes the inherited ancestor.
+                /* 7 */ Instr::V2GuardEnd,
+                /* 8 */ Instr::End,
             ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -7662,11 +7667,10 @@ mod tests {
                 /* 2 */ Instr::V2WaitFor,
                 /* 3 */ Instr::V2GuardNEnd,
                 /* 4 */ Instr::End,
-                // handler: post-push entry — pops the still-armed
-                // GuardN token (v2_verifier.rs's
-                // v4_guardn_handler_entry_state_is_post_push_inherits_own_token).
-                /* 5 */ Instr::V2GuardNEnd,
-                /* 6 */ Instr::End,
+                // handler: PRE-push entry (F6/BL-T5) — the handler never
+                // holds the guard's own token (v2_verifier.rs's
+                // v4_guardn_handler_entry_state_is_pre_push_no_own_token).
+                /* 5 */ Instr::End,
             ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -7727,25 +7731,18 @@ mod tests {
         assert!(t2.fibers_delete().is_empty(), "GuardN unwinds nothing");
         assert_eq!(t2.fibers_upsert().len(), 1, "only the new handler fibre");
         assert_eq!(t2.fibers_upsert()[0].pc, Addr::new(5));
-        assert_eq!(
-            t2.fibers_upsert()[0].control_stack,
-            vec![guard_handle],
-            "post-push: the handler inherits the still-armed GuardN token"
+        assert!(
+            t2.fibers_upsert()[0].control_stack.is_empty(),
+            "PRE-push (F6/BL-T5): the handler never holds the guard's own token, \
+             got {:?}",
+            t2.fibers_upsert()[0].control_stack
         );
-        assert_eq!(
-            t2.concurrency_mutations().len(),
-            1,
-            "record re-arms with the same identity/state — the one mutation is K-2's \
-             ancestor-membership fix-up (V4.2): the handler now shares guard_handle on its \
-             own control stack, so it must be added to guard_handle's members too"
+        assert!(
+            t2.concurrency_mutations().is_empty(),
+            "record re-arms with the same identity/state and the handler is NOT a \
+             member (F6/BL-T5) — no membership fix-up, no mutation at all, got {:?}",
+            t2.concurrency_mutations()
         );
-        assert!(matches!(
-            &t2.concurrency_mutations()[0],
-            ConcurrencyMutation::Insert(record)
-                if record.id == guard_handle
-                    && record.members.contains(&t2.fibers_upsert()[0].fiber_id)
-                    && record.members.contains(&root_fiber_id)
-        ));
         assert!(matches!(
             t2.events().iter().find(|e| matches!(e, RuntimeEvent::V2GuardNTriggered { .. })),
             Some(RuntimeEvent::V2GuardNTriggered { record_id, .. }) if *record_id == guard_handle
@@ -8246,12 +8243,11 @@ mod tests {
                 //       actually reached in this test — branch A fires first — but
                 //       must be statically present for V-11; exempt from popping
                 //       either the guard or fork handle, same as branch A's)
-                /* 6 */ Instr::V2GuardNEnd, // handler entry (post-push, unreached here) —
-                //       pops the guard's own re-armed token; the fork barrier from the
-                //       enclosing V2Fork is still on this path's inherited stack (handler
-                //       entry state inherits ancestors above the guard, per V4.1), so this
-                //       path terminates via EndTerminate (exempt) too, not End.
-                /* 7 */ Instr::EndTerminate,
+                /* 6 */ Instr::EndTerminate, // handler entry (PRE-push per F6/BL-T5,
+                //       unreached here) — the handler never holds the guard's own token;
+                //       the fork barrier from the enclosing V2Fork is still on this
+                //       path's inherited stack (handler entry inherits ancestors above
+                //       the guard), so this path terminates via EndTerminate (exempt).
             ],
             debug_map: BTreeMap::new(),
             join_plan: BTreeMap::new(),
@@ -9399,9 +9395,9 @@ mod tests {
         /// (`V4.6` blind-review remediation: this is the exact nesting order
         /// that exposed the `apply_job_failure` innermost-guard bug). Outer
         /// handler entry is pre-push (empty); inner `V2GuardN` handler entry
-        /// is post-push and must close both its own token and the outer
-        /// scope's to legally reach `End` — verified admissible the same
-        /// way as `definitive_job_failure_under_non_interrupting_guard_nested_inside_interrupting_guard_still_incidents`.
+        /// is ALSO pre-push (F6/BL-T5 — the handler never holds the guard's
+        /// own token), carrying only the inherited outer `Guard` token,
+        /// which it closes to legally reach `End`.
         fn topology_nested_guard_interrupting_outer() -> ExecutableWorkflow {
             build_workflow(20, "v4.6-nested-guard-interrupting-outer", vec![
                 /* 0  */ Instr::V2Guard { handler: Addr::new(7) },
@@ -9412,31 +9408,29 @@ mod tests {
                 /* 5  */ Instr::V2GuardEnd,
                 /* 6  */ Instr::End,
                 /* 7  */ Instr::End,
-                /* 8  */ Instr::V2GuardNEnd,
-                /* 9  */ Instr::V2GuardEnd,
-                /* 10 */ Instr::End,
+                /* 8  */ Instr::V2GuardEnd,
+                /* 9  */ Instr::End,
             ])
         }
 
         /// Topology 2 — nested guards, the REVERSE order: non-interrupting
         /// outside interrupting. Outer `V2GuardN`'s handler entry is
-        /// post-push (just its own token) and closes cleanly with one
-        /// `V2GuardNEnd`. Inner `V2Guard`'s handler entry is pre-push (the
-        /// outer's still-armed `GuardN` token) and closes it with one
-        /// `V2GuardNEnd` (kind-matched) before `End`.
+        /// pre-push (F6/BL-T5: empty — it never holds its own token) and
+        /// is a bare `End`. Inner `V2Guard`'s handler entry is pre-push
+        /// (the outer's still-armed `GuardN` ancestor token) and closes it
+        /// with one `V2GuardNEnd` (kind-matched) before `End`.
         fn topology_nested_guard_noninterrupting_outer() -> ExecutableWorkflow {
             build_workflow(21, "v4.6-nested-guard-noninterrupting-outer", vec![
                 /* 0  */ Instr::V2GuardN { handler: Addr::new(7) },
-                /* 1  */ Instr::V2Guard { handler: Addr::new(9) },
+                /* 1  */ Instr::V2Guard { handler: Addr::new(8) },
                 /* 2  */ Instr::PushI64(60_000),
                 /* 3  */ Instr::V2WaitFor,
                 /* 4  */ Instr::V2GuardEnd,
                 /* 5  */ Instr::V2GuardNEnd,
                 /* 6  */ Instr::End,
-                /* 7  */ Instr::V2GuardNEnd,
-                /* 8  */ Instr::End,
-                /* 9  */ Instr::V2GuardNEnd,
-                /* 10 */ Instr::End,
+                /* 7  */ Instr::End,
+                /* 8  */ Instr::V2GuardNEnd,
+                /* 9  */ Instr::End,
             ])
         }
 

@@ -59,44 +59,12 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
         }
     }
 
-    // WS-D D2, mirror of `lowering.rs`'s `guardn_close_before_end` walk:
-    // a NON-interrupting guard's handler fibre inherits the guard's
-    // scope token, so the escape flow's own terminal End must emit
-    // `V2GuardNEnd` before `End` to keep V-1 (control-stack balance).
-    // Same recorded narrowness as the XML side: only a linear escape
-    // chain is resolved; a branching escape finds no terminal to mark
-    // and `verify_v2_control_stack` then rejects the program with a
-    // precise V-1 diagnostic rather than this walk mis-lowering it.
-    let mut guardn_close_ends: HashSet<String> = HashSet::new();
-    for node in plan.nodes.values() {
-        let ExecutionNode::Task(task) = node else {
-            continue;
-        };
-        if task.guards.is_empty() || effective_interrupting(task) {
-            continue;
-        }
-        for guard in &task.guards {
-            let mut cursor = Some(guard.escape_entry.as_str());
-            let mut steps = 0usize;
-            while let Some(id) = cursor {
-                steps += 1;
-                if steps > plan.nodes.len() {
-                    break; // cycle guard — must not hang regardless.
-                }
-                match plan.nodes.get(id) {
-                    Some(ExecutionNode::End(e)) => {
-                        guardn_close_ends.insert(e.id.clone());
-                        break;
-                    }
-                    Some(next_node) => {
-                        let succs = next_node.flow_successors();
-                        cursor = if succs.len() == 1 { Some(succs[0]) } else { None };
-                    }
-                    None => break,
-                }
-            }
-        }
-    }
+    // F6/BL-T5: the WS-D D2 `guardn_close_ends` pre-pass (which injected
+    // a `V2GuardNEnd` at a non-interrupting guard's escape-chain terminal
+    // End) is REMOVED — handler fibres no longer inherit the guard's own
+    // token, so the escape flow has nothing to close and the injected pop
+    // would underflow V-1. The `lowering.rs` mirror walk was removed in
+    // the same tranche.
 
     let order = topological_order(plan)?;
     let mut addresses: BTreeMap<String, Addr> = BTreeMap::new();
@@ -107,7 +75,7 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
             .get(node_id)
             .ok_or_else(|| FrontendError::MissingNode(node_id.clone()))?;
         addresses.insert(node_id.clone(), address);
-        address = address.saturating_add(instruction_count(node, &guardn_close_ends)?);
+        address = address.saturating_add(instruction_count(node)?);
     }
 
     let mut instructions = Vec::new();
@@ -385,12 +353,6 @@ pub fn lower_plan(plan: &WorkflowExecutionPlan) -> Result<VerifiedWorkflow, Fron
                 }
             },
             ExecutionNode::End(node) => {
-                // WS-D D2: an End reached by a non-interrupting guard's
-                // linear escape chain closes the inherited scope first —
-                // see the `guardn_close_ends` pre-pass above.
-                if guardn_close_ends.contains(&node.id) {
-                    instructions.push(Instr::V2GuardNEnd);
-                }
                 // G5.3: `EndExecNode::status`'s doc comment documents the
                 // `"terminated"` sentinel `ir_plan::project_ir` sets for a
                 // graph-authored `IRNode::End { terminate: true }` — before
@@ -564,7 +526,6 @@ fn validate_guards(task: &TaskExecNode) -> Result<(), FrontendError> {
 
 fn instruction_count(
     node: &ExecutionNode,
-    guardn_close_ends: &HashSet<String>,
 ) -> Result<u32, FrontendError> {
     match node {
         // WS-D D2 guarded-task block: base ExecDslTask+Jump (2), plus
@@ -585,9 +546,6 @@ fn instruction_count(
         // WS-D D2: PushI64 + V2WaitFor/V2WaitUntil + Jump.
         ExecutionNode::Wait(_) => Ok(3),
         ExecutionNode::MessageWait(_) => Ok(2),
-        // WS-D D2: +1 for the V2GuardNEnd a non-interrupting guard's
-        // escape terminal emits before its own End.
-        ExecutionNode::End(node) if guardn_close_ends.contains(&node.id) => Ok(2),
         // V5 (§18 ruling H): an inclusive split's own v2 block (zero-match
         // precheck + `V2Fork` + per-branch headers — see
         // `dsl_inclusive_diverging_len`) is variable-length, unlike every
@@ -1489,12 +1447,14 @@ mod tests {
             plan_instrs.iter().any(|i| matches!(i, Instr::V2GuardTimerCycle { max_fires: 3 })),
             "max_fires must survive"
         );
-        // The escape terminal emits V2GuardNEnd before its End on both paths.
+        // F6/BL-T5: the escape terminal no longer emits a V2GuardNEnd —
+        // handler fibres never hold the guard's own token, so the ONLY
+        // close is the host body's, on both paths.
         let count_guardn_ends = |instrs: &[Instr]| {
             instrs.iter().filter(|i| matches!(i, Instr::V2GuardNEnd)).count()
         };
-        assert_eq!(count_guardn_ends(plan_instrs), 2, "body close + escape-terminal close");
-        assert_eq!(count_guardn_ends(xml_program.program()), 2);
+        assert_eq!(count_guardn_ends(plan_instrs), 1, "host body close only");
+        assert_eq!(count_guardn_ends(xml_program.program()), 1);
     }
 
     /// GREEN (WS-D D2): error guards arm specific-code-first, catch-all

@@ -1453,8 +1453,9 @@ async fn setup_ni_cycle_guard() -> (
             Instr::V2GuardNEnd,                                  // 5
             Instr::End,                                          // 6
             Instr::ExecNative { task_type: 1, argc: 0, retc: 0 }, // 7: send_reminder (handler)
-            Instr::V2GuardNEnd,                                  // 8
-            Instr::End,                                          // 9
+            // 8: handler ends bare — PRE-push entry (F6/BL-T5), the
+            // handler never holds the guard's own token.
+            Instr::End,                                          // 8
         ],
         debug_map: BTreeMap::from([
             (4.into(), "long_work".to_string()),
@@ -5999,16 +6000,14 @@ async fn t_bl3_named_deadline_fires_named_effect_host_unaffected() {
     );
 }
 
-/// BL-T3 discovery — PRE-EXISTING kernel defect, baseline-captured,
-/// variant (b): the handler fibre is still ALIVE (parked on its effect
-/// job); completing the host trips K-2 because `V2GuardNEnd` retires the
-/// guard record while the handler's control stack still references it.
-/// Reproduces identically with constant durations (variant (a) below
-/// uses `:duration-ms` and a handler that already ENDED). Fail-closed
-/// integrity rejection, not corruption. Flip to unwrap() when the kernel
-/// fix lands. Follow-up F6.
+/// BL-T5 (F6 fixed, option b): the standing test the suite never had —
+/// after a non-interrupting fire, the host completes its guarded task
+/// with the handler still ALIVE (parked on its effect job). Handlers no
+/// longer inherit the guard-record handle, so the host's `V2GuardNEnd`
+/// retirement is decoupled from the handler's lifetime. Flipped from the
+/// BL-T3 K-2 baseline cement.
 #[tokio::test]
-async fn t_bl3_baseline_k2_host_completion_after_ni_fire_with_live_handler() {
+async fn t_bl5_host_completes_after_ni_fire_with_live_handler() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
     let registry = turn_clock_registry();
@@ -6046,13 +6045,132 @@ async fn t_bl3_baseline_k2_host_completion_after_ni_fire_with_live_handler() {
         .complete_job(&host_key, payload, start_hash, BTreeMap::new())
         .await
         .unwrap();
-    let err = engine
+    let acts = engine
         .run_instance(iid)
         .await
-        .expect_err("K-2 baseline (live handler): flip to unwrap() when the kernel fix lands");
+        .expect("host must complete its guarded task after the fire (F6 fixed)");
     assert!(
-        err.to_string().contains("K-2"),
-        "expected the K-2 integrity rejection, got: {err}"
+        acts.iter().any(|a| a.task_type == "host.step-two"),
+        "the host must have advanced to the next step, got {:?}",
+        acts.iter().map(|a| &a.task_type).collect::<Vec<_>>()
+    );
+}
+
+/// BL-T3's full acceptance, unblocked by BL-T5: N named timers, started
+/// with N deadlines, fire N named effects in DECLARED ORDER, and the
+/// host continues after each — completing its guarded task post-fire
+/// (the exact sequence F6 used to forbid), which arms the next declared
+/// timer. Handler effect jobs are also completed, exercising both
+/// handler-alive and handler-ended host continuations.
+#[tokio::test]
+async fn t_bl3_named_deadlines_fire_named_effects_in_declared_order() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+    let registry = turn_clock_registry();
+    let plan =
+        bpmn_lite_compiler::dsl::compile(NAMED_TURN_CLOCK_DSL, &registry).expect("must compile");
+    let cr = engine.compile_dsl(&plan).await.unwrap();
+
+    let now = wall_now_ms();
+    let deadlines: BTreeMap<String, i64> = [
+        ("deadline-alpha".to_string(), now + 100_000),
+        ("deadline-beta".to_string(), now + 200_000),
+        ("deadline-gamma".to_string(), now + 300_000),
+    ]
+    .into_iter()
+    .collect();
+    let iid = start_with_deadlines(&engine, cr.bytecode_version, "named-turn-clock", deadlines)
+        .await
+        .unwrap();
+
+    let steps = [
+        ("host.step-one", "clock.alpha-passed"),
+        ("host.step-two", "clock.beta-passed"),
+        ("host.step-three", "clock.gamma-passed"),
+    ];
+    let mut current_payload_hash =
+        bpmn_lite_types::EffectId::content_hash(br#"{"case":"turn-clock"}"#);
+    let mut fired_in_order = Vec::new();
+    for (idx, (host_verb, effect_verb)) in steps.iter().enumerate() {
+        let acts = engine.run_instance(iid).await.unwrap();
+        let host_jobs: Vec<_> = acts.iter().filter(|a| a.task_type == *host_verb).collect();
+        assert_eq!(
+            host_jobs.len(),
+            1,
+            "host {host_verb} must be active; got {:?}",
+            acts.iter().map(|a| &a.task_type).collect::<Vec<_>>()
+        );
+        for (_, later_effect) in &steps[idx + 1..] {
+            assert!(
+                !acts.iter().any(|a| a.task_type == *later_effect),
+                "{later_effect} fired before its declared turn"
+            );
+        }
+
+        engine
+            .tick_due_timers("bl3-test", (wall_now_ms() + 400_000) as u64, 10, 30_000)
+            .await
+            .unwrap();
+        let after_fire = engine.run_instance(iid).await.unwrap();
+        let effect_jobs: Vec<_> = after_fire
+            .iter()
+            .filter(|a| a.task_type == *effect_verb)
+            .collect();
+        assert_eq!(
+            effect_jobs.len(),
+            1,
+            "named timer must fire exactly one {effect_verb}, got {:?}",
+            after_fire.iter().map(|a| &a.task_type).collect::<Vec<_>>()
+        );
+        assert_eq!(effect_jobs[0].process_instance_id, iid);
+        fired_in_order.push(effect_verb.to_string());
+
+        // Host continues after the fire WITH THE HANDLER STILL ALIVE —
+        // the exact sequence F6 used to forbid — then the handler's
+        // effect job is retired so its fibre can end (the handler-ended
+        // continuation is separately cemented by
+        // `t_bl5_host_completes_after_ni_fire_and_handler_end`).
+        let payload = r#"{"ok":true}"#;
+        engine
+            .complete_job(
+                &host_jobs[0].job_key,
+                payload,
+                current_payload_hash,
+                BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+        current_payload_hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
+        engine
+            .complete_job(
+                &effect_jobs[0].job_key,
+                payload,
+                current_payload_hash,
+                BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        fired_in_order,
+        vec![
+            "clock.alpha-passed".to_string(),
+            "clock.beta-passed".to_string(),
+            "clock.gamma-passed".to_string(),
+        ],
+        "the three named effects must fire in declared order"
+    );
+    // The instance itself runs to completion.
+    engine.run_instance(iid).await.unwrap();
+    let loaded = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(loaded.state, ProcessState::Completed { .. }),
+        "instance must complete, got {:?}",
+        loaded.state
     );
 }
 
@@ -6131,17 +6249,13 @@ async fn t_bl3_unknown_deadline_name_is_rejected_at_start() {
     );
 }
 
-/// BL-T3 discovery — PRE-EXISTING kernel defect, baseline-captured (the
-/// Phase-0 pattern), variant (a): after a non-interrupting guard timer fires and its
-/// handler fibre runs to an end-event, the host's later job completion
-/// trips Ring 3 K-2 ("record Retired, not Armed" while still on the host
-/// fibre's control stack). Reproduces with CONSTANT durations — nothing
-/// to do with `:deadline-from` (this fixture uses `:duration-ms`).
-/// The violation is a fail-closed integrity rejection, not corruption.
-/// When the kernel fix lands, this test flips: replace the expect_err
-/// with the original three unwraps. Logged as follow-up F6.
+/// BL-T5 (F6 fixed, option b), constant-duration variant: after a
+/// non-interrupting fire whose handler has already run to its end-event,
+/// the host completes its guarded task and the instance runs on. Flipped
+/// from the BL-T3 K-2 baseline cement (which proved the defect predated
+/// `:deadline-from` — this fixture uses `:duration-ms`).
 #[tokio::test]
-async fn t_bl3_baseline_k2_host_completion_after_ni_fire_and_handler_end() {
+async fn t_bl5_host_completes_after_ni_fire_and_handler_end() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
     let engine = BpmnLiteEngine::new(store.clone());
     let registry = turn_clock_registry();
@@ -6187,12 +6301,13 @@ async fn t_bl3_baseline_k2_host_completion_after_ni_fire_and_handler_end() {
         .complete_job(&effect_key, payload, next_hash, BTreeMap::new())
         .await
         .unwrap();
-    let err = engine
+    let acts = engine
         .run_instance(iid)
         .await
-        .expect_err("K-2 baseline: flip this to unwrap() when the kernel fix lands");
+        .expect("host must complete its guarded task after fire + handler end (F6 fixed)");
     assert!(
-        err.to_string().contains("K-2"),
-        "expected the K-2 integrity rejection, got: {err}"
+        acts.iter().any(|a| a.task_type == "host.step-two"),
+        "the host must have advanced to the next step, got {:?}",
+        acts.iter().map(|a| &a.task_type).collect::<Vec<_>>()
     );
 }
